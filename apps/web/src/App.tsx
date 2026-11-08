@@ -1,3 +1,4 @@
+import './zod-config.ts';
 import { type ApiClient, TEST_IDS } from '@octopus-diff/contracts';
 import { type QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';

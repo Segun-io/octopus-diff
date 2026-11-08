@@ -7,16 +7,7 @@ import {
 } from '@octopus-diff/contracts';
 import { keepPreviousData, QueryClient, useQuery } from '@tanstack/react-query';
 import { createContext, useContext } from 'react';
-import { z } from 'zod';
 import type { FileRef } from '../lib/fileRef.ts';
-
-/**
- * The daemon's CSP is `script-src 'self' 'wasm-unsafe-eval'`. zod v4 probes `Function('')` once to
- * decide whether it may JIT-compile schemas; the probe is caught, but the browser still reports a
- * `script-src` violation. Disable the JIT before the first parse (this module is imported before
- * any request is made).
- */
-z.config({ jitless: true });
 
 /** The daemon serves the UI and the API from the same origin; auth is the cookie. */
 export function createBrowserApiClient(): ApiClient {
