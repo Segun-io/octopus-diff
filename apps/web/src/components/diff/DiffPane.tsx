@@ -167,20 +167,26 @@ export function DiffPane() {
                 </button>
               </>
             )}
-            <button
-              type="button"
-              data-testid={TEST_IDS.reviewToggle}
-              aria-pressed={reviewed}
-              onClick={commands.toggleReviewed}
-              disabled={!entry && !diff}
-              title="Mark reviewed (r)"
-              className={`flex items-center gap-1 rounded border px-2 py-0.5 text-xs font-medium ${
-                reviewed ? 'border-add bg-add text-canvas' : 'border-line text-fg hover:bg-hover'
-              }`}
-            >
-              <CheckIcon />
-              {reviewed ? 'Reviewed' : 'Mark reviewed'}
-            </button>
+            {selected && model.disabledWorktrees.has(selected.worktreeId) ? (
+              <span className="text-[11px] text-faint" title="Review is off for this worktree">
+                review off
+              </span>
+            ) : (
+              <button
+                type="button"
+                data-testid={TEST_IDS.reviewToggle}
+                aria-pressed={reviewed}
+                onClick={commands.toggleReviewed}
+                disabled={!entry && !diff}
+                title="Mark reviewed (r)"
+                className={`flex items-center gap-1 rounded border px-2 py-0.5 text-xs font-medium ${
+                  reviewed ? 'border-add bg-add text-canvas' : 'border-line text-fg hover:bg-hover'
+                }`}
+              >
+                <CheckIcon />
+                {reviewed ? 'Reviewed' : 'Mark reviewed'}
+              </button>
+            )}
           </span>
         </header>
       )}

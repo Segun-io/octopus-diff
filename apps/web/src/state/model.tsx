@@ -1,4 +1,4 @@
-import type { DiffScope, InboxEntry } from '@octopus-diff/contracts';
+import type { DiffScope, EffectiveReviewPolicy, InboxEntry } from '@octopus-diff/contracts';
 import { createContext, type ReactNode, useContext, useMemo } from 'react';
 import { inboxScopeFor, useFilesQuery, useInboxQuery, useProjectsQuery } from '../api/queries.ts';
 import { fileRefKey } from '../lib/fileRef.ts';
@@ -14,6 +14,7 @@ import {
   type VisiblePredicate,
   visibleIf,
 } from '../lib/model.ts';
+import { effectivePolicy } from '../lib/policy.ts';
 import { useUi, type View } from './ui.tsx';
 
 export interface AppModel {
@@ -38,6 +39,14 @@ export interface AppModel {
   selectedEntry: NavEntry | undefined;
   /** Unreviewed files across every worktree in the review loop (current scope). */
   unreviewedTotal: number;
+  /** Worktrees whose review policy is disabled. */
+  disabledWorktrees: ReadonlySet<string>;
+  /** Current `stateHash` per worktree (from the projects list), for bulk `expectedStateHashes`. */
+  stateHashes: ReadonlyMap<string, string>;
+  /** Inbox view with no sidebar filter and no hidden file: a bulk "all" matches what is shown. */
+  inboxUnfiltered: boolean;
+  /** Effective policy of the selected worktree view (null in the Inbox). */
+  viewPolicy: EffectiveReviewPolicy | null;
 }
 
 const AppModelContext = createContext<AppModel | null>(null);
@@ -96,6 +105,7 @@ function useBuildAppModel(): AppModel {
     return map;
   }, [inboxEntries]);
 
+  const reviewOffDisplay = useUi((s) => s.reviewOffDisplay);
   const filesData = files.data;
   const groups = useMemo<FileGroup[]>(() => {
     if (view.kind === 'inbox') {
@@ -104,6 +114,8 @@ function useBuildAppModel(): AppModel {
       for (const entry of inboxEntries) {
         const row = sidebar.byId.get(entry.worktree.id);
         if (row && !rowVisible(row, filters)) continue;
+        const enabled = row ? row.review.enabled : effectivePolicy(entry.review).enabled;
+        if (!enabled && reviewOffDisplay === 'hide') continue;
         const group = sortedInboxFiles.get(entry.worktree.id);
         if (group) out.push(group);
       }
@@ -121,9 +133,43 @@ function useBuildAppModel(): AppModel {
     filterText,
     onlyDirty,
     onlyUnreviewed,
+    reviewOffDisplay,
   ]);
 
   const entries = useMemo(() => flattenGroups(groups), [groups]);
+
+  const disabledWorktrees = useMemo(() => {
+    const out = new Set<string>();
+    for (const row of sidebar.byId.values()) if (!row.review.enabled) out.add(row.worktree.id);
+    for (const entry of inboxEntries) {
+      if (!sidebar.byId.has(entry.worktree.id) && !effectivePolicy(entry.review).enabled) {
+        out.add(entry.worktree.id);
+      }
+    }
+    return out;
+  }, [sidebar, inboxEntries]);
+
+  const stateHashes = useMemo(() => {
+    const out = new Map<string, string>();
+    for (const row of sidebar.byId.values()) {
+      if (row.summary) out.set(row.worktree.id, row.summary.stateHash);
+    }
+    for (const entry of inboxEntries) {
+      if (!out.has(entry.worktree.id)) out.set(entry.worktree.id, entry.summary.stateHash);
+    }
+    return out;
+  }, [sidebar, inboxEntries]);
+
+  const inboxUnfiltered =
+    view.kind === 'inbox' &&
+    filterText.trim() === '' &&
+    !onlyDirty &&
+    !onlyUnreviewed &&
+    showReviewed &&
+    groups.length === inboxEntries.length;
+
+  const viewPolicy =
+    view.kind === 'worktree' ? (sidebar.byId.get(view.worktreeId)?.review ?? null) : null;
 
   const globalEntries = useMemo(() => {
     if (scope.kind === 'commit') return entries;
@@ -176,6 +222,10 @@ function useBuildAppModel(): AppModel {
     files,
     sidebar,
     unreviewedTotal,
+    disabledWorktrees,
+    stateHashes,
+    inboxUnfiltered,
+    viewPolicy,
     inboxEntries,
     groups,
     entries,

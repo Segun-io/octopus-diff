@@ -60,6 +60,16 @@ const WorktreeItem = memo(function WorktreeItem({
               {summary.inProgress}
             </span>
           )}
+          {!row.review.enabled && (
+            <span
+              data-testid={TEST_IDS.reviewOffBadge}
+              data-source={row.review.source}
+              className="ml-auto rounded-sm border border-line px-1 text-[10px] text-faint"
+              title={`Review off (from ${row.review.source})`}
+            >
+              review off
+            </span>
+          )}
           {row.unreviewed > 0 && (
             <span
               className="ml-auto rounded-full bg-accent px-1.5 text-[10px] font-semibold text-accent-fg"

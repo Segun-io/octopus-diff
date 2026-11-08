@@ -3,10 +3,12 @@ import { useIsFetching, useQueryClient } from '@tanstack/react-query';
 import { useEffect } from 'react';
 import { useResolvedTheme } from '../api/hooks.ts';
 import { queryKeys, useApi, useCommitsQuery } from '../api/queries.ts';
+import { useScanRootsQuery, useSettingsSupport } from '../api/settings.ts';
 import { useCommandsContext } from '../state/commandsContext.tsx';
 import { useAppModel } from '../state/model.tsx';
 import { useUi, useUiStore } from '../state/ui.tsx';
 import { ToggleButton } from './bits.tsx';
+import { ReviewPolicyChip } from './ReviewPolicyChip.tsx';
 
 const SCOPE_LABELS: Record<ScopeKind, string> = {
   working: 'Working tree',
@@ -15,6 +17,21 @@ const SCOPE_LABELS: Record<ScopeKind, string> = {
   branch: 'Branch (vs default)',
   commit: 'Commit…',
 };
+
+function GearIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+      <path
+        d="M6.6 1.5h2.8l.4 1.9 1.6.9 1.8-.6 1.4 2.4-1.4 1.3v1.8l1.4 1.3-1.4 2.4-1.8-.6-1.6.9-.4 1.9H6.6l-.4-1.9-1.6-.9-1.8.6L1.4 11l1.4-1.3V7.9L1.4 6.6l1.4-2.4 1.8.6 1.6-.9z"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.2"
+        strokeLinejoin="round"
+      />
+      <circle cx="8" cy="8.4" r="2" fill="none" stroke="currentColor" strokeWidth="1.2" />
+    </svg>
+  );
+}
 
 export function Toolbar() {
   const store = useUiStore();
@@ -32,6 +49,12 @@ export function Toolbar() {
   const worktreeId = model.view.kind === 'worktree' ? model.view.worktreeId : null;
   const commits = useCommitsQuery(worktreeId, worktreeId !== null);
   const fetching = useIsFetching();
+  const support = useSettingsSupport();
+  const scanRoots = useScanRootsQuery(support === 'ready');
+  const row = worktreeId ? model.sidebar.byId.get(worktreeId) : undefined;
+  const folderPath = row?.project.scanRootId
+    ? scanRoots.data?.scanRoots.find((r) => r.id === row.project.scanRootId)?.path
+    : undefined;
 
   const commitList = commits.data?.commits;
   // A commit scope always needs a sha: when entering commit scope, default to HEAD.
@@ -148,6 +171,9 @@ export function Toolbar() {
       >
         Show reviewed
       </ToggleButton>
+      {row && model.viewPolicy && (
+        <ReviewPolicyChip row={row} policy={model.viewPolicy} folderPath={folderPath} />
+      )}
       {model.view.kind === 'worktree' && (
         <button
           type="button"
@@ -202,6 +228,16 @@ export function Toolbar() {
           className="rounded px-1.5 py-0.5 text-xs text-muted hover:bg-hover hover:text-fg"
         >
           ?
+        </button>
+        <button
+          type="button"
+          data-testid={TEST_IDS.settingsOpenButton}
+          onClick={() => commands.openSettings()}
+          title="Settings (,)"
+          aria-label="Settings"
+          className="rounded px-1.5 py-0.5 text-xs text-muted hover:bg-hover hover:text-fg"
+        >
+          <GearIcon />
         </button>
       </span>
     </div>

@@ -14,10 +14,12 @@ import {
   describeError,
 } from './api/queries.ts';
 import { AddProjectForm } from './components/AddProjectForm.tsx';
+import { BulkReviewToast } from './components/BulkReviewToast.tsx';
 import { Dialog } from './components/Dialog.tsx';
 import { DiffPane } from './components/diff/DiffPane.tsx';
 import { FileList } from './components/FileList.tsx';
 import { HelpDialog } from './components/HelpDialog.tsx';
+import { MarkAllButton } from './components/MarkAllButton.tsx';
 import { Sidebar } from './components/Sidebar.tsx';
 import { Toolbar } from './components/Toolbar.tsx';
 import { toFileRef } from './lib/fileRef.ts';
@@ -33,6 +35,10 @@ import { useTheme } from './theme/useTheme.ts';
 // @pierre/trees (and its preact runtime) only loads when the tree layout is used.
 const FileTreeView = lazy(() =>
   import('./components/FileTreeView.tsx').then((m) => ({ default: m.FileTreeView })),
+);
+// Settings is a separate chunk: it is not needed for the first paint.
+const SettingsDialog = lazy(() =>
+  import('./components/settings/SettingsDialog.tsx').then((m) => ({ default: m.SettingsDialog })),
 );
 
 export interface AppProps {
@@ -169,16 +175,43 @@ function EmptyState() {
   );
 }
 
+/** Above the file list: what is listed, and the bulk action for it. */
+function FilePaneHeader() {
+  const model = useAppModel();
+  const inbox = model.view.kind === 'inbox';
+  const total = model.entries.length;
+  const shown = model.entries.filter(model.visible).length;
+  const unreviewed = model.entries.filter(
+    (e) => !e.file.reviewed && !model.disabledWorktrees.has(e.worktreeId),
+  ).length;
+  const label = inbox
+    ? `${model.groups.length} ${model.groups.length === 1 ? 'worktree' : 'worktrees'}`
+    : (model.viewPolicy?.enabled ?? true)
+      ? `${unreviewed} unreviewed`
+      : 'review off';
+  return (
+    <div className="flex h-[var(--od-row-header)] shrink-0 items-center gap-2 border-b border-line bg-surface px-[var(--od-pad-x)] text-[11px] text-muted">
+      <span className="truncate">
+        {shown < total ? `${shown}/${total}` : total} {total === 1 ? 'file' : 'files'} · {label}
+      </span>
+      <span className="ml-auto" />
+      <MarkAllButton compact />
+    </div>
+  );
+}
+
 function AppShell({ eventSourceFactory }: { eventSourceFactory?: EventSourceFactory | null }) {
   const model = useAppModel();
   const store = useUiStore();
   const theme = useResolvedTheme();
   const commands = useCommands(model, theme);
   const helpOpen = useUi((s) => s.helpOpen);
+  const settingsOpen = useUi((s) => s.settingsOpen);
   const addProjectOpen = useUi((s) => s.addProjectOpen);
   const layout = useUi((s) => s.fileListLayout);
   const selected = useUi((s) => s.selected);
   const titleCount = useUi((s) => s.titleCount);
+  const reviewOffDisplay = useUi((s) => s.reviewOffDisplay);
 
   useApplyTheme();
   useDocumentTitle(model.unreviewedTotal, titleCount);
@@ -238,6 +271,7 @@ function AppShell({ eventSourceFactory }: { eventSourceFactory?: EventSourceFact
               Inbox: {describeError(model.inbox.error).detail}
             </div>
           )}
+          <FilePaneHeader />
           <div className="min-h-0 flex-1">
             {!model.viewReady && model.files.isError ? (
               <p role="alert" className="p-3 text-xs text-danger">
@@ -259,6 +293,8 @@ function AppShell({ eventSourceFactory }: { eventSourceFactory?: EventSourceFact
             ) : (
               <FileList
                 groups={model.groups}
+                disabled={model.disabledWorktrees}
+                dimDisabled={reviewOffDisplay === 'dim'}
                 entries={model.entries}
                 visible={model.visible}
                 selectedKey={model.selectedKey}
@@ -290,6 +326,12 @@ function AppShell({ eventSourceFactory }: { eventSourceFactory?: EventSourceFact
       >
         {body}
         {helpOpen && <HelpDialog />}
+        {settingsOpen && (
+          <Suspense fallback={null}>
+            <SettingsDialog />
+          </Suspense>
+        )}
+        <BulkReviewToast />
         {addProjectOpen && (
           <Dialog title="Add project" onClose={() => store.setState({ addProjectOpen: false })}>
             <AddProjectForm />

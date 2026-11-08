@@ -24,6 +24,9 @@ interface LayoutGroup {
 
 export interface FileListProps {
   groups: readonly FileGroup[];
+  /** Worktrees out of the review loop (no unreviewed counts; dimmed when `dimDisabled`). */
+  disabled?: ReadonlySet<string>;
+  dimDisabled?: boolean;
   entries: readonly NavEntry[];
   visible: VisiblePredicate;
   selectedKey: string | null;
@@ -45,6 +48,8 @@ function rowId(key: string): string {
  */
 export function FileList({
   groups,
+  disabled,
+  dimDisabled = true,
   entries,
   visible,
   selectedKey,
@@ -180,8 +185,15 @@ export function FileList({
                   }
                 : {})}
               style={{ position: 'absolute', top: g.top, left: 0, right: 0, height: g.height }}
+              className={disabled?.has(g.group.worktree.id) && dimDisabled ? 'opacity-60' : ''}
             >
-              {grouped && <GroupHeader group={g.group} shown={g.rows.length} />}
+              {grouped && (
+                <GroupHeader
+                  group={g.group}
+                  shown={g.rows.length}
+                  reviewOff={disabled?.has(g.group.worktree.id) ?? false}
+                />
+              )}
               {rendered.map((entry, i) => (
                 <FileRow
                   key={entry.key}
@@ -202,12 +214,14 @@ export function FileList({
 const GroupHeader = memo(function GroupHeader({
   group,
   shown,
+  reviewOff,
 }: {
   group: FileGroup;
   shown: number;
+  reviewOff: boolean;
 }) {
   const total = group.files.length;
-  const unreviewed = group.files.reduce((n, f) => n + (f.reviewed ? 0 : 1), 0);
+  const unreviewed = reviewOff ? 0 : group.files.reduce((n, f) => n + (f.reviewed ? 0 : 1), 0);
   return (
     <div
       className="flex items-center gap-2 border-b border-line bg-raised px-2 text-xs"
@@ -217,7 +231,7 @@ const GroupHeader = memo(function GroupHeader({
       <span className="truncate font-semibold">{group.project.name}</span>
       <span className="truncate text-muted">{worktreeLabel(group.worktree)}</span>
       <span className="ml-auto shrink-0 text-[11px] text-muted">
-        {unreviewed > 0 ? `${unreviewed} unreviewed · ` : ''}
+        {reviewOff ? 'review off · ' : unreviewed > 0 ? `${unreviewed} unreviewed · ` : ''}
         {shown < total ? `${shown}/${total}` : total} files
       </span>
     </div>

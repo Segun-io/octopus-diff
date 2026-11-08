@@ -201,6 +201,25 @@ describe('mock backend implements the contract', () => {
       enabled: null,
     });
     expect(cleared.overrides.some((o) => o.target.kind === 'worktree')).toBe(false);
+    // no-op changes keep the revision and emit nothing (like the daemon)
+    const eventsBefore = events.length;
+    const same = await api.updateSettings({ review: { defaultEnabled: true } });
+    expect(same.revision).toBe(cleared.revision);
+    const sameAgain = await api.setReviewPolicy({
+      target: { kind: 'worktree', worktreeId: wt },
+      enabled: null,
+    });
+    expect(sameAgain.revision).toBe(cleared.revision);
+    expect(events.length).toBe(eventsBefore);
+    // overrides are ordered folder, project, branch, worktree
+    const kinds = cleared.overrides.map((o) => o.target.kind);
+    expect(kinds).toEqual(
+      [...kinds].sort(
+        (a, b) =>
+          ['folder', 'project', 'branch', 'worktree'].indexOf(a) -
+          ['folder', 'project', 'branch', 'worktree'].indexOf(b),
+      ),
+    );
     // default off makes everything without an override opt-in
     const off = await api.updateSettings({ review: { defaultEnabled: false } });
     expect(off.settings.review.defaultEnabled).toBe(false);

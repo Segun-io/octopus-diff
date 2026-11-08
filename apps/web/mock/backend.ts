@@ -682,11 +682,21 @@ export class MockBackend {
   }
 
   private settingsResponse(): SettingsResponse {
-    return {
-      settings: structuredClone(this.settings),
-      overrides: [...this.overrides.values()].map((o) => structuredClone(o)),
-      revision: this.settingsRevision,
+    // Like the daemon: folder, project, branch, worktree, then by target key.
+    const rank: Record<ReviewPolicyTarget['kind'], number> = {
+      folder: 0,
+      project: 1,
+      branch: 2,
+      worktree: 3,
     };
+    const overrides = [...this.overrides.values()]
+      .sort(
+        (a, b) =>
+          rank[a.target.kind] - rank[b.target.kind] ||
+          reviewTargetKey(a.target).localeCompare(reviewTargetKey(b.target)),
+      )
+      .map((o) => structuredClone(o));
+    return { settings: structuredClone(this.settings), overrides, revision: this.settingsRevision };
   }
 
   private bumpSettings(): void {
@@ -699,13 +709,14 @@ export class MockBackend {
   }
 
   updateSettings(patch: AppSettingsPatch): SettingsResponse {
-    if (patch.review?.defaultEnabled !== undefined) {
+    const next = patch.review?.defaultEnabled;
+    if (next !== undefined && next !== this.settings.review.defaultEnabled) {
       this.settings = {
         ...this.settings,
-        review: { ...this.settings.review, defaultEnabled: patch.review.defaultEnabled },
+        review: { ...this.settings.review, defaultEnabled: next },
       };
+      this.bumpSettings(); // a PATCH that changes nothing keeps the revision and emits nothing
     }
-    this.bumpSettings();
     return this.settingsResponse();
   }
 
@@ -731,8 +742,14 @@ export class MockBackend {
   setReviewPolicy(req: SetReviewPolicyRequest): SettingsResponse {
     this.assertTargetExists(req.target);
     const key = reviewTargetKey(req.target);
-    if (req.enabled === null) this.overrides.delete(key);
-    else this.overrides.set(key, { target: req.target, enabled: req.enabled, updatedAt: now() });
+    const current = this.overrides.get(key);
+    if (req.enabled === null) {
+      if (!current) return this.settingsResponse();
+      this.overrides.delete(key);
+    } else {
+      if (current && current.enabled === req.enabled) return this.settingsResponse();
+      this.overrides.set(key, { target: req.target, enabled: req.enabled, updatedAt: now() });
+    }
     this.bumpSettings();
     return this.settingsResponse();
   }

@@ -4,6 +4,7 @@
  */
 import type {
   ChangedFile,
+  EffectiveReviewPolicy,
   InboxEntry,
   Project,
   ProjectListItem,
@@ -12,6 +13,7 @@ import type {
   WorktreeSummary,
 } from '@octopus-diff/contracts';
 import { fileRefKey, toFileRef } from './fileRef.ts';
+import { effectivePolicy } from './policy.ts';
 
 function cmp(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
@@ -49,10 +51,15 @@ export interface WorktreeRow {
   worktree: Worktree;
   summary: WorktreeSummary | null;
   error: WorktreeListItem['error'];
-  /** Unreviewed files in the current scope (from the inbox), 0 if not in the inbox. */
+  /**
+   * Unreviewed files in the current scope (from the inbox), 0 if not in the inbox or when the
+   * worktree is out of the review loop.
+   */
   unreviewed: number;
   /** Changed files in the current scope (from the inbox), 0 if not in the inbox. */
   scopeFiles: number;
+  /** Effective review policy (absent from older daemons = enabled by default). */
+  review: EffectiveReviewPolicy;
 }
 
 export interface ProjectGroup {
@@ -107,13 +114,15 @@ export function buildSidebar(
     const worktrees = [...item.worktrees].sort((a, b) => compareWorktrees(a.worktree, b.worktree));
     for (const wt of worktrees) {
       const stats = inboxStats.get(wt.worktree.id);
+      const review = effectivePolicy(wt.review);
       const row: WorktreeRow = {
         project: item.project,
         worktree: wt.worktree,
         summary: wt.summary,
         error: wt.error,
-        unreviewed: stats?.unreviewed ?? 0,
+        unreviewed: review.enabled ? (stats?.unreviewed ?? 0) : 0,
         scopeFiles: stats?.files ?? 0,
+        review,
       };
       byId.set(wt.worktree.id, row);
       if (rowVisible(row, filters)) rows.push(row);
@@ -207,13 +216,14 @@ export function stepFile(
 export function nextUnreviewed(
   entries: readonly NavEntry[],
   selectedKey: string | null,
+  eligible: (entry: NavEntry) => boolean = () => true,
 ): NavEntry | null {
   const n = entries.length;
   if (n === 0) return null;
   const index = selectedKey === null ? -1 : entries.findIndex((e) => e.key === selectedKey);
   for (let step = 1; step <= n; step++) {
     const e = entries[(index + step + n) % n];
-    if (e && !e.file.reviewed && e.key !== selectedKey) return e;
+    if (e && !e.file.reviewed && e.key !== selectedKey && eligible(e)) return e;
   }
   return null;
 }
