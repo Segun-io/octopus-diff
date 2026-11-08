@@ -45,7 +45,10 @@ export class AppPage {
     return this.byTestId(TEST_IDS.fileList);
   }
 
-  /** Opens the tokenized URL (sets the auth cookie) and waits for the first render. */
+  /**
+   * Opens the `#token=` URL (the app moves the token into localStorage and strips it from the
+   * address bar) and waits for the first render.
+   */
   async open(authUrl: string): Promise<void> {
     await this.page.goto(authUrl);
     await this.waitReady();
