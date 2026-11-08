@@ -20,6 +20,9 @@ const vite = await createServer({
 await vite.listen();
 console.log(`mock API: ${mock.url} (dataset: ${process.env.MOCK_DATASET ?? 'demo'})`);
 vite.printUrls();
+if (process.env.MOCK_TOKEN) {
+  console.log(`MOCK_TOKEN is set: open the UI with #token=${process.env.MOCK_TOKEN} once`);
+}
 
 const shutdown = async () => {
   await vite.close();

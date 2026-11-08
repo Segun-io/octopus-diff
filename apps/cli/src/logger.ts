@@ -1,14 +1,24 @@
 import type { LogFields, Logger, LogLevel } from '@octopus-diff/contracts';
+import { oneLine } from './terminal.js';
 
 const RANK: Record<LogLevel, number> = { debug: 10, info: 20, warn: 30, error: 40, silent: 100 };
 
+/**
+ * Raw only for printable ASCII without `"` and `=`; anything else is JSON-quoted, and the C1
+ * and bidi characters `JSON.stringify` leaves alone are escaped too (SEC-09: values may come
+ * from repository content).
+ */
 function formatValue(value: unknown): string {
-  if (typeof value === 'string') return /^[^\s"=]+$/.test(value) ? value : JSON.stringify(value);
-  if (value instanceof Error) return JSON.stringify(value.message);
+  if (typeof value === 'string') {
+    return /^[\x21-\x7e]+$/.test(value) && !/["=]/.test(value)
+      ? value
+      : oneLine(JSON.stringify(value));
+  }
+  if (value instanceof Error) return oneLine(JSON.stringify(value.message));
   try {
-    return JSON.stringify(value) ?? String(value);
+    return oneLine(JSON.stringify(value) ?? String(value));
   } catch {
-    return String(value);
+    return oneLine(String(value));
   }
 }
 
@@ -25,7 +35,7 @@ export function formatLogLine(
         .map(([k, v]) => ` ${k}=${formatValue(v)}`)
         .join('')
     : '';
-  return `${time} ${level.toUpperCase().padEnd(5)} ${message}${extra}\n`;
+  return `${time} ${level.toUpperCase().padEnd(5)} ${oneLine(message)}${extra}\n`;
 }
 
 /** Human-readable logfmt-ish logger writing to `write` (stderr by default in the CLI). */

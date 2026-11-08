@@ -1,3 +1,4 @@
+import { createHmac } from 'node:crypto';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -7,6 +8,7 @@ import {
   createApiClient,
   type DaemonHandle,
   type HealthResponse,
+  healthProofMessage,
   type ProjectListItem,
   type ScanRoot,
   type StartDaemon,
@@ -87,7 +89,7 @@ export function fakeDaemon(
       const url = `http://${host}:${port}`;
       const handle: DaemonHandle = {
         url,
-        authUrl: `${url}/?token=tok123`,
+        authUrl: `${url}/#token=tok123`,
         token: 'tok123',
         host,
         port,
@@ -118,6 +120,33 @@ export function healthBody(overrides: Partial<HealthResponse> = {}): HealthRespo
     uptimeMs: 1234,
     ...overrides,
   };
+}
+
+/** The health proof a daemon holding `token` returns for `challenge` (computed independently). */
+export function proofFor(token: string, challenge: string): string {
+  return createHmac('sha256', token).update(healthProofMessage(challenge)).digest('hex');
+}
+
+/**
+ * `/api/health` body for a request URL: with `?challenge=`, the proof made with `token` (a
+ * daemon holding that token); `token: null` answers without a proof (an old or fake daemon).
+ */
+export function healthFor(
+  url: string,
+  token: string | null,
+  overrides: Partial<HealthResponse> = {},
+): HealthResponse {
+  const challenge = new URL(url).searchParams.get('challenge');
+  return healthBody({
+    ...overrides,
+    ...(challenge && token ? { proof: proofFor(token, challenge) } : {}),
+  });
+}
+
+/** True for `<base>/api/health` with or without a query. */
+export function isHealth(url: string, base?: string): boolean {
+  const u = new URL(url);
+  return u.pathname === '/api/health' && (base === undefined || u.origin === base);
 }
 
 export function projectItem(mainPath: string, name = path.basename(mainPath)): ProjectListItem {
@@ -233,6 +262,7 @@ export function makeDeps(dirs: TempDirs, overrides: Partial<CliDeps> = {}): Test
     runProgram: async () => ({ stdout: 'git version 2.53.0\n', stderr: '' }),
     readText: () => null,
     probePort: async () => 'free',
+    networkInterfaces: () => ({}),
     now: () => new Date('2026-11-08T12:00:00.000Z'),
     shutdownTimeoutMs: 1_000,
     ...overrides,

@@ -78,7 +78,7 @@ describe('serve with the real daemon', () => {
     expect(err.text).not.toContain('failed to start');
     expect(code).toBe(0);
     expect(healthStatus).toBe(200);
-    expect(out.text).toMatch(/Open: {3}http:\/\/127\.0\.0\.1:\d+\/\?token=\S+/);
+    expect(out.text).toMatch(/Open: {3}http:\/\/127\.0\.0\.1:\d+\/#token=\S+/);
     const token = await stat(path.join(dirs.stateDir, 'token'));
     expect(token.mode & 0o777).toBe(0o600);
   });
@@ -149,7 +149,7 @@ describe('built CLI binary (node apps/cli/dist/index.js)', () => {
     try {
       const output = await waitForOutput(
         child,
-        /Open: {3}http:\/\/127\.0\.0\.1:\d+\/\?token=\S+/,
+        /Open: {3}http:\/\/127\.0\.0\.1:\d+\/#token=\S+/,
         15_000,
       );
       const url = /Open: {3}(http:\/\/127\.0\.0\.1:\d+)\//.exec(output)?.[1];

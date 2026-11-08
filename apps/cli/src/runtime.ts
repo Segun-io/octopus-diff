@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { chmod, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
@@ -63,12 +64,35 @@ export async function readToken(stateDir: string): Promise<string | null> {
   }
 }
 
-/** `process.kill(pid, 0)`: true if the process exists (EPERM also means it exists). */
+/**
+ * `process.kill(pid, 0)`: true if a process with this pid exists **and belongs to this user**.
+ * `EPERM` (another user's process, e.g. after pid reuse) is not our daemon (SEC-02).
+ */
 export function isProcessAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === 'EPERM';
+  } catch {
+    return false;
   }
+}
+
+/**
+ * Replaces `<stateDir>/token` with a new random token (same format as the daemon's: 32 random
+ * bytes, base64url), written to a new 0600 file renamed over the old one. Returns the token.
+ */
+export async function rotateToken(stateDir: string): Promise<string> {
+  await mkdir(stateDir, { recursive: true, mode: 0o700 });
+  const file = tokenFilePath(stateDir);
+  const token = randomBytes(32).toString('base64url');
+  const tmp = `${file}.${randomBytes(6).toString('hex')}.tmp`;
+  await writeFile(tmp, `${token}\n`, { mode: 0o600, flag: 'wx' });
+  try {
+    await chmod(tmp, 0o600);
+    await rename(tmp, file);
+  } catch (error) {
+    await rm(tmp, { force: true }).catch(() => undefined);
+    throw error;
+  }
+  return token;
 }

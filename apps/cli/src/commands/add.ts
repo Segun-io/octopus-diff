@@ -5,6 +5,7 @@ import type { CliDeps } from '../deps.js';
 import { EXIT_FAILURE, EXIT_OK } from '../errors.js';
 import { resolveUserPath, tildify } from '../paths.js';
 import { loadContext } from '../settings.js';
+import { oneLine } from '../terminal.js';
 import { connectToDaemon, describeApiError } from './daemon-client.js';
 
 async function isDirectory(p: string): Promise<boolean> {
@@ -25,7 +26,8 @@ export async function runAdd(flags: AddFlags, deps: CliDeps): Promise<number> {
   const { paths, loaded } = await loadContext(flags, ctx);
   const out = (line: string) => deps.stdout.write(`${line}\n`);
   const err = (line: string) => deps.stderr.write(`${line}\n`);
-  const show = (p: string) => tildify(p, paths.home);
+  // Names and paths come from the daemon and the repositories: one line each (SEC-09).
+  const show = (p: string) => oneLine(tildify(p, paths.home));
 
   const conn = await connectToDaemon(flags, loaded.config, paths.stateDir, deps);
   let failures = 0;
@@ -41,11 +43,11 @@ export async function runAdd(flags: AddFlags, deps: CliDeps): Promise<number> {
       const { project, created } = await conn.client.addProject({ path: absolute });
       const worktrees = project.worktrees.length;
       out(
-        `${created ? 'added' : 'already added'}: ${project.project.name} ` +
+        `${created ? 'added' : 'already added'}: ${oneLine(project.project.name)} ` +
           `(${worktrees} worktree${worktrees === 1 ? '' : 's'}) ${show(project.project.mainWorktreePath ?? absolute)}`,
       );
     } catch (error) {
-      err(`error: ${show(absolute)}: ${describeApiError(error)}`);
+      err(`error: ${show(absolute)}: ${oneLine(describeApiError(error))}`);
       failures++;
     }
   }
@@ -65,7 +67,7 @@ export async function runAdd(flags: AddFlags, deps: CliDeps): Promise<number> {
           `(depth ${scanRoot.depth}); scanning in the background`,
       );
     } catch (error) {
-      err(`error: ${show(absolute)}: ${describeApiError(error)}`);
+      err(`error: ${show(absolute)}: ${oneLine(describeApiError(error))}`);
       failures++;
     }
   }

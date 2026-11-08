@@ -2,6 +2,7 @@ import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { getRequestListener } from '@hono/node-server';
 import {
+  AUTH_FRAGMENT_PARAM,
   type DaemonHandle,
   DEFAULT_HOST,
   DEFAULT_PORT,
@@ -130,7 +131,7 @@ export const startDaemon = (async (options: DaemonOptions = {}): Promise<Daemon>
   const loaded = await loadOrCreateToken(stateDir, options.token);
   token = loaded.token;
   for (const warning of loaded.warnings) logger.warn(warning);
-  if (loaded.source === 'created')
+  if (loaded.source === 'created' || loaded.source === 'replaced')
     logger.info('created a new auth token', { file: `${stateDir}/token` });
 
   const store = await Store.open(stateDir);
@@ -259,7 +260,8 @@ export const startDaemon = (async (options: DaemonOptions = {}): Promise<Daemon>
     boundPort = address.port;
     const urlHost = isWildcardHost(host) ? '127.0.0.1' : hostForUrl(host);
     const url = `http://${urlHost}:${boundPort}`;
-    const authUrl = `${url}/?token=${encodeURIComponent(token)}`;
+    // Fragment, not query: it never reaches a server, a log or a `Referer` (auth v2).
+    const authUrl = `${url}/#${AUTH_FRAGMENT_PARAM}=${encodeURIComponent(token)}`;
     logger.info('daemon listening', {
       url,
       stateDir,
