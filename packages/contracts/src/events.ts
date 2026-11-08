@@ -69,7 +69,9 @@ export const ReviewChangedEventSchema = z.object({
 
 /**
  * A bulk review call changed many marks at once (the per-file `review.changed` is NOT sent for
- * each of them). Clients refetch inbox/files for the listed projects.
+ * each of them). Clients refetch inbox/files for the listed projects. Sent only when something
+ * actually changed (`changed > 0`; after an undo, only when marks were restored): a no-op call
+ * produces no event.
  */
 export const ReviewBulkEventSchema = z.object({
   type: z.literal('review.bulk'),
@@ -80,7 +82,9 @@ export const ReviewBulkEventSchema = z.object({
 
 /**
  * Settings or a review-policy override changed. Clients that did not make the change refetch
- * `GET /api/settings`, projects and the inbox (effective policies may have moved).
+ * `GET /api/settings`, projects and the inbox (effective policies may have moved). Sent to every
+ * client including the caller (compare `revision` with the response you already applied), and only
+ * on a real change: a PATCH/PUT that changes nothing keeps the revision and emits nothing.
  */
 export const SettingsChangedEventSchema = z.object({
   type: z.literal('settings.changed'),

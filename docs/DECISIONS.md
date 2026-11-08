@@ -695,3 +695,28 @@ All 2026-11-08 · lead. Brief, ownership and merge plan: `docs/COORDINATION.md`.
    claimed by `ux-web` because it rewrites that path. Decisions of the streams go into their reports and are folded into this
    file at integration, to avoid append conflicts between branches.
 ||||||| 35e2ad7
+
+### UX round 1 — daemon stream (`ux/daemon`, folded in by the lead)
+
+All 2026-11-08 · ux-daemon, accepted by the lead after re-running `pnpm check` (exit 0) and `pnpm test:e2e`
+(48 passed, read-only proof 0 violations) on the merge with `main`. Full text: `docs/reports/ux-daemon.md`.
+
+8. **Storage.** `settings` is a key/value table of JSON documents (`app`, `revision`), merged with the defaults on
+   read (a corrupt document falls back to defaults, never blocks startup); `review_overrides` is keyed by the contracts'
+   `reviewTargetKey` and carries owner columns (project/scan root ids) only so one statement can clean up on removal.
+   Migration v2. Precedence is never re-implemented: the daemon calls the contracts' resolver over a cached key map.
+9. **Revision and events.** The revision moves only on a real change (same-value PATCH/PUT, removing a missing override: no
+   bump, no event). `settings.changed` goes to everyone including the caller. `review.bulk` is sent only when `changed > 0`
+   (after undo, `restored > 0`). Contract comments updated to say so (comment-only change).
+10. **Bulk semantics.** Stale is checked twice (when the target resolves and again after file lists arrive), so a worktree that
+    changes mid-call is `stale` and nothing in it is marked. `skippedDisabled` lists only disabled worktrees that had changes in
+    the scope; bare/missing/prunable/no-summary worktrees are ignored silently. `changed` counts mark rows per project. Bulk
+    waits (bounded 2.5 s) for first summaries like the list endpoints. One SQLite transaction; reuses the inbox's cached
+    per-worktree file lists, never one git process per file.
+11. **Undo.** Single-use random token, memory only, TTL and size cap from the contracts. Marks the call created are removed only
+    if still carrying the call's timestamp; marks it removed are restored only if no mark exists now; restored marks get fresh
+    timestamps. Cleanup of overrides on project/scan-root removal runs in the settings layer (it owns the revision bump).
+12. **Routes are optional dependencies of `createApp`**: without them the five routes 404 like an older daemon, which is how
+    degradation is tested. Measured (30 repos x 3 worktrees, 360 changed files): `GET /api/projects` 2.4 -> 2.6 ms, `GET
+    /api/inbox` warm 4.0 -> 4.2 ms, bulk `all` cold 493 ms / warm 2.7 ms; 18,090 changed files: bulk cold 1486 ms (equal to
+    the inbox's own cold aggregation), warm 51 ms.

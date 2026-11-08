@@ -157,7 +157,8 @@ export type AppSettingsPatch = z.infer<typeof AppSettingsPatchSchema>;
 /**
  * Settings plus every explicit override. `revision` increases on every change (settings,
  * overrides); a `settings.changed` event carries the new revision so clients can skip refetches
- * they already applied from a response.
+ * they already applied from a response. `overrides` is ordered folder, project, branch, worktree,
+ * then by target key; clients must not rely on anything stricter.
  */
 export const SettingsResponseSchema = z.object({
   settings: AppSettingsSchema,
@@ -226,9 +227,15 @@ export const BulkReviewResponseSchema = z.object({
   unchanged: z.number().int().min(0),
   /** Worktrees that had at least one file considered. */
   worktrees: z.number().int().min(0),
-  /** Worktrees skipped because review is disabled for them. */
+  /**
+   * Review-disabled worktrees that had changed files in `scope` and were therefore skipped (clean
+   * worktrees are not listed even when review is off for them).
+   */
   skippedDisabled: z.array(IdSchema),
-  /** Worktrees skipped because their `stateHash` no longer matched `expectedStateHashes`. */
+  /**
+   * Worktrees skipped because their `stateHash` no longer matched `expectedStateHashes`
+   * (reported whether or not they have changed files: the user saw a different state).
+   */
   stale: z.array(IdSchema),
   /** Pass to `POST /api/review/undo`; null when nothing changed. Valid for `BULK_UNDO_TTL_MS`. */
   undoToken: z.string().min(1).nullable(),
