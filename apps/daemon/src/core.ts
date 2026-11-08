@@ -2,10 +2,12 @@ import { realpath, stat } from 'node:fs/promises';
 import {
   API_VERSION,
   APP_NAME,
+  type BulkReviewTarget,
   type CommitInfo,
   type DiffQuery,
   type DiffResponse,
   type DiffScope,
+  type EffectiveReviewPolicy,
   type FilesResponse,
   type GitChangedFile,
   type GitCore,
@@ -29,11 +31,13 @@ import {
   type WorktreeLocator,
   type WorktreeSummary,
 } from '@octopus-diff/contracts';
+import type { BulkWorktree, ReviewSource } from './bulk-review.js';
 import { Coalescer, settleWithin } from './coalesce.js';
 import { ApiError, type ApiErrorInfo, isShutdownError, notFound, toApiError } from './errors.js';
 import type { EventHub } from './events.js';
 import { hashId } from './ids.js';
 import { resolveInputPath } from './paths.js';
+import { policyInputFor, type ReviewPolicyProvider } from './review-policy.js';
 import {
   type ProjectRow,
   REVIEW_TOUCH_INTERVAL_MS,
@@ -73,6 +77,8 @@ export interface CoreOptions {
   gcIntervalMs?: number;
   now?: () => Date;
   cwd?: string;
+  /** Review policy (UX round 1). Without it no `review` is attached (older-daemon behaviour). */
+  reviewPolicy?: ReviewPolicyProvider;
 }
 
 interface WorktreeEntry {
@@ -161,6 +167,7 @@ export class DaemonCore {
   readonly #gcIntervalMs: number;
   readonly #relistMs: number;
   readonly #watcher: WatcherService;
+  readonly #reviewPolicy: ReviewPolicyProvider | null;
   readonly #projects = new Map<string, ProjectEntry>();
   readonly #scanRoots = new Map<string, ScanState>();
   readonly #filesCache = new Map<string, { stateHash: string; files: GitChangedFile[] }>();
@@ -180,6 +187,7 @@ export class DaemonCore {
     this.#cwd = options.cwd ?? process.cwd();
     this.#initialWaitMs = options.initialSummaryWaitMs ?? CORE_DEFAULTS.initialSummaryWaitMs;
     this.#gcIntervalMs = options.gcIntervalMs ?? CORE_DEFAULTS.gcIntervalMs;
+    this.#reviewPolicy = options.reviewPolicy ?? null;
     const watch = options.watch ?? {};
     this.#relistMs = options.relistMs ?? 60_000;
     const watcherOptions: ConstructorParameters<typeof WatcherService>[0] = {
@@ -367,6 +375,7 @@ export class DaemonCore {
       this.#store.addScanExclusion(entry.row.scanRootId, id, this.#nowIso());
     }
     this.#store.deleteProject(id);
+    this.#reviewPolicy?.onProjectRemoved(id);
     if (this.#watcher.focus && entry.worktrees.has(this.#watcher.focus))
       this.#watcher.setFocus(null);
     const unwatched = this.#watcher.removeProject(id);
@@ -709,8 +718,21 @@ export class DaemonCore {
   #item(entry: ProjectEntry): ProjectListItem {
     const worktrees = [...entry.worktrees.values()]
       .sort((a, b) => compareWorktrees(a.worktree, b.worktree))
-      .map((e) => ({ worktree: e.worktree, summary: e.summary, error: e.error }));
+      .map((e) => {
+        const review = this.#policy(entry, e);
+        return {
+          worktree: e.worktree,
+          summary: e.summary,
+          error: e.error,
+          ...(review ? { review } : {}),
+        };
+      });
     return { project: this.#toProject(entry.row), worktrees };
+  }
+
+  /** Effective review policy of a worktree (UX round 1), or undefined without a provider. */
+  #policy(project: ProjectEntry, e: WorktreeEntry) {
+    return this.#reviewPolicy?.resolve(policyInputFor(project.row, e.worktree));
   }
 
   #requireProject(projectId: string): ProjectEntry {
@@ -984,11 +1006,15 @@ export class DaemonCore {
       project: ProjectEntry;
       entry: WorktreeEntry;
       summary: WorktreeSummary;
+      review: EffectiveReviewPolicy | undefined;
     }> = [];
     for (const project of projects) {
       for (const entry of project.worktrees.values()) {
         const summary = entry.summary;
         if (!summary || entry.worktree.bare || entry.worktree.missing) continue;
+        // Review-disabled worktrees are out of the review loop: omitted from onlyUnreviewed.
+        const review = this.#policy(project, entry);
+        if (onlyUnreviewed && review && !review.enabled) continue;
         const c = summary.counts;
         const relevant =
           scope.kind === 'working'
@@ -998,7 +1024,7 @@ export class DaemonCore {
               : scope.kind === 'unstaged'
                 ? c.unstaged + c.untracked + c.conflicted > 0
                 : true;
-        if (relevant) candidates.push({ project, entry, summary });
+        if (relevant) candidates.push({ project, entry, summary, review });
       }
     }
     const results = await Promise.all(
@@ -1013,6 +1039,7 @@ export class DaemonCore {
             worktree: c.entry.worktree,
             summary: c.summary,
             files,
+            ...(c.review ? { review: c.review } : {}),
           };
         } catch (error) {
           if (!isShutdownError(error)) {
@@ -1091,6 +1118,64 @@ export class DaemonCore {
     return { ok: true, reviewed: request.reviewed };
   }
 
+  /**
+   * Read-only view for bulk review (UX round 1, review-controls.ts): registry lookups, the
+   * worktrees a bulk target resolves to (after the bounded wait for first summaries), and the
+   * cached file lists. Nothing here spawns git per file.
+   */
+  reviewSource(): ReviewSource {
+    const toBulk = (project: ProjectEntry, e: WorktreeEntry): BulkWorktree => ({
+      worktreeId: e.worktree.id,
+      projectId: project.row.id,
+      scanRootId: project.row.scanRootId,
+      branch: e.worktree.branch,
+      detached: e.worktree.detached,
+      bare: e.worktree.bare,
+      missing: e.worktree.missing,
+      prunable: e.worktree.prunable,
+      summary: e.summary,
+    });
+    return {
+      hasProject: (projectId) => this.#projects.has(projectId),
+      hasScanRoot: (scanRootId) => this.#scanRoots.has(scanRootId),
+      projectOfWorktree: (worktreeId) => {
+        for (const p of this.#projects.values()) if (p.worktrees.has(worktreeId)) return p.row.id;
+        return null;
+      },
+      worktrees: async (target: BulkReviewTarget) => {
+        if (target.kind === 'worktree') {
+          const { project, entry } = this.#requireWorktree(target.worktreeId);
+          await this.#ensureSummary(entry);
+          return [toBulk(project, entry)];
+        }
+        let projects: ProjectEntry[];
+        if (target.kind === 'project') {
+          projects = [this.#requireProject(target.projectId)];
+        } else {
+          if (target.kind === 'folder' && !this.#scanRoots.has(target.scanRootId))
+            throw notFound('scan root');
+          projects = [...this.#projects.values()].filter(
+            (p) => target.kind === 'all' || p.row.scanRootId === target.scanRootId,
+          );
+        }
+        projects = projects.filter((p) => !p.missing);
+        await this.#awaitInitial(projects);
+        return projects.flatMap((p) => [...p.worktrees.values()].map((e) => toBulk(p, e)));
+      },
+      changedFiles: (worktreeId, scope) => {
+        const { project, entry } = this.#requireWorktree(worktreeId);
+        return this.#gitFiles(project, entry, scope);
+      },
+      currentStateHash: (worktreeId) => {
+        for (const p of this.#projects.values()) {
+          const e = p.worktrees.get(worktreeId);
+          if (e) return e.summary?.stateHash ?? null;
+        }
+        return null;
+      },
+    };
+  }
+
   // --- scan roots ------------------------------------------------------------------------------
 
   #toScanRoot(row: ScanRootRow): ScanRoot {
@@ -1164,6 +1249,7 @@ export class DaemonCore {
         void this.#dropProject(project, { exclude: false });
     }
     this.#store.deleteScanRoot(scanRootId);
+    this.#reviewPolicy?.onScanRootRemoved(scanRootId);
     this.#log.info('scan root removed', { scanRootId, path: st.row.path });
     if (st.running) await settleWithin(st.running, 2000);
   }
