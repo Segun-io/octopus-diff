@@ -1,0 +1,94 @@
+/**
+ * README screenshots: inbox, diff in split and unified mode, each in light and dark themes, from
+ * the acceptance fixtures. Writes PNGs to docs/screenshots/ (override with --out <dir>).
+ *
+ * Usage (after `pnpm build`): pnpm --filter @octopus-diff/fixtures screenshots
+ */
+import { mkdir } from 'node:fs/promises';
+import { join } from 'node:path';
+import { parseArgs } from 'node:util';
+import { TEST_IDS } from '@octopus-diff/contracts';
+import { findWorktree, generateFixtures } from '@octopus-diff/fixtures';
+import { chromium } from '@playwright/test';
+import { AppPage } from '../support/app.js';
+import { TestDaemon } from '../support/daemon.js';
+import {
+  applyChromiumLibraryPath,
+  assertBuilt,
+  E2ePreflightError,
+  REPO_ROOT,
+  scrubGitEnvironment,
+  webUiProblem,
+} from '../support/env.js';
+
+const { values: args } = parseArgs({
+  options: {
+    out: { type: 'string', default: join(REPO_ROOT, 'docs', 'screenshots') },
+    scale: { type: 'string', default: '1' },
+  },
+});
+
+async function main() {
+  scrubGitEnvironment();
+  assertBuilt();
+  const problem = webUiProblem();
+  if (problem) throw new E2ePreflightError(problem);
+  applyChromiumLibraryPath();
+  await mkdir(args.out, { recursive: true });
+
+  const fixtures = await generateFixtures({ seed: 1 });
+  const daemon = await TestDaemon.start({ manifest: fixtures.manifest });
+  const browser = await chromium.launch();
+  const written: string[] = [];
+  try {
+    await daemon.waitForProjects();
+    for (const theme of ['light', 'dark'] as const) {
+      const context = await browser.newContext({
+        viewport: { width: 1440, height: 900 },
+        deviceScaleFactor: Number(args.scale),
+        colorScheme: theme,
+      });
+      const page = await context.newPage();
+      const app = new AppPage(page);
+      await app.open(daemon.authUrl);
+      const shot = async (name: string) => {
+        await page.waitForTimeout(300); // let highlighting / fonts settle
+        const file = join(args.out, `${name}-${theme}.png`);
+        await page.screenshot({ path: file });
+        written.push(file);
+      };
+
+      await app.selectInbox();
+      const login = findWorktree(fixtures.manifest, 'alpha-login').worktree;
+      await app.openFile('src/login.ts', login.id);
+      await shot('inbox');
+
+      const sink = findWorktree(fixtures.manifest, 'kitchen-sink').worktree;
+      await app.selectWorktree(sink.id);
+      await app.openFile('src/both.ts');
+      await app.setDiffMode('split');
+      await shot('diff-split');
+      await app.setDiffMode('unified');
+      await shot('diff-unified');
+
+      await page.keyboard.press('?');
+      if (await app.byTestId(TEST_IDS.helpDialog).isVisible()) {
+        await shot('help');
+        await page.keyboard.press('Escape');
+      }
+      await context.close();
+    }
+  } finally {
+    await browser.close();
+    await daemon.close();
+    await fixtures.cleanup();
+  }
+  for (const file of written) process.stdout.write(`${file}\n`);
+}
+
+main().catch((error: unknown) => {
+  process.stderr.write(
+    `[screenshots] FAILED: ${error instanceof Error ? error.message : String(error)}\n`,
+  );
+  process.exitCode = 1;
+});

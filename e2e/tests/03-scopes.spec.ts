@@ -4,7 +4,7 @@
  * fixture manifest (API level, every worktree × scope × file), then the UI is checked for the
  * scope selector and every special-case rendering.
  */
-import type { DiffScope, FileDiff } from '@octopus-diff/contracts';
+import { type DiffScope, type FileDiff, TEST_IDS } from '@octopus-diff/contracts';
 import { type ExpectedFile, findProject, findWorktree } from '@octopus-diff/fixtures';
 import type { TestDaemon } from '../support/daemon.js';
 import {
@@ -274,7 +274,7 @@ test.describe('§8.4 scopes (UI)', () => {
 
     await app.openFile('generated/huge.sql');
     await expect(app.placeholder('too-large')).toBeVisible();
-    await app.byTestId('diff-load-anyway').click();
+    await app.byTestId(TEST_IDS.diffLoadAnyway).click();
     await expect(app.diffViewer).toHaveAttribute('data-state', 'ready', { timeout: 30_000 });
     await app.expectDiffText('octopus-marker-very-large', 30_000);
 
@@ -314,9 +314,9 @@ test.describe('§8.4 scopes (UI)', () => {
 
     // Hide-whitespace toggle empties a whitespace-only diff.
     await app.openFile('src/whitespace.ts');
-    await app.setToggle('whitespace-toggle', true);
+    await app.setToggle(TEST_IDS.whitespaceToggle, true);
     await expect(app.diffViewer).toHaveAttribute('data-state', /^(ready|empty)$/);
-    await app.setToggle('whitespace-toggle', false);
+    await app.setToggle(TEST_IDS.whitespaceToggle, false);
   });
 
   test('conflicted and unborn repositories render', async ({ manifest, daemon, app }) => {
