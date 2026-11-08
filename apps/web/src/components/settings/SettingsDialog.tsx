@@ -1,6 +1,7 @@
 import { TEST_IDS } from '@octopus-diff/contracts';
-import { useEffect, useId, useRef } from 'react';
+import { useCallback, useEffect, useId, useRef } from 'react';
 import { useHealthQuery, useSettingsSupport } from '../../api/settings.ts';
+import { useEscapeToClose } from '../../lib/useEscape.ts';
 import {
   APPEARANCE_ITEMS,
   GENERAL_ITEMS,
@@ -31,7 +32,8 @@ export function SettingsDialog() {
     return () => previous?.focus?.();
   }, []);
 
-  const close = () => store.setState({ settingsOpen: false });
+  const close = useCallback(() => store.setState({ settingsOpen: false }), [store]);
+  useEscapeToClose(true, close);
   const setSection = (id: SettingsSectionId) => store.setState({ settingsSection: id });
 
   const onKeyDown = (event: React.KeyboardEvent) => {
