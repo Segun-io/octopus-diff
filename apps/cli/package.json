@@ -19,7 +19,8 @@
     "build": "tsc -p tsconfig.build.json && node scripts/copy-web-assets.mjs",
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run --passWithNoTests",
-    "lint": "biome check ."
+    "lint": "biome check .",
+    "pack:tarball": "node scripts/pack.mjs"
   },
   "bin": {
     "octopus-diff": "./dist/index.js"
@@ -33,6 +34,7 @@
     "zod": "^4.6.7"
   },
   "devDependencies": {
-    "@octopus-diff/web": "workspace:*"
+    "@octopus-diff/web": "workspace:*",
+    "esbuild": "^0.28.2"
   }
 }

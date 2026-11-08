@@ -197,6 +197,9 @@ importers:
       '@octopus-diff/web':
         specifier: workspace:*
         version: link:../web
+      esbuild:
+        specifier: ^0.28.2
+        version: 0.28.2
 
   apps/daemon:
     dependencies:
