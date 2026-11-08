@@ -111,7 +111,88 @@ Newest last. Format: date · who · decision · reason. Contract changes are mar
 
 ## WS5 — CLI, packaging, docs, CI
 
-(none yet)
+All 2026-11-08 · WS5.
+
+1. **Argument parsing with `node:util` `parseArgs`** (no dependency), `strict: true`,
+   `allowNegative: true` for `--no-open` / `--no-watch`. Numbers are validated by hand (`--port`
+   0–65535, `--depth` 0–`SCAN_DEPTH_MAX`).
+2. **No command, or a leading option, means `serve`**, so `npx octopus-diff` and
+   `octopus-diff --port 9000` just start (PLAN §5.1 lists `npx octopus-diff` as the entry point).
+3. **Exit codes:** 0 ok, 1 runtime failure (daemon not running, port in use, a doctor check failed),
+   2 bad command line or invalid config file.
+4. **Extra commands beyond PLAN §6:** `status` (is a daemon running, health, re-print the tokenized
+   URL, `--open`) and `config` (`--path`, `--schema` prints the JSON Schema). Both are read-only and
+   small; `status` answers "what was the URL again?" without restarting.
+5. **Config file** `$XDG_CONFIG_HOME/octopus-diff/config.json`: zod `strictObject` (unknown keys are
+   errors, so typos don't silently do nothing; reversible by switching to a warning), relative paths
+   resolve against the file's directory, `~` is expanded, `$schema` is allowed. Keys: `host`, `port`,
+   `allowNonLoopback`, `allowedHosts`, `open`, `projects`, `scanRoots` (string or `{path, depth}`),
+   `scanDepth`, `watch` (mirrors `WatchOptions`), `git` (a subset of `GitCoreOptions`), `logLevel`,
+   `stateDir`, `webRoot`. **Merge:** scalar flags win; list flags (`--scan`, project paths,
+   `--allowed-host`) are *added* to the config lists (registration is idempotent and additive anyway).
+6. **The CLI always passes explicit `stateDir` and `configDir`** to `startDaemon`, computed with the
+   same XDG rules the daemon defaults to (relative `XDG_*` values are ignored, per the spec), so
+   `add` / `status` / `doctor` know where the token is. Precedence for the state dir:
+   `--state-dir` > config `stateDir` > `$XDG_STATE_HOME/octopus-diff`.
+7. **Runtime file `<stateDir>/daemon.json`** (pid, url, host, port, version, startedAt), written by
+   `serve` after the daemon starts (atomic rename, mode 0600, no secrets) and removed on shutdown if it
+   still has our pid. `add` / `status` / `doctor` use it to find a daemon on a non-default port
+   (`--port 0`). Stale files are ignored (`kill(pid, 0)` plus `/api/health`). Lookup order for clients:
+   `--url` > runtime file (unless `--host`/`--port` are given) > host/port from flags/config.
+8. **One daemon per state dir:** if `serve` finds a live daemon for the same state dir, it prints that
+   daemon's tokenized URL (opening it with `--open`) and exits 0 instead of starting a second one that
+   would share the SQLite store and token.
+9. **`add` without a running daemon fails** (exit 1) with "no octopus-diff daemon is running at …;
+   start one with `octopus-diff serve`". No offline fallback: the registry lives in the daemon's
+   store, and writing to `config.json` instead would create a second source of truth. Paths are
+   resolved to absolute paths in the CLI (the daemon's cwd is unrelated) and checked to be
+   directories before they are sent. The token is read from `<stateDir>/token` (DECISIONS #16).
+10. **Non-loopback hosts are refused in the CLI too** (exit 2) unless `--allow-non-loopback` /
+    `allowNonLoopback`, before the daemon is started (defense in depth; the daemon also checks).
+11. **Web assets:** the CLI build (`tsc && node scripts/copy-web-assets.mjs`) copies `apps/web/dist`
+    into `apps/cli/dist/web`; `@octopus-diff/web` is a devDependency of the CLI so `pnpm -r build`
+    builds the web app first. At runtime: `--web-root` / config `webRoot` (must contain
+    `index.html`, else exit 2) > `apps/web/dist` **only if** `../web/package.json` is
+    `@octopus-diff/web` (workspace; picks up a web-only rebuild) > `<cli>/dist/web`. If nothing is
+    found, `serve` warns and runs API-only (`webRoot: null`) rather than refusing.
+12. **Opening the browser:** macOS `open`; Windows `rundll32 url.dll,FileProtocolHandler`; Linux
+    `xdg-open`; WSL `wslview` → `powershell.exe -EncodedCommand` (`Start-Process '<url>'`, base64
+    UTF-16LE, so no Windows quoting applies) → `xdg-open`. Only `http(s)` URLs made of URL-safe
+    characters are opened; spawned detached with an argv array, never a shell. Failure to open is a
+    warning, not an error. Tests inject the opener and never open a browser.
+13. **`doctor`:** checks Node (≥ 24), git, platform/WSL, inotify (Linux), config file, state dir and
+    token permissions, port, web assets. Exit 1 only on `fail`; warnings don't fail. **Minimum git
+    `MIN_GIT_VERSION = 2.25.0` (provisional)**: the first release after `--end-of-options` (2.24),
+    shipped by Ubuntu 20.04; WS1 owns the real minimum, keep `apps/cli/src/commands/doctor.ts` and
+    README in sync with it. doctor runs only `git --version` (execFile, argv array, cwd = OS temp dir),
+    not through git-core: it never touches a repository and git-core is still a placeholder.
+    inotify: warn below `max_user_watches` 524 288 / `max_user_instances` 512, with a sysctl fix that
+    never lowers a value and a WSL note; token file with group/other bits → fail (`chmod 600`); state
+    dir with group/other bits → warn.
+14. **Shutdown:** SIGINT/SIGTERM/SIGHUP handlers are registered *before* `startDaemon`, then
+    `handle.close()` with a 10 s timeout (timeout or error → exit 1); a second signal exits 130
+    immediately. The bin sets `process.exitCode` and arms an unref'd 2 s `process.exit` fallback in
+    case a stray handle keeps the loop alive (so stdout still flushes normally).
+15. **Logger:** the CLI passes a logfmt-style stderr `Logger` (filtered by `--log-level`) plus
+    `logLevel` to the daemon.
+16. **Self-contained tarball (stretch):** `pnpm --filter octopus-diff run pack:tarball` bundles the CLI
+    with esbuild (new devDependency, already in the tree via tsx/vite), resolving workspace packages
+    from sources through the `@octopus-diff/source` condition; only the native `@parcel/watcher` stays
+    a real dependency. Copies the web build to `dist/web`, writes a minimal `package.json`, and runs
+    `npm pack` (local file only) into `apps/cli/.pack/` (ignored by `apps/cli/.gitignore`). Not part of
+    `pnpm build`. Never published; `private: true` stays on the workspace package.
+17. **CI** (`.github/workflows/ci.yml`, never pushed): jobs `check` (Node 24 and 26: install, lint,
+    typecheck, test, build, CLI `--version` + `doctor` smoke), `e2e` (Node 26,
+    `playwright install --with-deps chromium`, report uploaded on failure) and `package` (tarball
+    installed into an empty dir and run). Action majors current on 2026-11-08: `actions/checkout@v7`,
+    `actions/setup-node@v7`, `pnpm/action-setup@v6`, `actions/upload-artifact@v7`. Installs use
+    `--frozen-lockfile --config.strict-dep-builds=false` because of the esbuild build-script issue in
+    BLOCKERS (WS5 #1). Validated locally with `@action-validator/cli` and actionlint 2.0.6 (wasm build
+    from npm): no issues.
+18. **Tests against the real daemon skip themselves** (`ctx.skip()`) while `startDaemon` throws the
+    placeholder error, so they start running automatically once WS2 is merged; no manual un-skip.
+    Everything else uses an injected fake `startDaemon`, fake fetch, or a tiny `node:http` stub
+    daemon on an ephemeral loopback port.
 
 ## Phase 2 — integration (lead)
 
