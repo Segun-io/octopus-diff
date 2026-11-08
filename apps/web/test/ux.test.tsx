@@ -608,3 +608,22 @@ describe('F9, F10 and SEC-05', () => {
     await waitFor(() => expect(screen.queryByTestId('diff-unicode-warning')).toBeNull());
   });
 });
+
+describe('favicon dot (P2)', () => {
+  it('swaps the svg icon href to a data url with the dot and back', async () => {
+    const { applyFaviconDot, FAVICON_HREF, faviconWithDot } = await import('../src/lib/favicon.ts');
+    const link = document.createElement('link');
+    link.rel = 'icon';
+    link.type = 'image/svg+xml';
+    link.setAttribute('href', '/favicon.svg');
+    document.head.appendChild(link);
+    applyFaviconDot(true);
+    const href = link.getAttribute('href') ?? '';
+    expect(href.startsWith('data:image/svg+xml,')).toBe(true);
+    expect(decodeURIComponent(href)).toContain('<circle cx="26" cy="6" r="5" fill="#e0ae52"/>');
+    expect(href).toBe(faviconWithDot());
+    applyFaviconDot(false);
+    expect(link.getAttribute('href')).toBe(FAVICON_HREF);
+    link.remove();
+  });
+});

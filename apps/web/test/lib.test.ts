@@ -167,21 +167,3 @@ describe('unicode (SEC-05)', () => {
     expect(escapeSuspicious('﻿x​')).toBe('⟨U+FEFF⟩x⟨U+200B⟩');
   });
 });
-
-describe('favicon dot (P2)', () => {
-  it('swaps the svg icon href to a data url with the dot and back', async () => {
-    const { applyFaviconDot, FAVICON_HREF, faviconWithDot } = await import('../src/lib/favicon.ts');
-    const { JSDOM } = await import('jsdom');
-    const dom = new JSDOM(
-      '<html><head><link rel="icon" href="/favicon.svg" type="image/svg+xml"></head></html>',
-    );
-    const doc = dom.window.document;
-    applyFaviconDot(true, doc);
-    const href = doc.querySelector('link')?.getAttribute('href') ?? '';
-    expect(href.startsWith('data:image/svg+xml,')).toBe(true);
-    expect(decodeURIComponent(href)).toContain('<circle cx="26" cy="6" r="5" fill="#e0ae52"/>');
-    expect(href).toBe(faviconWithDot());
-    applyFaviconDot(false, doc);
-    expect(doc.querySelector('link')?.getAttribute('href')).toBe(FAVICON_HREF);
-  });
-});
