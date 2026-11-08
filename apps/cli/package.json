@@ -16,7 +16,7 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "build": "tsc -p tsconfig.build.json && node scripts/copy-web-assets.mjs",
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run --passWithNoTests",
     "lint": "biome check ."
@@ -29,6 +29,10 @@
   },
   "dependencies": {
     "@octopus-diff/contracts": "workspace:*",
-    "@octopus-diff/daemon": "workspace:*"
+    "@octopus-diff/daemon": "workspace:*",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@octopus-diff/web": "workspace:*"
   }
 }
