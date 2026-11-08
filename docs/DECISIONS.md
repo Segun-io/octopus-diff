@@ -203,7 +203,151 @@ All 2026-11-08, WS1. Details and rationale also in `docs/reports/git-core.md`.
 
 ## WS2 — daemon
 
-(none yet)
+All 2026-11-08 · WS2. No contract changes were needed.
+
+1. **Every route except `/api/health` requires the token, including static UI files** (DECISIONS
+   #16 taken literally; the UI build has no secrets, but one rule is easier to audit). An
+   unauthenticated HTML page load gets a small 401 page explaining how to sign in; everything
+   else gets a JSON `ApiErrorBody` 401 with `WWW-Authenticate: Bearer`. `?token=` is honored only
+   on non-API `GET`/`HEAD` page loads (never on `/api/*`, so tokens don't end up in API URLs);
+   a valid one sets the cookie and 302-redirects to the same path and query minus `token`
+   (leading slashes collapsed so the redirect can never point to another host).
+2. **Auth cookie:** `octopus_diff_token`, `HttpOnly; SameSite=Strict; Path=/; Max-Age=34560000`
+   (400 days, the browser maximum; a session cookie would force re-login after every browser
+   restart). No `Secure` flag: the daemon speaks plain HTTP on loopback. Cookies are not
+   port-scoped, so two daemons on the same host name with different state dirs overwrite each
+   other's cookie (re-open the tokenized URL).
+3. **Token format:** generated tokens are 32 random bytes, base64url (43 chars). Explicit tokens
+   must be 16–512 chars of `[A-Za-z0-9._~-]` (cookie- and header-safe). Comparison hashes both
+   sides with SHA-256 and uses `timingSafeEqual`. An invalid `<stateDir>/token` is replaced;
+   loose permissions on the token (0600) or the state dir (0700) are tightened with a warning.
+4. **Host policy (DNS rebinding):** accepted are loopback names/addresses (`localhost`,
+   127.0.0.0/8, `::1`, IPv4-mapped loopback) **with the bound port**; the bound address itself
+   (non-loopback binds); for wildcard binds (`0.0.0.0`/`::`) the IP literals of local interfaces
+   (IP literals cannot be rebound); and `allowedHosts` entries, where `name` matches any port
+   (reverse proxies) and `name:port` only that port. Host values with userinfo, paths, etc. are
+   rejected. **Origin**, when present, must be exactly `http://<Host>` (or `https://<Host>` for a
+   TLS-terminating proxy); `Origin: null` is rejected. Additionally `Sec-Fetch-Site: cross-site`
+   is rejected on `/api/*`. No CORS headers are ever sent (preflights fail with 403).
+5. **Security headers** on every response: `X-Content-Type-Options: nosniff`,
+   `Referrer-Policy: no-referrer`, `X-Frame-Options: DENY`, `Cross-Origin-Opener-Policy` and
+   `Cross-Origin-Resource-Policy: same-origin`; `Cache-Control: no-store` on the API. CSP for the
+   UI: `default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'
+   'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self';
+   worker-src 'self' blob:; object-src 'none'; base-uri 'none'; form-action 'self';
+   frame-ancestors 'none'` (wasm for Shiki/oniguruma, inline styles for React/highlighting,
+   blob workers for the highlighter pool). API responses get `default-src 'none'`. Inline
+   `<script>` in `index.html` is **not** allowed (WS3: keep scripts in files).
+6. **Error mapping:** `GitCoreError` → (`code`, status): `not_a_repository` → 422,
+   `not_found` → 404, `invalid_argument` → `bad_request` 400, `timeout` → 504,
+   `output_too_large` → `too_large` 413, `git_failed`/`git_not_found`/`git_unsupported` →
+   `git_error` 500, `command_not_allowed` → `internal` 500, `aborted`/`disposed` → `internal`
+   503, `not_implemented` → `internal` 501. `details` carries `gitCode`, `exitCode` and the first
+   2 KB of stderr. Validation failures are `bad_request` 400 with `details.issues`; a non-JSON
+   `Content-Type` on a body route is 415; bodies are capped at 1 MiB (413). Malformed ids in
+   path params are 400, unknown ids 404. A path that does not exist is `not_found` 404.
+7. **Success statuses:** `POST /api/projects` and `POST /api/scan-roots` return 201 when created
+   and 200 when the call was a no-op; `POST /api/scan-roots/:id/rescan` returns 202 (scan runs
+   in the background). Everything else returns 200.
+8. **SSE:** event ids are `<bootId>.<seq>` (bootId random per daemon start), so a
+   `Last-Event-ID` from a previous run is never confused with the current one. The last 1000
+   events are buffered for replay. `hello` is always sent first and carries no id (clients
+   should refetch on every `hello`). Heartbeat `: ping` every 15 s. A client whose queue exceeds
+   2000 frames is disconnected (it reconnects with `Last-Event-ID`).
+9. **`worktree.changed` semantics:** emitted on the first computed summary of a worktree and on
+   every later `stateHash` change. When a summary fails or a worktree/project goes missing,
+   the event carries a synthetic hash (`error:<code>` / `missing`) so clients refetch and show
+   the error. Expect a burst of these right after startup (WS3: coalesce refetches).
+10. **List endpoints wait (bounded) for first summaries:** `GET /api/projects`, `GET /api/inbox`,
+    `POST /api/projects` and `PATCH /api/projects/:id` wait up to 2.5 s for not-yet-computed
+    summaries, then return `summary: null` for the rest (a `worktree.changed` follows).
+    Startup registrations from `StartDaemonOptions.projects` do not wait.
+11. **Storage (`node:sqlite`):** `<stateDir>/octopus-diff.db`, WAL, migrations via
+    `PRAGMA user_version` (a newer schema is refused). Tables: `projects` (incl.
+    `default_branch_override`, `scan_root_id`, `added_at`, and `worktrees_json`, the last known
+    worktrees so the registry is usable before git answers and vanished paths can be reported),
+    `scan_roots`, `scan_exclusions`, and `reviewed(project_id, scope_kind, path, raw, patch_hash,
+    reviewed_at, last_seen_at)`. `path` holds `rawPath ?? path` and `raw` tells them apart (a
+    UTF-8 path can never collide with a base64 raw path). `last_seen_at` is refreshed (at most
+    daily) whenever a mark matches a listed file; GC runs at startup and every 24 h and deletes
+    marks unseen for 30 days and marks of unregistered projects. Removing a project deletes its
+    marks immediately.
+12. **`node:sqlite` ExperimentalWarning:** Node 26 (dev machine) prints none; Node 22–24 print one
+    on first load. The store loads `node:sqlite` lazily while a scoped `process.emitWarning`
+    filter drops only `ExperimentalWarning`s that mention SQLite; all other warnings pass.
+13. **Directories:** XDG layout on every platform (`$XDG_STATE_HOME`/`$XDG_CONFIG_HOME` when
+    absolute, else `~/.local/state` / `~/.config`), plus `octopus-diff`. The state dir is created
+    0700. The daemon reports `configDir` but never creates or writes it (the config file belongs
+    to the CLI, WS5).
+14. **Registry rules:** adding is idempotent; adding a project explicitly that a scan root had
+    discovered detaches it from the scan root (`scanRootId: null`). **Removing a scan root also
+    removes the projects it discovered** (explicit projects stay). Removing a scan-discovered
+    project records a per-scan-root exclusion so rescans don't bring it back; adding it
+    explicitly clears the exclusion. Rescans only add projects. Stored scan roots are rescanned
+    in the background at startup. Re-adding an existing scan root updates its depth and rescans.
+    The scan uses git-core's own ignores (`watch.ignore` is not applied to scanning).
+15. **Startup reconciliation:** stored projects are served immediately from the cached worktree
+    list and re-resolved in the background. A project whose common dir vanished (or now resolves
+    to a different id) is **kept and reported**: its worktrees get `missing: true`,
+    `summary: null`, `error.code = not_found`, and `project.updated` is emitted; it is retried
+    every 60 s and restored automatically when it comes back.
+16. **Bare entries** (bare repos, or the bare "main" of a bare+worktrees setup) get no summary
+    (`summary: null`, `error: null`) and never appear in the inbox.
+17. **Caching:** file lists are cached per (worktree, scope) and keyed by the summary's
+    `stateHash` for `working`/`staged`/`unstaged` (the contract says it changes whenever any
+    file's patch changes), by sha for `commit`; `branch` is never cached (its base can move
+    without the worktree changing). Summaries are single-flight per worktree with one coalesced
+    follow-up run. Review flags are attached at response time, so marking never invalidates a
+    cache. The inbox prefilters with summary counts (`working`: changedFiles; `staged`:
+    staged+conflicted; `unstaged`: unstaged+untracked+conflicted) and queries every worktree
+    for `branch`/`commit`; per-worktree failures are skipped.
+18. **Watcher layout:** one `@parcel/watcher` subscription per worktree root (ignoring `.git`,
+    `node_modules`, common build/cache dirs at any depth, `watch.ignore`, and nested worktree
+    roots known at subscribe time) and one per project on the common git dir (ignoring
+    `objects`, `logs`, `hooks`, `lfs`, `modules`, `rr-cache`, `info`, `fsmonitor--daemon`,
+    `worktrees/*/logs`; `*.lock` events are dropped). Git-dir events are routed with
+    `GitCore.getWatchTargets`: a linked worktree's own git dir → that worktree; `refs/`,
+    `packed-refs` → every worktree; other matching `gitPaths` → their worktree; top-level files
+    and `rebase-*`/`sequencer` → the main worktree; `worktrees/<name>` creation/removal (or
+    `gitdir`/`locked` changes) → re-list worktrees. Working-tree events inside a nested worktree
+    root are attributed to the deepest root (Claude Code's `.claude/worktrees/*`). Changes to
+    files inside ignored build dirs are picked up by polling only.
+19. **Watcher timing:** debounce 200 ms (clamped to 150–300 per PLAN §5.6) with a 1 s max wait
+    during continuous bursts. Poll cadence: natively watched worktrees 30 s focused / 5 min
+    others; degraded worktrees (native watching failed, or on `/mnt/*` under WSL where Windows-
+    side edits produce no inotify events) 5 s focused / 30 s others. Focusing a worktree
+    refreshes it immediately. Worktree lists are re-read every 60 s and on git-dir changes.
+    `watch.enabled: false` and `forcePolling` both poll with the degraded cadence and report
+    mode `disabled` / `polling`.
+20. **Watcher degradation:** inotify `ENOSPC` (watch limit), `EMFILE` (instances), permission and
+    missing-path failures switch the affected worktrees to polling, log one warning per kind
+    (with paths), and surface path-free warnings (with the current sysctl value and the fix) in
+    `/api/health` (`watcher.mode` = `native` | `mixed` | `polling` | `disabled`). `/api/health`
+    is unauthenticated, so its warnings never contain paths.
+21. **`startDaemon`** returns a `Daemon` (a superset of `DaemonHandle`: also `app`, `core`, `hub`,
+    `store`, `logger`) and accepts `internal` knobs for tests/benchmarks (heartbeat, relist and
+    wait intervals, an injectable watcher `subscribe`, a clock). It refuses non-loopback hosts
+    without `allowNonLoopback`, rejects invalid ports, and turns `EADDRINUSE` into a clear
+    message. For wildcard binds the reported `url` uses `127.0.0.1`.
+22. **`close()`** stops the core (watchers, timers, scans), ends SSE streams, closes the server
+    (idle connections at once, the rest after a 200 ms grace), disposes git-core **only if the
+    daemon created it** (an injected `gitCore` belongs to the caller), then closes SQLite.
+    Idempotent.
+23. **HTTP adapter:** `@hono/node-server`'s `getRequestListener` with
+    `overrideGlobalObjects: false`, so embedding the daemon in the CLI does not replace the
+    process-wide `Request`/`Response`. Because node-server's `bodyLimit` middleware needs those
+    overrides, the daemon reads JSON bodies itself with the 1 MiB cap.
+24. **Logging:** JSON lines on stderr (`{"time","level","msg",...}`), or the injected `Logger`;
+    both are filtered by `logLevel` and redacted (the token value anywhere, and any field whose
+    name looks like token/authorization/cookie/password/secret). Requests are logged at `debug`
+    with the path only (never the query string). The auth URL is never logged.
+25. **`PUT /api/focus`** accepts unknown worktree ids (a UI can race a removal); they are ignored.
+26. **`webRoot`** without an `index.html` (e.g. web not built) logs a warning and serves the API
+    only, instead of failing startup. Static paths are decoded per segment; `.`/`..`/NUL/
+    backslash segments are refused; realpaths must stay inside the webRoot realpath (no symlink
+    escape). Missing paths without an extension (or requests accepting HTML) fall back to
+    `index.html`; missing `/assets/*` or files with an extension are 404. Hashed `/assets/*` are
+    cached `private, max-age=31536000, immutable`; everything else `no-cache`.
 
 ## WS3 — web
 
