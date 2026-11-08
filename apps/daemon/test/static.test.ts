@@ -39,6 +39,8 @@ describe('static web UI', () => {
     expect(js.status).toBe(200);
     expect(js.headers.get('content-type')).toBe('text/javascript; charset=utf-8');
     expect(js.headers.get('cache-control')).toContain('immutable');
+    // Worker scripts run under their own response's CSP: it must allow same-origin imports.
+    expect(js.headers.get('content-security-policy') ?? '').toContain("script-src 'self'");
     const svg = await http(daemon, '/favicon.svg');
     expect(svg.headers.get('content-type')).toBe('image/svg+xml');
     const head = await http(daemon, '/assets/app-abc123.js', { method: 'HEAD' });
