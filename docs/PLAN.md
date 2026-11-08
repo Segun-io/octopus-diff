@@ -318,6 +318,14 @@ Then run, as separate fresh sessions, in parallel: **(a)** adversarial code revi
 execution, symlink escapes), **(c)** performance pass against the bench. Triage findings, fix, re-run
 acceptance. Write `docs/reports/mvp.md` (what works, what does not, next steps).
 
+### Phase 2b — UX round 1 (2026-11-08, user-requested)
+
+Identity and design system, theming-ready architecture, a Folder tier in the shell, "Mark all as verified" with undo, review
+policy (per worktree / branch / project / folder, ON by default for anything new) and a real Settings screen. Two parallel
+streams, `ux-web` and `ux-daemon`; brief, ownership, behaviour spec, merge plan and acceptance (UX-1…UX-8) are in
+`docs/COORDINATION.md`; decisions in `docs/DECISIONS.md` ("UX round 1"). New contract surface: `packages/contracts/src/settings.ts`,
+routes `/api/settings`, `/api/review-policy`, `/api/review/bulk`, `/api/review/undo`, events `review.bulk` and `settings.changed`.
+
 ### Phase 3 — After the MVP (needs user input; do not start autonomously)
 
 Backlog in §4.4. Desktop shell. Naming / branding / public repo / npm publish.

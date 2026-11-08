@@ -613,3 +613,38 @@ All 2026-11-08 · WS5.
    Contract changes are additive (`AUTH_FRAGMENT_PARAM`, `TOKEN_STORAGE_KEY`, `HEALTH_CHALLENGE_PARAM`,
    `healthProofMessage`, `HealthQuerySchema`, optional `HealthResponse.proof`, `client.health({challenge})`);
    `AUTH_COOKIE_NAME` stays exported (deprecated).
+
+## UX round 1 — identity, theming-ready, review controls (lead)
+
+All 2026-11-08 · lead. Brief, ownership and merge plan: `docs/COORDINATION.md`.
+
+1. **Two parallel streams split by layer, not by feature.** `ux-web` owns all of `apps/web` (one owner keeps the visual
+   language coherent: tokens, themes, shell, settings, review UI), `ux-daemon` owns the daemon side. The seam is the
+   contracts commit `642a116` (`contracts:`), frozen for the round; the pure resolver in the contracts is the single
+   implementation of the policy precedence so daemon and web mock cannot drift.
+2. **[contracts] Review policy is an inheritance chain with one default** — worktree > branch > project > folder (scan
+   root) > default. "Review ON by default for new repos/worktrees/branches" *is* the default level: new things have no
+   override, so they inherit it. Rejected: per-kind "defaults for new items" stamped at discovery (hidden state, surprising
+   when the global default changes, needs a "first seen" notion). Branch overrides are keyed by (project, branch name) so
+   they survive agents deleting and recreating worktrees for the same branch. Disabled worktrees stay listed and diffable
+   (diff first) but leave `onlyUnreviewed`, `n`, badges and bulk actions.
+3. **[contracts] Bulk review is resolved on the server** with an optional `expectedStateHashes` guard and a single-use,
+   in-memory undo token. Rejected: the client sending every `patchHash` (6000 files = megabytes, and the F2 class of
+   bug: marking a patch the user has not seen). Undo is cheap because marks are app state, not repository state.
+   `onlyUnreviewed` now also omits review-disabled worktrees (a refinement; identical while nothing is disabled).
+4. **Settings split.** Shared and behavioural (review default + overrides) live in the daemon (SQLite migration v2, SSE
+   `settings.changed` with a persisted revision). Per-device presentation (theme, density, layout, display prefs) stays in
+   the browser's versioned `localStorage` prefs. The Settings screen labels each. Rejected for now: syncing UI prefs through
+   the daemon (no account model; revisit with the desktop shell).
+5. **Themes are prepared, not built.** Token names from one source, themes as data with a diff-viewer theme mapping, a
+   registry, `data-theme` + the existing `.dark` class, prefs `{ mode, light, dark }`, an external pre-paint script (the CSP
+   forbids inline scripts), an AA contrast unit test over every registered theme. Ship two brand themes plus at most one.
+6. **"Read-only capabilities for a whole folder" is prepared as IA only.** A Folder tier (scan roots) and a per-node view
+   registry in the web shell; `docs/design/FOLDERS.md` records the vision and the daemon security prerequisites (registered
+   roots only, realpath containment, caps, no writes). No daemon endpoints now; this does not change the read-only guarantee
+   in PLAN §1/§5.5.
+7. **Coordination with in-flight work.** `review/perf` is still running (touches `api/cache.ts`, `api/hooks.ts`,
+   `daemon/{app,core,daemon,watcher}.ts`): the streams may touch those files only with minimal `wire:` commits. Auth v2
+   implementation, F1/F3–F8 and the SEC items stay unassigned and reserved; F2 (review toggle keyed on the displayed diff) is
+   claimed by `ux-web` because it rewrites that path. Decisions of the streams go into their reports and are folded into this
+   file at integration, to avoid append conflicts between branches.
