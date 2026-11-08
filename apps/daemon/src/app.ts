@@ -3,8 +3,10 @@ import {
   type AddProjectResponse,
   AddScanRootRequestSchema,
   type AddScanRootResponse,
+  AppSettingsPatchSchema,
   AUTH_COOKIE_NAME,
   AUTH_QUERY_PARAM,
+  BulkReviewRequestSchema,
   CommitsQuerySchema,
   type CommitsResponse,
   DiffQuerySchema,
@@ -22,6 +24,9 @@ import {
   type RouteName,
   type ScanRootsResponse,
   type ServerEvent,
+  SetReviewPolicyRequestSchema,
+  type SettingsResponse,
+  UndoReviewRequestSchema,
   UpdateProjectRequestSchema,
   type UpdateProjectResponse,
 } from '@octopus-diff/contracts';
@@ -31,7 +36,9 @@ import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { DaemonCore } from './core.js';
 import { ApiError, toApiError } from './errors.js';
 import type { EventHub } from './events.js';
+import type { ReviewControls } from './review-controls.js';
 import { API_CSP, type HostPolicy, isHostAllowed, isOriginAllowed, UI_CSP } from './security.js';
+import type { SettingsService } from './settings.js';
 import type { StaticFiles } from './static.js';
 import { tokensEqual } from './token.js';
 
@@ -48,6 +55,9 @@ export interface AppDeps {
   hostPolicy: HostPolicy;
   staticFiles: StaticFiles | null;
   hello: () => ServerEvent;
+  /** UX round 1: settings, review policy, bulk review (routes 404 when absent, as older daemons). */
+  settings?: SettingsService;
+  reviewControls?: ReviewControls;
 }
 
 interface SafeParser<T> {
@@ -324,6 +334,37 @@ export function createApp(deps: AppDeps): Hono {
     const body: OkResponse = { ok: true };
     return c.json(body);
   });
+
+  // --- UX round 1: settings, review policy, bulk review (COORDINATION §2) -------------------
+  const { settings, reviewControls } = deps;
+  if (settings && reviewControls) {
+    route('getSettings', (c) => {
+      const body: SettingsResponse = settings.response();
+      return c.json(body);
+    });
+
+    route('updateSettings', async (c) => {
+      const patch = parseWith(AppSettingsPatchSchema, await readJson(c), 'request body');
+      const body: SettingsResponse = settings.update(patch);
+      return c.json(body);
+    });
+
+    route('setReviewPolicy', async (c) => {
+      const request = parseWith(SetReviewPolicyRequestSchema, await readJson(c), 'request body');
+      const body: SettingsResponse = reviewControls.setPolicy(request);
+      return c.json(body);
+    });
+
+    route('bulkReview', async (c) => {
+      const request = parseWith(BulkReviewRequestSchema, await readJson(c), 'request body');
+      return c.json(await reviewControls.bulk(request));
+    });
+
+    route('undoReview', async (c) => {
+      const request = parseWith(UndoReviewRequestSchema, await readJson(c), 'request body');
+      return c.json(reviewControls.undoBulk(request));
+    });
+  }
 
   route('events', (c) => {
     const stream = hub.createStream(deps.hello(), c.req.header('last-event-id') ?? null);

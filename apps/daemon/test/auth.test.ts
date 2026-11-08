@@ -174,6 +174,63 @@ describe('auth and request safety', () => {
     expect(res.headers.get('content-type')).toContain('text/html');
   });
 
+  it('guards the UX round 1 routes (settings, review policy, bulk review, undo) like every API route', async () => {
+    const routes: Array<{ method: string; path: string; body?: unknown; ok: number }> = [
+      { method: 'GET', path: '/api/settings', ok: 200 },
+      { method: 'PATCH', path: '/api/settings', body: {}, ok: 200 },
+      {
+        method: 'PUT',
+        path: '/api/review-policy',
+        body: { target: { kind: 'project', projectId: '0000000000000000' }, enabled: false },
+        ok: 404,
+      },
+      { method: 'POST', path: '/api/review/bulk', body: { target: { kind: 'all' } }, ok: 200 },
+      { method: 'POST', path: '/api/review/undo', body: { undoToken: 'nope' }, ok: 404 },
+    ];
+    for (const r of routes) {
+      const init = {
+        method: r.method,
+        headers: { 'content-type': 'application/json' },
+        ...(r.body === undefined ? {} : { body: JSON.stringify(r.body) }),
+      };
+      const label = `${r.method} ${r.path}`;
+      const missing = await http(daemon, r.path, { ...init, auth: false });
+      expect(missing.status, `${label} without token`).toBe(401);
+      expect((await errorOf(missing)).code).toBe('unauthorized');
+      const wrong = await http(daemon, r.path, {
+        ...init,
+        headers: { ...init.headers, authorization: 'Bearer nope-nope-nope-nope' },
+      });
+      expect(wrong.status, `${label} wrong token`).toBe(401);
+      const query = await http(daemon, `${r.path}?token=${daemon.token}`, {
+        ...init,
+        auth: false,
+      });
+      expect(query.status, `${label} ?token=`).toBe(401);
+      const origin = await inproc(daemon, r.path, {
+        ...init,
+        headers: { ...init.headers, origin: 'https://evil.example' },
+      });
+      expect(origin.status, `${label} foreign Origin`).toBe(403);
+      const host = await inproc(daemon, r.path, {
+        ...init,
+        headers: { ...init.headers, host: `evil.example:${daemon.port}` },
+      });
+      expect(host.status, `${label} foreign Host`).toBe(403);
+      const crossSite = await inproc(daemon, r.path, {
+        ...init,
+        headers: { ...init.headers, 'sec-fetch-site': 'cross-site' },
+      });
+      expect(crossSite.status, `${label} cross-site`).toBe(403);
+      const ok = await http(daemon, r.path, {
+        ...init,
+        headers: { ...init.headers, origin: daemon.url },
+      });
+      expect(ok.status, `${label} with token`).toBe(r.ok);
+      expect(ok.headers.get('cache-control')).toBe('no-store');
+    }
+  });
+
   it('never logs the token', async () => {
     const lines: string[] = [];
     const d = await startTestDaemon({
