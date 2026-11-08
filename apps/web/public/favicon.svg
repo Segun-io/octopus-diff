@@ -1,4 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="octopus-diff">
+  <title>octopus-diff</title>
   <!-- octopus-diff mark (docs/design/IDENTITY.md). One colour; the eyes are cut out. -->
   <style>
     .m { fill: #5b47d6; stroke: #5b47d6; }

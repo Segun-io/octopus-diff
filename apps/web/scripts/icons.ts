@@ -42,12 +42,7 @@ function markSvg(fill: string, size: number): string {
 
 let svgSource = '';
 
-async function shot(
-  page: Page,
-  html: string,
-  size: number,
-  transparent: boolean,
-): Promise<Buffer> {
+async function shot(page: Page, html: string, size: number, transparent: boolean): Promise<Buffer> {
   await page.setViewportSize({ width: size, height: size });
   await page.setContent(
     `<!doctype html><html><body style="margin:0;${transparent ? 'background:transparent' : ''}">${html}</body></html>`,
