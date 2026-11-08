@@ -109,6 +109,22 @@ export function loadPrefs(storage: Storage | null = safeStorage()): Prefs {
   }
 }
 
+/** True when the stored document is already in the current shape (`version` matches). */
+export function storedPrefsAreCurrent(storage: Storage | null = safeStorage()): boolean {
+  const raw = storage?.getItem(PREFS_STORAGE_KEY);
+  if (!raw) return true;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return (
+      typeof parsed === 'object' &&
+      parsed !== null &&
+      (parsed as { version?: unknown }).version === PREFS_VERSION
+    );
+  } catch {
+    return false;
+  }
+}
+
 export function serializePrefs(prefs: Prefs): string {
   return JSON.stringify({ version: PREFS_VERSION, ...prefs });
 }
