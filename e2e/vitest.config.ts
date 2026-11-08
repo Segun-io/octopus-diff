@@ -7,6 +7,6 @@ export default defineConfig({
   resolve: { conditions },
   ssr: { resolve: { conditions, externalConditions: ['@octopus-diff/source'] } },
   test: {
-    include: ['src/**/*.test.ts'],
+    include: ['support/**/*.test.ts'],
   },
 });
