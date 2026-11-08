@@ -40,6 +40,7 @@ describe('subcommand allowlist', () => {
         'ls-files',
         'log',
         'config',
+        'check-attr',
       ].sort(),
     );
     for (const args of [
@@ -53,6 +54,8 @@ describe('subcommand allowlist', () => {
       ['rev-parse', '--git-dir', '--git-common-dir'],
       ['log', '-z', '--format=%H', 'HEAD', '--'],
       ['cat-file', '-t', 'HEAD'],
+      ['check-attr', '-z', '--stdin', 'diff'],
+      ['check-attr', 'diff', 'text', '--', 'a.txt', '--source=x'],
     ]) {
       expect(() => assertAllowedGitArgs(args), args.join(' ')).not.toThrow();
     }
@@ -140,6 +143,9 @@ describe('subcommand allowlist', () => {
     rejects(['log', '--show-signature']);
     rejects(['diff', '--color=always']);
     rejects(['status', 'x\u0000y']);
+    rejects(['check-attr', '--source=HEAD', 'diff', '--', 'x']);
+    rejects(['check-attr', '--output=/tmp/x', 'diff']);
+    rejects(['check-attr', '-o', 'diff']);
     // After `--`, arguments are paths, not options.
     expect(() => assertAllowedGitArgs(['diff', 'HEAD', '--', '--output=x'])).not.toThrow();
   });
@@ -170,6 +176,23 @@ describe('argv and environment', () => {
     expect(buildGitArgv(['status'])).not.toContain('--no-ext-diff');
     for (const [key] of CONFIG_PINS)
       expect(argv).toContain(argv.find((a) => a.startsWith(`${key}=`)));
+  });
+
+  it('pins the repository location as global options (SEC-06)', () => {
+    const argv = buildGitArgv(['status'], [], { gitDir: '/r/.git', workTree: '/r' });
+    expect(argv.slice(0, 4)).toEqual([
+      '--no-pager',
+      '--no-optional-locks',
+      '--git-dir=/r/.git',
+      '--work-tree=/r',
+    ]);
+    expect(buildGitArgv(['log'], [], { gitDir: '/r.git' })).not.toContainEqual(
+      expect.stringMatching(/^--work-tree/),
+    );
+    expect(buildGitArgv(['log'])).not.toContainEqual(expect.stringMatching(/^--git-dir/));
+    expect(() => buildGitArgv(['log'], [], { gitDir: 'relative/.git' })).toThrowError(
+      expect.objectContaining({ code: 'invalid_argument' }),
+    );
   });
 
   it('lets safety variables win and strips redirections', () => {
@@ -235,6 +258,7 @@ describe('process control', () => {
         '  fail) echo "fatal: something broke" >&2; exit 2 ;;',
         '  notrepo) echo "fatal: not a git repository (or any of the parent directories): .git" >&2; exit 128 ;;',
         '  env) env ;;',
+        '  stdin) cat ;;',
         'esac',
         `echo "end $$ $(date +%s%N)" >> "${log}"`,
         'exit 0',
@@ -257,6 +281,25 @@ describe('process control', () => {
     expect(isGitCoreError(error, 'timeout')).toBe(true);
     expect(Date.now() - started).toBeLessThan(5_000);
     await runner.dispose();
+  });
+
+  it('passes input on stdin, and survives git exiting before reading it', async () => {
+    const echo = new GitRunner({ gitBinary: fakeGit, env: { FAKE_MODE: 'stdin' } });
+    const result = await echo.run(['check-attr', '-z', '--stdin', 'diff'], {
+      cwd: fx.root,
+      input: Buffer.from('a.txt\u0000b\u00ffc\u0000', 'latin1'),
+    });
+    expect(result.stdout.toString('latin1')).toBe('a.txt\u0000b\u00ffc\u0000');
+    // Without input, stdin is closed (`cat` gets EOF at once).
+    const none = await echo.run(['status'], { cwd: fx.root });
+    expect(none.stdout.length).toBe(0);
+    await echo.dispose();
+    const failing = new GitRunner({ gitBinary: fakeGit, env: { FAKE_MODE: 'fail' } });
+    const error = await failing
+      .run(['check-attr', '--stdin', 'diff'], { cwd: fx.root, input: Buffer.alloc(8 << 20, 97) })
+      .catch((e: unknown) => e);
+    expect(isGitCoreError(error, 'git_failed')).toBe(true);
+    await failing.dispose();
   });
 
   it('caps buffered output', async () => {

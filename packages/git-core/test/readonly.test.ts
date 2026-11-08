@@ -7,9 +7,22 @@
  * - `git status --porcelain` output is unchanged.
  */
 import { createHash } from 'node:crypto';
-import { type FSWatcher, readdirSync, readFileSync, statSync, utimesSync, watch } from 'node:fs';
+import {
+  chmodSync,
+  type FSWatcher,
+  readdirSync,
+  readFileSync,
+  statSync,
+  utimesSync,
+  watch,
+} from 'node:fs';
 import path from 'node:path';
-import type { DiffScope, GitCore, WorktreeLocator } from '@octopus-diff/contracts';
+import {
+  type DiffScope,
+  type GitCore,
+  isGitCoreError,
+  type WorktreeLocator,
+} from '@octopus-diff/contracts';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createGitCore, hashId } from '../src/index.js';
 import { createFixture, type Fixture, lines } from './helpers/fixture.js';
@@ -51,6 +64,7 @@ describe('read-only proof', () => {
   let gitDirs: string[];
   let worktrees: string[];
   let bare: string;
+  let unreadable: string | null = null;
   const events: string[] = [];
   const watchers: FSWatcher[] = [];
 
@@ -91,12 +105,35 @@ describe('read-only proof', () => {
     bare = path.join(fx.root, 'bare.git');
     fx.git(fx.root, ['clone', '-q', '--bare', main, bare]);
 
-    worktrees = [main, linked, conflict, unborn];
+    // Superproject: a moved submodule pointer (git-core reads the submodule's HEAD), an
+    // attributes file with an untracked binary-attribute file (git check-attr), an untracked
+    // nested repository, and (unless root) an unreadable modified tracked file.
+    const lib = fx.repo('lib', { files: { 'l.txt': 'l1\n' } });
+    fx.write(path.join(lib, 'l.txt'), 'l2\n');
+    fx.commitAll(lib, 'l2');
+    const sup = fx.repo('super', {
+      files: { '.gitattributes': '*.dat binary\n', 'r.txt': 'r\n', 'locked.txt': 'k\n' },
+    });
+    fx.git(sup, ['submodule', 'add', '-q', lib, 'sub']);
+    fx.commitAll(sup, 'sub');
+    fx.git(path.join(sup, 'sub'), ['checkout', '-q', '--detach', 'HEAD~1']);
+    fx.write(path.join(sup, 'x.dat'), 'text under binary\n');
+    const nested = fx.repo('super/nested', { files: { 'n.txt': 'n\n' } });
+    if (process.getuid?.() !== 0) {
+      unreadable = path.join(sup, 'locked.txt');
+      fx.write(unreadable, 'changed\n');
+      chmodSync(unreadable, 0o000);
+    }
+
+    worktrees = [main, linked, conflict, unborn, sup];
     gitDirs = [
       path.join(main, '.git'),
       path.join(conflict, '.git'),
       path.join(unborn, '.git'),
       bare,
+      path.join(sup, '.git'),
+      path.join(nested, '.git'),
+      path.join(lib, '.git'),
     ];
 
     // Make the index stat-dirty: tracked files get new mtimes with unchanged content, which
@@ -114,6 +151,7 @@ describe('read-only proof', () => {
   });
 
   afterAll(async () => {
+    if (unreadable) chmodSync(unreadable, 0o644);
     for (const watcher of watchers) watcher.close();
     await core.dispose();
     fx.dispose();
@@ -140,9 +178,13 @@ describe('read-only proof', () => {
     const scan = await core.scan(fx.root, { depth: 2 });
     expect(scan.repositories.length).toBeGreaterThanOrEqual(5);
     const projects = await Promise.all(
-      [...worktrees, bare, path.join(worktrees[0] as string, 'sub'), gitDirs[0] as string].map(
-        (p) => core.resolveProject(p),
-      ),
+      [
+        ...worktrees,
+        bare,
+        path.join(worktrees[0] as string, 'sub'),
+        gitDirs[0] as string,
+        path.join(fx.root, 'super', 'sub'),
+      ].map((p) => core.resolveProject(p)),
     );
     const locators: WorktreeLocator[] = [];
     for (const { project, worktrees: list } of projects) {
@@ -175,12 +217,24 @@ describe('read-only proof', () => {
           throw error;
         });
         for (const file of files) {
-          await core.getFileDiff(wt, scope, file);
-          await core.getFileDiff(wt, scope, file, {
-            ignoreWhitespace: true,
-            contextLines: 10,
-            full: true,
-          });
+          const expectFailure = unreadable !== null && path.join(wt.path, file.path) === unreadable;
+          const run = async (promise: Promise<unknown>): Promise<void> => {
+            // The unreadable file's own diff fails (F7); nothing else may.
+            if (!expectFailure) return void (await promise);
+            const error = await promise.then(
+              () => null,
+              (e: unknown) => e,
+            );
+            expect(isGitCoreError(error, 'git_failed') || error === null).toBe(true);
+          };
+          await run(core.getFileDiff(wt, scope, file));
+          await run(
+            core.getFileDiff(wt, scope, file, {
+              ignoreWhitespace: true,
+              contextLines: 10,
+              full: true,
+            }),
+          );
           diffs += 1;
         }
       }

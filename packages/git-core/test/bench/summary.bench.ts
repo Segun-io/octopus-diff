@@ -3,6 +3,9 @@
  * Not part of `pnpm test`. Run from the repo root:
  *
  *   pnpm exec tsx --conditions=@octopus-diff/source packages/git-core/test/bench/summary.bench.ts [repos]
+ *
+ * BENCH_ATTRIBUTES=1 commits a root `.gitattributes` in every repository, so untracked files
+ * need a `git check-attr` call (otherwise git-core skips it).
  */
 import path from 'node:path';
 import type { WorktreeLocator } from '@octopus-diff/contracts';
@@ -11,6 +14,7 @@ import { createFixture, lines } from '../helpers/fixture.js';
 
 const REPOS = Number(process.argv[2] ?? 30);
 const FILES_PER_REPO = 200;
+const WITH_ATTRIBUTES = process.env.BENCH_ATTRIBUTES === '1';
 
 async function time<T>(label: string, fn: () => Promise<T>): Promise<T> {
   const start = performance.now();
@@ -28,6 +32,7 @@ async function main(): Promise<void> {
       const files: Record<string, string> = {};
       for (let f = 0; f < FILES_PER_REPO; f += 1)
         files[`src/dir${f % 10}/file${f}.ts`] = lines(40, `r${r}f${f}`);
+      if (WITH_ATTRIBUTES) files['.gitattributes'] = '*.png binary\n* text=auto\n';
       const repo = fx.repo(`repo-${r}`, { files });
       const commonDir = path.join(repo, '.git');
       const worktrees = [repo];
@@ -48,7 +53,7 @@ async function main(): Promise<void> {
       });
     }
     console.log(
-      `setup: ${REPOS} repos, ${locators.length} worktrees in ${((performance.now() - setupStart) / 1000).toFixed(1)} s`,
+      `setup${WITH_ATTRIBUTES ? ' (with .gitattributes)' : ''}: ${REPOS} repos, ${locators.length} worktrees in ${((performance.now() - setupStart) / 1000).toFixed(1)} s`,
     );
 
     const core = createGitCore(fx.coreOptions());

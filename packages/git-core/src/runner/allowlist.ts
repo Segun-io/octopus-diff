@@ -20,6 +20,8 @@ export const ALLOWED_SUBCOMMANDS: ReadonlySet<string> = new Set([
   'ls-files',
   'log',
   'config',
+  // Reads .gitattributes (no filters or drivers run); used for untracked files (F8).
+  'check-attr',
 ]);
 
 /** Subcommands that produce diffs and therefore always get `--no-ext-diff --no-textconv`. */
@@ -77,6 +79,8 @@ const CONFIG_OPTIONS = new Set([
   '--type=color',
 ]);
 
+const CHECK_ATTR_OPTIONS = new Set(['-z', '--stdin', '-a', '--all', '--cached']);
+
 const SYMBOLIC_REF_OPTIONS = new Set(['-q', '--quiet', '--short', '--no-recurse', '--recurse']);
 
 function deny(message: string, args: readonly string[]): never {
@@ -131,6 +135,15 @@ export function assertAllowedGitArgs(args: readonly string[]): void {
         deny('config requires exactly one of --get, --get-all, --get-regexp', args);
       if (positional < 1 || positional > 2)
         deny('config --get takes a key and an optional pattern', args);
+      return;
+    }
+    case 'check-attr': {
+      for (const arg of rest) {
+        if (isSeparator(arg)) break;
+        if (arg.startsWith('-') && !CHECK_ATTR_OPTIONS.has(arg)) {
+          deny(`check-attr option not allowed: ${arg}`, args);
+        }
+      }
       return;
     }
     case 'symbolic-ref': {

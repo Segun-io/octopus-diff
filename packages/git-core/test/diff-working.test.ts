@@ -355,18 +355,44 @@ describe('working / staged / unstaged scopes', () => {
     expect(fromSubdir).toEqual(fromRoot);
   });
 
-  it('caps untracked inspection with maxUntrackedFiles', async () => {
-    // Sorted by raw bytes the first two untracked entries are `nested-repo/` (a directory, never
-    // read) and the non-UTF-8 file, so exactly one file gets line counts.
-    const capped = createGitCore(fx.coreOptions({ maxUntrackedFiles: 2 }));
+  it('caps untracked inspection with maxUntrackedFiles, for all files or none (F4)', async () => {
+    const all = (await listFiles(core, wt, { kind: 'working' })).filter(
+      (f) => f.status === 'untracked',
+    );
+    expect(all.length).toBeGreaterThan(2);
+    const capped = createGitCore(fx.coreOptions({ maxUntrackedFiles: all.length - 1 }));
+    const roomy = createGitCore(fx.coreOptions({ maxUntrackedFiles: all.length }));
     try {
-      const files = await listFiles(capped, wt, { kind: 'working' });
-      const untracked = files.filter((f) => f.status === 'untracked' && f.newMode !== '160000');
-      const withCounts = untracked.filter((f) => f.additions !== null || f.binary);
-      expect(withCounts.map((f) => f.rawPath)).toEqual([NON_UTF8_UNTRACKED.toString('base64')]);
-      await expectConsistentHashes(capped, wt, { kind: 'working' }, untracked);
+      const files = (await listFiles(capped, wt, { kind: 'working' })).filter(
+        (f) => f.status === 'untracked',
+      );
+      // Over the cap nothing is read: no line counts, stat-based hashes.
+      expect(files.filter((f) => f.additions !== null)).toEqual([]);
+      await expectConsistentHashes(capped, wt, { kind: 'working' }, files);
+      const under = (await listFiles(roomy, wt, { kind: 'working' })).filter(
+        (f) => f.status === 'untracked' && f.newMode !== '160000' && !f.binary,
+      );
+      expect(under.length).toBeGreaterThan(0);
+      for (const file of under) expect(file.additions, file.path).not.toBeNull();
+
+      // A new file that sorts first does not change any other file's hash (it used to push
+      // the last read file over the cap).
+      const first = path.join(repo, '!first.txt');
+      fx.write(first, 'first\n');
+      try {
+        const before = new Map(files.map((f) => [f.rawPath ?? f.path, f.patchHash]));
+        const after = (await listFiles(capped, wt, { kind: 'working' })).filter(
+          (f) => f.status === 'untracked' && f.path !== '!first.txt',
+        );
+        for (const file of after) {
+          expect(file.patchHash, file.path).toBe(before.get(file.rawPath ?? file.path));
+        }
+      } finally {
+        rmSync(first);
+      }
     } finally {
       await capped.dispose();
+      await roomy.dispose();
     }
   });
 });
