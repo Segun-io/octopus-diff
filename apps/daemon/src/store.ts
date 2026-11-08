@@ -1,6 +1,7 @@
 import path from 'node:path';
 import type { DatabaseSync, StatementSync } from 'node:sqlite';
 import type { ScopeKind, Worktree } from '@octopus-diff/contracts';
+import { SETTINGS_MIGRATION_V2, SettingsStore } from './settings-store.js';
 
 export const DB_FILE = 'octopus-diff.db';
 
@@ -127,6 +128,8 @@ const MIGRATIONS: readonly string[] = [
   );
   CREATE INDEX reviewed_last_seen ON reviewed (last_seen_at);
   `,
+  // v2: app settings + review-policy overrides (UX round 1), see settings-store.ts
+  SETTINGS_MIGRATION_V2,
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS.length;
@@ -179,11 +182,14 @@ export class Store {
   readonly file: string;
   readonly #db: DatabaseSync;
   readonly #stmts: Record<string, StatementSync> = {};
+  /** Settings and review-policy overrides (v2 tables); wrap multi-statement writes in `transaction`. */
+  readonly settings: SettingsStore;
   #closed = false;
 
   private constructor(db: DatabaseSync, file: string) {
     this.#db = db;
     this.file = file;
+    this.settings = new SettingsStore(db);
   }
 
   /** Opens (creating if needed) `<stateDir>/octopus-diff.db` and applies migrations. */
