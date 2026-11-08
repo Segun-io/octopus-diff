@@ -588,3 +588,10 @@ All 2026-11-08 · WS5.
    Revert: `Remove-NetFirewallHyperVRule -Name octopus-diff-7428` (elevated). The token is still
    required; traffic is plain HTTP on the LAN. Found while doing it: the CLI prints a `127.0.0.1` URL
    for wildcard binds; it should list the LAN addresses (follow-up).
+   Diagnosis with `pktmon`: no packet from another LAN device reached the NIC during the user's test
+   (blocked upstream of this PC, or the device was on another network); the only SYNs came from
+   Windows itself to its own LAN IP, which mirrored mode does not loop into WSL unless
+   `hostAddressLoopback=true` is set in `.wslconfig` (needs `wsl --shutdown`; not done). Windows
+   `localhost` resolves to `::1`, which mirrored mode does not forward into WSL, so `127.0.0.1` is the
+   reliable local URL. The instance now binds `::` (dual-stack). Follow-ups for the CLI: print the
+   loopback **and** LAN URLs for wildcard binds, and consider binding `::` for `--host 0.0.0.0`.
