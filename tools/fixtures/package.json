@@ -2,7 +2,7 @@
   "name": "@octopus-diff/fixtures",
   "version": "0.0.0",
   "private": true,
-  "description": "Scratch-repo generator, agent simulator and perf bench for octopus-diff.",
+  "description": "Scratch-repo generator, agent simulator, read-only proof harness and perf-bench helpers for octopus-diff.",
   "license": "MIT",
   "type": "module",
   "exports": {
@@ -19,9 +19,15 @@
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run --passWithNoTests",
-    "lint": "biome check ."
+    "lint": "biome check .",
+    "fixtures": "tsx --conditions=@octopus-diff/source src/cli.ts",
+    "bench": "pnpm --filter @octopus-diff/e2e run bench",
+    "screenshots": "pnpm --filter @octopus-diff/e2e run screenshots"
   },
   "dependencies": {
     "@octopus-diff/contracts": "workspace:*"
+  },
+  "bin": {
+    "octopus-diff-fixtures": "./dist/cli.js"
   }
 }

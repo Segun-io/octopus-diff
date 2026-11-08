@@ -272,6 +272,9 @@ importers:
       '@octopus-diff/contracts':
         specifier: workspace:*
         version: link:../packages/contracts
+      '@octopus-diff/daemon':
+        specifier: workspace:*
+        version: link:../apps/daemon
       '@octopus-diff/fixtures':
         specifier: workspace:*
         version: link:../tools/fixtures
