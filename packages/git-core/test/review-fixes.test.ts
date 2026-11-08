@@ -199,6 +199,123 @@ describe('F8: untracked files under binary / -diff / diff attributes', () => {
   });
 });
 
+describe('F8: attribute sources (check-attr is skipped only when none can apply)', () => {
+  /** A core that records the subcommands it runs. */
+  function recordingCore(env: Record<string, string> = {}): { core: GitCore; subs: string[] } {
+    const subs: string[] = [];
+    const logger = {
+      debug(message: string, fields?: Record<string, unknown>) {
+        const args = fields?.args;
+        if (message === 'git' && Array.isArray(args)) subs.push(String(args[0]));
+      },
+      info() {},
+      warn() {},
+      error() {},
+    };
+    // Hermetic: no global (XDG) or system attributes from the machine running the tests.
+    const isolated = {
+      HOME: path.join(fx.root, 'empty-home'),
+      XDG_CONFIG_HOME: path.join(fx.root, 'empty-xdg'),
+      GIT_ATTR_NOSYSTEM: '1',
+      ...env,
+    };
+    return { core: createGitCore(fx.coreOptions({ logger, env: isolated })), subs };
+  }
+
+  async function binaryOf(c: GitCore, repo: string, file: string): Promise<boolean | undefined> {
+    const files = await c.listChangedFiles(locator(repo), { kind: 'working' });
+    const summary = await c.getSummary(locator(repo));
+    const found = files.find((f) => f.path === file);
+    expect(summary.additions).toBe(files.reduce((sum, f) => sum + (f.additions ?? 0), 0));
+    return found?.binary;
+  }
+
+  it('does not spawn check-attr without any attributes source', async () => {
+    const repo = fx.repo('f8-none', { files: { 'a.txt': 'a\n' } });
+    fx.write(path.join(repo, 'x.dat'), 'text\n');
+    fx.write(path.join(repo, 'deep/dir/y.dat'), 'text\n');
+    const { core: c, subs } = recordingCore();
+    try {
+      expect(await binaryOf(c, repo, 'x.dat')).toBe(false);
+      await c.getFileDiff(locator(repo), { kind: 'working' }, { path: 'x.dat' });
+      expect(subs).toContain('status');
+      expect(subs).not.toContain('check-attr');
+    } finally {
+      await c.dispose();
+    }
+  });
+
+  it('honors .git/info/attributes, a nested .gitattributes, core.attributesFile and XDG', async () => {
+    const info = fx.repo('f8-info', { files: { 'a.txt': 'a\n' } });
+    fx.write(path.join(info, '.git', 'info', 'attributes'), '*.dat binary\n');
+    fx.write(path.join(info, 'x.dat'), 'text\n');
+
+    const nested = fx.repo('f8-nested-attrs', { files: { 'a.txt': 'a\n' } });
+    fx.write(path.join(nested, 'sub', 'deeper', '.gitattributes'), '*.dat binary\n');
+    fx.write(path.join(nested, 'sub', 'deeper', 'x.dat'), 'text\n');
+
+    const configured = fx.repo('f8-config', { files: { 'a.txt': 'a\n' } });
+    const attributesFile = path.join(fx.root, 'custom-attributes');
+    writeFileSync(attributesFile, '*.dat binary\n');
+    fx.git(configured, ['config', 'core.attributesFile', attributesFile]);
+    fx.write(path.join(configured, 'x.dat'), 'text\n');
+
+    const xdgRepo = fx.repo('f8-xdg', { files: { 'a.txt': 'a\n' } });
+    fx.write(path.join(xdgRepo, 'x.dat'), 'text\n');
+    const xdg = path.join(fx.root, 'xdg');
+    fx.write(path.join(xdg, 'git', 'attributes'), '*.dat binary\n');
+
+    const { core: c, subs } = recordingCore();
+    const { core: withXdg } = recordingCore({ XDG_CONFIG_HOME: xdg });
+    try {
+      expect(await binaryOf(c, info, 'x.dat')).toBe(true);
+      expect(await binaryOf(c, nested, 'sub/deeper/x.dat')).toBe(true);
+      expect(await binaryOf(c, configured, 'x.dat')).toBe(true);
+      expect(await binaryOf(c, xdgRepo, 'x.dat')).toBe(false);
+      expect(await binaryOf(withXdg, xdgRepo, 'x.dat')).toBe(true);
+      expect(subs).toContain('check-attr');
+      const diff = await withXdg.getFileDiff(
+        locator(xdgRepo),
+        { kind: 'working' },
+        {
+          path: 'x.dat',
+        },
+      );
+      expect(diff).toMatchObject({ binary: true, patch: '' });
+    } finally {
+      await c.dispose();
+      await withXdg.dispose();
+    }
+  });
+  it('caches verdicts while the attribute sources are unchanged', async () => {
+    const repo = fx.repo('f8-cache', { files: { '.gitattributes': '*.dat binary\n' } });
+    fx.write(path.join(repo, 'x.dat'), 'text\n');
+    fx.write(path.join(repo, 'sub/y.txt'), 'y\n');
+    const { core: c, subs } = recordingCore();
+    const count = (): number => subs.filter((sub) => sub === 'check-attr').length;
+    try {
+      expect(await binaryOf(c, repo, 'x.dat')).toBe(true);
+      const afterFirst = count();
+      expect(afterFirst).toBeGreaterThan(0);
+      await c.getSummary(locator(repo));
+      await c.listChangedFiles(locator(repo), { kind: 'working' });
+      expect(count()).toBe(afterFirst);
+      // A new path is asked about; known ones are not re-asked.
+      fx.write(path.join(repo, 'z.dat'), 'z\n');
+      expect(await binaryOf(c, repo, 'z.dat')).toBe(true);
+      expect(count()).toBe(afterFirst + 1);
+      // Changing a source invalidates the cache.
+      fx.write(path.join(repo, '.gitattributes'), '*.txt binary\n');
+      expect(await binaryOf(c, repo, 'x.dat')).toBe(false);
+      expect(await binaryOf(c, repo, 'sub/y.txt')).toBe(true);
+      fx.write(path.join(repo, 'sub/.gitattributes'), '*.txt -binary diff\n');
+      expect(await binaryOf(c, repo, 'sub/y.txt')).toBe(false);
+    } finally {
+      await c.dispose();
+    }
+  });
+});
+
 describe('F3: a submodule commit changes stateHash', () => {
   it('detects commits and checkouts inside the submodule', async () => {
     const lib = fx.repo('f3-lib', { files: { 'a.txt': 'v1\n' } });

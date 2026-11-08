@@ -245,10 +245,11 @@ export async function getSummary(
 
   const untrackedKeysSorted = [...untrackedRaw].sort(compareBstr);
   const untrackedPromise = readDiffAttributes(
-    ctx,
+    deps,
     repo,
     untrackedKeysSorted,
     untrackedRaw.length,
+    status.entries,
   ).then(async (attributes) => ({
     attributes,
     infos: await inspectUntracked(

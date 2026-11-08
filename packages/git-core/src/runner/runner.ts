@@ -243,6 +243,11 @@ export class GitRunner {
     return this.resolvedBinary;
   }
 
+  /** A variable of the environment git processes get (e.g. `HOME`, `XDG_CONFIG_HOME`). */
+  envValue(name: string): string | undefined {
+    return this.env[name];
+  }
+
   /** Runs an allowlisted git command. Rejects with `GitCoreError`. */
   run(args: readonly string[], options: GitRunOptions): Promise<GitRunResult> {
     if (this.disposed) return Promise.reject(disposedError());

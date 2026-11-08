@@ -488,7 +488,17 @@ export async function untrackedPatchText(
 const SMALL_FILE = 4096;
 const PACKED_REFS_MAX = 4 * 1024 * 1024;
 const OID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
-const REF_NAME = /^refs\/[^\u0000-\u001f\u007f ~^:?*[\\]+$/;
+/** A loose ref name git-core is willing to read as a file (no traversal, no odd bytes). */
+function isPlainRefName(ref: string): boolean {
+  if (!ref.startsWith('refs/') || ref.split('/').some((part) => part === '' || part === '..')) {
+    return false;
+  }
+  for (let i = 0; i < ref.length; i += 1) {
+    const code = ref.charCodeAt(i);
+    if (code <= 0x20 || code === 0x7f || '~^:?*[\\'.includes(ref[i] as string)) return false;
+  }
+  return true;
+}
 
 export interface NestedHead {
   /** The commit HEAD resolves to (loose refs, packed-refs), or null (unborn, reftable, ...). */
@@ -560,7 +570,7 @@ export async function nestedRepoHead(dirBuffer: Buffer): Promise<NestedHead> {
   const chain: string[] = [value];
   for (let depth = 0; depth < 5 && value.startsWith('ref: '); depth += 1) {
     const ref = value.slice('ref: '.length).trim();
-    if (!REF_NAME.test(ref) || ref.split('/').includes('..')) break;
+    if (!isPlainRefName(ref)) break;
     const loose =
       (await readSmall(path.join(gitDir, ref))) ??
       (commonDir !== gitDir ? await readSmall(path.join(commonDir, ref)) : null);

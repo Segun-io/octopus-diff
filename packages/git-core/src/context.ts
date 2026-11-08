@@ -48,10 +48,19 @@ export interface RepoInfo {
   objectFormat: ObjectFormat;
   emptyTree: string;
   /**
-   * Filter-driver overrides, computed at most once per GitCore operation: `repo()` returns a
-   * fresh object per call, so nothing is reused across operations (config may change).
+   * Config scan (filter-driver overrides, attributes file), computed at most once per GitCore
+   * operation: `repo()` returns a fresh object per call, so nothing is reused across
+   * operations (config may change).
    */
-  filterOverrides?: Promise<Array<[string, string]>>;
+  configScan?: Promise<ConfigScan>;
+}
+
+/** What git-core reads from a repository's config once per operation. */
+export interface ConfigScan {
+  /** Filter-driver neutralization entries (see `GitContext.filterOverrides`). */
+  overrides: Array<[string, string]>;
+  /** Values of `core.attributesFile` in any config scope (last one wins), raw. */
+  attributesFiles: string[];
 }
 
 interface CachedRepo {
@@ -207,14 +216,19 @@ export class GitContext {
    * `GIT_CONFIG_COUNT`, which overrides repository config. Read once per operation, not
    * cached: config can include other files and depend on HEAD (`includeIf onbranch:`).
    */
-  filterOverrides(repo: RepoInfo): Promise<Array<[string, string]>> {
-    repo.filterOverrides ??= this.readFilterOverrides(repo);
-    return repo.filterOverrides;
+  async filterOverrides(repo: RepoInfo): Promise<Array<[string, string]>> {
+    return (await this.configScan(repo)).overrides;
   }
 
-  private async readFilterOverrides(repo: RepoInfo): Promise<Array<[string, string]>> {
+  /** The per-operation config read (one `git config --get-regexp`). */
+  configScan(repo: RepoInfo): Promise<ConfigScan> {
+    repo.configScan ??= this.readConfigScan(repo);
+    return repo.configScan;
+  }
+
+  private async readConfigScan(repo: RepoInfo): Promise<ConfigScan> {
     const result = await this.runner.run(
-      ['config', '--null', '--show-scope', '--get-regexp', '^filter\\.'],
+      ['config', '--null', '--show-scope', '--get-regexp', '^filter\\.|^core\\.attributesfile$'],
       {
         cwd: repo.cwd,
         queueKey: repo.commonDir,
@@ -222,14 +236,22 @@ export class GitContext {
         location: repoLocation(repo),
       },
     );
-    const entries = computeFilterOverrides(result.stdout.toString('utf8'));
+    const output = result.stdout.toString('utf8');
+    const entries = computeFilterOverrides(output);
     if (entries.length > 0) {
       this.settings.logger.warn('neutralizing repository-local git filter drivers', {
         repo: repo.cwd,
         keys: entries.map(([key]) => key),
       });
     }
-    return entries;
+    const attributesFiles: string[] = [];
+    for (const token of output.split('\u0000')) {
+      if (token === 'core.attributesfile') attributesFiles.push('');
+      else if (token.startsWith('core.attributesfile\n')) {
+        attributesFiles.push(token.slice('core.attributesfile\n'.length));
+      }
+    }
+    return { overrides: entries, attributesFiles };
   }
 }
 

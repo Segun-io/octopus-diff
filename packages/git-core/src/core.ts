@@ -13,7 +13,7 @@ import {
   type WorktreeLocator,
 } from '@octopus-diff/contracts';
 import { GitContext } from './context.js';
-import { type DiffDeps, getFileDiff, listChangedFiles } from './diff.js';
+import { createAttributeCache, type DiffDeps, getFileDiff, listChangedFiles } from './diff.js';
 import { detectDefaultBranch, listWorktrees, resolveProject, scan } from './discovery.js';
 import { LOG_FORMAT, parseLog } from './parse/log.js';
 import { defaultBigFileThreshold, GitRunner } from './runner/runner.js';
@@ -131,7 +131,11 @@ export const createGitCore: CreateGitCore = (options: GitCoreOptions = {}): GitC
     logger: settings.logger,
   });
   const ctx = new GitContext(runner, settings);
-  const deps: DiffDeps = { ctx, untrackedCache: createUntrackedCache() };
+  const deps: DiffDeps = {
+    ctx,
+    untrackedCache: createUntrackedCache(),
+    attributeCache: createAttributeCache(),
+  };
   let disposed = false;
 
   /** Rejects after dispose, and maps unexpected errors to `GitCoreError`. */
@@ -181,6 +185,7 @@ export const createGitCore: CreateGitCore = (options: GitCoreOptions = {}): GitC
     dispose: async () => {
       disposed = true;
       deps.untrackedCache.clear();
+      deps.attributeCache.clear();
       await runner.dispose();
     },
   };

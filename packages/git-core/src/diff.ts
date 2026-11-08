@@ -1,5 +1,6 @@
 import { constants } from 'node:fs';
-import { access, lstat } from 'node:fs/promises';
+import { access, lstat, stat } from 'node:fs/promises';
+import path from 'node:path';
 import {
   type DiffOptions,
   type FileSelector,
@@ -22,8 +23,8 @@ import {
   selectorToBstr,
 } from './bstr.js';
 import type { GitContext, RepoInfo } from './context.js';
-import { mapLimit } from './fs-utils.js';
-import { hashParts, PATCH_HASH_LENGTH, PatchHasher } from './hash.js';
+import { LruCache, mapLimit } from './fs-utils.js';
+import { hashParts, PATCH_HASH_LENGTH, PatchHasher, STATE_HASH_LENGTH } from './hash.js';
 import { DiffOutputParser, type NumstatEntry, type RawEntry } from './parse/diff-output.js';
 import { type ChunkKind, PatchSplitter } from './parse/patch.js';
 import { parseStatusV2, type StatusEntry, type StatusResult } from './parse/status.js';
@@ -577,6 +578,7 @@ async function collectCombinedChunks(
 export interface DiffDeps {
   ctx: GitContext;
   untrackedCache: UntrackedCache;
+  attributeCache: AttributeCache;
 }
 
 /**
@@ -599,28 +601,145 @@ export function inspectOptions(
   };
 }
 
+/** `diff` attribute verdicts of one worktree, valid while its attribute sources are unchanged. */
+interface AttributeCacheEntry {
+  stateKey: string;
+  verdicts: Map<string, DiffAttribute>;
+}
+export type AttributeCache = LruCache<string, AttributeCacheEntry>;
+
+export function createAttributeCache(): AttributeCache {
+  return new LruCache<string, AttributeCacheEntry>(1000);
+}
+
+/** Directories checked for `.gitattributes` before git-core stops trying to be clever. */
+const MAX_ATTRIBUTE_DIRS = 1000;
+
+async function sourceSignature(file: string | Buffer): Promise<string> {
+  try {
+    const info = await stat(file, { bigint: true });
+    return `${info.size}:${info.mtimeNs}:${info.ctimeNs}:${info.ino}`;
+  } catch {
+    return 'none';
+  }
+}
+
+interface AttributeState {
+  /** False only when no attributes source exists: every verdict is `unspecified`. */
+  mayApply: boolean;
+  /** Changes whenever an attributes source changes; null when it cannot be computed. */
+  stateKey: string | null;
+}
+
 /**
- * The `diff` attribute of untracked paths (`git check-attr -z --stdin diff`, one call), so
- * `binary` / `-diff` / `diff` attributes give the same verdict as git's diff after `git add`
- * (F8). Skipped (empty map) when contents are not read anyway. Keys are bstr; a trailing `/`
- * (nested repositories) is dropped.
+ * Where `diff` attributes of untracked `keys` can come from, and a key over all of it: the
+ * `.gitattributes` in the worktree root and every directory containing one of `keys`, status
+ * entries for `.gitattributes` files (deleted, untracked, modified), `info/attributes`,
+ * `core.attributesFile` (from the per-operation config read), the global default
+ * (`$XDG_CONFIG_HOME/git/attributes`) and the system file (`/etc/gitattributes`,
+ * `<prefix>/etc/gitattributes`). Only file stats, no git process.
+ */
+async function attributeState(
+  ctx: GitContext,
+  repo: RepoInfo,
+  keys: readonly string[],
+  entries: readonly StatusEntry[],
+): Promise<AttributeState> {
+  const root = repo.toplevel;
+  if (root === null) return { mayApply: true, stateKey: null };
+  let mayApply = process.platform === 'win32';
+  const parts: string[] = [];
+  for (const entry of entries) {
+    const named =
+      path.posix.basename(entry.path) === '.gitattributes' ||
+      (entry.kind === 'renamed' && path.posix.basename(entry.origPath) === '.gitattributes');
+    if (named) {
+      mayApply = true;
+      parts.push(entry.line);
+    }
+  }
+  const dirs = new Set<string>(['']);
+  for (const key of keys) {
+    for (let slash = key.indexOf('/'); slash >= 0; slash = key.indexOf('/', slash + 1)) {
+      dirs.add(key.slice(0, slash));
+      if (dirs.size > MAX_ATTRIBUTE_DIRS) return { mayApply: true, stateKey: null };
+    }
+  }
+  const env = (name: string): string | undefined => ctx.runner.envValue(name) || undefined;
+  const home = env('HOME');
+  const candidates: Array<string | Buffer> = [...dirs].map((dir) =>
+    absolutePathBuffer(root, dir ? `${dir}/.gitattributes` : '.gitattributes'),
+  );
+  candidates.push(path.join(repo.commonDir, 'info', 'attributes'));
+  const xdg = env('XDG_CONFIG_HOME') ?? (home ? path.join(home, '.config') : undefined);
+  if (xdg) candidates.push(path.join(xdg, 'git', 'attributes'));
+  if (!/^(1|true|yes|on)$/i.test(env('GIT_ATTR_NOSYSTEM') ?? '')) {
+    candidates.push('/etc/gitattributes');
+    try {
+      candidates.push(
+        path.join(path.dirname(path.dirname(ctx.runner.binary())), 'etc', 'gitattributes'),
+      );
+    } catch {
+      return { mayApply: true, stateKey: null };
+    }
+  }
+  const configured = (await ctx.configScan(repo)).attributesFiles;
+  if (configured.length > 0) {
+    mayApply = true;
+    parts.push(...configured);
+    const last = configured[configured.length - 1] as string;
+    const expanded = last.startsWith('~/') && home ? path.join(home, last.slice(2)) : last;
+    if (expanded) candidates.push(path.resolve(root, expanded));
+  }
+  const signatures = await mapLimit(candidates, 32, sourceSignature);
+  if (signatures.some((sig) => sig !== 'none')) mayApply = true;
+  candidates.forEach((candidate, i) => {
+    const name = typeof candidate === 'string' ? candidate : bstrFromBuffer(candidate);
+    parts.push(`${name}\u0000${signatures[i]}`);
+  });
+  return { mayApply, stateKey: hashParts(parts, STATE_HASH_LENGTH) };
+}
+
+/**
+ * The `diff` attribute of untracked paths, so `binary` / `-diff` / `diff` attributes give the
+ * same verdict as git's diff after `git add` (F8). Asks `git check-attr -z --stdin diff` (one
+ * call) only for paths whose verdict is not cached for the current attribute sources, and
+ * not at all when no source exists or contents are not read anyway (over the cap). Keys are
+ * bstr; a trailing `/` (nested repositories) is dropped.
  */
 export async function readDiffAttributes(
-  ctx: GitContext,
+  deps: DiffDeps,
   repo: RepoInfo,
   rawKeys: readonly string[],
   untrackedCount: number,
+  entries: readonly StatusEntry[],
 ): Promise<Map<string, DiffAttribute>> {
+  const { ctx } = deps;
   const keys = rawKeys.filter((key) => !key.endsWith('/'));
   if (keys.length === 0 || untrackedCount > ctx.settings.maxUntrackedFiles) return new Map();
-  const input = bstrToBuffer(keys.map((key) => `${key}\u0000`).join(''));
-  const result = await ctx.git(repo, ['check-attr', '-z', '--stdin', 'diff'], { input });
-  const tokens = bstrFromBuffer(result.stdout).split('\u0000');
-  const attributes = new Map<string, DiffAttribute>();
-  for (let i = 0; i + 2 < tokens.length; i += 3) {
-    attributes.set(tokens[i] as string, tokens[i + 2] as string);
+  const state = await attributeState(ctx, repo, keys, entries);
+  if (!state.mayApply) return new Map();
+  const cacheKey = repo.toplevel ?? repo.gitDir;
+  const cached = state.stateKey === null ? undefined : deps.attributeCache.get(cacheKey);
+  let verdicts = cached?.stateKey === state.stateKey ? cached.verdicts : new Map<string, string>();
+  const missing = keys.filter((key) => !verdicts.has(key));
+  if (missing.length > 0) {
+    const input = bstrToBuffer(missing.map((key) => `${key}\u0000`).join(''));
+    const result = await ctx.git(repo, ['check-attr', '-z', '--stdin', 'diff'], { input });
+    const tokens = bstrFromBuffer(result.stdout).split('\u0000');
+    if (verdicts.size + missing.length > 4 * Math.max(ctx.settings.maxUntrackedFiles, 1)) {
+      verdicts = new Map(
+        keys.flatMap((key) => (verdicts.has(key) ? [[key, verdicts.get(key) as string]] : [])),
+      );
+    }
+    for (let i = 0; i + 2 < tokens.length; i += 3) {
+      verdicts.set(tokens[i] as string, tokens[i + 2] as string);
+    }
   }
-  return attributes;
+  if (state.stateKey !== null) {
+    deps.attributeCache.set(cacheKey, { stateKey: state.stateKey, verdicts });
+  }
+  return new Map(keys.map((key) => [key, verdicts.get(key) ?? 'unspecified']));
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -648,10 +767,11 @@ export async function listChangedFiles(
     if (!plan.includeUntracked || !snapshot) return new Map<string, DiffAttribute>();
     const untracked = snapshot.entries.filter((entry) => entry.kind === 'untracked');
     return readDiffAttributes(
-      ctx,
+      deps,
       repo,
       untracked.map((entry) => entry.path),
       untracked.length,
+      snapshot.entries,
     );
   });
   let unreadable = new Set<string>();
@@ -892,7 +1012,7 @@ export async function getFileDiff(
     (raw) => (raw.endsWith('/') ? raw.slice(0, -1) : raw) === key,
   );
   if (rawKey === undefined) throw notFound();
-  const attributes = await readDiffAttributes(ctx, repo, [rawKey], 0);
+  const attributes = await readDiffAttributes(deps, repo, [rawKey], 0, status?.entries ?? []);
   const [info] = await inspectUntracked(
     repo.cwd,
     [rawKey],
