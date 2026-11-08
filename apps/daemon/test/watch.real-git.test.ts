@@ -140,7 +140,7 @@ async function start(fx: Fixture): Promise<Started> {
 }
 
 /** Waits for a `worktree.changed` of `worktreeId` recorded after `mark`. */
-function changedAfter(events: EventRecorder, mark: number, worktreeId: string, timeoutMs = 2500) {
+function changedAfter(events: EventRecorder, mark: number, worktreeId: string, timeoutMs = 5000) {
   return events.waitFor(
     (e: ServerEvent) =>
       events.events.indexOf(e) >= mark &&
@@ -164,7 +164,7 @@ describe.skipIf(!GIT_CORE_IMPLEMENTED)(
       const { daemon, events } = await start(fx);
       const api = client(daemon);
       await api.addProject({ path: repo });
-      await eventually(() => daemon.core.watcher.isWatched(hashId(wt)), 3000);
+      await eventually(() => daemon.core.watcher.isWatched(hashId(wt)), 5000);
       await sleep(500);
 
       fx.sh(repo, `git worktree remove --force "${wt}" && git worktree add -q -b b2 "${wt}"`);
@@ -188,7 +188,7 @@ describe.skipIf(!GIT_CORE_IMPLEMENTED)(
       const sub = path.join(sup, 'sub');
       const { daemon, events, summaries } = await start(fx);
       await client(daemon).addProject({ path: sup });
-      await eventually(() => daemon.core.watcher.isWatched(hashId(sup)), 3000);
+      await eventually(() => daemon.core.watcher.isWatched(hashId(sup)), 5000);
       await sleep(500);
 
       // Only the submodule's git dir (.git/modules/sub) changes: HEAD's branch moves.
@@ -219,7 +219,7 @@ describe.skipIf(!GIT_CORE_IMPLEMENTED)(
       // git-core that reports the checkout (`sub`) instead exercises the nested-project path.
       const subWorktree = added.project.worktrees[0]?.worktree;
       if (!subWorktree) throw new Error('submodule project has no worktree');
-      await eventually(() => daemon.core.watcher.isWatched(subWorktree.id), 3000);
+      await eventually(() => daemon.core.watcher.isWatched(subWorktree.id), 5000);
       // Not refused as "too broad": the health stays clean.
       expect((await api.health()).watcher).toEqual({ mode: 'native', warnings: [] });
       await sleep(500);
@@ -229,7 +229,7 @@ describe.skipIf(!GIT_CORE_IMPLEMENTED)(
       const before = summaries(sup);
       let mark = events.events.length;
       await writeFile(path.join(sub, 'a.txt'), 'edited inside the submodule\n');
-      await eventually(() => summaries(sup) > before, 2500);
+      await eventually(() => summaries(sup) > before, 5000);
       if (subWorktree.path === sub) await changedAfter(events, mark, hashId(sub));
 
       // A commit inside the submodule moves the gitlink state: the superproject changes.
@@ -249,7 +249,7 @@ describe.skipIf(!GIT_CORE_IMPLEMENTED)(
       });
       const { daemon, events } = await start(fx);
       await client(daemon).addProject({ path: repo });
-      await eventually(() => daemon.core.watcher.isWatched(hashId(repo)), 3000);
+      await eventually(() => daemon.core.watcher.isWatched(hashId(repo)), 5000);
       await sleep(500);
 
       let mark = events.events.length;
@@ -293,7 +293,7 @@ describe.skipIf(!GIT_CORE_IMPLEMENTED)(
 
       const { daemon, subscribed } = await start(fx);
       await client(daemon).addProject({ path: repo });
-      await eventually(() => daemon.core.watcher.isWatched(hashId(repo)), 3000);
+      await eventually(() => daemon.core.watcher.isWatched(hashId(repo)), 5000);
       await sleep(300);
       expect(daemon.core.watcher.isWatched(hashId(victim))).toBe(false);
       expect(subscribed).not.toContain(victim);

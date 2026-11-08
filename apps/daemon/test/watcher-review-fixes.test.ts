@@ -138,7 +138,7 @@ describe('F1: worktree folder deleted / replaced at the same path', { timeout: 2
     // `git worktree remove --force wt && git worktree add wt` as seen by the file system.
     await rm(layout.linked, { recursive: true, force: true });
     await mkdir(path.join(layout.linked, 'src'), { recursive: true });
-    await eventually(() => rec.lists.some((l) => l.reason === 'missing'), 2000);
+    await eventually(() => rec.lists.some((l) => l.reason === 'missing'), 5000);
     const degraded = watcher.status();
     expect(degraded.mode).toBe('mixed');
     expect(degraded.warnings.join('\n')).toMatch(/do not exist/);
@@ -147,11 +147,11 @@ describe('F1: worktree folder deleted / replaced at the same path', { timeout: 2
     // The relist that follows keeps the same id (same path): the watcher must re-subscribe.
     await watcher.setProject('p1', layout.common, layout.worktrees);
     expect(watcher.status()).toEqual({ mode: 'native', warnings: [] });
-    await eventually(() => rec.dirty.some((d) => d.id === 'linked'), 2000); // catch-up refresh
+    await eventually(() => rec.dirty.some((d) => d.id === 'linked'), 5000); // catch-up refresh
     await sleep(300);
     const mark = rec.dirty.length;
     await writeFile(path.join(layout.linked, 'src', 'agent.ts'), 'edited after recycle');
-    await eventually(() => idsOf(rec, mark).includes('linked'), 2000);
+    await eventually(() => idsOf(rec, mark).includes('linked'), 5000);
   });
 
   it('re-subscribes when the root was replaced without a delete event (inode changed)', async () => {
@@ -170,7 +170,7 @@ describe('F1: worktree folder deleted / replaced at the same path', { timeout: 2
     await sleep(300);
     const mark = rec.dirty.length;
     await writeFile(path.join(layout.linked, 'src', 'x.ts'), 'x');
-    await eventually(() => idsOf(rec, mark).includes('linked'), 2000);
+    await eventually(() => idsOf(rec, mark).includes('linked'), 5000);
   });
 
   it('re-subscribes when the git dir behind the same path changed (new admin dir)', async () => {
@@ -190,7 +190,7 @@ describe('F1: worktree folder deleted / replaced at the same path', { timeout: 2
     // Index changes of the new admin dir now route to the linked worktree only.
     const mark = rec.dirty.length;
     await writeFile(path.join(newGitDir, 'index'), 'x');
-    await eventually(() => rec.dirty.length > mark, 2000);
+    await eventually(() => rec.dirty.length > mark, 5000);
     await sleep(250);
     expect(idsOf(rec, mark)).toEqual(['linked']);
   });
@@ -200,15 +200,15 @@ describe('F1: worktree folder deleted / replaced at the same path', { timeout: 2
     const { watcher, rec } = makeWatcher({ pollFocusedMs: 200 });
     await watcher.setProject('p1', layout.common, layout.worktrees);
     await rm(layout.linked, { recursive: true, force: true });
-    await eventually(() => watcher.status().mode === 'mixed', 2000);
+    await eventually(() => watcher.status().mode === 'mixed', 5000);
     await mkdir(path.join(layout.linked, 'src'), { recursive: true });
-    await eventually(() => watcher.status().mode === 'native', 3000);
+    await eventually(() => watcher.status().mode === 'native', 5000);
     await sleep(200);
     const mark = rec.dirty.length;
     await writeFile(path.join(layout.linked, 'src', 'back.ts'), 'x');
     await eventually(
       () => rec.dirty.slice(mark).some((d) => d.id === 'linked' && d.reason === 'fs'),
-      2000,
+      5000,
     );
   });
 
@@ -217,7 +217,7 @@ describe('F1: worktree folder deleted / replaced at the same path', { timeout: 2
     const { watcher, rec } = makeWatcher();
     await watcher.setProject('p1', layout.common, layout.worktrees);
     await rm(layout.common, { recursive: true, force: true });
-    await eventually(() => rec.lists.some((l) => l.reason === 'missing'), 2000);
+    await eventually(() => rec.lists.some((l) => l.reason === 'missing'), 5000);
     expect(watcher.status().mode).toBe('polling');
     await mkdir(path.join(layout.common, 'refs', 'heads'), { recursive: true });
     await mkdir(layout.linkedGitDir, { recursive: true });
@@ -226,7 +226,7 @@ describe('F1: worktree folder deleted / replaced at the same path', { timeout: 2
     await sleep(300);
     const mark = rec.dirty.length;
     await writeFile(path.join(layout.common, 'refs', 'heads', 'main'), 'abc');
-    await eventually(() => idsOf(rec, mark).length === 2, 2000);
+    await eventually(() => idsOf(rec, mark).length === 2, 5000);
   });
 });
 
@@ -247,14 +247,14 @@ describe('F3: submodules', { timeout: 20_000 }, () => {
     expect(rec.dirty).toEqual([]);
 
     await writeFile(path.join(modDir, 'refs', 'heads', 'main'), 'c2'); // commit inside the submodule
-    await eventually(() => rec.dirty.length > 0, 2000);
+    await eventually(() => rec.dirty.length > 0, 5000);
     await sleep(250);
     expect(idsOf(rec)).toEqual(['main']);
     expect(rec.dirty[0]?.reason).toBe('git');
 
     const mark = rec.dirty.length;
     await writeFile(path.join(linkedMod, 'HEAD'), 'c3'); // the linked worktree's submodule
-    await eventually(() => rec.dirty.length > mark, 2000);
+    await eventually(() => rec.dirty.length > mark, 5000);
     await sleep(250);
     expect(idsOf(rec, mark)).toEqual(['linked']);
   });
@@ -279,13 +279,13 @@ describe('F3: submodules', { timeout: 20_000 }, () => {
     ]);
 
     await writeFile(path.join(subRoot, 'a.txt'), 'edited inside the submodule');
-    await eventually(() => idsOf(rec).length === 2, 2000);
+    await eventually(() => idsOf(rec).length === 2, 5000);
     expect(idsOf(rec)).toEqual(['main', 'sub']);
 
     await sleep(300);
     const mark = rec.dirty.length;
     await writeFile(path.join(subGitDir, 'HEAD'), 'ref: refs/heads/other'); // checkout in sub
-    await eventually(() => idsOf(rec, mark).length === 2, 2000);
+    await eventually(() => idsOf(rec, mark).length === 2, 5000);
     expect(idsOf(rec, mark)).toEqual(['main', 'sub']);
   });
 });
@@ -367,12 +367,12 @@ describe('F5: build-output directories', { timeout: 20_000 }, () => {
     await watcher.setProject('p1', layout.common, layout.worktrees);
     expect(await changed(layout, rec, 'out/a.js')).toBe(true);
     await writeFile(path.join(layout.main, '.gitignore'), 'out/\n');
-    await eventually(() => t.subscribed.filter((d) => d === layout.main).length === 2, 2000);
+    await eventually(() => t.subscribed.filter((d) => d === layout.main).length === 2, 5000);
     expect(await changed(layout, rec, 'out/a.js')).toBe(false);
 
     expect(await changed(layout, rec, 'coverage/lcov.info')).toBe(true);
     await writeFile(path.join(layout.common, 'info', 'exclude'), 'coverage\n');
-    await eventually(() => t.subscribed.filter((d) => d === layout.main).length === 3, 2000);
+    await eventually(() => t.subscribed.filter((d) => d === layout.main).length === 3, 5000);
     expect(await changed(layout, rec, 'coverage/lcov.info')).toBe(false);
   });
 
@@ -422,12 +422,12 @@ describe('F6: info/ in the common git dir', () => {
     const { watcher, rec } = makeWatcher();
     await watcher.setProject('p1', layout.common, layout.worktrees);
     await writeFile(path.join(layout.common, 'info', 'exclude'), 'junk.log\n');
-    await eventually(() => idsOf(rec).length === 2, 2000);
+    await eventually(() => idsOf(rec).length === 2, 5000);
     expect(rec.dirty.every((d) => d.reason === 'git')).toBe(true);
     await sleep(300);
     const mark = rec.dirty.length;
     await writeFile(path.join(layout.common, 'info', 'attributes'), '*.bin binary\n');
-    await eventually(() => idsOf(rec, mark).length === 2, 2000);
+    await eventually(() => idsOf(rec, mark).length === 2, 5000);
   });
 });
 

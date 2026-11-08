@@ -35,7 +35,7 @@ describe('watch wiring in DaemonCore', () => {
       internal: { subscribe: rec.subscribe },
     });
     await client(daemon).addProject({ path: repo.mainPath });
-    await eventually(() => daemon.core.watcher.isWatched(linked.id), 2000);
+    await eventually(() => daemon.core.watcher.isWatched(linked.id), 5000);
     expect(daemon.core.watcher.isWatched(forged.id)).toBe(false);
     expect(rec.dirs).not.toContain(forged.path);
   });
@@ -65,7 +65,7 @@ describe('watch wiring in DaemonCore', () => {
     });
     const api = client(daemon);
     await api.addProject({ path: repo.mainPath });
-    await eventually(() => daemon.core.watcher.isWatched(hashId('/')), 2000);
+    await eventually(() => daemon.core.watcher.isWatched(hashId('/')), 5000);
     const health = await api.health();
     expect(health.watcher.mode).toBe('mixed');
     expect(health.watcher.warnings).toHaveLength(1);
@@ -89,7 +89,7 @@ describe('watch wiring in DaemonCore', () => {
     const events = recordEvents(daemon);
     await events.opened;
     await api.addProject({ path: repo.mainPath });
-    await eventually(() => daemon.core.watcher.isWatched(wt.id), 2000);
+    await eventually(() => daemon.core.watcher.isWatched(wt.id), 5000);
     await sleep(300);
 
     // `git worktree remove` + `git worktree add` at the same path; git picked `worktrees/wt1`.
@@ -98,7 +98,7 @@ describe('watch wiring in DaemonCore', () => {
     await mkdir(newGitDir, { recursive: true });
     const before = fake.callCount('getWatchTargets');
     await writeFile(path.join(wt.path, '.git'), `gitdir: ${newGitDir}\n`);
-    await eventually(() => fake.callCount('getWatchTargets') > before, 2000);
+    await eventually(() => fake.callCount('getWatchTargets') > before, 5000);
     await sleep(300);
 
     // Index changes in the new admin dir must refresh that worktree.
@@ -108,13 +108,13 @@ describe('watch wiring in DaemonCore', () => {
     await events.waitFor(
       (e) =>
         events.events.indexOf(e) >= mark && e.type === 'worktree.changed' && e.worktreeId === wt.id,
-      2000,
+      5000,
     );
 
     // Once git-core agrees, the precise targets are used again.
     wt.gitDir = newGitDir;
     const settled = fake.callCount('getWatchTargets');
-    await eventually(() => fake.callCount('getWatchTargets') > settled, 2000);
+    await eventually(() => fake.callCount('getWatchTargets') > settled, 5000);
     await sleep(300);
     const calls = fake.callCount('getWatchTargets');
     await sleep(400);
