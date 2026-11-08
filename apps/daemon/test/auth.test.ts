@@ -1,92 +1,206 @@
-import { AUTH_COOKIE_NAME, HealthResponseSchema } from '@octopus-diff/contracts';
+import { createHmac } from 'node:crypto';
+import { writeFile } from 'node:fs/promises';
+import path from 'node:path';
+import {
+  AUTH_COOKIE_NAME,
+  createApiClient,
+  HealthResponseSchema,
+  healthProofMessage,
+  ROUTES,
+} from '@octopus-diff/contracts';
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { Daemon } from '../src/daemon.js';
+import { healthProof } from '../src/token.js';
 import { FakeGitCore } from './fake-git-core.js';
-import { errorOf, http, inproc, startTestDaemon, tempDir } from './helpers.js';
+import { errorOf, http, inproc, recordEvents, startTestDaemon, tempDir } from './helpers.js';
 
-describe('auth and request safety', () => {
+const CHALLENGE = '0123456789abcdef'.repeat(4);
+
+function expectedProof(token: string, challenge: string): string {
+  return createHmac('sha256', token).update(healthProofMessage(challenge)).digest('hex');
+}
+
+/** Every authenticated API route, with a request that reaches its handler. */
+function apiRequests(): Array<{ method: string; path: string; body?: string }> {
+  const id = '0'.repeat(16);
+  return [
+    { method: 'GET', path: ROUTES.listProjects.path },
+    { method: 'POST', path: ROUTES.addProject.path, body: '{"path":"/tmp"}' },
+    { method: 'PATCH', path: `/api/projects/${id}`, body: '{}' },
+    { method: 'DELETE', path: `/api/projects/${id}` },
+    { method: 'GET', path: ROUTES.listScanRoots.path },
+    { method: 'POST', path: ROUTES.addScanRoot.path, body: '{"path":"/tmp"}' },
+    { method: 'DELETE', path: `/api/scan-roots/${id}` },
+    { method: 'POST', path: `/api/scan-roots/${id}/rescan` },
+    { method: 'GET', path: ROUTES.inbox.path },
+    { method: 'GET', path: `/api/worktrees/${id}/files` },
+    { method: 'GET', path: `/api/worktrees/${id}/diff?path=a` },
+    { method: 'GET', path: `/api/worktrees/${id}/commits` },
+    { method: 'POST', path: `/api/worktrees/${id}/refresh` },
+    { method: 'PUT', path: ROUTES.setReview.path, body: '{}' },
+    { method: 'PUT', path: ROUTES.setFocus.path, body: '{"worktreeId":null}' },
+    { method: 'GET', path: ROUTES.events.path },
+    { method: 'GET', path: '/api/no-such-route' },
+    { method: 'GET', path: '/api' },
+  ];
+}
+
+describe('auth v2 and request safety', () => {
   let daemon: Daemon;
+  let webRoot: string;
 
   beforeEach(async () => {
-    daemon = await startTestDaemon({ fake: new FakeGitCore(), stateDir: await tempDir() });
+    webRoot = await tempDir();
+    await writeFile(path.join(webRoot, 'index.html'), '<!doctype html><title>ui</title>');
+    await writeFile(path.join(webRoot, 'app.js'), 'console.log(1)');
+    daemon = await startTestDaemon({ fake: new FakeGitCore(), stateDir: await tempDir(), webRoot });
   });
 
-  it('binds loopback on an ephemeral port and exposes the tokenized URL', () => {
+  it('binds loopback on an ephemeral port and exposes the #token= URL', () => {
     expect(daemon.host).toBe('127.0.0.1');
     expect(daemon.port).toBeGreaterThan(0);
     expect(daemon.url).toBe(`http://127.0.0.1:${daemon.port}`);
-    expect(daemon.authUrl).toBe(`${daemon.url}/?token=${daemon.token}`);
+    expect(daemon.authUrl).toBe(`${daemon.url}/#token=${daemon.token}`);
   });
 
-  it('serves /api/health without a token', async () => {
+  it('serves /api/health without a token, and without a proof unless challenged', async () => {
     const res = await http(daemon, '/api/health', { auth: false });
     expect(res.status).toBe(200);
     const body = HealthResponseSchema.parse(await res.json());
     expect(body.git).toEqual({ version: '2.53.0', supported: true });
     expect(body.watcher.mode).toBe('native');
+    expect(body.proof).toBeUndefined();
   });
 
-  it('rejects API requests without a token (401) or with a wrong one', async () => {
-    const missing = await http(daemon, '/api/projects', { auth: false });
-    expect(missing.status).toBe(401);
-    expect(await missing.json()).toEqual({
-      error: { code: 'unauthorized', message: 'missing token' },
-    });
-    expect(missing.headers.get('www-authenticate')).toMatch(/^Bearer/);
-
-    const wrong = await http(daemon, '/api/projects', {
-      headers: { authorization: 'Bearer nope-nope-nope-nope' },
-    });
-    expect(wrong.status).toBe(401);
-    expect((await errorOf(wrong)).code).toBe('unauthorized');
-
-    const wrongCookie = await http(daemon, '/api/projects', {
-      auth: false,
-      headers: { cookie: `${AUTH_COOKIE_NAME}=wrong-token-wrong-token` },
-    });
-    expect(wrongCookie.status).toBe(401);
+  it('proves possession of the token for ?challenge= (HMAC-SHA256 keyed by the token)', async () => {
+    const res = await http(daemon, `/api/health?challenge=${CHALLENGE}`, { auth: false });
+    expect(res.status).toBe(200);
+    const body = HealthResponseSchema.parse(await res.json());
+    expect(body.proof).toBe(expectedProof(daemon.token, CHALLENGE));
+    expect(body.proof).toBe(healthProof(daemon.token, CHALLENGE));
+    expect(JSON.stringify(body)).not.toContain(daemon.token);
+    // A different challenge gives a different proof; the contract client passes it through.
+    const other = 'f'.repeat(32);
+    const viaClient = await createApiClient({ baseUrl: daemon.url }).health({ challenge: other });
+    expect(viaClient.proof).toBe(expectedProof(daemon.token, other));
+    expect(viaClient.proof).not.toBe(body.proof);
   });
 
-  it('does not accept ?token= on API routes', async () => {
+  it('rejects malformed challenges', async () => {
+    for (const challenge of [
+      'zz',
+      'abc',
+      'A'.repeat(32),
+      '0'.repeat(129),
+      `${'0'.repeat(32)}%20`,
+    ]) {
+      const res = await http(daemon, `/api/health?challenge=${challenge}`, { auth: false });
+      expect(res.status, challenge).toBe(400);
+    }
+  });
+
+  it('requires the bearer token on every other API route, including /api/events', async () => {
+    for (const { method, path: p, body } of apiRequests()) {
+      const headers = body ? { 'content-type': 'application/json' } : undefined;
+      const none = await inproc(daemon, p, { method, auth: false, headers, body });
+      expect(none.status, `${method} ${p} without a token`).toBe(401);
+      expect(await errorOf(none)).toEqual({ code: 'unauthorized', message: 'missing token' });
+      expect(none.headers.get('www-authenticate')).toMatch(/^Bearer/);
+
+      const wrong = await inproc(daemon, p, {
+        method,
+        body,
+        headers: { ...headers, authorization: 'Bearer nope-nope-nope-nope' },
+      });
+      expect(wrong.status, `${method} ${p} with a wrong token`).toBe(401);
+      expect((await errorOf(wrong)).message).toBe('invalid token');
+
+      const ok = await inproc(daemon, p, { method, headers, body });
+      expect(ok.status, `${method} ${p} with the token`).not.toBe(401);
+      await ok.body?.cancel();
+    }
+  });
+
+  it('streams events with the bearer token (fetch-based subscribe)', async () => {
+    const recorder = recordEvents(daemon);
+    await recorder.opened;
+    expect(recorder.events[0]?.type).toBe('hello');
+  });
+
+  it('ignores the v1 cookie (even with the right token) and expires it everywhere', async () => {
+    const cookie = `other=1; ${AUTH_COOKIE_NAME}=${daemon.token}`;
+    const api = await http(daemon, '/api/projects', { auth: false, headers: { cookie } });
+    expect(api.status).toBe(401);
+    for (const res of [
+      api,
+      await http(daemon, '/api/projects', { headers: { cookie } }),
+      await http(daemon, '/api/health', { auth: false, headers: { cookie } }),
+      await http(daemon, '/', { auth: false, headers: { cookie } }),
+    ]) {
+      const set = res.headers.get('set-cookie') ?? '';
+      expect(set).toContain(`${AUTH_COOKIE_NAME}=;`);
+      expect(set).toMatch(/Max-Age=0/);
+      expect(set).toMatch(/Path=\//);
+      expect(set).not.toContain(daemon.token);
+    }
+    // No cookie in the request: no Set-Cookie at all.
+    expect((await http(daemon, '/')).headers.get('set-cookie')).toBeNull();
+    expect((await http(daemon, '/api/projects')).headers.get('set-cookie')).toBeNull();
+  });
+
+  it('never accepts ?token= on API routes', async () => {
     const res = await http(daemon, `/api/projects?token=${daemon.token}`, { auth: false });
     expect(res.status).toBe(401);
+    expect(res.headers.get('location')).toBeNull();
   });
 
-  it('accepts the bearer token and the auth cookie', async () => {
-    expect((await http(daemon, '/api/projects')).status).toBe(200);
-    const res = await http(daemon, '/api/projects', {
-      auth: false,
-      headers: { cookie: `other=1; ${AUTH_COOKIE_NAME}=${daemon.token}` },
-    });
-    expect(res.status).toBe(200);
-  });
-
-  it('bootstraps the cookie from ?token= on a page load and redirects without it', async () => {
+  it('redirects a v1 ?token= page load to #token= without setting a cookie', async () => {
     const res = await http(daemon, `/some/page?x=1&token=${daemon.token}&y=2`, { auth: false });
     expect(res.status).toBe(302);
-    expect(res.headers.get('location')).toBe('/some/page?x=1&y=2');
-    const cookie = res.headers.get('set-cookie') ?? '';
-    expect(cookie).toContain(`${AUTH_COOKIE_NAME}=${daemon.token}`);
-    expect(cookie).toMatch(/HttpOnly/i);
-    expect(cookie).toMatch(/SameSite=Strict/i);
-    expect(cookie).toMatch(/Path=\//);
+    expect(res.headers.get('location')).toBe(`/some/page?x=1&y=2#token=${daemon.token}`);
+    expect(res.headers.get('set-cookie')).toBeNull();
     expect(res.headers.get('cache-control')).toBe('no-store');
 
     const root = await http(daemon, `/?token=${daemon.token}`, { auth: false });
-    expect(root.headers.get('location')).toBe('/');
+    expect(root.headers.get('location')).toBe(`/#token=${daemon.token}`);
 
-    const sneaky = await http(daemon, `//evil.example/?token=${daemon.token}`, { auth: false });
-    expect(sneaky.headers.get('location')).toBe('/evil.example/');
+    const sneaky = await inproc(daemon, `//evil.example/?token=${daemon.token}`, { auth: false });
+    expect(sneaky.headers.get('location')).toBe(`/evil.example/#token=${daemon.token}`);
   });
 
-  it('rejects a wrong ?token= without setting a cookie', async () => {
+  it('answers a wrong ?token= with a sign-in hint, no redirect and no cookie', async () => {
     const res = await http(daemon, '/?token=wrong-wrong-wrong-wrong', {
       auth: false,
       headers: { accept: 'text/html' },
     });
     expect(res.status).toBe(401);
     expect(res.headers.get('set-cookie')).toBeNull();
-    expect(await res.text()).toContain('not signed in');
+    expect(res.headers.get('location')).toBeNull();
+    expect(await res.text()).toContain('#token=');
+  });
+
+  it('serves the static UI without a token, but still checks Host and Origin', async () => {
+    for (const p of ['/', '/app.js', '/inbox/some/route']) {
+      const res = await http(daemon, p, { auth: false });
+      expect(res.status, p).toBe(200);
+      await res.body?.cancel();
+    }
+    const foreignHost = await inproc(daemon, '/', {
+      auth: false,
+      headers: { host: `evil.example:${daemon.port}` },
+    });
+    expect(foreignHost.status).toBe(403);
+    const foreignOrigin = await inproc(daemon, '/app.js', {
+      auth: false,
+      headers: { origin: 'https://evil.example' },
+    });
+    expect(foreignOrigin.status).toBe(403);
+    // A cross-site navigation to the page is fine (fetch metadata only guards the API).
+    const nav = await inproc(daemon, '/', {
+      auth: false,
+      headers: { 'sec-fetch-site': 'cross-site' },
+    });
+    expect(nav.status).toBe(200);
   });
 
   it('rejects foreign Host headers (DNS rebinding), even for /api/health and with a token', async () => {
@@ -98,7 +212,7 @@ describe('auth and request safety', () => {
       `127.0.0.1.nip.io:${daemon.port}`,
       `user@127.0.0.1:${daemon.port}`,
     ]) {
-      const res = await inproc(daemon, '/api/health', { headers: { host } });
+      const res = await inproc(daemon, `/api/health?challenge=${CHALLENGE}`, { headers: { host } });
       expect(res.status, host).toBe(403);
       expect((await errorOf(res)).code).toBe('forbidden');
     }
@@ -146,11 +260,11 @@ describe('auth and request safety', () => {
     expect(sse.status).toBe(403);
   });
 
-  it('rejects cross-site fetch metadata on the API', async () => {
-    const res = await inproc(daemon, '/api/projects', {
-      headers: { 'sec-fetch-site': 'cross-site' },
-    });
-    expect(res.status).toBe(403);
+  it('rejects cross-site fetch metadata on every API route, health included', async () => {
+    for (const p of ['/api/projects', '/api/health', '/api/events', '/api/nope']) {
+      const res = await inproc(daemon, p, { headers: { 'sec-fetch-site': 'cross-site' } });
+      expect(res.status, p).toBe(403);
+    }
   });
 
   it('sets security headers and never CORS headers', async () => {
@@ -168,24 +282,74 @@ describe('auth and request safety', () => {
     expect(preflight.headers.get('access-control-allow-origin')).toBeNull();
   });
 
-  it('answers unauthenticated page loads with a sign-in hint', async () => {
-    const res = await http(daemon, '/', { auth: false, headers: { accept: 'text/html' } });
-    expect(res.status).toBe(401);
-    expect(res.headers.get('content-type')).toContain('text/html');
-  });
-
   it('never logs the token', async () => {
     const lines: string[] = [];
     const d = await startTestDaemon({
       fake: new FakeGitCore(),
       stateDir: await tempDir(),
+      webRoot,
       logLevel: 'debug',
       internal: { logWrite: (line) => lines.push(line) },
     });
     await http(d, `/?token=${d.token}`, { auth: false });
+    await http(d, `/api/health?challenge=${CHALLENGE}`, { auth: false });
     await http(d, '/api/projects');
     await http(d, '/api/projects', { headers: { authorization: `Bearer ${d.token}x` } });
+    await http(d, '/api/projects', {
+      auth: false,
+      headers: { cookie: `${AUTH_COOKIE_NAME}=${d.token}` },
+    });
     expect(lines.length).toBeGreaterThan(0);
     for (const line of lines) expect(line).not.toContain(d.token);
+  });
+});
+
+describe('SEC-10: router and security middleware agree on paths', () => {
+  let daemon: Daemon;
+
+  beforeEach(async () => {
+    const webRoot = await tempDir();
+    await writeFile(path.join(webRoot, 'index.html'), '<!doctype html><title>ui</title>');
+    daemon = await startTestDaemon({ fake: new FakeGitCore(), stateDir: await tempDir(), webRoot });
+  });
+
+  it('refuses percent-encoded unreserved characters in the path before routing', async () => {
+    for (const p of [
+      '/%61pi/projects',
+      '/%41pi/projects',
+      '/api/%70rojects',
+      '/ap%69/health',
+      `/%61pi/projects?token=${daemon.token}`,
+      '/api/projects%2E',
+      '/%7Eroot',
+      '/assets/%5Fx.js',
+    ]) {
+      for (const auth of [false, true]) {
+        const res = await inproc(daemon, p, { auth });
+        expect(res.status, `${p} auth=${auth}`).toBe(400);
+        expect(res.headers.get('set-cookie')).toBeNull();
+        expect(res.headers.get('location')).toBeNull();
+      }
+      const crossSite = await inproc(daemon, p, { headers: { 'sec-fetch-site': 'cross-site' } });
+      expect([400, 403]).toContain(crossSite.status);
+    }
+  });
+
+  it('never serves API data on paths the router does not treat as API paths', async () => {
+    for (const p of ['//api/projects', '/API/projects', '/api%2Fprojects', '//api/health']) {
+      const res = await inproc(daemon, p, { auth: false });
+      const text = await res.text();
+      expect(text, p).not.toContain('"projects"');
+      expect(text, p).not.toContain('"apiVersion"');
+    }
+  });
+
+  it('applies API rules to every path the router sends to the API', async () => {
+    for (const p of ['/api/projects', '/./api/projects', '/x/../api/projects', '/api//projects']) {
+      const res = await inproc(daemon, p, { auth: false });
+      expect(res.status, p).toBe(401);
+      const redirect = await inproc(daemon, `${p}?token=${daemon.token}`, { auth: false });
+      expect(redirect.status, `${p}?token=`).toBe(401);
+    }
   });
 });

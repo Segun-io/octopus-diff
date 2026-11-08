@@ -1,3 +1,4 @@
+import { createHmac } from 'node:crypto';
 import { chmod, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { GitCoreError } from '@octopus-diff/contracts';
@@ -12,9 +13,16 @@ import {
   resolveDirs,
   resolveInputPath,
 } from '../src/paths.js';
-import { isHostAllowed, isLoopbackHost, isOriginAllowed, parseHost } from '../src/security.js';
+import {
+  hasEncodedUnreserved,
+  isApiPath,
+  isHostAllowed,
+  isLoopbackHost,
+  isOriginAllowed,
+  parseHost,
+} from '../src/security.js';
 import { DB_FILE, SCHEMA_VERSION, Store } from '../src/store.js';
-import { isValidToken, loadOrCreateToken, tokensEqual } from '../src/token.js';
+import { healthProof, isValidToken, loadOrCreateToken, tokensEqual } from '../src/token.js';
 import { tempDir } from './helpers.js';
 
 describe('security helpers', () => {
@@ -87,6 +95,47 @@ describe('security helpers', () => {
   });
 });
 
+describe('path helpers (SEC-10)', () => {
+  it('detects escaped unreserved characters only', () => {
+    for (const p of [
+      '/%61pi',
+      '/%41',
+      '/%5a',
+      '/%7a',
+      '/%30',
+      '/%39',
+      '/%2d',
+      '/%2E',
+      '/%5F',
+      '/%7e',
+    ]) {
+      expect(hasEncodedUnreserved(p), p).toBe(true);
+    }
+    for (const p of [
+      '/api/projects',
+      '/%2F',
+      '/%25',
+      '/%20',
+      '/%40',
+      '/%5B',
+      '/%60',
+      '/%7B',
+      '/%2C',
+      '/%C3%A9',
+    ]) {
+      expect(hasEncodedUnreserved(p), p).toBe(false);
+    }
+  });
+
+  it('isApiPath covers /api and below only', () => {
+    expect(isApiPath('/api')).toBe(true);
+    expect(isApiPath('/api/')).toBe(true);
+    expect(isApiPath('/api/projects')).toBe(true);
+    expect(isApiPath('/apix')).toBe(false);
+    expect(isApiPath('//api/projects')).toBe(false);
+  });
+});
+
 describe('token', () => {
   it('creates a 0600 token in a 0700 state dir and reuses it', async () => {
     const stateDir = path.join(await tempDir(), 'nested', 'state');
@@ -111,6 +160,53 @@ describe('token', () => {
     expect(loaded.warnings).toHaveLength(1);
     expect((await readFile(path.join(stateDir, 'token'), 'utf8')).trim()).toBe(loaded.token);
     expect((await stat(path.join(stateDir, 'token'))).mode & 0o777).toBe(0o600);
+  });
+
+  it('replaces (not just chmods) a token file other users could read or write', async () => {
+    for (const mode of [0o644, 0o640, 0o606, 0o622]) {
+      const stateDir = await tempDir();
+      const file = path.join(stateDir, 'token');
+      const exposed = 'exposed-token-0123456789abcdef';
+      await writeFile(file, `${exposed}\n`);
+      await chmod(file, mode);
+      const before = await stat(file);
+      const loaded = await loadOrCreateToken(stateDir);
+      expect(loaded.source, mode.toString(8)).toBe('replaced');
+      expect(loaded.token).not.toBe(exposed);
+      expect(isValidToken(loaded.token)).toBe(true);
+      expect(loaded.warnings.join(' ')).toMatch(/other users.*replaced it with a new token/);
+      expect(loaded.warnings.join(' ')).not.toContain(exposed);
+      expect((await readFile(file, 'utf8')).trim()).toBe(loaded.token);
+      const after = await stat(file);
+      expect(after.mode & 0o777).toBe(0o600);
+      // A new file (rename), so an fd or hard link to the old one never sees the new token.
+      expect(after.ino).not.toBe(before.ino);
+      expect(await loadOrCreateToken(stateDir)).toMatchObject({
+        token: loaded.token,
+        source: 'file',
+      });
+    }
+  });
+
+  it('keeps a private token file as is', async () => {
+    const stateDir = await tempDir();
+    const file = path.join(stateDir, 'token');
+    await writeFile(file, 'private-token-0123456789abcdef\n', { mode: 0o600 });
+    await chmod(file, 0o400);
+    expect(await loadOrCreateToken(stateDir)).toMatchObject({
+      token: 'private-token-0123456789abcdef',
+      source: 'file',
+      warnings: [],
+    });
+  });
+
+  it('computes the health proof as hex HMAC-SHA256 keyed by the token', () => {
+    const challenge = 'ab'.repeat(16);
+    const expected = createHmac('sha256', 'k'.repeat(20))
+      .update(`octopus-diff-health:v1:${challenge}`)
+      .digest('hex');
+    expect(healthProof('k'.repeat(20), challenge)).toBe(expected);
+    expect(healthProof('k'.repeat(21), challenge)).not.toBe(expected);
   });
 
   it('validates explicit tokens and compares in constant time', async () => {

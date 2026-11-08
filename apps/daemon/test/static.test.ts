@@ -79,9 +79,13 @@ describe('static web UI', () => {
     }
   });
 
-  it('requires auth for static files too', async () => {
-    const res = await http(daemon, '/assets/app-abc123.js', { auth: false });
-    expect(res.status).toBe(401);
+  it('serves static files without auth (auth v2: they hold no secrets)', async () => {
+    for (const p of ['/', '/assets/app-abc123.js', '/favicon.svg', '/inbox/some/route']) {
+      const res = await http(daemon, p, { auth: false });
+      expect(res.status, p).toBe(200);
+      await res.body?.cancel();
+    }
+    expect((await http(daemon, '/leak.txt', { auth: false })).status).toBe(404);
   });
 
   it('does not serve the UI for non-GET methods', async () => {

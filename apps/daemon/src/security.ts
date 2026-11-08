@@ -152,3 +152,22 @@ export const UI_CSP = [
 
 /** CSP for API responses and error pages: nothing may load. */
 export const API_CSP = "default-src 'none'; frame-ancestors 'none'";
+
+/** True for `/api` and everything below it. Pass Hono's routing path (`c.req.path`). */
+export function isApiPath(pathname: string): boolean {
+  return pathname === '/api' || pathname.startsWith('/api/');
+}
+
+/** `%XX` escapes of RFC 3986 unreserved characters (ALPHA, DIGIT, `-`, `.`, `_`, `~`). */
+const ENCODED_UNRESERVED = /%(?:[46][1-9a-f]|[57][0-9a]|3[0-9]|2[de]|5f|7e)/i;
+
+/**
+ * SEC-10: Hono routes on a percent-decoded path (`/%61pi/projects` reaches `/api/projects`),
+ * while anything that looks at the raw URL sees `/%61pi/...`. No client needs to escape an
+ * unreserved character (RFC 3986 §2.3 says they are equivalent unescaped), so such paths are
+ * refused before routing; the remaining escapes (`%2F`, `%25`, …) are ones the router leaves
+ * encoded too. Pass the raw path (`new URL(c.req.url).pathname`).
+ */
+export function hasEncodedUnreserved(rawPath: string): boolean {
+  return ENCODED_UNRESERVED.test(rawPath);
+}
