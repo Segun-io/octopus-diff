@@ -35,6 +35,8 @@ export interface UiState {
   onlyUnreviewed: boolean;
   theme: ThemePreference;
   fileListLayout: FileListLayout;
+  /** Show the unreviewed count in the document title: `(12) octopus-diff`. */
+  titleCount: boolean;
   helpOpen: boolean;
   addProjectOpen: boolean;
   fileOptions: Record<string, FileViewOptions>;
@@ -51,6 +53,7 @@ const PERSISTED_KEYS = [
   'showReviewed',
   'theme',
   'fileListLayout',
+  'titleCount',
 ] as const satisfies readonly (keyof UiState)[];
 type Persisted = Pick<UiState, (typeof PERSISTED_KEYS)[number]>;
 
@@ -68,6 +71,7 @@ export const DEFAULT_UI_STATE: UiState = {
   onlyUnreviewed: false,
   theme: 'system',
   fileListLayout: 'list',
+  titleCount: true,
   helpOpen: false,
   addProjectOpen: false,
   fileOptions: {},
@@ -101,6 +105,7 @@ export function loadPrefs(): Partial<Persisted> {
     if (parsed.fileListLayout === 'list' || parsed.fileListLayout === 'tree') {
       out.fileListLayout = parsed.fileListLayout;
     }
+    if (typeof parsed.titleCount === 'boolean') out.titleCount = parsed.titleCount;
     return out;
   } catch {
     return {};

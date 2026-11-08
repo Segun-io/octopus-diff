@@ -17,7 +17,8 @@
     "dev:mock:large": "MOCK_DATASET=large tsx --conditions=@octopus-diff/source mock/dev.ts",
     "preview:mock": "tsx --conditions=@octopus-diff/source mock/preview.ts",
     "check:browser": "tsx scripts/browser-check.ts",
-    "perf": "tsx scripts/perf.ts"
+    "perf": "tsx scripts/perf.ts",
+    "icons": "tsx scripts/icons.ts"
   },
   "dependencies": {
     "@octopus-diff/contracts": "workspace:*",

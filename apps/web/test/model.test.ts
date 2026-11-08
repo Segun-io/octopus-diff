@@ -167,3 +167,12 @@ describe('selection repair', () => {
     expect(repairSelection([], 'gone', 0, all)).toBeNull();
   });
 });
+
+describe('document title', () => {
+  it('shows the unreviewed count only when enabled and non-zero', async () => {
+    const { formatTitle } = await import('../src/lib/title.ts');
+    expect(formatTitle(12, true)).toBe('(12) octopus-diff');
+    expect(formatTitle(0, true)).toBe('octopus-diff');
+    expect(formatTitle(12, false)).toBe('octopus-diff');
+  });
+});

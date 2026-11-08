@@ -21,6 +21,7 @@ import { HelpDialog } from './components/HelpDialog.tsx';
 import { Sidebar } from './components/Sidebar.tsx';
 import { Toolbar } from './components/Toolbar.tsx';
 import { toFileRef } from './lib/fileRef.ts';
+import { useDocumentTitle } from './lib/title.ts';
 import { type NavEntry, repairSelection } from './lib/model.ts';
 import { useCommands, useKeyboardShortcuts } from './state/commands.ts';
 import { CommandsContext } from './state/commandsContext.tsx';
@@ -174,8 +175,10 @@ function AppShell({ eventSourceFactory }: { eventSourceFactory?: EventSourceFact
   const addProjectOpen = useUi((s) => s.addProjectOpen);
   const layout = useUi((s) => s.fileListLayout);
   const selected = useUi((s) => s.selected);
+  const titleCount = useUi((s) => s.titleCount);
 
   useApplyTheme(theme);
+  useDocumentTitle(model.unreviewedTotal, titleCount);
   useServerEvents(eventSourceFactory);
   const focusWorktree =
     model.view.kind === 'worktree' ? model.view.worktreeId : (selected?.worktreeId ?? null);

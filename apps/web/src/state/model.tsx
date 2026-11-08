@@ -36,6 +36,8 @@ export interface AppModel {
   viewReady: boolean;
   selectedKey: string | null;
   selectedEntry: NavEntry | undefined;
+  /** Unreviewed files across every worktree in the review loop (current scope). */
+  unreviewedTotal: number;
 }
 
 const AppModelContext = createContext<AppModel | null>(null);
@@ -160,6 +162,12 @@ function useBuildAppModel(): AppModel {
     [selectedKey, entries, globalEntries],
   );
 
+  const unreviewedTotal = useMemo(() => {
+    let n = 0;
+    for (const row of sidebar.byId.values()) n += row.unreviewed;
+    return n;
+  }, [sidebar]);
+
   return {
     view,
     scope,
@@ -167,6 +175,7 @@ function useBuildAppModel(): AppModel {
     inbox,
     files,
     sidebar,
+    unreviewedTotal,
     inboxEntries,
     groups,
     entries,
