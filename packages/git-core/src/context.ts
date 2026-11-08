@@ -52,7 +52,11 @@ interface CachedRepo {
   at: number;
 }
 
-const REPO_TTL_MS = 30_000;
+// Git dir, common dir, toplevel and object format of a path almost never change; a failing
+// call with `not_a_repository` / `not_found` drops the entry (see `git()`). At 30 s nearly
+// every refresh after a quiet period, and every 60 s worktree relist, paid one extra
+// `rev-parse` spawn.
+const REPO_TTL_MS = 5 * 60_000;
 const FILTER_KEY = /^filter\.(.+)\.(clean|smudge|process|required)$/;
 const TRUSTED_SCOPES = new Set(['system', 'global', 'command']);
 
