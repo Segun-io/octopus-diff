@@ -111,11 +111,16 @@ All 2026-11-08, WS1. Details and rationale also in `docs/reports/git-core.md`.
    `--show-signature`, `--exec`, `--upload-pack`, `--color*`) are rejected before `--`.
 3. **Repo-local filter drivers are neutralized.** `filter.<d>.clean/smudge/process` run programs
    whenever git reads worktree files (status, diff), and committed `.gitattributes` decide where
-   they apply. Before `status`/`diff`, git-core reads `git config --show-scope --get-regexp
-   ^filter\.`; a driver key whose effective value comes from `local`/`worktree` scope is reset to
-   the system/global value if one exists (so git-lfs keeps working), else emptied with
-   `filter.<d>.required=false`. Passed via `GIT_CONFIG_COUNT` because driver names may contain
-   `=` (which breaks `-c`). Cached per git dir, keyed on the config files' mtime, 60 s TTL.
+   they apply. Once per GitCore operation that runs `status`/`diff`, git-core reads `git config
+   --show-scope --get-regexp ^filter\.`; a driver key whose effective value comes from
+   `local`/`worktree` scope is reset to the system/global value if one exists (so git-lfs keeps
+   working), else emptied with `filter.<d>.required=false`. Passed via `GIT_CONFIG_COUNT`
+   because driver names may contain `=` (which breaks `-c`). Not cached across operations:
+   included files and `includeIf "onbranch:"` can change what applies (a 60 s cache was found
+   exploitable in review). Consequence of trusting global drivers: git-lfs's clean filter may
+   write objects into `.git/lfs/objects` when status/diff re-read a modified LFS file, as plain
+   `git status` would; strict mode (neutralize every driver) would make LFS/git-crypt files show
+   as modified whenever their stat data changes.
 4. **`diff.autoRefreshIndex=false` is pinned.** Found by the read-only proof test: porcelain
    `git diff` with stat-dirty files calls `refresh_index_quietly()`, which takes `index.lock`
    and rewrites the index *even with* `--no-optional-locks` / `GIT_OPTIONAL_LOCKS=0`. With it
@@ -157,8 +162,8 @@ All 2026-11-08, WS1. Details and rationale also in `docs/reports/git-core.md`.
 13. **Branch scope** = committed changes only (`merge-base(HEAD, base)` tree vs HEAD tree).
     Unborn HEAD → `[]`; missing base → `not_found`; no base given or detected →
     `invalid_argument`; unrelated histories → `not_found`. **Commit scope** diffs merge commits
-    against their first parent; root commits against the empty tree. Branch/commit results are
-    cached (LRU 64) since they are immutable.
+    against their first parent; root commits against the empty tree. Not cached: tree diffs
+    still read the worktree's `.gitattributes` (binary, diff drivers), which differ per worktree.
 14. **Environment:** `GIT_*` variables from the daemon's own environment are dropped except
     `GIT_CONFIG_GLOBAL/SYSTEM/NOSYSTEM` and `GIT_EXEC_PATH` (a daemon started from a git hook would
     otherwise inherit `GIT_DIR`). Redirecting/executing variables (`GIT_DIR`, `GIT_EXTERNAL_DIFF`,
@@ -175,6 +180,26 @@ All 2026-11-08, WS1. Details and rationale also in `docs/reports/git-core.md`.
     counts; working/staged/unstaged return `[]`; branch and commit scopes work.
 18. **Worktree locator paths** may also be a subdirectory: git-core resolves the toplevel with
     `rev-parse --show-prefix` (one call, cached 30 s per path).
+19. **`core.bigFileThreshold` is pinned to `max(maxOutputBytes, 1 MiB)`** (64 MiB by default):
+    git diffs larger files as binary (header with full object ids + "Binary files differ"), so
+    no single file's patch can exceed about twice that while it is streamed and hashed.
+    Streaming runs (patch hashing) do not apply `maxOutputBytes` to the *total* output: a big
+    refactor may legitimately produce hundreds of MiB across files; they are bounded by
+    `timeoutMs`, and retained text is capped per file. Untracked files above the threshold are
+    listed as binary too, and untracked contents are hashed by streaming (O(1 MiB) memory).
+20. **The git executable is resolved to an absolute path** using only absolute `PATH` entries
+    (Windows: `.exe`/`.com`). Spawning a bare `git` lets the OS resolve relative `PATH` entries
+    against the child's working directory (the repository), so a planted `./git` could run.
+21. **Split-index repositories are a documented exception to "no writes":** git bumps the mtime
+    of `.git/sharedindex.<sha>` on every index read (`freshen_shared_index`), and nothing on
+    the command line turns that off. Content, `index`, refs and locks stay untouched; a test pins
+    exactly this boundary.
+22. **An independent review** of `src/` (fresh agent, code only) found 11 issues, 10 confirmed;
+    all fixed with regression tests (decisions 3, 13, 19, 20 changed as a result; also:
+    getFileDiff falls back to the whole scope when a narrowed pathspec changes rename pairing,
+    touched-but-unchanged binary files are stat-only, `scan` rejects when `onProgress` throws,
+    commit dates are clamped to 4-digit years, unmerged paths containing newlines, rename
+    sources get `staged`, untracked symlinks are synthesized).
 
 ## WS2 — daemon
 
