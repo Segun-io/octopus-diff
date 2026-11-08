@@ -1,0 +1,99 @@
+# octopus-diff CI. Committed for when the repository gets a remote; it has never been pushed.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # pnpm 12 fails the install when a dependency's build script is not approved; esbuild's
+  # postinstall is not needed (its platform binary ships as an optional dependency).
+  PNPM_INSTALL_FLAGS: --frozen-lockfile --config.strict-dep-builds=false
+
+jobs:
+  check:
+    name: lint · typecheck · test · build (Node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [24, 26]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6 # version from "packageManager" in package.json
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node }}
+          cache: pnpm
+      - run: git --version
+      - run: pnpm install $PNPM_INSTALL_FLAGS
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm build
+      - name: CLI smoke test
+        run: |
+          node apps/cli/dist/index.js --version
+          node apps/cli/dist/index.js doctor --state-dir "$RUNNER_TEMP/od-state" --config-dir "$RUNNER_TEMP/od-config"
+
+  e2e:
+    name: e2e (Playwright, Chromium)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+          cache: pnpm
+      - run: pnpm install $PNPM_INSTALL_FLAGS
+      - run: pnpm build
+      - name: Install Chromium and its system dependencies
+        run: pnpm --filter @octopus-diff/e2e exec playwright install --with-deps chromium
+      - run: pnpm test:e2e
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-report
+          path: |
+            e2e/playwright-report/
+            e2e/test-results/
+          retention-days: 7
+          if-no-files-found: ignore
+
+  package:
+    name: package (tarball, not published)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install $PNPM_INSTALL_FLAGS
+      - run: pnpm build
+      - run: pnpm --filter octopus-diff run pack:tarball
+      - name: Install the tarball in an empty directory and run it
+        run: |
+          dir="$RUNNER_TEMP/od-pack"
+          mkdir -p "$dir"
+          cp apps/cli/.pack/octopus-diff-*.tgz "$dir/"
+          cd "$dir"
+          echo '{ "name": "od-pack-test", "private": true }' > package.json
+          npm install --no-audit --no-fund ./octopus-diff-*.tgz
+          ./node_modules/.bin/octopus-diff --version
+          ./node_modules/.bin/octopus-diff doctor --state-dir "$dir/state" --config-dir "$dir/config"

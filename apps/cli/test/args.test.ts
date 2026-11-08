@@ -1,0 +1,137 @@
+import { describe, expect, it } from 'vitest';
+import { parseCommandLine } from '../src/args.js';
+import { UsageError } from '../src/errors.js';
+
+describe('parseCommandLine', () => {
+  it('defaults to serve with no arguments or a leading option', () => {
+    expect(parseCommandLine([])).toMatchObject({
+      command: 'serve',
+      flags: { scan: [], projects: [] },
+    });
+    expect(parseCommandLine(['--port', '9000'])).toMatchObject({
+      command: 'serve',
+      flags: { port: 9000 },
+    });
+  });
+
+  it('parses every serve flag', () => {
+    const parsed = parseCommandLine([
+      'serve',
+      'repo-a',
+      '--port=0',
+      '--host',
+      '::1',
+      '--open',
+      '--scan',
+      '~/code',
+      '-s',
+      '/srv/work',
+      '--depth',
+      '5',
+      '--allow-non-loopback',
+      '--allowed-host',
+      'box.local',
+      '--no-watch',
+      '--poll',
+      '--web-root',
+      './web',
+      '--state-dir',
+      '/tmp/s',
+      '--config-dir',
+      '/tmp/c',
+      '--config',
+      '/tmp/c/x.json',
+      '--log-level',
+      'debug',
+      'repo-b',
+    ]);
+    expect(parsed).toEqual({
+      command: 'serve',
+      flags: {
+        projects: ['repo-a', 'repo-b'],
+        port: 0,
+        host: '::1',
+        open: true,
+        scan: ['~/code', '/srv/work'],
+        depth: 5,
+        allowNonLoopback: true,
+        allowedHosts: ['box.local'],
+        watch: false,
+        poll: true,
+        webRoot: './web',
+        stateDir: '/tmp/s',
+        configDir: '/tmp/c',
+        config: '/tmp/c/x.json',
+        logLevel: 'debug',
+      },
+    });
+  });
+
+  it('supports --no-open to override the config file', () => {
+    expect(parseCommandLine(['serve', '--no-open'])).toMatchObject({ flags: { open: false } });
+  });
+
+  it.each([
+    [['serve', '--port', 'abc'], /--port must be an integer/],
+    [['serve', '--port', '70000'], /--port must be between 0 and 65535/],
+    [['serve', '--port', '-1'], /--port/],
+    [['serve', '--depth', '9'], /--depth must be between 0 and 8/],
+    [['serve', '--log-level', 'loud'], /--log-level must be one of/],
+    [['serve', '--bogus'], /serve: Unknown option '--bogus'/],
+    [['serve', '--host', ''], /--host must not be empty/],
+    [['add'], /at least one repository path/],
+    [['add', 'x', '--depth', '2'], /--depth only applies to --scan/],
+    [['status', 'extra'], /status: Unexpected argument/],
+    [['frobnicate'], /unknown command "frobnicate"/],
+  ])('rejects %j', (argv, message) => {
+    expect(() => parseCommandLine(argv)).toThrow(UsageError);
+    expect(() => parseCommandLine(argv)).toThrow(message);
+  });
+
+  it('parses add with paths and scan roots', () => {
+    expect(
+      parseCommandLine([
+        'add',
+        'a',
+        'b',
+        '--scan',
+        'dir',
+        '--depth',
+        '2',
+        '--url',
+        'http://127.0.0.1:1',
+      ]),
+    ).toEqual({
+      command: 'add',
+      flags: { paths: ['a', 'b'], scan: ['dir'], depth: 2, url: 'http://127.0.0.1:1' },
+    });
+    expect(parseCommandLine(['add', '--scan', 'dir'])).toMatchObject({
+      command: 'add',
+      flags: { paths: [], scan: ['dir'] },
+    });
+  });
+
+  it('parses doctor, status and config', () => {
+    expect(parseCommandLine(['doctor', '--json', '-p', '1234'])).toEqual({
+      command: 'doctor',
+      flags: { json: true, port: 1234 },
+    });
+    expect(parseCommandLine(['status', '--open'])).toEqual({
+      command: 'status',
+      flags: { open: true },
+    });
+    expect(parseCommandLine(['config', '--schema'])).toEqual({
+      command: 'config',
+      flags: { schema: true },
+    });
+  });
+
+  it('handles help and version', () => {
+    expect(parseCommandLine(['--help'])).toEqual({ command: 'help' });
+    expect(parseCommandLine(['help', 'add'])).toEqual({ command: 'help', topic: 'add' });
+    expect(parseCommandLine(['serve', '--help'])).toEqual({ command: 'help', topic: 'serve' });
+    expect(parseCommandLine(['add', '-h'])).toEqual({ command: 'help', topic: 'add' });
+    expect(parseCommandLine(['--version'])).toEqual({ command: 'version' });
+    expect(parseCommandLine(['-v'])).toEqual({ command: 'version' });
+  });
+});
