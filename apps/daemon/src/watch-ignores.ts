@@ -90,15 +90,21 @@ function addAnyDepth(rules: BuildDirRules, name: string): void {
   if (BUILD_NAMES.has(name)) rules.anyDepth.add(name);
 }
 
-/** Rules that apply at the worktree root: `<root>/.gitignore` and `<commonDir>/info/exclude`. */
+/** `<commonDir>/info/exclude` (shared by every worktree of a repository), or null. */
+export function readExcludeFile(commonDir: string): Promise<string | null> {
+  return readSmallRegularFile(path.join(commonDir, 'info', 'exclude'), MAX_IGNORE_FILE_BYTES);
+}
+
+/** Rules that apply at the worktree root: `<root>/.gitignore` plus the `info/exclude` text. */
 export async function readRootBuildDirRules(
   root: string,
-  commonDir: string | null,
+  excludeText: string | null,
 ): Promise<BuildDirRules> {
-  const files = [path.join(root, '.gitignore')];
-  if (commonDir) files.push(path.join(commonDir, 'info', 'exclude'));
-  const texts = await Promise.all(files.map((f) => readSmallRegularFile(f, MAX_IGNORE_FILE_BYTES)));
-  return parseBuildDirRules(texts.filter((t): t is string => t !== null));
+  const gitignore = await readSmallRegularFile(
+    path.join(root, '.gitignore'),
+    MAX_IGNORE_FILE_BYTES,
+  );
+  return parseBuildDirRules([gitignore, excludeText].filter((t): t is string => t !== null));
 }
 
 /** Rules of a nested `.gitignore` (`relDir` is `/`-separated, relative to the worktree root). */

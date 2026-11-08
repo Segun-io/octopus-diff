@@ -87,8 +87,13 @@ interface WorktreeEntry {
   lastHash: string | null;
   attempted: boolean;
   targets: WatchTargets | null;
+  /** The folder may have been recycled: compare `targets.gitDir` with its `.git` (F1). */
+  checkGitDir: boolean;
   refresher: Coalescer;
 }
+
+/** How long a removed worktree id is remembered: git-core caches repository info for 5 min. */
+const RECYCLE_WINDOW_MS = 5 * 60_000;
 
 interface ProjectEntry {
   row: ProjectRow;
@@ -168,6 +173,8 @@ export class DaemonCore {
   readonly #scanRoots = new Map<string, ScanState>();
   readonly #filesCache = new Map<string, { stateHash: string; files: GitChangedFile[] }>();
   readonly #filesInflight = new Map<string, Promise<GitChangedFile[]>>();
+  /** Worktree ids removed recently (id → time), to spot a path re-added soon after (F1). */
+  readonly #recentlyRemoved = new Map<string, number>();
   #gitVersion: string | null = null;
   #timers: NodeJS.Timeout[] = [];
   #closed = false;
@@ -197,6 +204,7 @@ export class DaemonCore {
         const entry = this.#projects.get(projectId);
         if (entry) void this.#relist(entry);
       },
+      onWorktreeReplaced: (worktreeId) => this.#onWorktreeReplaced(worktreeId),
     };
     if (watch.debounceMs !== undefined) watcherOptions.debounceMs = watch.debounceMs;
     if (watch.pollFocusedMs !== undefined) watcherOptions.pollFocusedMs = watch.pollFocusedMs;
@@ -601,11 +609,17 @@ export class DaemonCore {
           if (wasMissing && !wt.missing) {
             existing.error = null;
             existing.attempted = false;
+            existing.checkGitDir = true;
           }
         }
         next.set(wt.id, existing);
       } else {
-        next.set(wt.id, this.#newWorktreeEntry(wt, entry.row.id));
+        const created = this.#newWorktreeEntry(wt, entry.row.id);
+        const removedAt = this.#recentlyRemoved.get(wt.id);
+        if (removedAt !== undefined && Date.now() - removedAt < RECYCLE_WINDOW_MS) {
+          created.checkGitDir = true;
+        }
+        next.set(wt.id, created);
         added.push(wt.id);
         changed = true;
       }
@@ -615,6 +629,7 @@ export class DaemonCore {
         removed.push(id);
         changed = true;
         this.#invalidateWorktreeFiles(id);
+        this.#rememberRemoved(id);
       }
     }
     entry.worktrees = next;
@@ -666,15 +681,37 @@ export class DaemonCore {
     return entry.watchSync;
   }
 
+  #rememberRemoved(worktreeId: string): void {
+    const now = Date.now();
+    for (const [id, at] of this.#recentlyRemoved) {
+      if (now - at >= RECYCLE_WINDOW_MS) this.#recentlyRemoved.delete(id);
+    }
+    this.#recentlyRemoved.set(worktreeId, now);
+  }
+
+  /** The watcher saw a worktree folder deleted or replaced: re-check its targets (F1). */
+  #onWorktreeReplaced(worktreeId: string): void {
+    for (const project of this.#projects.values()) {
+      const e = project.worktrees.get(worktreeId);
+      if (!e) continue;
+      e.checkGitDir = true;
+      void this.#syncWatcher(project);
+      return;
+    }
+  }
+
   /**
-   * Watch targets of a worktree. They are re-fetched when its `.git` entry points at another git
-   * dir than the cached one (removed and re-added at the same path, review F1). If git-core
-   * still reports the old git dir (its repository cache), null is returned: the watcher then
-   * routes every git-dir event of the project to this worktree until the targets agree.
-   * Undefined on shutdown.
+   * Watch targets of a worktree. When the folder may have been recycled (`checkGitDir`), its
+   * `.git` entry is read and the targets are re-fetched if it points at another git dir (review
+   * F1). If git-core still reports the old git dir (its repository cache), null is returned:
+   * the watcher then routes every git-dir event of the project to this worktree until the two
+   * agree. Undefined on shutdown.
    */
   async #watchTargets(e: WorktreeEntry): Promise<WatchTargets | null | undefined> {
-    const actual = e.worktree.bare ? null : await gitDirOf(e.worktree.path);
+    const check = e.checkGitDir && !e.worktree.bare;
+    if (!check) e.checkGitDir = false;
+    if (e.targets && !check) return e.targets;
+    const actual = check ? await gitDirOf(e.worktree.path) : null;
     if (e.targets && actual !== null && e.targets.gitDir !== actual) {
       this.#log.debug('worktree git dir changed; refreshing watch targets', {
         worktreeId: e.worktree.id,
@@ -697,6 +734,8 @@ export class DaemonCore {
       e.targets = null;
       return null;
     }
+    // Keep checking while the `.git` entry can't be read (the folder may be coming back).
+    if (actual !== null) e.checkGitDir = false;
     return e.targets;
   }
 
@@ -721,6 +760,7 @@ export class DaemonCore {
       lastHash: null,
       attempted: false,
       targets: null,
+      checkGitDir: false,
       refresher: new Coalescer(() => this.#computeSummary(entry)),
     };
     return entry;

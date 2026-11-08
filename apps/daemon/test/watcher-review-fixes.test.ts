@@ -23,13 +23,14 @@ import { eventually, onCleanup, sleep, tempDir } from './helpers.js';
 interface Recorder {
   dirty: Array<{ id: string; reason: DirtyReason; at: number }>;
   lists: Array<{ projectId: string; reason: string }>;
+  replaced: string[];
 }
 
 function makeWatcher(overrides: Partial<WatcherServiceOptions> = {}): {
   watcher: WatcherService;
   rec: Recorder;
 } {
-  const rec: Recorder = { dirty: [], lists: [] };
+  const rec: Recorder = { dirty: [], lists: [], replaced: [] };
   const watcher = new WatcherService({
     logger: noopLogger,
     debounceMs: 150,
@@ -39,6 +40,7 @@ function makeWatcher(overrides: Partial<WatcherServiceOptions> = {}): {
     guardDirs: { home: null, tmp: null },
     onWorktreeDirty: (id, reason) => rec.dirty.push({ id, reason, at: Date.now() }),
     onWorktreeListDirty: (projectId, reason) => rec.lists.push({ projectId, reason }),
+    onWorktreeReplaced: (id) => rec.replaced.push(id),
     ...overrides,
   });
   onCleanup(() => watcher.close());
@@ -139,6 +141,7 @@ describe('F1: worktree folder deleted / replaced at the same path', { timeout: 2
     await rm(layout.linked, { recursive: true, force: true });
     await mkdir(path.join(layout.linked, 'src'), { recursive: true });
     await eventually(() => rec.lists.some((l) => l.reason === 'missing'), 5000);
+    expect(rec.replaced).toEqual(['linked']); // DaemonCore re-checks the watch targets
     const degraded = watcher.status();
     expect(degraded.mode).toBe('mixed');
     expect(degraded.warnings.join('\n')).toMatch(/do not exist/);
@@ -167,32 +170,37 @@ describe('F1: worktree folder deleted / replaced at the same path', { timeout: 2
     await watcher.setProject('p1', layout.common, layout.worktrees);
     expect(t.subscribed.filter((d) => d === layout.linked).length).toBe(before + 1);
     expect(t.active).toBe(3);
+    expect(rec.replaced).toEqual(['linked']);
     await sleep(300);
     const mark = rec.dirty.length;
     await writeFile(path.join(layout.linked, 'src', 'x.ts'), 'x');
     await eventually(() => idsOf(rec, mark).includes('linked'), 5000);
   });
 
-  it('re-subscribes when the git dir behind the same path changed (new admin dir)', async () => {
+  it('routes a new admin dir behind the same folder to it and refreshes it', async () => {
     const layout = await makeLayout();
     const t = tracking();
     const { watcher, rec } = makeWatcher({ subscribe: t.subscribe });
     await watcher.setProject('p1', layout.common, layout.worktrees);
     const newGitDir = path.join(layout.common, 'worktrees', 'wt1');
     await mkdir(newGitDir, { recursive: true });
+    await sleep(300);
+    const mark = rec.dirty.length;
     const linkedWt = {
       ...layout.linkedWt,
       targets: targetsFor(layout.common, newGitDir, layout.linked),
     };
     await watcher.setProject('p1', layout.common, [layout.mainWt, linkedWt]);
-    expect(t.subscribed.filter((d) => d === layout.linked)).toHaveLength(2);
+    // The folder's subscription does not depend on the git dir: refresh, no re-subscribe.
+    expect(t.subscribed.filter((d) => d === layout.linked)).toHaveLength(1);
+    await eventually(() => rec.dirty.slice(mark).some((d) => d.id === 'linked'), 5000);
     await sleep(300);
     // Index changes of the new admin dir now route to the linked worktree only.
-    const mark = rec.dirty.length;
+    const mark2 = rec.dirty.length;
     await writeFile(path.join(newGitDir, 'index'), 'x');
-    await eventually(() => rec.dirty.length > mark, 5000);
+    await eventually(() => rec.dirty.length > mark2, 5000);
     await sleep(250);
-    expect(idsOf(rec, mark)).toEqual(['linked']);
+    expect(idsOf(rec, mark2)).toEqual(['linked']);
   });
 
   it('heals on the fallback poll when the folder comes back without a relist', async () => {

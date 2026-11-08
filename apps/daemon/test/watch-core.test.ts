@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import parcelWatcher from '@parcel/watcher';
 import { describe, expect, it } from 'vitest';
@@ -97,6 +97,8 @@ describe('watch wiring in DaemonCore', () => {
     const newGitDir = path.join(repo.commonDir, 'worktrees', 'wt1');
     await mkdir(newGitDir, { recursive: true });
     const before = fake.callCount('getWatchTargets');
+    await rm(wt.path, { recursive: true, force: true });
+    await mkdir(wt.path);
     await writeFile(path.join(wt.path, '.git'), `gitdir: ${newGitDir}\n`);
     await eventually(() => fake.callCount('getWatchTargets') > before, 5000);
     await sleep(300);

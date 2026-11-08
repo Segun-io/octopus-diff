@@ -21,6 +21,7 @@ import {
   buildDirsOf,
   emptyBuildDirRules,
   isIgnoredBuildDir,
+  readExcludeFile,
   readNestedBuildDirRules,
   readRootBuildDirRules,
 } from './watch-ignores.js';
@@ -124,6 +125,11 @@ export interface WatcherServiceOptions {
   guardDirs?: GuardDirs;
   onWorktreeDirty: (worktreeId: string, reason: DirtyReason) => void;
   onWorktreeListDirty: (projectId: string, reason: 'git' | 'timer' | 'missing') => void;
+  /**
+   * A watched worktree folder was deleted, or replaced at the same path: its git dir may have
+   * changed too, so cached watch targets should be re-checked (F1).
+   */
+  onWorktreeReplaced?: (worktreeId: string) => void;
 }
 
 type FailureKind = 'inotify-watches' | 'inotify-instances' | 'missing' | 'permission' | 'other';
@@ -175,6 +181,8 @@ interface ProjectState {
   failure: { kind: FailureKind; message: string } | null;
   policy: WatchRefusal | null;
   identity: string | null;
+  /** `info/exclude` text, read once and shared by the worktrees (reset when it changes). */
+  exclude: Promise<string | null> | null;
   worktreeIds: Set<string>;
   relist: NodeJS.Timeout | undefined;
   listDebounce: NodeJS.Timeout | undefined;
@@ -287,6 +295,7 @@ export class WatcherService {
       | 'onWorktreeListDirty'
       | 'guardDirs'
       | 'maxWorktreesPerProject'
+      | 'onWorktreeReplaced'
     >
   >;
   readonly #log: Logger;
@@ -297,6 +306,7 @@ export class WatcherService {
   readonly #maxPerProject: number;
   readonly #onDirty: WatcherServiceOptions['onWorktreeDirty'];
   readonly #onListDirty: WatcherServiceOptions['onWorktreeListDirty'];
+  readonly #onReplaced: (worktreeId: string) => void;
   readonly #worktrees = new Map<string, WorktreeState>();
   readonly #projects = new Map<string, ProjectState>();
   readonly #loggedFailures = new Set<FailureKind>();
@@ -333,6 +343,7 @@ export class WatcherService {
     );
     this.#onDirty = options.onWorktreeDirty;
     this.#onListDirty = options.onWorktreeListDirty;
+    this.#onReplaced = options.onWorktreeReplaced ?? (() => {});
   }
 
   get #native(): boolean {
@@ -370,6 +381,7 @@ export class WatcherService {
         failure: null,
         policy: dirRefusal(commonDir, this.#guard),
         identity: null,
+        exclude: null,
         worktreeIds: new Set(),
         relist: undefined,
         listDebounce: undefined,
@@ -676,17 +688,23 @@ export class WatcherService {
     const identity = await dirIdentity(info.root);
     if (identity === null || this.#worktrees.get(info.worktreeId) !== st || st.subscribing) return;
     const gitDir = info.targets?.gitDir ?? null;
-    const replaced =
-      st.sub !== null &&
-      (identity !== st.identity || (gitDir !== null && st.gitDir !== null && gitDir !== st.gitDir));
+    const replaced = st.sub !== null && identity !== st.identity;
     const back = st.sub === null && (st.failure === null || st.failure.kind === 'missing');
-    if (!replaced && !back) return;
+    if (!replaced && !back) {
+      if (gitDir !== null && st.gitDir !== null && gitDir !== st.gitDir) {
+        // New admin dir behind the same folder: routing uses the new targets from now on.
+        st.gitDir = gitDir;
+        this.markDirty(info.worktreeId, 'git');
+      }
+      return;
+    }
     this.#log.info(
       replaced
         ? 'worktree folder was replaced at the same path; re-subscribing'
         : 'worktree folder is back; re-subscribing',
       { worktreeId: info.worktreeId, path: info.root },
     );
+    if (replaced) this.#onReplaced(info.worktreeId);
     await this.#enqueue(st, () => this.#subscribeWorktree(st));
     // Changes made while the folder had no working subscription were missed.
     this.markDirty(info.worktreeId, 'fs');
@@ -699,7 +717,10 @@ export class WatcherService {
     if (!current() || !this.#native || st.info.bare || st.policy) return;
     await this.#releaseSub(st);
     const root = st.info.root;
-    const identity = await dirIdentity(root);
+    const [identity, rules] = await Promise.all([
+      dirIdentity(root),
+      this.#excludeOf(st).then((exclude) => readRootBuildDirRules(root, exclude)),
+    ]);
     if (!current()) return;
     if (identity === null) {
       st.failure = { kind: 'missing', message: 'worktree folder does not exist' };
@@ -707,9 +728,8 @@ export class WatcherService {
       this.#schedulePoll(id);
       return;
     }
-    st.build.rules = await readRootBuildDirRules(root, this.#commonDirOf(st));
+    st.build.rules = rules;
     st.build.nested.clear();
-    if (!current()) return;
     const buildIgnores = buildDirIgnoreEntries(st.build.rules, st.build.forced);
     const nested = [...this.#worktrees.values()]
       .map((other) => other.info.root)
@@ -758,8 +778,12 @@ export class WatcherService {
     return run;
   }
 
-  #commonDirOf(st: WorktreeState): string | null {
-    return st.info.targets?.commonDir ?? this.#projects.get(st.info.projectId)?.commonDir ?? null;
+  /** The project's `info/exclude` text, read once per change (F5, F6). */
+  #excludeOf(st: WorktreeState): Promise<string | null> {
+    const project = this.#projects.get(st.info.projectId);
+    if (!project) return Promise.resolve(null);
+    project.exclude ??= readExcludeFile(project.commonDir);
+    return project.exclude;
   }
 
   #logPolicy(st: WorktreeState): void {
@@ -838,6 +862,7 @@ export class WatcherService {
     st.failure = { kind: 'missing', message: 'worktree folder was deleted' };
     void this.#enqueue(st, () => this.#releaseSub(st));
     this.#schedulePoll(st.info.worktreeId);
+    this.#onReplaced(st.info.worktreeId);
     this.#onListDirty(st.info.projectId, 'missing');
   }
 
@@ -898,7 +923,7 @@ export class WatcherService {
 
   async #recheckIgnores(st: WorktreeState): Promise<void> {
     if (this.#closed || this.#worktrees.get(st.info.worktreeId) !== st || !st.sub) return;
-    const rules = await readRootBuildDirRules(st.info.root, this.#commonDirOf(st));
+    const rules = await readRootBuildDirRules(st.info.root, await this.#excludeOf(st));
     if (this.#worktrees.get(st.info.worktreeId) !== st) return;
     st.build.rules = rules;
     st.build.nested.clear();
@@ -1045,7 +1070,10 @@ export class WatcherService {
         continue;
       }
       if (isLockFile(p)) continue;
-      if (p === excludeFile) for (const st of states) this.#scheduleIgnoreCheck(st);
+      if (p === excludeFile) {
+        project.exclude = null;
+        for (const st of states) this.#scheduleIgnoreCheck(st);
+      }
       if (isSameOrInside(worktreesDir, p)) {
         const rel = path.relative(worktreesDir, p).split(path.sep);
         // worktrees/, worktrees/<name>, worktrees/<name>/{gitdir,locked}: the list changed.

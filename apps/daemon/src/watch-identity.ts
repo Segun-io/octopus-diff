@@ -1,5 +1,5 @@
-import { constants } from 'node:fs';
-import { lstat, open, realpath, stat } from 'node:fs/promises';
+import { constants, type Stats } from 'node:fs';
+import { type FileHandle, open, realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
 
 /**
@@ -25,26 +25,41 @@ export async function dirIdentity(dir: string): Promise<string | null> {
  * refused) or larger than `maxBytes`. Repository content is untrusted.
  */
 export async function readSmallRegularFile(file: string, maxBytes: number): Promise<string | null> {
+  const opened = await openNoFollow(file);
+  if (!opened) return null;
   try {
-    const info = await lstat(file);
-    if (!info.isFile() || info.size > maxBytes) return null;
-    // O_NOFOLLOW / O_NONBLOCK: the entry may be swapped for a symlink or a FIFO after lstat.
-    const handle = await open(
-      file,
-      constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
-    );
-    try {
-      const opened = await handle.stat();
-      if (!opened.isFile() || opened.size > maxBytes) return null;
-      const buffer = Buffer.alloc(Math.max(1, opened.size));
-      const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
-      return buffer.subarray(0, bytesRead).toString('utf8');
-    } finally {
-      await handle.close();
-    }
+    return opened.info.isFile() ? await readUpTo(opened.handle, opened.info.size, maxBytes) : null;
+  } finally {
+    await opened.handle.close().catch(() => {});
+  }
+}
+
+// O_NOFOLLOW: never follow a symlink planted in the repository. O_NONBLOCK: opening a FIFO
+// must not block. The type is checked on the open descriptor (no lstat/open race).
+async function openNoFollow(file: string): Promise<{ handle: FileHandle; info: Stats } | null> {
+  let handle: FileHandle;
+  try {
+    handle = await open(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   } catch {
     return null;
   }
+  try {
+    return { handle, info: await handle.stat() };
+  } catch {
+    await handle.close().catch(() => {});
+    return null;
+  }
+}
+
+async function readUpTo(
+  handle: FileHandle,
+  size: number,
+  maxBytes: number,
+): Promise<string | null> {
+  if (size > maxBytes) return null;
+  const buffer = Buffer.alloc(Math.max(1, size));
+  const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+  return buffer.subarray(0, bytesRead).toString('utf8');
 }
 
 /** A `.git` file is one short line (`gitdir: <path>`); anything bigger is not one. */
@@ -58,12 +73,18 @@ const MAX_GIT_FILE_BYTES = 4096;
  */
 export async function gitDirOf(root: string): Promise<string | null> {
   const dotGit = path.join(root, '.git');
+  const opened = await openNoFollow(dotGit);
+  if (!opened) return null;
+  let text: string | null = null;
   try {
-    if ((await lstat(dotGit)).isDirectory()) return await realpath(dotGit);
+    if (opened.info.isDirectory()) return await realpath(dotGit).catch(() => null);
+    if (!opened.info.isFile()) return null;
+    text = await readUpTo(opened.handle, opened.info.size, MAX_GIT_FILE_BYTES);
   } catch {
     return null;
+  } finally {
+    await opened.handle.close().catch(() => {});
   }
-  const text = await readSmallRegularFile(dotGit, MAX_GIT_FILE_BYTES);
   const first = text?.split('\n', 1)[0]?.replace(/\r$/, '') ?? '';
   if (!first.startsWith('gitdir: ')) return null;
   const target = path.resolve(root, first.slice('gitdir: '.length).trim());
