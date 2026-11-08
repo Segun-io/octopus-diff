@@ -11,7 +11,10 @@
     "preview": "vite preview",
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run --passWithNoTests",
-    "lint": "biome check ."
+    "lint": "biome check .",
+    "dev:mock": "tsx --conditions=@octopus-diff/source mock/dev.ts",
+    "mock": "tsx --conditions=@octopus-diff/source mock/server.ts",
+    "dev:mock:large": "MOCK_DATASET=large tsx --conditions=@octopus-diff/source mock/dev.ts"
   },
   "dependencies": {
     "@octopus-diff/contracts": "workspace:*",
@@ -22,6 +25,7 @@
     "react-dom": "^19.3.1"
   },
   "devDependencies": {
+    "@playwright/test": "^1.65.0",
     "@tailwindcss/vite": "^4.3.5",
     "@testing-library/dom": "^10.4.2",
     "@testing-library/react": "^16.3.3",
@@ -29,6 +33,7 @@
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.2.1",
+    "diff": "^9.0.0",
     "jsdom": "^31.0.0",
     "tailwindcss": "^4.3.5",
     "vite": "^8.3.6"
