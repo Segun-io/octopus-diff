@@ -1,0 +1,20 @@
+{
+  "name": "@octopus-diff/e2e",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Playwright end-to-end tests for octopus-diff (MVP acceptance list, PLAN §8).",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "build": "echo 'e2e: nothing to build'",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run --passWithNoTests",
+    "test:e2e": "playwright test",
+    "lint": "biome check ."
+  },
+  "devDependencies": {
+    "@octopus-diff/contracts": "workspace:*",
+    "@octopus-diff/fixtures": "workspace:*",
+    "@playwright/test": "^1.65.0"
+  }
+}

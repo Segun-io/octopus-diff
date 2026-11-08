@@ -1,0 +1,30 @@
+{
+  "name": "octopus-diff-monorepo",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Diff-first, read-only git UI for many projects and worktrees at once.",
+  "license": "MIT",
+  "type": "module",
+  "packageManager": "pnpm@12.16.1",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "build": "pnpm -r --workspace-concurrency=4 run build",
+    "typecheck": "pnpm -r run typecheck",
+    "test": "pnpm -r run test",
+    "test:e2e": "pnpm --filter @octopus-diff/e2e run test:e2e",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "format": "biome format --write .",
+    "check": "pnpm run lint && pnpm run typecheck && pnpm run test && pnpm run build",
+    "clean": "pnpm -r exec rm -rf dist coverage *.tsbuildinfo"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.6.6",
+    "@types/node": "^26.6.6",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vitest": "^5.1.0"
+  }
+}

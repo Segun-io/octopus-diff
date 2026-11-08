@@ -1,0 +1,149 @@
+# AGENTS.md — working on octopus-diff
+
+octopus-diff is a **read-only, diff-first, multi-project git UI**: a Node daemon that shells out to
+the `git` CLI, plus a browser UI. **`docs/PLAN.md` is the source of truth**: vision, locked decisions,
+architecture, contracts, work streams and the acceptance list. Read it before changing anything. If you
+deviate from it, log why in `docs/DECISIONS.md`.
+
+## Commands (run from the repo root)
+
+| Command | What it does |
+|---|---|
+| `pnpm install` | Install dependencies (pnpm 12, Node ≥ 24; the dev machine has Node 26) |
+| `pnpm lint` | Biome lint + format check for the whole repo (`pnpm lint:fix` to apply fixes) |
+| `pnpm typecheck` | `tsc` in every package (resolves workspace deps to their sources, no build needed) |
+| `pnpm test` | vitest unit tests in every package (no build needed) |
+| `pnpm build` | Topological build: contracts → git-core → daemon → cli, plus web (Vite) |
+| `pnpm test:e2e` | Playwright e2e (`e2e/`) |
+| `pnpm check` | lint + typecheck + test + build |
+
+Per package: `pnpm --filter <name> <script>` (names: `@octopus-diff/contracts`, `@octopus-diff/git-core`,
+`@octopus-diff/daemon`, `@octopus-diff/web`, `octopus-diff` (the CLI), `@octopus-diff/fixtures`,
+`@octopus-diff/e2e`). Every package has `build`, `typecheck`, `test` and `lint` scripts.
+
+Run TypeScript sources directly in dev: `pnpm exec tsx --conditions=@octopus-diff/source <file.ts>`.
+
+## Layout and ownership (PLAN §5.2)
+
+```
+packages/contracts/   zod schemas, types, routes, SSE events, API client, GitCore + daemon interfaces  [lead]
+packages/git-core/    read-only git runner, parsers, discovery, diff retrieval                         [WS1]
+apps/daemon/          HTTP + SSE server, registry, watcher, review store                               [WS2]
+apps/web/             React UI                                                                         [WS3]
+tools/fixtures/       scratch-repo generator, agent simulator, perf bench, read-only proof harness    [WS4]
+e2e/                  Playwright tests                                                                 [WS4]
+apps/cli/             `octopus-diff` bin, config, packaging; README.md, CONTRIBUTING.md, .github/      [WS5]
+docs/                 everyone (PLAN.md changes need a DECISIONS.md entry)
+```
+
+Edit only paths you own, plus `docs/`. If another stream's code needs a change, describe it in your
+report or in `docs/DECISIONS.md`; don't make it.
+
+## How packages resolve each other
+
+Each workspace package's `exports` has a custom condition first:
+
+```json
+".": { "@octopus-diff/source": "./src/index.ts", "types": "./dist/index.d.ts", "import": "./dist/index.js" }
+```
+
+`tsconfig.base.json` sets `customConditions: ["@octopus-diff/source"]`, and every `vitest.config.ts` /
+`vite.config.ts` adds the same condition, so typecheck, tests and the Vite dev server use **sources**.
+`tsconfig.build.json` clears the condition, so `tsc` builds against the dependencies' `dist/`; that is
+why `pnpm build` runs in topological order. At runtime (`node apps/cli/dist/index.js`) Node uses `dist/`.
+New packages must follow the same pattern.
+
+## Conventions
+
+- TypeScript strict, ESM only, `module: nodenext`: relative imports end in `.js` (web uses `bundler`
+  resolution and may import `.tsx`). Named exports; no default exports except where a tool requires one
+  (Vite/Vitest/Playwright configs).
+- Node built-ins use the `node:` prefix. `packages/contracts/src` and `apps/web/src` must not import Node
+  built-ins (Biome enforces this): the contracts are shared with the browser.
+- Formatting and linting: Biome (`biome.json`), 2-space indent, single quotes, semicolons, width 100.
+  Run `pnpm lint:fix` before committing. Markdown is not auto-formatted.
+- Tests live in `<package>/test/**/*.test.ts` (web may also colocate `src/**/*.test.tsx`).
+- Validate every input at the boundary with the zod schemas from `@octopus-diff/contracts`.
+- Errors from git-core are `GitCoreError` with a `code`; the daemon maps them to `ApiErrorBody`.
+
+### The read-only guarantee (PLAN §5.5) — non-negotiable
+
+- All git access goes through the single runner in `packages/git-core`. No other package spawns `git`
+  against user repositories (test fixture setup is the only exception; see below).
+- Subcommand allowlist; `--no-optional-locks` + `GIT_OPTIONAL_LOCKS=0`; `GIT_TERMINAL_PROMPT=0`,
+  `GIT_PAGER=cat`, `LC_ALL=C`; `--no-ext-diff --no-textconv` on diffs; `-z` formats; argv arrays only.
+- **Never use `shell: true`** or build command strings. Never pass user input where git could read it as
+  an option: validate refs/paths with the contract schemas, and use `--end-of-options` / `--` separators
+  and literal pathspecs.
+- Treat repository config as untrusted (e.g. `core.fsmonitor` can run programs).
+
+### Tests that create git repositories
+
+- Create fixtures under the OS temp dir with `fs.mkdtemp(path.join(os.tmpdir(), 'octopus-diff-'))` and
+  delete them afterwards. Never touch the user's real repositories.
+- **Isolate git config.** The dev machine's global config sets `core.autocrlf=input`, `core.pager=delta`
+  and other options that change git's output. For every git process that creates or inspects fixtures,
+  set `GIT_CONFIG_GLOBAL=<a file inside the temp dir>`, `GIT_CONFIG_NOSYSTEM=1`, and explicitly
+  `user.name`, `user.email`, `init.defaultBranch=main`, `commit.gpgsign=false`, `core.autocrlf=false`.
+  Use fixed `GIT_AUTHOR_DATE` / `GIT_COMMITTER_DATE` where determinism matters.
+- git-core's `GitCoreOptions.env` exists so tests can pass the same isolation variables to the runner.
+
+### e2e on this machine
+
+Chromium's system libraries (libnss3, libnspr4, libasound2) are not installed system-wide and there is no
+sudo, so they were extracted to `~/.cache/octopus-diff-dev/chromium-libs/` and `e2e/playwright.config.ts`
+adds them to `LD_LIBRARY_PATH` automatically. Browsers live in `~/.cache/ms-playwright` (already
+installed). CI uses `playwright install --with-deps chromium` instead.
+
+## Contracts (`packages/contracts`)
+
+The lead owns the contracts. Streams may make **additive** changes only (new optional fields, new
+schemas, new routes or events), in a **small separate commit** whose message starts with
+`contracts:`, and with an entry in `docs/DECISIONS.md`. Never rename or remove fields, and never change
+an existing field's meaning. If you need a breaking change, log it as a proposal in `docs/DECISIONS.md`
+and work around it.
+
+## Dependencies
+
+Add dependencies only to the package you own (`pnpm --filter <pkg> add <dep>`). Prefer small,
+well-maintained, MIT/Apache-2.0/BSD/ISC packages. pnpm 12 blocks dependency build scripts by default:
+if a dependency truly needs one, add it to `allowBuilds` in `pnpm-workspace.yaml` and log why. The lead
+resolves `pnpm-lock.yaml` conflicts at merge time by re-running `pnpm install`.
+
+License hygiene (PLAN §3): reuse ideas from anything; copy code only from MIT / Apache-2.0 sources, with
+attribution in a comment. Never copy from GitButler (FSL), Zed or Detached (GPL-3).
+
+## Rules for autonomous sessions (PLAN §7)
+
+These apply to the lead and to every delegated session.
+
+1. **Never ask the user questions** (no AskUserQuestion, no "should I…?"). Decide using the plan. If the
+   plan is silent, choose the simplest reversible option and log it in `docs/DECISIONS.md` (date,
+   decision, reason). If something is truly blocked, record it in `docs/BLOCKERS.md`, then continue with
+   other work.
+2. **Stay in scope.** Edit only paths you own plus `docs/`. Don't refactor other streams' code.
+3. **Outward-facing actions are out of bounds:** no `git push`, no remotes, no npm publish, no posting
+   anywhere, no use of the user's secrets, credentials or Bitwarden. Network: npm registry installs and
+   public docs only.
+4. **Keep repositories safe.** Never run git commands that modify any repository outside this project
+   and its temp fixtures.
+5. **Verify, don't claim.** Run build, typecheck, lint and tests and report the real results. Don't mark
+   work done with red checks; if something fails or is skipped, say so.
+6. **Commit often** on your own branch with clear messages (`<area>: <what>`, e.g.
+   `git-core: parse status porcelain v2`). Leave `main` to the lead. End commit messages with the
+   `Co-Authored-By:` trailer your harness specifies, if any.
+7. **Don't poll other sessions.** Wait for notifications and follow the orchestration tools' guidance.
+
+## Stream reports
+
+Each stream finishes by committing `docs/reports/<stream>.md`:
+
+```markdown
+# <stream> report
+## Shipped        what works, with the main entry points
+## Verification   exact commands run and their real results (pass/fail counts, timings)
+## Decisions      choices made (also logged in docs/DECISIONS.md)
+## Contract changes   additive changes to packages/contracts, if any
+## Known gaps     what is missing, flaky or deferred, and why
+## Notes for integration   what the lead needs to know to merge and wire this up
+```

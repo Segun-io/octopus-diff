@@ -1,0 +1,27 @@
+{
+  "name": "@octopus-diff/fixtures",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Scratch-repo generator, agent simulator and perf bench for octopus-diff.",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": {
+      "@octopus-diff/source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run --passWithNoTests",
+    "lint": "biome check ."
+  },
+  "dependencies": {
+    "@octopus-diff/contracts": "workspace:*"
+  }
+}

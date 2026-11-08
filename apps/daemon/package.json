@@ -1,0 +1,31 @@
+{
+  "name": "@octopus-diff/daemon",
+  "version": "0.0.0",
+  "private": true,
+  "description": "octopus-diff daemon: HTTP + SSE API, registry, watcher, review store.",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": {
+      "@octopus-diff/source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run --passWithNoTests",
+    "lint": "biome check ."
+  },
+  "dependencies": {
+    "@hono/node-server": "^2.1.6",
+    "@octopus-diff/contracts": "workspace:*",
+    "@octopus-diff/git-core": "workspace:*",
+    "@parcel/watcher": "^2.6.0",
+    "hono": "^4.13.17"
+  }
+}

@@ -1,0 +1,20 @@
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+.vite/
+.turbo/
+playwright-report/
+test-results/
+blob-report/
+.cache/
+*.log
+.DS_Store
+.env
+.env.*
+!.env.example
+# local agent/editor state
+.claude/settings.local.json
+.idea/
+.vscode/*
+!.vscode/extensions.json
