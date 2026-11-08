@@ -90,6 +90,13 @@ async function getWatchTargets(ctx: GitContext, worktree: WorktreeLocator): Prom
     path.join(commonDir, 'worktrees'),
     path.join(commonDir, 'config'),
     path.join(commonDir, 'info', 'exclude'),
+    path.join(commonDir, 'info', 'attributes'),
+    // Git dirs of absorbed submodules (`modules/<name>`, nested for nested submodules). A
+    // commit or checkout inside a submodule changes the superproject's patch for its gitlink
+    // (F3); what matters below these is `HEAD`, `refs/**`, `packed-refs` and `reftable/**`,
+    // not `objects`, `logs` or `index`.
+    path.join(gitDir, 'modules'),
+    path.join(commonDir, 'modules'),
   ];
   if (gitDir !== commonDir) gitPaths.push(path.join(gitDir, 'refs'));
   return {

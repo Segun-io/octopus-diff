@@ -1,20 +1,28 @@
-import { lstat } from 'node:fs/promises';
 import path from 'node:path';
-import type {
-  InProgressOperation,
-  ScopeOptions,
-  WorktreeLocator,
-  WorktreeSummary,
+import {
+  type InProgressOperation,
+  isGitCoreError,
+  type ScopeOptions,
+  type WorktreeLocator,
+  type WorktreeSummary,
 } from '@octopus-diff/contracts';
 import { bstrFromBuffer, bstrToUtf8, compareBstr } from './bstr.js';
 import type { GitContext, RepoInfo } from './context.js';
 import type { DiffDeps } from './diff.js';
-import { inspectOptions, readStatus } from './diff.js';
+import {
+  findUnreadable,
+  inspectOptions,
+  lstatSignature,
+  pathspecsExcluding,
+  readDiffAttributes,
+  readStatus,
+} from './diff.js';
 import { exists, mapLimit } from './fs-utils.js';
 import { hashParts, STATE_HASH_LENGTH } from './hash.js';
 import { DiffOutputParser } from './parse/diff-output.js';
+import type { StatusEntry } from './parse/status.js';
 import { DIFF_PINS, resolveDefaultBranch } from './scope.js';
-import { absolutePathBuffer, inspectUntracked } from './untracked.js';
+import { absolutePathBuffer, inspectUntracked, nestedRepoHead } from './untracked.js';
 
 const STAT_CONCURRENCY = 32;
 
@@ -41,12 +49,67 @@ export async function detectInProgress(gitDir: string): Promise<InProgressOperat
   return null;
 }
 
-async function statSignature(root: string, key: string): Promise<string> {
+/**
+ * Change detector of a path with worktree changes. For a submodule (gitlink) it includes the
+ * submodule's HEAD: a commit inside the submodule changes the superproject's patch for it
+ * (`Subproject commit <sha>`) but neither `git status` nor the directory's stat data (F3).
+ */
+async function dirtySignature(root: string, key: string, gitlink: boolean): Promise<string> {
+  const sig = await lstatSignature(root, key);
+  if (!gitlink) return sig;
+  return `${sig}|${(await nestedRepoHead(absolutePathBuffer(root, key))).fingerprint}`;
+}
+
+interface TrackedNumstat {
+  /** numstat output (bstr), or '' when not run or degraded to status only. */
+  output: string;
+  /** Tracked files whose worktree file cannot be read (F7). */
+  unreadable: Set<string>;
+  /** numstat could not run at all: line counts of tracked files are unknown. */
+  statusOnly: boolean;
+}
+
+/**
+ * `git diff --numstat` for the working scope. One unreadable tracked file makes it exit 128
+ * (F7): then it is re-run for the other changed paths, and the unreadable ones count as
+ * changed without line counts. If even that is impossible, only status-based counts remain.
+ */
+async function trackedNumstat(
+  ctx: GitContext,
+  repo: RepoInfo,
+  headSha: string | null,
+  entries: readonly StatusEntry[],
+): Promise<TrackedNumstat> {
+  const args = (pathspecs: readonly string[]): string[] => [
+    'diff',
+    ...DIFF_PINS,
+    '--numstat',
+    '-z',
+    headSha ?? repo.emptyTree,
+    '--',
+    ...pathspecs,
+  ];
   try {
-    const info = await lstat(absolutePathBuffer(root, key), { bigint: true });
-    return `${info.size}:${info.mtimeNs}:${info.ctimeNs}:${info.ino}:${info.mode}`;
-  } catch {
-    return 'missing';
+    const result = await ctx.git(repo, args([]));
+    return { output: bstrFromBuffer(result.stdout), unreadable: new Set(), statusOnly: false };
+  } catch (error) {
+    if (!isGitCoreError(error, 'git_failed')) throw error;
+    const unreadable = await findUnreadable(repo.cwd, entries);
+    if (unreadable.size === 0) throw error;
+    ctx.settings.logger.warn('some changed files cannot be read; their line counts are unknown', {
+      repo: repo.cwd,
+      files: [...unreadable].slice(0, 20).map(bstrToUtf8),
+    });
+    const pathspecs = pathspecsExcluding(entries, unreadable);
+    if (pathspecs === null) return { output: '', unreadable, statusOnly: true };
+    if (pathspecs.length === 0) return { output: '', unreadable, statusOnly: false };
+    try {
+      const result = await ctx.git(repo, args(pathspecs));
+      return { output: bstrFromBuffer(result.stdout), unreadable, statusOnly: false };
+    } catch (retryError) {
+      if (!isGitCoreError(retryError, 'git_failed')) throw retryError;
+      return { output: '', unreadable, statusOnly: true };
+    }
   }
 }
 
@@ -111,6 +174,8 @@ export async function getSummary(
   let conflicted = 0;
   const untrackedRaw: string[] = [];
   const dirtyKeys: string[] = [];
+  /** dirtyKeys entries that are submodules (gitlinks) in the worktree. */
+  const gitlinkKeys = new Set<string>();
   /** Paths git status reports as changed (incl. rename sources). */
   const statusPaths = new Set<string>();
   let tracked = 0;
@@ -125,6 +190,7 @@ export async function getSummary(
         if (entry.y !== '.') {
           unstaged += 1;
           dirtyKeys.push(entry.path);
+          if (entry.modeWorktree === '160000') gitlinkKeys.add(entry.path);
         }
         break;
       case 'unmerged':
@@ -145,9 +211,7 @@ export async function getSummary(
   const hasUpstreamCounts = upstream !== null && branch.ahead !== null && branch.behind !== null;
 
   const numstatPromise =
-    tracked > 0
-      ? ctx.git(repo, ['diff', ...DIFF_PINS, '--numstat', '-z', headSha ?? repo.emptyTree, '--'])
-      : Promise.resolve(null);
+    tracked > 0 ? trackedNumstat(ctx, repo, headSha, status.entries) : Promise.resolve(null);
 
   const aheadBehindPromise = (async (): Promise<{
     ref: string | null;
@@ -180,25 +244,42 @@ export async function getSummary(
   })();
 
   const untrackedKeysSorted = [...untrackedRaw].sort(compareBstr);
-  const [numstatResult, aheadBehind, inProgress, signatures, untrackedInfos] = await Promise.all([
+  const untrackedPromise = readDiffAttributes(
+    ctx,
+    repo,
+    untrackedKeysSorted,
+    untrackedRaw.length,
+  ).then(async (attributes) => ({
+    attributes,
+    infos: await inspectUntracked(
+      repo.cwd,
+      untrackedKeysSorted,
+      deps.untrackedCache,
+      inspectOptions(ctx, repo, untrackedRaw.length, attributes),
+    ),
+  }));
+  const [numstatResult, aheadBehind, inProgress, signatures, untracked] = await Promise.all([
     numstatPromise,
     aheadBehindPromise,
     detectInProgress(repo.gitDir),
-    mapLimit(dirtyKeys, STAT_CONCURRENCY, (key) => statSignature(repo.cwd, key)),
-    inspectUntracked(
-      repo.cwd,
-      untrackedKeysSorted.map((key, index) => ({ key, index })),
-      deps.untrackedCache,
-      inspectOptions(ctx),
+    mapLimit(dirtyKeys, STAT_CONCURRENCY, (key) =>
+      dirtySignature(repo.cwd, key, gitlinkKeys.has(key)),
     ),
+    untrackedPromise,
   ]);
+  const untrackedInfos = untracked.infos;
 
   let additions = 0;
   let deletions = 0;
   const trackedPaths = new Set<string>();
-  let numstatOutput = '';
-  if (numstatResult) {
-    numstatOutput = bstrFromBuffer(numstatResult.stdout);
+  const numstatOutput = numstatResult?.output ?? '';
+  if (numstatResult?.statusOnly) {
+    // Degraded (F7): every tracked status entry counts as one changed file.
+    for (const entry of status.entries) {
+      if (entry.kind !== 'untracked' && entry.kind !== 'ignored') trackedPaths.add(entry.path);
+    }
+  } else if (numstatResult) {
+    for (const key of numstatResult.unreadable) trackedPaths.add(key);
     const parser = new DiffOutputParser();
     parser.write(numstatOutput);
     parser.end();
@@ -222,7 +303,7 @@ export async function getSummary(
 
   const stateHash = hashParts(
     [
-      'summary-v1',
+      'summary-v2',
       status.output,
       numstatOutput,
       aheadBehind.ref,
@@ -231,7 +312,14 @@ export async function getSummary(
       aheadBehind.behind,
       inProgress,
       dirtyKeys.map((key, i) => `${key}\u0000${signatures[i]}`).join('\u0000'),
-      untrackedInfos.map((info) => `${info.key}\u0000${info.statSig}`).join('\u0000'),
+      untrackedInfos
+        .map((info) => {
+          const attribute = untracked.attributes.get(info.key) ?? '';
+          return `${info.key}\u0000${info.statSig}\u0000${attribute}`;
+        })
+        .join('\u0000'),
+      numstatResult?.statusOnly ? 'status-only' : null,
+      [...(numstatResult?.unreadable ?? [])].sort(compareBstr).join('\u0000'),
     ],
     STATE_HASH_LENGTH,
   );

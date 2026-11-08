@@ -1,3 +1,5 @@
+import { constants } from 'node:fs';
+import { access, lstat } from 'node:fs/promises';
 import {
   type DiffOptions,
   type FileSelector,
@@ -12,6 +14,7 @@ import {
 } from '@octopus-diff/contracts';
 import {
   bstrFromBuffer,
+  bstrToBuffer,
   bstrToUtf8,
   compareBstr,
   decodeRepoPath,
@@ -19,6 +22,7 @@ import {
   selectorToBstr,
 } from './bstr.js';
 import type { GitContext, RepoInfo } from './context.js';
+import { mapLimit } from './fs-utils.js';
 import { hashParts, PATCH_HASH_LENGTH, PatchHasher } from './hash.js';
 import { DiffOutputParser, type NumstatEntry, type RawEntry } from './parse/diff-output.js';
 import { type ChunkKind, PatchSplitter } from './parse/patch.js';
@@ -33,12 +37,13 @@ import {
   unbornRevArgs,
 } from './scope.js';
 import {
+  absolutePathBuffer,
+  type DiffAttribute,
   type InspectOptions,
   inspectUntracked,
-  readUntrackedContent,
-  synthesizeNewFilePatch,
   type UntrackedCache,
   type UntrackedInfo,
+  untrackedPatchText,
 } from './untracked.js';
 
 // ---------------------------------------------------------------------------------------------
@@ -66,6 +71,80 @@ export async function readStatus(ctx: GitContext, repo: RepoInfo): Promise<Statu
   const result = await ctx.git(repo, STATUS_ARGS);
   const output = bstrFromBuffer(result.stdout);
   return { ...parseStatusV2(output), output };
+}
+
+/** `size:mtimeNs:ctimeNs:ino:mode` of a worktree path (lstat), or `missing`. */
+export async function lstatSignature(root: string, key: string): Promise<string> {
+  try {
+    const info = await lstat(absolutePathBuffer(root, key), { bigint: true });
+    return `${info.size}:${info.mtimeNs}:${info.ctimeNs}:${info.ino}:${info.mode}`;
+  } catch {
+    return 'missing';
+  }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Unreadable worktree files (F7)
+// ---------------------------------------------------------------------------------------------
+
+const REGULAR_MODES = new Set(['100644', '100755']);
+const DENIED = new Set(['EACCES', 'EPERM']);
+/** Total bytes of explicit pathspecs git-core passes as argv (Windows caps a command line). */
+const PATHSPEC_BUDGET = process.platform === 'win32' ? 24_000 : 512_000;
+
+/**
+ * Tracked paths with worktree changes whose file exists but cannot be read. `git status`
+ * tolerates them, but any `git diff` that reads the worktree exits 128 on them ("cannot hash"),
+ * which would fail the whole worktree.
+ */
+export async function findUnreadable(
+  root: string,
+  entries: readonly StatusEntry[],
+): Promise<Set<string>> {
+  const candidates = entries.filter((entry) => {
+    if (entry.kind === 'unmerged') return REGULAR_MODES.has(entry.modes[3]);
+    if (entry.kind !== 'ordinary' && entry.kind !== 'renamed') return false;
+    return entry.y !== '.' && entry.y !== 'D' && REGULAR_MODES.has(entry.modeWorktree);
+  });
+  const unreadable = new Set<string>();
+  await mapLimit(candidates, 32, async (entry) => {
+    try {
+      await access(absolutePathBuffer(root, entry.path), constants.R_OK);
+    } catch (error) {
+      if (DENIED.has((error as NodeJS.ErrnoException).code ?? '')) unreadable.add(entry.path);
+    }
+  });
+  return unreadable;
+}
+
+/**
+ * Literal pathspecs for every path git status reports as changed (tracked entries and rename
+ * sources), except `exclude` and the rename sources of excluded entries. Null when they cannot
+ * be passed (a path that is not UTF-8, or too many bytes for a command line).
+ */
+export function pathspecsExcluding(
+  entries: readonly StatusEntry[],
+  exclude: ReadonlySet<string>,
+): string[] | null {
+  const paths = new Set<string>();
+  for (const entry of entries) {
+    if (entry.kind === 'untracked' || entry.kind === 'ignored') continue;
+    if (exclude.has(entry.path)) continue;
+    paths.add(entry.path);
+    if (entry.kind === 'renamed') paths.add(entry.origPath);
+  }
+  for (const entry of entries) {
+    if (entry.kind === 'renamed' && exclude.has(entry.path)) paths.delete(entry.origPath);
+  }
+  const out: string[] = [];
+  let bytes = 0;
+  for (const key of paths) {
+    if (!isValidUtf8(key)) return null;
+    bytes += key.length + 1;
+    if (bytes > PATHSPEC_BUDGET) return null;
+    out.push(bstrToUtf8(key));
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -421,6 +500,50 @@ function untrackedIdentity(info: UntrackedInfo): Identity {
   return identity;
 }
 
+function readsWorktree(plan: ScopePlan): boolean {
+  return plan.kind === 'working' || plan.kind === 'unstaged';
+}
+
+/**
+ * A changed tracked file whose worktree content cannot be read (F7), described from its
+ * `git status` entry: no line counts, and a patchHash over the status entry (index and HEAD
+ * object ids, modes) and the file's stat signature, so it changes whenever the file does.
+ */
+function unreadableIdentity(plan: ScopePlan, entry: StatusEntry, statSig: string): Identity {
+  const working = plan.kind === 'working';
+  let status: FileStatus = 'modified';
+  let oldPath: string | null = null;
+  let oldMode: string | null = null;
+  let newMode: string | null = null;
+  if (entry.kind === 'unmerged') {
+    status = 'conflicted';
+    oldMode = modeOrNull(entry.modes[1]);
+    newMode = modeOrNull(entry.modes[3]);
+  } else if (entry.kind === 'ordinary' || entry.kind === 'renamed') {
+    oldMode = modeOrNull(working ? entry.modeHead : entry.modeIndex);
+    newMode = modeOrNull(entry.modeWorktree);
+    if (working && entry.kind === 'renamed') {
+      status = entry.score.startsWith('C') ? 'copied' : 'renamed';
+      oldPath = decodeRepoPath(entry.origPath).path;
+    } else if (entry.y === 'A' || (working && entry.x === 'A')) status = 'added';
+    else if (entry.y === 'T' || (working && entry.x === 'T')) status = 'typechange';
+  }
+  const decoded = decodeRepoPath(entry.path);
+  const identity: Identity = {
+    path: decoded.path,
+    oldPath,
+    status,
+    binary: false,
+    oldMode,
+    newMode,
+    additions: null,
+    deletions: null,
+    patchHash: hashParts(['unreadable', plan.kind, entry.line, statSig], PATCH_HASH_LENGTH),
+  };
+  if (decoded.rawPath !== undefined) identity.rawPath = decoded.rawPath;
+  return identity;
+}
+
 /** Untracked paths in the scope: sorted, de-duplicated against tracked entries. */
 function untrackedKeys(index: StatusIndex, trackedKeys: ReadonlySet<string>): string[] {
   const keys: string[] = [];
@@ -456,12 +579,48 @@ export interface DiffDeps {
   untrackedCache: UntrackedCache;
 }
 
-export function inspectOptions(ctx: GitContext): InspectOptions {
+/**
+ * Inspection options for the untracked files of one status snapshot. Contents are read only
+ * when the worktree has at most `maxUntrackedFiles` untracked entries (all or none, so a
+ * file's hash never depends on the other files), counted on git status' list.
+ */
+export function inspectOptions(
+  ctx: GitContext,
+  repo: RepoInfo,
+  untrackedCount: number,
+  diffAttributes?: ReadonlyMap<string, DiffAttribute>,
+): InspectOptions {
   return {
-    maxFiles: ctx.settings.maxUntrackedFiles,
+    readContent: untrackedCount <= ctx.settings.maxUntrackedFiles,
     bigFileThreshold: ctx.settings.bigFileThreshold,
     executableBit: process.platform !== 'win32',
+    objectFormat: repo.objectFormat,
+    diffAttributes,
   };
+}
+
+/**
+ * The `diff` attribute of untracked paths (`git check-attr -z --stdin diff`, one call), so
+ * `binary` / `-diff` / `diff` attributes give the same verdict as git's diff after `git add`
+ * (F8). Skipped (empty map) when contents are not read anyway. Keys are bstr; a trailing `/`
+ * (nested repositories) is dropped.
+ */
+export async function readDiffAttributes(
+  ctx: GitContext,
+  repo: RepoInfo,
+  rawKeys: readonly string[],
+  untrackedCount: number,
+): Promise<Map<string, DiffAttribute>> {
+  const keys = rawKeys.filter((key) => !key.endsWith('/'));
+  if (keys.length === 0 || untrackedCount > ctx.settings.maxUntrackedFiles) return new Map();
+  const input = bstrToBuffer(keys.map((key) => `${key}\u0000`).join(''));
+  const result = await ctx.git(repo, ['check-attr', '-z', '--stdin', 'diff'], { input });
+  const tokens = bstrFromBuffer(result.stdout).split('\u0000');
+  const attributes = new Map<string, DiffAttribute>();
+  for (let i = 0; i + 2 < tokens.length; i += 3) {
+    attributes.set(tokens[i] as string, tokens[i + 2] as string);
+  }
+  return attributes;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -484,9 +643,40 @@ export async function listChangedFiles(
   // and change over time.
   if (plan.empty) return [];
 
-  const [run, status] = await Promise.all([
-    runScopeDiff(ctx, repo, plan, { head: true, patch: true }),
-    plan.statusBased ? readStatus(ctx, repo) : Promise.resolve(null),
+  const statusPromise = plan.statusBased ? readStatus(ctx, repo) : Promise.resolve(null);
+  const attributesPromise = statusPromise.then((snapshot) => {
+    if (!plan.includeUntracked || !snapshot) return new Map<string, DiffAttribute>();
+    const untracked = snapshot.entries.filter((entry) => entry.kind === 'untracked');
+    return readDiffAttributes(
+      ctx,
+      repo,
+      untracked.map((entry) => entry.path),
+      untracked.length,
+    );
+  });
+  let unreadable = new Set<string>();
+  const runPromise = runScopeDiff(ctx, repo, plan, { head: true, patch: true }).catch(
+    async (error: unknown): Promise<DiffRun> => {
+      // One unreadable tracked file fails the whole diff (F7): diff the other changed paths
+      // and list it from git status, without a patch.
+      const snapshot = await statusPromise;
+      if (!readsWorktree(plan) || !snapshot || !isGitCoreError(error, 'git_failed')) throw error;
+      unreadable = await findUnreadable(repo.cwd, snapshot.entries);
+      if (unreadable.size === 0) throw error;
+      const pathspecs = pathspecsExcluding(snapshot.entries, unreadable);
+      if (pathspecs === null) throw error;
+      ctx.settings.logger.warn('some changed files cannot be read; listing them without a diff', {
+        repo: repo.cwd,
+        files: [...unreadable].slice(0, 20).map(bstrToUtf8),
+      });
+      if (pathspecs.length === 0) return { raw: [], numstat: [], chunks: new Map() };
+      return runScopeDiff(ctx, repo, plan, { head: true, patch: true, pathspecs });
+    },
+  );
+  const [run, status, attributes] = await Promise.all([
+    runPromise,
+    statusPromise,
+    attributesPromise,
   ]);
   const index = status ? indexStatus(status) : null;
   const numstat = new Map(run.numstat.map((entry) => [entry.path, entry]));
@@ -514,13 +704,21 @@ export async function listChangedFiles(
     });
   }
 
+  for (const key of [...unreadable].sort(compareBstr)) {
+    const entry = index?.tracked.get(key);
+    if (trackedKeys.has(key) || !entry || !index) continue;
+    trackedKeys.add(key);
+    const identity = unreadableIdentity(plan, entry, await lstatSignature(repo.cwd, key));
+    rows.push({ key, file: { ...identity, ...flagsFor(plan, index, key) } });
+  }
+
   if (plan.includeUntracked && index) {
     const keys = untrackedKeys(index, trackedKeys);
     const infos = await inspectUntracked(
       repo.cwd,
-      keys.map((key, position) => ({ key, index: position })),
+      keys,
       deps.untrackedCache,
-      inspectOptions(ctx),
+      inspectOptions(ctx, repo, index.untracked.length, attributes),
     );
     for (const info of infos) {
       rows.push({
@@ -690,67 +888,45 @@ export async function getFileDiff(
 
   if (!plan.includeUntracked || !index) throw notFound();
   const trackedKeys = new Set(ident.raw.map((candidate) => candidate.path));
-  const keys = untrackedKeys(index, trackedKeys);
-  const position = keys.findIndex((raw) => (raw.endsWith('/') ? raw.slice(0, -1) : raw) === key);
-  const rawKey = keys[position];
-  if (position < 0 || rawKey === undefined) throw notFound();
+  const rawKey = untrackedKeys(index, trackedKeys).find(
+    (raw) => (raw.endsWith('/') ? raw.slice(0, -1) : raw) === key,
+  );
+  if (rawKey === undefined) throw notFound();
+  const attributes = await readDiffAttributes(ctx, repo, [rawKey], 0);
   const [info] = await inspectUntracked(
     repo.cwd,
-    [{ key: rawKey, index: position }],
+    [rawKey],
     deps.untrackedCache,
-    inspectOptions(ctx),
+    inspectOptions(ctx, repo, index.untracked.length, attributes),
   );
   if (!info) throw notFound();
   return {
     ...untrackedIdentity(info),
-    ...(await untrackedPatch(deps, repo, info, limit, view.full)),
+    ...(await untrackedPatch(repo, info, attributes.get(info.key), limit, view.full)),
   };
 }
 
+/**
+ * The displayed patch of an untracked entry: the synthesized canonical new-file patch (the
+ * text whose hash is the entry's patchHash), view options do not apply to pure additions.
+ */
 async function untrackedPatch(
-  deps: DiffDeps,
   repo: RepoInfo,
   info: UntrackedInfo,
+  attribute: DiffAttribute | undefined,
   limit: number,
   full: boolean,
 ): Promise<Shown & { byteLength: number | null }> {
   const empty = { patch: '', tooLarge: false, truncated: false, byteLength: null };
-  if (info.kind === 'directory' || info.kind === 'missing' || info.kind === 'other') return empty;
-  if (info.binary) return empty;
-  const estimate = info.size + (info.lines ?? info.size) + 512 + info.key.length * 3;
-  if (!full && estimate > limit) return { ...empty, tooLarge: true };
-
-  // `--no-index` chunks are keyed by the path as given; retain whatever chunk appears.
-  let collector = new PatchCollector({ retain: new AnyKeySet(), retainLimit: limit });
-  let viaGit = false;
-  if (isValidUtf8(info.key) && info.kind === 'file') {
-    // git exits 1 both for "differences" and for errors in --no-index mode, so errors are
-    // detected from stderr; then fall back to synthesizing the patch.
-    const result = await deps.ctx.git(
-      repo,
-      [
-        'diff',
-        '--no-index',
-        ...DIFF_PINS,
-        '-p',
-        `-U${CANONICAL_CONTEXT}`,
-        '--',
-        '/dev/null',
-        bstrToUtf8(info.key),
-      ],
-      { onStdout: (data) => collector.write(bstrFromBuffer(data)) },
-    );
-    viaGit = !/^(error|fatal):/m.test(result.stderr);
+  if (info.kind === 'missing' || info.kind === 'other' || info.binary) return empty;
+  if (info.kind !== 'directory') {
+    const estimate = info.size + (info.lines ?? info.size) + 512 + info.key.length * 3;
+    if (!full && estimate > limit) return { ...empty, tooLarge: true };
   }
-  if (!viaGit) {
-    // Symlinks (their target is the content) and paths that cannot be passed as argv.
-    const content = await readUntrackedContent(repo.cwd, info);
-    if (content === null) return empty;
-    collector = new PatchCollector({ retain: new AnyKeySet(), retainLimit: limit });
-    collector.write(
-      synthesizeNewFilePatch(info.key, info.mode ?? '100644', content, repo.objectFormat),
-    );
-  }
+  const text = await untrackedPatchText(repo.cwd, info, repo.objectFormat, attribute);
+  if (text === null) return empty;
+  const collector = new PatchCollector({ retain: new AnyKeySet(), retainLimit: limit });
+  collector.write(text);
   collector.end();
   const chunk = [...collector.results().values()][0];
   if (!chunk) return empty;
