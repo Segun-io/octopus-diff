@@ -613,6 +613,22 @@ All 2026-11-08 · WS5.
    Contract changes are additive (`AUTH_FRAGMENT_PARAM`, `TOKEN_STORAGE_KEY`, `HEALTH_CHALLENGE_PARAM`,
    `healthProofMessage`, `HealthQuerySchema`, optional `HealthResponse.proof`, `client.health({challenge})`);
    `AUTH_COOKIE_NAME` stays exported (deprecated).
+6. **2026-11-08 · Coordination with the UX round 1 orchestrator** (a second lead thread the user
+   started; see `docs/COORDINATION.md` on `lead/ux-foundation`). That thread now owns the root checkout
+   (`/home/santosa/angelsantosa/octopus-diff`, branch `lead/ux-foundation`); the Phase 2 lead works in
+   its own worktree (`~/.t3/worktrees/octopus-diff/lead-phase2`, branch `lead/phase2`) and moves `main`
+   only by fast-forward (`git fetch . lead/phase2:main`, which git refuses while `main` is checked out
+   elsewhere). Done for that plan: **step 1, `review/perf` is merged to `main` (`945c4ec`)**, all
+   prototypes P1–P8 accepted (P3 leading-edge refresh and P8 UI CSP on worker scripts reviewed and
+   accepted; their proposals are below). Ownership of the review findings, matching COORDINATION.md:
+   - Phase 2 lead, on branches from `945c4ec`: `fix/git-core` (F3 stateHash, F4, F7, F8, SEC-06,
+     SEC-07 worktree validation, SEC-08), `fix/daemon-watch` (F1, F3 watching, F5, F6, SEC-07 watch
+     cap), `fix/auth-v2` (SEC-01/02/10/11/12 end to end: daemon auth, web token bootstrap and SSE,
+     CLI incl. SEC-03/04/09, e2e auth specs, README security model).
+   - UX round (web UI it is rewriting): F2 (claimed by ux-web), F9 (false "updated" banner on scope
+     switch: key `seen` by file + scope), F10 (tree view order), SEC-05 (warn on bidi control chars in
+     diffs and file names). The auth-v2 web change is limited to token bootstrap, the API client's
+     token and the SSE subscription (`main.tsx`, `api/hooks.ts`).
 
 ## Phase 2 — performance review (`review/perf`, proposals for the lead)
 
