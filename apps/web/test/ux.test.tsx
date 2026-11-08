@@ -100,6 +100,11 @@ async function press(user: Harness['user'], keys: string) {
   });
 }
 
+function bodyOf<T>(request: Harness['requests'][number] | undefined): T {
+  if (!request) throw new Error('request not found');
+  return request.body as T;
+}
+
 function worktreeItem(branch: string): HTMLElement {
   const el = screen.getAllByTestId(TEST_IDS.worktreeItem).find((e) => e.dataset.branch === branch);
   if (!el) throw new Error(`no worktree item ${branch}`);
@@ -240,7 +245,7 @@ describe('mark all as verified', () => {
       reviewed: true,
       expectedStateHashes: expect.any(Object),
     });
-    expect((bulk?.body as { paths: unknown[] }).paths).toHaveLength(19);
+    expect(bodyOf<{ paths: unknown[] }>(bulk).paths).toHaveLength(19);
     await waitFor(() =>
       expect(
         screen.getAllByTestId(TEST_IDS.fileItem).every((f) => f.dataset.reviewed === 'true'),
@@ -266,7 +271,7 @@ describe('mark all as verified', () => {
     const bulk = requests.find((r) => r.url.endsWith('/api/review/bulk'));
     expect(bulk?.body).toMatchObject({ target: { kind: 'all' } });
     expect(
-      Object.keys((bulk?.body as { expectedStateHashes: object }).expectedStateHashes),
+      Object.keys(bodyOf<{ expectedStateHashes: object }>(bulk).expectedStateHashes),
     ).toHaveLength(5);
     await press(user, '{Control>}z{/Control}');
     await waitFor(() => expect(backend.reviews.size).toBe(0));
@@ -292,7 +297,7 @@ describe('mark all as verified', () => {
     fireEvent.click(button);
     await screen.findByTestId(TEST_IDS.bulkReviewToast);
     const bulk = requests.find((r) => r.url.endsWith('/api/review/bulk'));
-    expect((bulk?.body as { paths: unknown[] }).paths).toHaveLength(1);
+    expect(bodyOf<{ paths: unknown[] }>(bulk).paths).toHaveLength(1);
   });
 });
 

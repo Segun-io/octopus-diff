@@ -1,4 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 220 40" width="440" height="80">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 220 40" width="440" height="80" role="img" aria-label="octopus-diff">
+  <title>octopus-diff</title>
   <!-- octopus-diff wordmark: mark + lowercase name, "-diff" in the monospace face. System font stacks only. -->
   <style>
     .mark { fill: #5b47d6; stroke: #5b47d6; }

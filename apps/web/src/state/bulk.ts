@@ -11,30 +11,24 @@ let toastId = 0;
 
 /** Folds several responses (one per worktree) into one summary line. */
 export function mergeResponses(list: BulkReviewResponse[]): BulkReviewResponse {
-  const first = list[0];
-  if (!first) {
-    return {
-      ok: true,
-      reviewed: true,
-      changed: 0,
-      unchanged: 0,
-      worktrees: 0,
-      skippedDisabled: [],
-      stale: [],
-      undoToken: null,
-    };
+  const out: BulkReviewResponse = {
+    ok: true,
+    reviewed: list[0]?.reviewed ?? true,
+    changed: 0,
+    unchanged: 0,
+    worktrees: 0,
+    skippedDisabled: [],
+    stale: [],
+    undoToken: list[0]?.undoToken ?? null,
+  };
+  for (const r of list) {
+    out.changed += r.changed;
+    out.unchanged += r.unchanged;
+    out.worktrees += r.worktrees;
+    out.skippedDisabled.push(...r.skippedDisabled);
+    out.stale.push(...r.stale);
   }
-  return list.slice(1).reduce(
-    (acc, r) => ({
-      ...acc,
-      changed: acc.changed + r.changed,
-      unchanged: acc.unchanged + r.unchanged,
-      worktrees: acc.worktrees + r.worktrees,
-      skippedDisabled: [...acc.skippedDisabled, ...r.skippedDisabled],
-      stale: [...acc.stale, ...r.stale],
-    }),
-    first,
-  );
+  return out;
 }
 
 export interface BulkActions {
@@ -93,7 +87,7 @@ export function useBulkActions(): BulkActions {
 
   const doUndo = useCallback(async () => {
     const toast = store.getState().bulkToast;
-    if (!toast || toast.state !== 'done' || tokens.current.length === 0) return;
+    if (toast?.state !== 'done' || tokens.current.length === 0) return;
     store.setState({ bulkToast: { ...toast, state: 'undoing' } });
     try {
       const results = await Promise.all(tokens.current.map((t) => undo.mutateAsync(t)));

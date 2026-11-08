@@ -224,11 +224,10 @@ function AppearancePanel() {
           One light and one dark slot; picking a theme switches to it. Themes are files in{' '}
           <code className="font-mono">src/theme/themes/</code>.
         </p>
-        <div
+        <fieldset
           data-testid={TEST_IDS.themePicker}
-          role="radiogroup"
           aria-label="Theme"
-          className="mt-2 grid grid-cols-3 gap-2"
+          className="mt-2 grid grid-cols-3 gap-2 border-0 p-0"
         >
           {THEMES.map((theme) => {
             const inSlot = prefs[theme.kind] === theme.id;
@@ -237,8 +236,7 @@ function AppearancePanel() {
               <button
                 key={theme.id}
                 type="button"
-                role="radio"
-                aria-checked={isActive}
+                aria-pressed={isActive}
                 data-testid={TEST_IDS.themeOption}
                 data-theme-id={theme.id}
                 onClick={() => store.setState({ theme: selectTheme(prefs, theme.id) })}
@@ -277,7 +275,7 @@ function AppearancePanel() {
               </button>
             );
           })}
-        </div>
+        </fieldset>
       </div>
       {APPEARANCE_ITEMS.map((item) => (
         <PrefControl key={item.key} item={item} />
