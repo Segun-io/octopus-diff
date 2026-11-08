@@ -6,7 +6,7 @@
  * - `scan()` must not follow symlinks out of the scan root.
  * Each hostile setup is first shown to be effective with plain git (control).
  */
-import { cpSync, mkdirSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { GitCore } from '@octopus-diff/contracts';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -218,6 +218,18 @@ describe('SEC-07: forged worktree records', () => {
     // The duplicate record for the linked worktree is dropped.
     expect(worktrees.filter((w) => w.path === linked)).toHaveLength(1);
     expect(new Set(worktrees.map((w) => w.id)).size).toBe(worktrees.length);
+  });
+
+  it('accepts linked worktrees that use relative paths (worktree.useRelativePaths)', async () => {
+    const repo = fx.repo('relative-main', { files: { 'a.txt': 'a\n' } });
+    const wt = path.join(fx.root, 'relative-wt');
+    fx.git(repo, ['-c', 'worktree.useRelativePaths=true', 'worktree', 'add', '-q', '-b', 'r', wt], {
+      allowFail: true,
+    });
+    if (!existsSync(path.join(wt, '.git'))) return; // git < 2.48
+    expect(readFileSync(path.join(wt, '.git'), 'utf8')).toMatch(/^gitdir: \.\./);
+    const { worktrees } = await core.resolveProject(repo);
+    expect(worktrees.find((w) => w.path === wt)).toMatchObject({ missing: false, prunable: false });
   });
 
   it('rejects a worktree whose .git file points at another admin dir', async () => {

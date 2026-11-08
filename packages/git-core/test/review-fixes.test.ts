@@ -74,6 +74,26 @@ describe('F4: an untracked file keeps its patchHash through git add -N and git a
     const shown = await fileDiff(core, wt, { kind: 'working' }, { path: 'no-newline.txt' });
     expect(shown.patch).toMatch(/\+b\n\\ No newline at end of file\n$/);
 
+    // A file over 1 MiB (two streaming passes) is displayed exactly as git prints it.
+    const large = await fileDiff(
+      core,
+      wt,
+      { kind: 'working' },
+      { path: 'large.txt' },
+      {
+        full: true,
+      },
+    );
+    const expected = fx.git(
+      repo,
+      ['diff', '--no-index', '--full-index', '--', '/dev/null', 'large.txt'],
+      { allowFail: true },
+    );
+    expect(expected.length).toBeGreaterThan(1024 * 1024);
+    expect(large.patch === expected).toBe(true);
+    expect(large.byteLength).toBe(Buffer.byteLength(expected));
+    expect(large.patchHash).toBe(untracked.get('large.txt')?.patchHash);
+
     fx.git(repo, ['add', '-N', '--', '.']);
     const intentToAdd = await working(wt);
     fx.git(repo, ['add', '-A']);

@@ -150,11 +150,17 @@ function textPrelude(key: string, count: number): string {
 
 const NO_NEWLINE = '\n\\ No newline at end of file\n';
 
-/** Writes `+`-prefixed lines of new-file content to a hasher, chunk by chunk. */
+/** Receives patch text in order: bstr pieces and raw content bytes. */
+export interface PatchSink {
+  update(data: string): void;
+  updateBytes(data: Uint8Array): void;
+}
+
+/** Writes `+`-prefixed lines of new-file content to a sink, chunk by chunk. */
 class AddedLines {
   private atLineStart = true;
 
-  constructor(private readonly out: PatchHasher) {}
+  constructor(private readonly out: PatchSink) {}
 
   write(chunk: Uint8Array): void {
     let start = 0;
@@ -226,24 +232,25 @@ export function attributeBinary(attribute: DiffAttribute | undefined): boolean |
 class ContentChanged extends Error {}
 
 /**
- * Reads a file and computes line count, binary verdict and the patchHash of its canonical
- * new-file patch (the PatchHasher digest `listChangedFiles` computes for the same file once
- * it is added). Files up to 1 MiB are read once; larger ones are streamed twice (the patch
- * starts with the blob id and the line count), and rejected if they change in between.
+ * Streams the canonical new-file patch of a regular file to `sink`, in O(1 MiB) memory. Files
+ * up to 1 MiB are read once; larger ones twice (the patch starts with the blob id and the
+ * line count), and rejected (`ContentChanged`) if they change in between. `binary`: the
+ * verdict to use, or null for git's (NUL sniff, `core.bigFileThreshold`).
  */
-async function factsFromFile(
+async function streamNewFilePatch(
   file: Buffer,
   key: string,
   mode: string,
   size: number,
-  sig: string,
-  options: InspectOptions,
-  attribute: DiffAttribute | undefined,
-): Promise<ContentFacts> {
+  format: ObjectFormat,
+  bigFileThreshold: number,
+  binaryVerdict: boolean | null,
+  sink: PatchSink,
+): Promise<{ binary: boolean; lines: number }> {
   const handle = await openRegularFile(file, { noFollow: true });
   if (!handle) throw new ContentChanged();
   try {
-    const first = blobHasher(options.objectFormat, size);
+    const first = blobHasher(format, size);
     const buffer = Buffer.allocUnsafe(Math.min(READ_CHUNK, Math.max(size, 1)));
     let total = 0;
     let lines = 0;
@@ -269,17 +276,16 @@ async function factsFromFile(
     if (total > 0 && last !== 10) lines += 1;
     const oid = first.digest('hex');
     // git diffs files above core.bigFileThreshold as binary, unless the attribute says text.
-    const binary = attributeBinary(attribute) ?? (sniffedNul || total > options.bigFileThreshold);
+    const binary = binaryVerdict ?? (sniffedNul || total > bigFileThreshold);
 
-    const hasher = new PatchHasher('patch');
-    hasher.update(newFileHeader(key, mode, oid, options.objectFormat));
-    if (total > 0 && binary) hasher.update(binaryLine(key));
+    sink.update(newFileHeader(key, mode, oid, format));
+    if (total > 0 && binary) sink.update(binaryLine(key));
     else if (total > 0) {
-      hasher.update(textPrelude(key, lines));
-      const added = new AddedLines(hasher);
+      sink.update(textPrelude(key, lines));
+      const added = new AddedLines(sink);
       if (whole) added.write(whole);
       else {
-        const again = blobHasher(options.objectFormat, size);
+        const again = blobHasher(format, size);
         let position = 0;
         for (;;) {
           const { bytesRead } = await handle.read(buffer, 0, buffer.length, position);
@@ -293,10 +299,37 @@ async function factsFromFile(
       }
       added.end();
     }
-    return { sig, binary, lines: binary ? 0 : lines, patchHash: hasher.digest() };
+    return { binary, lines: binary ? 0 : lines };
   } finally {
     await handle.close();
   }
+}
+
+/**
+ * Line count, binary verdict and the patchHash of a file's canonical new-file patch (the
+ * PatchHasher digest `listChangedFiles` computes for the same file once it is added).
+ */
+async function factsFromFile(
+  file: Buffer,
+  key: string,
+  mode: string,
+  size: number,
+  sig: string,
+  options: InspectOptions,
+  attribute: DiffAttribute | undefined,
+): Promise<ContentFacts> {
+  const hasher = new PatchHasher('patch');
+  const { binary, lines } = await streamNewFilePatch(
+    file,
+    key,
+    mode,
+    size,
+    options.objectFormat,
+    options.bigFileThreshold,
+    attributeBinary(attribute),
+    hasher,
+  );
+  return { sig, binary, lines, patchHash: hasher.digest() };
 }
 
 function factsForLink(
@@ -461,26 +494,48 @@ export async function readUntrackedContent(
 }
 
 /**
- * The canonical patch text of an untracked entry (bstr), or null when it cannot be produced.
- * For an entry whose content was read, its hash is `info.patchHash`. Entries fingerprinted by
- * stat (over `maxUntrackedFiles`) are still displayed, with git's binary rules.
+ * Writes the canonical patch of an untracked entry to `sink` (streamed: never the whole file
+ * in memory); false when there is none (missing, unreadable, changed while read, a nested
+ * repository without a resolvable HEAD). For an entry whose content was read, the text hashes
+ * to `info.patchHash`. Entries fingerprinted by stat (over `maxUntrackedFiles`) are still
+ * displayed, with git's binary rules.
  */
-export async function untrackedPatchText(
+export async function writeUntrackedPatch(
   root: string,
   info: UntrackedInfo,
   format: ObjectFormat,
+  bigFileThreshold: number,
   attribute: DiffAttribute | undefined,
-): Promise<string | null> {
+  sink: PatchSink,
+): Promise<boolean> {
   if (info.kind === 'directory') {
-    return info.headSha ? synthesizeGitlinkPatch(info.key, info.headSha, format) : null;
+    if (!info.headSha) return false;
+    sink.update(synthesizeGitlinkPatch(info.key, info.headSha, format));
+    return true;
   }
-  if ((info.kind !== 'file' && info.kind !== 'symlink') || info.mode === null) return null;
-  const content = await readUntrackedContent(root, info);
-  if (content === null) return null;
-  const binary = info.read
-    ? info.binary
-    : ((info.kind === 'file' ? attributeBinary(attribute) : null) ?? undefined);
-  return synthesizeNewFilePatch(info.key, info.mode, content, format, binary);
+  if (info.mode === null) return false;
+  if (info.kind === 'symlink') {
+    const target = await readUntrackedContent(root, info);
+    if (target === null) return false;
+    sink.update(synthesizeNewFilePatch(info.key, info.mode, target, format));
+    return true;
+  }
+  if (info.kind !== 'file') return false;
+  try {
+    await streamNewFilePatch(
+      absolutePathBuffer(root, info.key),
+      info.key,
+      info.mode,
+      info.size,
+      format,
+      bigFileThreshold,
+      info.read ? info.binary : attributeBinary(attribute),
+      sink,
+    );
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 // ---------------------------------------------------------------------------------------------

@@ -168,8 +168,15 @@ async function linkedMainWorkTree(
   if ((await realpathOrSelf(main.path)) !== repo.commonDir) return null;
   // With an explicit --git-dir and no --work-tree, git computes the work tree from
   // core.worktree (or takes the cwd, the common dir, which never links back).
-  const result = await ctx.git(repo, ['rev-parse', '--show-toplevel'], { okExitCodes: [0, 128] });
-  const candidate = result.exitCode === 0 ? result.stdout.toString('utf8').trim() : '';
+  let candidate = '';
+  try {
+    const result = await ctx.git(repo, ['rev-parse', '--show-toplevel'], {
+      okExitCodes: [0, 128],
+    });
+    if (result.exitCode === 0) candidate = result.stdout.toString('utf8').trim();
+  } catch (error) {
+    if (!isGitCoreError(error, 'git_failed')) throw error;
+  }
   if (!candidate || !path.isAbsolute(candidate)) return null;
   const real = await realpathOrSelf(candidate);
   if (real === repo.commonDir) return null;

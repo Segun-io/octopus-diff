@@ -44,7 +44,7 @@ import {
   inspectUntracked,
   type UntrackedCache,
   type UntrackedInfo,
-  untrackedPatchText,
+  writeUntrackedPatch,
 } from './untracked.js';
 
 // ---------------------------------------------------------------------------------------------
@@ -729,8 +729,19 @@ export async function readDiffAttributes(
   const missing = keys.filter((key) => !verdicts.has(key));
   if (missing.length > 0) {
     const input = bstrToBuffer(missing.map((key) => `${key}\u0000`).join(''));
-    const result = await ctx.git(repo, ['check-attr', '-z', '--stdin', 'diff'], { input });
-    const tokens = bstrFromBuffer(result.stdout).split('\u0000');
+    let output: Buffer;
+    try {
+      output = (await ctx.git(repo, ['check-attr', '-z', '--stdin', 'diff'], { input })).stdout;
+    } catch (error) {
+      // Attributes only refine binary detection: fall back to git's content sniff.
+      if (!isGitCoreError(error, 'git_failed')) throw error;
+      ctx.settings.logger.warn('git check-attr failed; untracked binary detection by content', {
+        repo: repo.cwd,
+        error: error.message,
+      });
+      return new Map();
+    }
+    const tokens = bstrFromBuffer(output).split('\u0000');
     if (verdicts.size + missing.length > 4 * Math.max(ctx.settings.maxUntrackedFiles, 1)) {
       verdicts = new Map(
         keys.flatMap((key) => (verdicts.has(key) ? [[key, verdicts.get(key) as string]] : [])),
@@ -1027,7 +1038,7 @@ export async function getFileDiff(
   if (!info) throw notFound();
   return {
     ...untrackedIdentity(info),
-    ...(await untrackedPatch(repo, info, attributes.get(info.key), limit, view.full)),
+    ...(await untrackedPatch(ctx, repo, info, attributes.get(info.key), limit, view.full)),
   };
 }
 
@@ -1036,6 +1047,7 @@ export async function getFileDiff(
  * text whose hash is the entry's patchHash), view options do not apply to pure additions.
  */
 async function untrackedPatch(
+  ctx: GitContext,
   repo: RepoInfo,
   info: UntrackedInfo,
   attribute: DiffAttribute | undefined,
@@ -1048,10 +1060,20 @@ async function untrackedPatch(
     const estimate = info.size + (info.lines ?? info.size) + 512 + info.key.length * 3;
     if (!full && estimate > limit) return { ...empty, tooLarge: true };
   }
-  const text = await untrackedPatchText(repo.cwd, info, repo.objectFormat, attribute);
-  if (text === null) return empty;
   const collector = new PatchCollector({ retain: new AnyKeySet(), retainLimit: limit });
-  collector.write(text);
+  const written = await writeUntrackedPatch(
+    repo.cwd,
+    info,
+    repo.objectFormat,
+    ctx.settings.bigFileThreshold,
+    attribute,
+    {
+      update: (data) => collector.write(data),
+      updateBytes: (data) =>
+        collector.write(bstrFromBuffer(Buffer.from(data.buffer, data.byteOffset, data.byteLength))),
+    },
+  );
+  if (!written) return empty;
   collector.end();
   const chunk = [...collector.results().values()][0];
   if (!chunk) return empty;
