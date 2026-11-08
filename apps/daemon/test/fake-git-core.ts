@@ -43,6 +43,8 @@ export interface FakeWorktree {
   fsBacked: boolean;
   /** Bumped to force a new stateHash. */
   generation: number;
+  /** Reported as `prunable` by `git worktree list` (broken or forged record). */
+  prunable?: boolean;
 }
 
 export interface FakeRepo {
@@ -254,7 +256,7 @@ export class FakeGitCore implements GitCore {
       isMain: wt.isMain,
       bare: false,
       locked: wt.locked,
-      prunable: false,
+      prunable: wt.prunable ?? false,
       missing: !existsSync(wt.path),
     };
   }
