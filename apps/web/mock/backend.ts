@@ -5,12 +5,20 @@
 import {
   type AddProjectResponse,
   type AddScanRootResponse,
+  type AppSettings,
+  type AppSettingsPatch,
+  BULK_UNDO_MAX_ENTRIES,
+  BULK_UNDO_TTL_MS,
+  type BulkReviewRequestParsed,
+  type BulkReviewResponse,
   type ChangedFile,
   type CommitInfo,
   type CommitsResponse,
+  DEFAULT_APP_SETTINGS,
   type DiffQuery,
   type DiffResponse,
   type DiffScope,
+  type EffectiveReviewPolicy,
   type FilesResponse,
   type HealthResponse,
   type InboxResponse,
@@ -18,10 +26,21 @@ import {
   type ProjectListItem,
   type ProjectsResponse,
   type RefreshResponse,
+  type RescanResponse,
+  type ReviewOverride,
+  type ReviewPolicyTarget,
   type ReviewRequest,
+  resolveReviewPolicyFromMap,
+  reviewOverrideMap,
+  reviewTargetKey,
   type ScanRoot,
   type ServerEvent,
+  type SetReviewPolicyRequest,
+  type SettingsResponse,
   scopeKey,
+  type UndoReviewResponse,
+  type UpdateProjectRequest,
+  type UpdateProjectResponse,
   type Worktree,
   type WorktreeSummary,
 } from '@octopus-diff/contracts';
@@ -127,11 +146,24 @@ const NAMES = [
   'events.ts',
 ];
 
+interface UndoEntry {
+  /** Review keys this call set (`true`) or cleared (`false`), with the state they now have. */
+  rows: { key: string; reviewed: boolean; projectId: string }[];
+  createdAt: number;
+}
+
 export class MockBackend {
   readonly projects: MockProject[] = [];
   readonly scanRoots: ScanRoot[] = [];
   readonly reviews = new Set<string>();
   focus: string | null = null;
+  settings: AppSettings = structuredClone(DEFAULT_APP_SETTINGS);
+  readonly overrides = new Map<string, ReviewOverride>();
+  settingsRevision = 0;
+  private readonly undo = new Map<string, UndoEntry>();
+  private undoSeq = 0;
+  /** Clock for undo TTLs (tests override it). */
+  now: () => number = () => Date.now();
   private readonly listeners = new Set<Listener>();
   private readonly patchCache = new Map<string, CanonicalPatch>();
   private readonly rand: () => number;
@@ -320,7 +352,17 @@ export class MockBackend {
   }
 
   private buildDemo(): void {
-    const api = this.makeProject('octopus-api');
+    // `~/code` is a watched folder (scan root); infra and legacy-tool were added directly.
+    const code: ScanRoot = {
+      id: hash16('/home/dev/code'),
+      path: '/home/dev/code',
+      depth: 3,
+      addedAt: isoAt(-2 * 86_400_000),
+      lastScannedAt: isoAt(-3_600_000),
+      projectCount: 3,
+    };
+    this.scanRoots.push(code);
+    const api = this.makeProject('octopus-api', { scanRootId: code.id });
     const apiMain = this.makeWorktree(api, {
       branch: 'main',
       isMain: true,
@@ -388,7 +430,7 @@ export class MockBackend {
     });
     detached.files = [];
 
-    const web = this.makeProject('web-dashboard');
+    const web = this.makeProject('web-dashboard', { scanRootId: code.id });
     const webMain = this.makeWorktree(web, {
       branch: 'main',
       isMain: true,
@@ -407,7 +449,7 @@ export class MockBackend {
     const infra = this.makeProject('infra', { defaultBranch: null });
     this.makeWorktree(infra, { branch: 'trunk', isMain: true });
 
-    const docs = this.makeProject('docs-site');
+    const docs = this.makeProject('docs-site', { scanRootId: code.id });
     const docsMain = this.makeWorktree(docs, { branch: null, isMain: true, inProgress: 'rebase' });
     docsMain.files = [this.file('content/intro.md', 'conflicted', { kind: 'conflict', lines: 30 })];
 
@@ -418,6 +460,15 @@ export class MockBackend {
       error: 'git status timed out after 10000 ms',
     });
     this.makeWorktree(legacy, { branch: 'old-experiment', missing: true, locked: true });
+
+    // Demo overrides: review is off for legacy-tool (nothing to review there) and for the
+    // agent branch of web-dashboard, so the policy UI has something to show.
+    for (const target of [
+      { kind: 'project', projectId: legacy.project.id },
+      { kind: 'branch', projectId: web.project.id, branch: 'agent/codex-123' },
+    ] as const) {
+      this.overrides.set(reviewTargetKey(target), { target, enabled: false, updatedAt: isoAt(0) });
+    }
   }
 
   private buildLarge(): void {
@@ -599,14 +650,226 @@ export class MockBackend {
   }
 
   private projectItem(mp: MockProject): ProjectListItem {
+    const map = reviewOverrideMap([...this.overrides.values()]);
     return {
       project: mp.project,
       worktrees: mp.worktrees.map((mw) => ({
         worktree: mw.worktree,
         summary: mw.error || mw.worktree.missing ? null : this.summary(mp, mw),
         error: mw.error ? { code: 'timeout', message: mw.error } : null,
+        review: this.policyOf(mp, mw, map),
       })),
     };
+  }
+
+  // --- settings and review policy (COORDINATION §2) -------------------------------------
+
+  policyOf(
+    mp: MockProject,
+    mw: MockWorktree,
+    map = reviewOverrideMap([...this.overrides.values()]),
+  ): EffectiveReviewPolicy {
+    return resolveReviewPolicyFromMap(
+      {
+        defaultEnabled: this.settings.review.defaultEnabled,
+        worktreeId: mw.worktree.id,
+        projectId: mp.project.id,
+        branch: mw.worktree.branch,
+        scanRootId: mp.project.scanRootId,
+      },
+      map,
+    );
+  }
+
+  private settingsResponse(): SettingsResponse {
+    return {
+      settings: structuredClone(this.settings),
+      overrides: [...this.overrides.values()].map((o) => structuredClone(o)),
+      revision: this.settingsRevision,
+    };
+  }
+
+  private bumpSettings(): void {
+    this.settingsRevision += 1;
+    this.emit({ type: 'settings.changed', revision: this.settingsRevision });
+  }
+
+  getSettings(): SettingsResponse {
+    return this.settingsResponse();
+  }
+
+  updateSettings(patch: AppSettingsPatch): SettingsResponse {
+    if (patch.review?.defaultEnabled !== undefined) {
+      this.settings = {
+        ...this.settings,
+        review: { ...this.settings.review, defaultEnabled: patch.review.defaultEnabled },
+      };
+    }
+    this.bumpSettings();
+    return this.settingsResponse();
+  }
+
+  private assertTargetExists(target: ReviewPolicyTarget): void {
+    const missing = (what: string) =>
+      new MockApiError(404, 'not_found', `unknown ${target.kind} ${what}`);
+    switch (target.kind) {
+      case 'folder':
+        if (!this.scanRoots.some((s) => s.id === target.scanRootId))
+          throw missing(target.scanRootId);
+        return;
+      case 'project':
+      case 'branch':
+        if (!this.projects.some((p) => p.project.id === target.projectId))
+          throw missing(target.projectId);
+        return;
+      case 'worktree':
+        this.findWorktree(target.worktreeId);
+        return;
+    }
+  }
+
+  setReviewPolicy(req: SetReviewPolicyRequest): SettingsResponse {
+    this.assertTargetExists(req.target);
+    const key = reviewTargetKey(req.target);
+    if (req.enabled === null) this.overrides.delete(key);
+    else this.overrides.set(key, { target: req.target, enabled: req.enabled, updatedAt: now() });
+    this.bumpSettings();
+    return this.settingsResponse();
+  }
+
+  private dropOverridesOfProject(projectId: string, worktreeIds: string[]): void {
+    for (const [key, o] of this.overrides) {
+      const t = o.target;
+      if (
+        ((t.kind === 'project' || t.kind === 'branch') && t.projectId === projectId) ||
+        (t.kind === 'worktree' && worktreeIds.includes(t.worktreeId))
+      ) {
+        this.overrides.delete(key);
+      }
+    }
+  }
+
+  // --- bulk review and undo (COORDINATION §2.2) -----------------------------------------
+
+  private targetWorktrees(
+    target: BulkReviewRequestParsed['target'],
+  ): { mp: MockProject; mw: MockWorktree }[] {
+    switch (target.kind) {
+      case 'all':
+        return this.projects.flatMap((mp) => mp.worktrees.map((mw) => ({ mp, mw })));
+      case 'folder':
+        if (!this.scanRoots.some((s) => s.id === target.scanRootId)) {
+          throw new MockApiError(404, 'not_found', `unknown scan root ${target.scanRootId}`);
+        }
+        return this.projects
+          .filter((mp) => mp.project.scanRootId === target.scanRootId)
+          .flatMap((mp) => mp.worktrees.map((mw) => ({ mp, mw })));
+      case 'project': {
+        const mp = this.projects.find((p) => p.project.id === target.projectId);
+        if (!mp) throw new MockApiError(404, 'not_found', `unknown project ${target.projectId}`);
+        return mp.worktrees.map((mw) => ({ mp, mw }));
+      }
+      case 'worktree':
+        return [this.findWorktree(target.worktreeId)];
+    }
+  }
+
+  bulkReview(req: BulkReviewRequestParsed): BulkReviewResponse {
+    if (req.paths && req.target.kind !== 'worktree') {
+      throw new MockApiError(400, 'bad_request', 'paths is only valid with a worktree target');
+    }
+    if (req.scope.kind === 'commit') {
+      throw new MockApiError(400, 'bad_request', 'commit scope is not supported by bulk review');
+    }
+    const map = reviewOverrideMap([...this.overrides.values()]);
+    const stale: string[] = [];
+    const skippedDisabled: string[] = [];
+    const rows: UndoEntry['rows'] = [];
+    const projectIds = new Set<string>();
+    let changed = 0;
+    let unchanged = 0;
+    let worktrees = 0;
+    const wanted = req.paths ? new Set(req.paths.map((p) => p.rawPath ?? p.path)) : null;
+    for (const { mp, mw } of this.targetWorktrees(req.target)) {
+      if (mw.error || mw.worktree.missing || mw.worktree.prunable) continue;
+      const expected = req.expectedStateHashes?.[mw.worktree.id];
+      if (expected !== undefined && expected !== this.summary(mp, mw).stateHash) {
+        stale.push(mw.worktree.id);
+        continue;
+      }
+      let files = this.changedFiles(mp, mw, req.scope);
+      if (wanted) files = files.filter((f) => wanted.has(f.rawPath ?? f.path));
+      if (files.length === 0) continue;
+      if (!req.includeDisabled && !this.policyOf(mp, mw, map).enabled) {
+        skippedDisabled.push(mw.worktree.id);
+        continue;
+      }
+      worktrees += 1;
+      for (const f of files) {
+        const key = this.reviewKey(mp.project.id, req.scope.kind, f, f.patchHash);
+        const has = this.reviews.has(key);
+        if (has === req.reviewed) {
+          unchanged += 1;
+          continue;
+        }
+        if (req.reviewed) this.reviews.add(key);
+        else this.reviews.delete(key);
+        changed += 1;
+        rows.push({ key, reviewed: req.reviewed, projectId: mp.project.id });
+        projectIds.add(mp.project.id);
+      }
+    }
+    let undoToken: string | null = null;
+    if (changed > 0) {
+      undoToken = `undo-${++this.undoSeq}-${hash16(`${this.undoSeq}:${this.now()}`)}`;
+      this.undo.set(undoToken, { rows, createdAt: this.now() });
+      while (this.undo.size > BULK_UNDO_MAX_ENTRIES) {
+        const oldest = this.undo.keys().next().value;
+        if (oldest === undefined) break;
+        this.undo.delete(oldest);
+      }
+      this.emit({
+        type: 'review.bulk',
+        projectIds: [...projectIds],
+        reviewed: req.reviewed,
+        changed,
+      });
+    }
+    return {
+      ok: true,
+      reviewed: req.reviewed,
+      changed,
+      unchanged,
+      worktrees,
+      skippedDisabled,
+      stale,
+      undoToken,
+    };
+  }
+
+  undoReview(undoToken: string): UndoReviewResponse {
+    const entry = this.undo.get(undoToken);
+    if (!entry || this.now() - entry.createdAt > BULK_UNDO_TTL_MS) {
+      this.undo.delete(undoToken);
+      throw new MockApiError(404, 'not_found', 'unknown, expired or used undo token');
+    }
+    this.undo.delete(undoToken);
+    let restored = 0;
+    const projectIds = new Set<string>();
+    let reviewed: boolean | null = null;
+    for (const row of entry.rows) {
+      // Rows changed again since the bulk call are left alone.
+      if (this.reviews.has(row.key) !== row.reviewed) continue;
+      if (row.reviewed) this.reviews.delete(row.key);
+      else this.reviews.add(row.key);
+      reviewed = !row.reviewed;
+      restored += 1;
+      projectIds.add(row.projectId);
+    }
+    if (restored > 0 && reviewed !== null) {
+      this.emit({ type: 'review.bulk', projectIds: [...projectIds], reviewed, changed: restored });
+    }
+    return { ok: true, restored };
   }
 
   inbox(scope: DiffScope, onlyUnreviewed: boolean): InboxResponse {
@@ -614,9 +877,12 @@ export class MockBackend {
       throw new MockApiError(400, 'bad_request', 'commit scope is not supported by the inbox');
     }
     const entries: InboxResponse['entries'] = [];
+    const map = reviewOverrideMap([...this.overrides.values()]);
     for (const mp of this.projects) {
       for (const mw of mp.worktrees) {
         if (mw.error || mw.worktree.missing) continue;
+        const review = this.policyOf(mp, mw, map);
+        if (onlyUnreviewed && !review.enabled) continue;
         let files = this.changedFiles(mp, mw, scope);
         if (onlyUnreviewed) files = files.filter((f) => !f.reviewed);
         if (files.length === 0) continue;
@@ -625,6 +891,7 @@ export class MockBackend {
           worktree: mw.worktree,
           summary: this.summary(mp, mw),
           files,
+          review,
         });
       }
     }
@@ -730,9 +997,47 @@ export class MockBackend {
   removeProject(projectId: string): { ok: true } {
     const index = this.projects.findIndex((p) => p.project.id === projectId);
     if (index === -1) throw new MockApiError(404, 'not_found', `unknown project ${projectId}`);
-    this.projects.splice(index, 1);
+    const [removed] = this.projects.splice(index, 1);
+    const before = this.overrides.size;
+    this.dropOverridesOfProject(projectId, removed?.worktrees.map((w) => w.worktree.id) ?? []);
     this.emit({ type: 'project.removed', projectId });
+    if (this.overrides.size !== before) this.bumpSettings();
     return { ok: true };
+  }
+
+  updateProject(projectId: string, req: UpdateProjectRequest): UpdateProjectResponse {
+    const mp = this.projects.find((p) => p.project.id === projectId);
+    if (!mp) throw new MockApiError(404, 'not_found', `unknown project ${projectId}`);
+    if (req.defaultBranchOverride !== undefined) {
+      mp.project.defaultBranchOverride = req.defaultBranchOverride;
+      mp.project.defaultBranch = req.defaultBranchOverride ?? 'main';
+    }
+    this.emit({ type: 'project.updated', projectId });
+    return { project: this.projectItem(mp) };
+  }
+
+  rescanScanRoot(scanRootId: string): RescanResponse {
+    const scanRoot = this.scanRoots.find((s) => s.id === scanRootId);
+    if (!scanRoot) throw new MockApiError(404, 'not_found', `unknown scan root ${scanRootId}`);
+    this.emit({
+      type: 'scan.progress',
+      scanRootId,
+      state: 'scanning',
+      scannedDirs: 0,
+      foundRepos: 0,
+      message: null,
+    });
+    scanRoot.lastScannedAt = now();
+    scanRoot.projectCount = this.projects.filter((p) => p.project.scanRootId === scanRootId).length;
+    this.emit({
+      type: 'scan.progress',
+      scanRootId,
+      state: 'done',
+      scannedDirs: 42,
+      foundRepos: scanRoot.projectCount,
+      message: null,
+    });
+    return { scanRoot };
   }
 
   listScanRoots(): { scanRoots: ScanRoot[] } {
@@ -788,6 +1093,13 @@ export class MockBackend {
     const index = this.scanRoots.findIndex((s) => s.id === scanRootId);
     if (index === -1) throw new MockApiError(404, 'not_found', `unknown scan root ${scanRootId}`);
     this.scanRoots.splice(index, 1);
+    const before = this.overrides.size;
+    this.overrides.delete(reviewTargetKey({ kind: 'folder', scanRootId }));
+    // Projects discovered by the root are removed with it (and their overrides).
+    for (const mp of this.projects.filter((p) => p.project.scanRootId === scanRootId)) {
+      this.removeProject(mp.project.id);
+    }
+    if (this.overrides.size !== before) this.bumpSettings();
     return { ok: true };
   }
 

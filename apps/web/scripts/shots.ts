@@ -81,9 +81,12 @@ async function main() {
           colorScheme: theme.kind,
           reducedMotion: 'reduce',
         });
-        await context.addInitScript((prefs: string) => {
-          localStorage.setItem('octopus-diff:prefs', prefs);
-        }, JSON.stringify({ version: 2, theme: { mode: theme.kind, [theme.kind]: theme.id } }));
+        await context.addInitScript(
+          (prefs: string) => {
+            localStorage.setItem('octopus-diff:prefs', prefs);
+          },
+          JSON.stringify({ version: 2, theme: { mode: theme.kind, [theme.kind]: theme.id } }),
+        );
         const page = await context.newPage();
         const errors: string[] = [];
         page.on('pageerror', (e) => errors.push(e.message));
