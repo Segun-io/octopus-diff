@@ -22,7 +22,7 @@ interface BufferedEvent {
 }
 
 interface SseClient {
-  controller: ReadableStreamDefaultController<Uint8Array>;
+  controller: ReadableStreamDefaultController<Uint8Array<ArrayBuffer>>;
   closed: boolean;
 }
 
@@ -93,9 +93,12 @@ export class EventHub {
    * that are still buffered, then live events and heartbeats until the client disconnects or
    * the hub closes.
    */
-  createStream(hello: ServerEvent, lastEventId?: string | null): ReadableStream<Uint8Array> {
+  createStream(
+    hello: ServerEvent,
+    lastEventId?: string | null,
+  ): ReadableStream<Uint8Array<ArrayBuffer>> {
     let client: SseClient | undefined;
-    return new ReadableStream<Uint8Array>(
+    return new ReadableStream<Uint8Array<ArrayBuffer>>(
       {
         start: (controller) => {
           client = { controller, closed: false };
@@ -129,7 +132,7 @@ export class EventHub {
     return this.#buffer.filter((e) => e.seq > seq);
   }
 
-  #send(client: SseClient, bytes: Uint8Array): void {
+  #send(client: SseClient, bytes: Uint8Array<ArrayBuffer>): void {
     if (client.closed) return;
     try {
       const desired = client.controller.desiredSize;

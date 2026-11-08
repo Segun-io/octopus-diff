@@ -2,7 +2,7 @@ import { AUTH_COOKIE_NAME, HealthResponseSchema } from '@octopus-diff/contracts'
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { Daemon } from '../src/daemon.js';
 import { FakeGitCore } from './fake-git-core.js';
-import { http, inproc, startTestDaemon, tempDir } from './helpers.js';
+import { errorOf, http, inproc, startTestDaemon, tempDir } from './helpers.js';
 
 describe('auth and request safety', () => {
   let daemon: Daemon;
@@ -38,7 +38,7 @@ describe('auth and request safety', () => {
       headers: { authorization: 'Bearer nope-nope-nope-nope' },
     });
     expect(wrong.status).toBe(401);
-    expect((await wrong.json()).error.code).toBe('unauthorized');
+    expect((await errorOf(wrong)).code).toBe('unauthorized');
 
     const wrongCookie = await http(daemon, '/api/projects', {
       auth: false,
@@ -100,7 +100,7 @@ describe('auth and request safety', () => {
     ]) {
       const res = await inproc(daemon, '/api/health', { headers: { host } });
       expect(res.status, host).toBe(403);
-      expect((await res.json()).error.code).toBe('forbidden');
+      expect((await errorOf(res)).code).toBe('forbidden');
     }
     const authed = await inproc(daemon, '/api/projects', {
       headers: { host: `evil.example:${daemon.port}` },

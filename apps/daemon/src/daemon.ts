@@ -27,6 +27,8 @@ import { loadOrCreateToken } from './token.js';
 import type { SubscribeFn } from './watcher.js';
 
 export const DEFAULT_VERSION = '0.0.0-dev';
+/** How long `close()` lets in-flight responses finish before cutting connections. */
+const CLOSE_GRACE_MS = 200;
 
 /** Internal knobs for tests and benchmarks; not part of the CLI contract. */
 export interface DaemonInternals {
@@ -254,9 +256,11 @@ export const startDaemon = (async (options: DaemonOptions = {}): Promise<Daemon>
           .close()
           .catch((error) => logger.warn('error while stopping the core', { error }));
         hub.close();
+        // SSE streams were ended above; give responses a moment to flush, then cut the rest.
         await new Promise<void>((resolve) => {
           httpServer.close(() => resolve());
-          httpServer.closeAllConnections();
+          httpServer.closeIdleConnections();
+          setTimeout(() => httpServer.closeAllConnections(), CLOSE_GRACE_MS).unref();
         });
         if (ownsGitCore) await gitCore.dispose().catch(() => {});
         store.close();

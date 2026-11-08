@@ -3,6 +3,8 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   type ApiClient,
+  type ApiErrorBody,
+  ApiErrorBodySchema,
   createApiClient,
   type EventSubscription,
   type ServerEvent,
@@ -159,13 +161,13 @@ export async function eventually<T>(
   check: () => T | Promise<T>,
   timeoutMs = 3000,
   stepMs = 25,
-): Promise<T> {
+): Promise<NonNullable<Awaited<T>>> {
   const deadline = Date.now() + timeoutMs;
   let last: unknown;
   for (;;) {
     try {
       const value = await check();
-      if (value) return value;
+      if (value) return value as NonNullable<Awaited<T>>;
     } catch (error) {
       last = error;
     }
@@ -174,4 +176,9 @@ export async function eventually<T>(
     }
     await sleep(stepMs);
   }
+}
+
+/** Parses an `ApiErrorBody` response and returns its `error`. */
+export async function errorOf(res: Response): Promise<ApiErrorBody['error']> {
+  return ApiErrorBodySchema.parse(await res.json()).error;
 }
