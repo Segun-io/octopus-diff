@@ -209,10 +209,7 @@ export class GitRunner {
     if (this.disposed) return;
     this.disposed = true;
     this.scheduler.rejectAll(disposedError());
-    for (const [child, fail] of this.children) {
-      fail(disposedError());
-      child.kill('SIGKILL');
-    }
+    for (const fail of [...this.children.values()]) fail(disposedError());
   }
 
   private execute(
@@ -242,6 +239,8 @@ export class GitRunner {
           env,
           stdio: ['ignore', 'pipe', 'pipe'],
           windowsHide: true,
+          // Own process group on POSIX, so a timeout kills git's children too.
+          detached: USE_PROCESS_GROUP,
         });
       } catch (error) {
         reject(spawnError(error, this.gitBinary, args, cwd));
@@ -251,7 +250,11 @@ export class GitRunner {
       const fail = (error: GitCoreError): void => {
         if (failure) return;
         failure = error;
-        child.kill('SIGKILL');
+        killTree(child);
+        // Settle now: a grandchild may keep the pipes (and so 'close') open.
+        child.stdout?.destroy();
+        child.stderr?.destroy();
+        finish(error);
       };
       this.children.set(child, fail);
 
@@ -334,6 +337,20 @@ export class GitRunner {
       });
     });
   }
+}
+
+const USE_PROCESS_GROUP = process.platform !== 'win32';
+
+function killTree(child: ChildProcess): void {
+  if (USE_PROCESS_GROUP && child.pid !== undefined) {
+    try {
+      process.kill(-child.pid, 'SIGKILL');
+      return;
+    } catch {
+      // Group already gone, or not a group leader: fall back to the process itself.
+    }
+  }
+  child.kill('SIGKILL');
 }
 
 function disposedError(): GitCoreError {

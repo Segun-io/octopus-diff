@@ -11,8 +11,9 @@ import { detectDefaultBranchRef, type ResolvedRef, resolveRefName } from './disc
 
 /**
  * Flags on every `git diff` git-core runs, so that output does not depend on user or repo
- * config: full object names, fixed prefixes, rename+copy detection, Myers, no hunk merging,
- * short submodule format, submodules reported only when their commit changes, no orderfile.
+ * config: full object names, fixed prefixes, rename detection, Myers, no hunk merging, short
+ * submodule format, submodules reported only when their commit changes, no orderfile.
+ * Copy detection is added per scope (`ScopePlan.findCopies`).
  */
 export const DIFF_PINS: readonly string[] = [
   '--no-abbrev',
@@ -20,7 +21,6 @@ export const DIFF_PINS: readonly string[] = [
   '--src-prefix=a/',
   '--dst-prefix=b/',
   '--find-renames',
-  '--find-copies',
   '--diff-algorithm=myers',
   '--indent-heuristic',
   '--inter-hunk-context=0',
@@ -48,6 +48,12 @@ export interface ScopePlan {
   immutableKey: string | null;
   /** Revision args use `HEAD`, which fails on an unborn branch (retry with the empty tree). */
   usesHead: boolean;
+  /**
+   * Detect copies (`--find-copies`). Only for scopes that do not read the worktree: with
+   * `diff.autoRefreshIndex=false`, stat-dirty but unchanged files count as modified and would
+   * become copy sources, so results would depend on stat state rather than content.
+   */
+  findCopies: boolean;
 }
 
 export function parseScope(scope: unknown): DiffScope {
@@ -99,6 +105,7 @@ export async function planScope(
     empty: false,
     immutableKey: null,
     usesHead: false,
+    findCopies: true,
   };
   switch (scope.kind) {
     case 'working':
@@ -110,6 +117,7 @@ export async function planScope(
         includeUntracked: true,
         usesHead: true,
         empty: repo.bare,
+        findCopies: false,
       };
     case 'staged':
       return {
@@ -121,7 +129,14 @@ export async function planScope(
         empty: repo.bare,
       };
     case 'unstaged':
-      return { ...base, kind: 'unstaged', revArgs: [], statusBased: true, empty: repo.bare };
+      return {
+        ...base,
+        kind: 'unstaged',
+        revArgs: [],
+        statusBased: true,
+        empty: repo.bare,
+        findCopies: false,
+      };
     case 'branch': {
       const [head, baseRef] = await Promise.all([
         resolveHead(ctx, repo),

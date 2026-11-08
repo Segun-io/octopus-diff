@@ -1,4 +1,4 @@
-import { chmodSync, rmSync, unlinkSync } from 'node:fs';
+import { chmodSync, rmSync, statSync, unlinkSync, utimesSync } from 'node:fs';
 import path from 'node:path';
 import type { GitCore, WorktreeLocator } from '@octopus-diff/contracts';
 import { isGitCoreError } from '@octopus-diff/contracts';
@@ -115,7 +115,8 @@ describe('working / staged / unstaged scopes', () => {
       additions: 0,
       deletions: 0,
     });
-    expectFile(files, 'copy-dst.txt', { status: 'copied', oldPath: 'copy-src.txt' });
+    // Copies are detected only in scopes that do not read the worktree (see ScopePlan).
+    expectFile(files, 'copy-dst.txt', { status: 'added', oldPath: null });
     expectFile(files, 'copy-src.txt', { status: 'modified' });
     expectFile(files, 'modify.txt', {
       status: 'modified',
@@ -178,6 +179,7 @@ describe('working / staged / unstaged scopes', () => {
     );
     expectFile(files, 'both.txt', { staged: true, unstaged: true, additions: 1, deletions: 1 });
     expectFile(files, 'staged.txt', { staged: true, unstaged: false });
+    expectFile(files, 'copy-dst.txt', { status: 'copied', oldPath: 'copy-src.txt' });
   });
 
   it('lists the unstaged scope', async () => {
@@ -242,7 +244,7 @@ describe('working / staged / unstaged scopes', () => {
     const renamed = await fileDiff(core, wt, scope, { path: 'renamed.txt' });
     expect(renamed.patch).toContain('rename from rename-src.txt\nrename to renamed.txt\n');
 
-    const copied = await fileDiff(core, wt, scope, { path: 'copy-dst.txt' });
+    const copied = await fileDiff(core, wt, { kind: 'staged' }, { path: 'copy-dst.txt' });
     expect(copied.patch).toContain('copy from copy-src.txt\ncopy to copy-dst.txt\n');
 
     const bin = await fileDiff(core, wt, scope, { path: 'bin.dat' });
@@ -305,6 +307,29 @@ describe('working / staged / unstaged scopes', () => {
       const error = await bad().catch((e: unknown) => e);
       expect(isGitCoreError(error, 'invalid_argument'), String(error)).toBe(true);
     }
+  });
+
+  it('ignores stat-only changes and never refreshes the index', async () => {
+    const index = path.join(repo, '.git', 'index');
+    const before = statSync(index, { bigint: true });
+    const future = new Date(Date.now() + 120_000);
+    utimesSync(path.join(repo, 'keep.txt'), future, future);
+    utimesSync(path.join(repo, 'dir', 'nested.txt'), future, future);
+    for (const kind of ['working', 'unstaged'] as const) {
+      const files = await listFiles(core, wt, { kind });
+      expect(files.map((f) => f.path)).not.toContain('keep.txt');
+      expect(files.map((f) => f.path)).not.toContain('dir/nested.txt');
+      const error = await core
+        .getFileDiff(wt, { kind }, { path: 'keep.txt' })
+        .catch((e: unknown) => e);
+      expect(isGitCoreError(error, 'not_found')).toBe(true);
+    }
+    const summary = await core.getSummary(wt);
+    const working = await listFiles(core, wt, { kind: 'working' });
+    expect(summary.changedFiles).toBe(working.length);
+    const after = statSync(index, { bigint: true });
+    expect(after.mtimeNs).toBe(before.mtimeNs);
+    expect(after.ino).toBe(before.ino);
   });
 
   it('caps untracked inspection with maxUntrackedFiles', async () => {

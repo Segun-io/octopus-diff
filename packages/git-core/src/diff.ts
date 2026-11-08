@@ -193,8 +193,9 @@ interface DiffRunOptions {
   revArgs?: string[];
 }
 
-function diffArgs(revArgs: readonly string[], options: DiffRunOptions): string[] {
+function diffArgs(plan: ScopePlan, revArgs: readonly string[], options: DiffRunOptions): string[] {
   const args = ['diff', ...DIFF_PINS];
+  if (plan.findCopies) args.push('--find-copies');
   if (options.head) args.push('--raw', '--numstat', '-z');
   if (options.patch) {
     args.push('-p', `-U${options.context ?? CANONICAL_CONTEXT}`);
@@ -208,6 +209,7 @@ function diffArgs(revArgs: readonly string[], options: DiffRunOptions): string[]
 async function runDiffOnce(
   ctx: GitContext,
   repo: RepoInfo,
+  plan: ScopePlan,
   revArgs: readonly string[],
   options: DiffRunOptions,
 ): Promise<DiffRun> {
@@ -220,7 +222,7 @@ async function runDiffOnce(
     : null;
   const usesHead = options.head || !options.patch;
   const parser = usesHead ? new DiffOutputParser((data) => collector?.write(data)) : null;
-  await ctx.git(repo, diffArgs(revArgs, options), {
+  await ctx.git(repo, diffArgs(plan, revArgs, options), {
     onStdout: (chunk) => {
       const data = bstrFromBuffer(chunk);
       if (parser) parser.write(data);
@@ -245,11 +247,11 @@ async function runScopeDiff(
 ): Promise<DiffRun> {
   const revArgs = options.revArgs ?? plan.revArgs;
   try {
-    return await runDiffOnce(ctx, repo, revArgs, options);
+    return await runDiffOnce(ctx, repo, plan, revArgs, options);
   } catch (error) {
     if (!plan.usesHead || options.revArgs || !isGitCoreError(error, 'git_failed')) throw error;
     if ((await resolveHead(ctx, repo)) !== null) throw error;
-    return runDiffOnce(ctx, repo, unbornRevArgs(plan, repo), options);
+    return runDiffOnce(ctx, repo, plan, unbornRevArgs(plan, repo), options);
   }
 }
 
@@ -326,6 +328,41 @@ function flagsFor(
     default:
       return { staged: false, unstaged: false };
   }
+}
+
+/**
+ * The raw entry for `key`. git can report an unmerged path twice (`U` plus a diff against
+ * stage 2) depending on the output format; prefer a combined entry, then a non-`U` one.
+ */
+function pickEntry(entries: readonly RawEntry[], key: string): RawEntry | undefined {
+  let first: RawEntry | undefined;
+  let nonUnmerged: RawEntry | undefined;
+  for (const entry of entries) {
+    if (entry.path !== key) continue;
+    if (entry.combined) return entry;
+    first ??= entry;
+    if (entry.status !== 'U') nonUnmerged ??= entry;
+  }
+  return nonUnmerged ?? first;
+}
+
+/**
+ * With `diff.autoRefreshIndex=false`, a file whose stat data changed but whose content did not
+ * is still reported in raw output (modified, same mode), but has no numstat entry and no patch.
+ * Such entries are not changes and are dropped.
+ */
+function isStatOnly(
+  entry: RawEntry,
+  chunk: ChunkResult | undefined,
+  numstat: NumstatEntry | undefined,
+): boolean {
+  return (
+    !entry.combined &&
+    entry.status === 'M' &&
+    entry.srcMode === entry.dstMode &&
+    chunk === undefined &&
+    numstat === undefined
+  );
 }
 
 /** patchHash for a tracked entry without a patch chunk (e.g. a race, or an unmerged path). */
@@ -457,9 +494,12 @@ export async function listChangedFiles(
 
   const rows: Array<{ key: string; file: GitChangedFile }> = [];
   const trackedKeys = new Set<string>();
-  for (const entry of run.raw) {
-    trackedKeys.add(entry.path);
+  for (const candidate of run.raw) {
+    if (trackedKeys.has(candidate.path)) continue;
+    trackedKeys.add(candidate.path);
+    const entry = pickEntry(run.raw, candidate.path) ?? candidate;
     const chunk = entry.combined ? combinedChunks.get(entry.path) : run.chunks.get(entry.path);
+    if (isStatOnly(entry, chunk, numstat.get(entry.path))) continue;
     const conflicted = entry.combined || (index?.conflicted.has(entry.path) ?? false);
     const identity = trackedIdentity(
       entry,
@@ -574,47 +614,45 @@ export async function getFileDiff(
     plan.statusBased ? readStatus(ctx, repo) : Promise.resolve(null),
   ]);
   const index = status ? indexStatus(status) : null;
-  const entry = ident.raw.find((candidate) => candidate.path === key);
+  const identified = pickEntry(ident.raw, key);
   const limit = view.full ? ctx.settings.maxOutputBytes : ctx.settings.maxPatchBytes;
   const needsView = view.ignoreWhitespace || view.context !== CANONICAL_CONTEXT;
 
-  if (entry) {
-    const conflicted = entry.combined || (index?.conflicted.has(key) ?? false);
+  if (identified) {
     const only = new Set([key]);
     const retainCanonical = needsView ? new Set<string>() : only;
-    let canonical: ChunkResult | undefined;
-    let numstat: NumstatEntry | undefined;
-    let pathspecs: string[] | null;
-
+    const renamed = identified.status === 'R';
+    const usable = isValidUtf8(key) && (!renamed || isValidUtf8(identified.srcPath));
+    // Copies are diffed in the whole scope: with a narrowed pathspec git could pair the
+    // source as a rename instead, which would change the patch (and its hash).
+    const pathspecs =
+      identified.status === 'C' || !usable
+        ? null
+        : renamed
+          ? [bstrToUtf8(identified.srcPath), bstrToUtf8(key)]
+          : [bstrToUtf8(key)];
+    // 2. The canonical patch, in exactly the output format listChangedFiles uses (git reports
+    //    unmerged paths differently depending on the format), so identity and hash match.
+    const run = await runScopeDiff(ctx, repo, plan, {
+      head: true,
+      patch: true,
+      pathspecs,
+      only,
+      retain: retainCanonical,
+      retainLimit: limit,
+    });
+    const entry = pickEntry(run.raw, key) ?? identified;
+    const numstat = run.numstat.find((candidate) => candidate.path === key);
+    let canonical = run.chunks.get(key);
     if (entry.combined) {
-      pathspecs = isValidUtf8(key) ? [bstrToUtf8(key)] : null;
       const chunks = await collectCombinedChunks(ctx, repo, plan, [key], {
         retain: retainCanonical,
         retainLimit: limit,
       });
       canonical = chunks.get(key);
-    } else {
-      const renamed = entry.status === 'R';
-      const usable = isValidUtf8(key) && (!renamed || isValidUtf8(entry.srcPath));
-      // Copies are diffed in the whole scope: with a narrowed pathspec git could pair the
-      // source as a rename instead, which would change the patch (and its hash).
-      pathspecs =
-        entry.status === 'C' || !usable
-          ? null
-          : renamed
-            ? [bstrToUtf8(entry.srcPath), bstrToUtf8(key)]
-            : [bstrToUtf8(key)];
-      const run = await runScopeDiff(ctx, repo, plan, {
-        head: true,
-        patch: true,
-        pathspecs,
-        only,
-        retain: retainCanonical,
-        retainLimit: limit,
-      });
-      canonical = run.chunks.get(key);
-      numstat = run.numstat.find((candidate) => candidate.path === key);
     }
+    if (isStatOnly(entry, canonical, numstat)) throw notFound();
+    const conflicted = entry.combined || (index?.conflicted.has(key) ?? false);
 
     const identity = trackedIdentity(
       entry,

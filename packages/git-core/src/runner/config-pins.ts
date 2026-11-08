@@ -44,7 +44,10 @@ export const CONFIG_PINS: ReadonlyArray<readonly [string, string]> = [
   ['diff.suppressBlankEmpty', 'false'],
   ['diff.submodule', 'short'],
   ['diff.ignoreSubmodules', 'dirty'],
-  ['diff.autoRefreshIndex', 'true'],
+  // `git diff` with autoRefreshIndex=true rewrites the index (taking index.lock) when files are
+  // stat-dirty, even with --no-optional-locks (git's refresh_index_quietly ignores it). Off,
+  // stat-only changes appear as raw entries without a patch, which git-core filters out.
+  ['diff.autoRefreshIndex', 'false'],
   ['diff.colorMoved', 'no'],
   ['status.relativePaths', 'false'],
   ['status.renames', 'true'],
