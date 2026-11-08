@@ -6,6 +6,7 @@ import parcelWatcher from '@parcel/watcher';
 import { describe, expect, it } from 'vitest';
 import {
   buildWorktreeIgnores,
+  compactIgnores,
   type DirtyReason,
   type SubscribeFn,
   WatcherService,
@@ -293,5 +294,17 @@ describe('WatcherService', () => {
     expect(ignores).toContain('**/gen');
     expect(ignores).toContain('docs/**/*.tmp');
     expect(ignores).not.toContain('**/docs/**/*.tmp');
+  });
+
+  it('compacts any-depth name globs into one brace glob for the native matcher', () => {
+    const compact = compactIgnores(buildWorktreeIgnores(['gen', 'docs/**/*.tmp', 'a,b']));
+    const brace = compact.filter((e) => e.startsWith('**/{'));
+    expect(brace).toHaveLength(1);
+    expect(brace[0]).toContain('node_modules');
+    expect(brace[0]).toContain('gen');
+    expect(compact).toContain('node_modules');
+    expect(compact).toContain('docs/**/*.tmp');
+    expect(compact).toContain('**/a,b');
+    expect(compact.filter((e) => /^\*\*\/[^{]/.test(e))).toEqual(['**/a,b']);
   });
 });
