@@ -11,6 +11,8 @@ import {
   CommitsQuerySchema,
   type CommitsResponse,
   DiffQuerySchema,
+  DirsQuerySchema,
+  type DirsResponse,
   FilesQuerySchema,
   FocusRequestSchema,
   HealthQuerySchema,
@@ -38,6 +40,7 @@ import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { DaemonCore } from './core.js';
 import { ApiError, toApiError } from './errors.js';
 import type { EventHub } from './events.js';
+import { listDirs } from './fs-browse.js';
 import type { ReviewControls } from './review-controls.js';
 import {
   API_CSP,
@@ -339,6 +342,14 @@ export function createApp(deps: AppDeps): Hono {
     const request = parseWith(FocusRequestSchema, await readJson(c), 'request body');
     core.setFocus(request.worktreeId);
     const body: OkResponse = { ok: true };
+    return c.json(body);
+  });
+
+  // Folder picker: subdirectory names under a path (no git, no file contents). Behind the
+  // bearer token like every other route; a token holder can already add any repo on disk.
+  route('listDirs', async (c) => {
+    const query = parseWith(DirsQuerySchema, c.req.query(), 'query');
+    const body: DirsResponse = await listDirs(query.path);
     return c.json(body);
   });
 

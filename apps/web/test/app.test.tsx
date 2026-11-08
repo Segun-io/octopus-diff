@@ -123,15 +123,107 @@ describe('app shell', () => {
     expect((await screen.findByTestId('stub-diff')).textContent).toContain('<<<<<<< HEAD');
   });
 
-  it('shows the empty state and adds a project through the form', async () => {
+  it('shows the empty state and adds a project by typing its path', async () => {
     const { user } = setup('empty');
     await waitFor(() => screen.getByTestId(TEST_IDS.emptyState));
-    await user.type(screen.getByTestId(TEST_IDS.addProjectPathInput), '/home/dev/code/fresh');
+    const input = screen.getByTestId(TEST_IDS.folderPickerInput);
+    await user.clear(input);
+    await user.type(input, '/home/dev/code/fresh');
     await user.click(screen.getByTestId(TEST_IDS.addProjectSubmit));
     await ready();
     expect(screen.getAllByTestId(TEST_IDS.projectItem)[0]?.getAttribute('data-project-name')).toBe(
       'fresh',
     );
+  });
+
+  describe('folder picker', () => {
+    const picker = () => screen.getByTestId(TEST_IDS.folderPicker);
+    const input = () => screen.getByTestId(TEST_IDS.folderPickerInput) as HTMLInputElement;
+    const names = () =>
+      screen
+        .queryAllByTestId(TEST_IDS.folderPickerEntry)
+        .map((el) => el.getAttribute('data-path')?.split('/').pop());
+    const row = (name: string) => {
+      const el = screen
+        .getAllByTestId(TEST_IDS.folderPickerEntry)
+        .find((r) => r.getAttribute('data-path')?.endsWith(`/${name}`));
+      if (!el) throw new Error(`no row ${name}`);
+      return el;
+    };
+    const listed = (path: string) =>
+      waitFor(() => expect(picker().getAttribute('data-path')).toBe(path));
+
+    it('starts at home, hides dot folders, and opens a folder by clicking it', async () => {
+      const { user } = setup('empty');
+      await listed('/home/dev');
+      expect(input().value).toBe('~/');
+      expect(names()).toEqual(['code', 'Documents', 'Downloads']);
+      expect(picker().textContent).toContain('2 hidden folders');
+      await user.click(row('code'));
+      await listed('/home/dev/code');
+      expect(input().value).toBe('~/code/');
+      expect(row('fresh').getAttribute('data-kind')).toBe('repo');
+      expect(row('scratch').getAttribute('data-kind')).toBe('dir');
+      expect(picker().textContent).toContain('~/code has 2 repositories directly inside');
+    });
+
+    it('adds a repository straight from its row and marks it added', async () => {
+      const { user } = setup('empty');
+      await listed('/home/dev');
+      await user.click(row('code'));
+      await listed('/home/dev/code');
+      await user.click(within(row('side-project')).getByTestId(TEST_IDS.folderPickerEntryAdd));
+      await ready();
+      expect(
+        screen.getAllByTestId(TEST_IDS.projectItem)[0]?.getAttribute('data-project-name'),
+      ).toBe('side-project');
+    });
+
+    it('filters as you type, completes with Tab and watches with Enter', async () => {
+      const { user, backend } = setup('empty');
+      await listed('/home/dev');
+      await user.click(input());
+      await user.type(input(), 'code/s');
+      await listed('/home/dev/code');
+      expect(names()).toEqual(['scratch', 'side-project']);
+      await user.type(input(), 'c');
+      expect(names()).toEqual(['scratch']);
+      await user.keyboard('{Tab}');
+      await listed('/home/dev/code/scratch');
+      expect(input().value).toBe('~/code/scratch/');
+      expect(document.activeElement).toBe(input());
+      expect(picker().textContent).toContain('has 1 repository directly inside');
+      await user.keyboard('{Enter}');
+      await waitFor(() =>
+        expect(backend.scanRoots.map((r) => r.path)).toContain('/home/dev/code/scratch'),
+      );
+    });
+
+    it('moves with the arrows: Enter opens the highlighted row, .. goes up', async () => {
+      const { user } = setup('empty');
+      await listed('/home/dev');
+      await user.click(input());
+      await user.type(input(), 'code/');
+      await listed('/home/dev/code');
+      await user.keyboard('{ArrowDown}');
+      expect(screen.getByTestId(TEST_IDS.folderPickerUp).getAttribute('aria-selected')).toBe(
+        'true',
+      );
+      await user.keyboard('{Enter}');
+      await listed('/home/dev');
+      expect(input().value).toBe('~/');
+      await user.type(input(), '.');
+      expect(names()).toEqual(['.cache', '.config']);
+    });
+
+    it('says when a typed folder does not exist and disables the actions', async () => {
+      const { user } = setup('empty');
+      await listed('/home/dev');
+      await user.type(input(), 'nope');
+      await waitFor(() => expect(picker().textContent).toContain('No folder named “nope” in ~'));
+      expect(screen.getByTestId(TEST_IDS.addProjectSubmit)).toHaveProperty('disabled', true);
+      expect(screen.getByTestId(TEST_IDS.addScanRootSubmit)).toHaveProperty('disabled', true);
+    });
   });
 
   it('explains how to authenticate on 401', async () => {

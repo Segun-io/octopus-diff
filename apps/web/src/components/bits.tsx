@@ -196,3 +196,39 @@ export function WorktreeName({
 export function Kbd({ children }: { children: ReactNode }) {
   return <kbd>{children}</kbd>;
 }
+
+export function FolderIcon(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M2 4.5a1 1 0 0 1 1-1h3.2l1.5 1.5H13a1 1 0 0 1 1 1V12a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1z" />
+    </Svg>
+  );
+}
+
+/** A repository: a commit graph with a branch. */
+export function RepoIcon(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <circle cx="5" cy="3.5" r="1.5" />
+      <circle cx="5" cy="12.5" r="1.5" />
+      <circle cx="11" cy="6" r="1.5" />
+      <path d="M5 5v6M11 7.5c0 2.5-6 1.5-6 3.5" />
+    </Svg>
+  );
+}
+
+export function ArrowUpIcon(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M8 13V3M4 7l4-4 4 4" />
+    </Svg>
+  );
+}
+
+export function ChevronRightIcon(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M6 3.5L10.5 8 6 12.5" />
+    </Svg>
+  );
+}

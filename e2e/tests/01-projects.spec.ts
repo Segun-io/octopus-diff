@@ -14,7 +14,7 @@ test.describe('§8.2 projects and worktrees', () => {
       await app.open(daemon.authUrl);
       await expect(app.byTestId(TEST_IDS.emptyState)).toBeVisible();
 
-      const pathInput = app.byTestId(TEST_IDS.addProjectPathInput);
+      const pathInput = app.byTestId(TEST_IDS.folderPickerInput);
       if (!(await pathInput.isVisible())) await app.byTestId(TEST_IDS.addProjectButton).click();
 
       // By path: alpha (main checkout + two linked worktrees).
@@ -23,6 +23,17 @@ test.describe('§8.2 projects and worktrees', () => {
       await app.byTestId(TEST_IDS.addProjectSubmit).click();
       await expect(app.projectItem('alpha')).toBeVisible({ timeout: 15_000 });
       for (const worktree of alpha.worktrees) await app.expectWorktreeItem(worktree);
+
+      // The folder picker lists the real filesystem: alpha's folder is a repository, now added.
+      const alphaDir = alpha.mainWorktreePath ?? '';
+      const parentDir = alphaDir.slice(0, alphaDir.lastIndexOf('/') + 1);
+      if (!(await pathInput.isVisible())) await app.byTestId(TEST_IDS.addProjectButton).click();
+      await pathInput.fill(parentDir);
+      const alphaRow = app.page.locator(
+        `[data-testid="${TEST_IDS.folderPickerEntry}"][data-path$="/alpha"]`,
+      );
+      await expect(alphaRow).toHaveAttribute('data-kind', 'repo');
+      await expect(alphaRow).toHaveAttribute('data-registered', 'true');
 
       // A linked worktree path resolves to the same project (idempotent).
       const login = findWorktree(manifest, 'alpha-login').worktree;
@@ -33,7 +44,7 @@ test.describe('§8.2 projects and worktrees', () => {
       // By scan root: beta (depth 1, detached linked worktree), gamma (depth 3), epsilon (clean).
       const [scan] = manifest.scanRoots;
       if (!scan) throw new Error('manifest has no scan root');
-      const scanInput = app.byTestId(TEST_IDS.addScanRootPathInput);
+      const scanInput = app.byTestId(TEST_IDS.folderPickerInput);
       if (!(await scanInput.isVisible())) await app.byTestId(TEST_IDS.addProjectButton).click();
       await scanInput.fill(scan.path);
       await app.byTestId(TEST_IDS.addScanRootSubmit).click();

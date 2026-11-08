@@ -34,6 +34,8 @@ export const queryKeys = {
   health: () => ['health'] as const,
   projects: () => ['projects'] as const,
   scanRoots: () => ['scan-roots'] as const,
+  /** Folder picker listing; `''` is the daemon's default folder (home). */
+  dirs: (path: string) => ['dirs', path] as const,
   inboxAll: () => ['inbox'] as const,
   inbox: (scope: DiffScope) => ['inbox', scopeKey(scope)] as const,
   filesAll: (worktreeId: string) => ['files', worktreeId] as const,

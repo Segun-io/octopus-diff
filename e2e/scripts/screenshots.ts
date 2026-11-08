@@ -71,6 +71,16 @@ async function main() {
       await app.setDiffMode('unified');
       await shot('diff-unified');
 
+      // Folder picker: the add dialog browsing the folder that holds alpha and its siblings.
+      const alphaDir = findWorktree(fixtures.manifest, 'alpha').worktree.path;
+      await app.byTestId(TEST_IDS.addProjectButton).click();
+      await app.byTestId(TEST_IDS.folderPickerInput).fill(alphaDir.replace(/[^/]+$/, ''));
+      await app.byTestId(TEST_IDS.folderPickerEntry).first().waitFor();
+      await page.keyboard.press('ArrowDown');
+      await page.keyboard.press('ArrowDown');
+      await shot('folder-picker');
+      await page.keyboard.press('Escape');
+
       await page.keyboard.press('?');
       if (await app.byTestId(TEST_IDS.helpDialog).isVisible()) {
         await shot('help');

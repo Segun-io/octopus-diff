@@ -193,12 +193,12 @@ test.describe('UX-2/3 review policy (UI)', () => {
     // A repository added through the sidebar form while the default is on.
     const first = await createRepo(parent, 'fresh-a', gitEnv);
     await ui.byTestId(TEST_IDS.addProjectButton).click();
-    await ui.byTestId(TEST_IDS.addProjectPathInput).fill(first.dir);
+    await ui.byTestId(TEST_IDS.folderPickerInput).fill(first.dir);
     await ui.byTestId(TEST_IDS.addProjectSubmit).click();
     await expect(ui.worktreeItem(first.worktreeId)).toBeVisible({ timeout: 15_000 });
     // The form stays open ("Added fresh-a.") so more can be added; dismiss it.
     await ui.press('Escape');
-    await expect(ui.byTestId(TEST_IDS.addProjectPathInput)).toBeHidden();
+    await expect(ui.byTestId(TEST_IDS.folderPickerInput)).toBeHidden();
     await ui.selectWorktree(first.worktreeId);
     await ui.expectChip(true, 'default');
     await expect(ui.reviewOffBadge(first.worktreeId)).toHaveCount(0);

@@ -13,8 +13,8 @@ export function expandHome(input: string, home = os.homedir()): string {
 }
 
 /** Expands `~` and resolves a user-supplied path against `cwd` (the daemon's cwd by default). */
-export function resolveInputPath(input: string, cwd = process.cwd()): string {
-  return path.resolve(cwd, expandHome(input.trim()));
+export function resolveInputPath(input: string, cwd = process.cwd(), home = os.homedir()): string {
+  return path.resolve(cwd, expandHome(input.trim(), home));
 }
 
 function xdgDir(envValue: string | undefined, fallback: string[]): string {

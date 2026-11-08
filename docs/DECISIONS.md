@@ -911,3 +911,44 @@ behavioural, no route, contract or `data-testid` changed. Report: `docs/reports/
     sidebar's porcelain shorthand (`S1 M2 ?1 !1`: a product vocabulary question, not a design one); "verified" in bulk
     actions versus "reviewed" on the file toggle (the e2e suite pins both; unifying is a WS4 + contracts conversation);
     the dark theme's blue cast; the mark, the palette and the icons (no asset regenerated).
+
+## Folder picker (lead, 2026-11-08)
+
+1. **Add by browsing, not only by typing.** A browser cannot hand a local path to a web page (a file input gives no
+   path), so the daemon lists folders itself: new route `GET /api/fs/dirs?path=` (`ROUTES.listDirs`,
+   `DirsQuerySchema`, `DirsResponseSchema`, `ApiClient.listDirs`; additive, in its own `contracts:` commit). It returns
+   subfolder names of one folder (default: home; `~` expanded, relative paths against the daemon's cwd), the folder's
+   realpath, parent, home, separator and starting places (home, the daemon's cwd, root). Capped at
+   `DIRS_ENTRIES_MAX` = 2000 with `truncated`.
+2. **Read-only, no git.** `apps/daemon/src/fs-browse.ts` uses `readdir` and `lstat` only. Each entry is classified by
+   its entries (`repo`: a `.git` directory or a bare layout `HEAD` + `objects/` + `refs/`; `gitfile`: a `.git` file,
+   i.e. a linked worktree or a submodule; else `dir`), so no repository config is ever read and no git process runs
+   (PLAN §5.5 still holds). File names are never returned. Errors map to `not_found` / `bad_request` (not a folder) /
+   `forbidden` (EACCES/EPERM).
+3. **Threat model unchanged.** The route sits behind the bearer token like every other route. Listing folder names
+   anywhere the daemon user can read is no new exposure, since a token holder can already `POST /api/projects` with
+   any path and read the diffs. Noted in the README security section.
+4. **Interaction modeled on T3 Code's command-palette browse mode** (pingdotgg/t3code, MIT; ideas reused, one small
+   helper adapted with attribution in `apps/web/src/lib/folderPath.ts`): the location text *is* the browser (the part
+   up to the last separator is listed, the last segment filters by prefix); hidden folders appear only once the typed
+   name starts with `.` (no toggle); `Tab` completes shell-style (one match enters it, several extend to the common
+   prefix); a `..` row goes up; `Enter` opens the highlighted row, otherwise it submits, and `Ctrl/Cmd+Enter` always
+   submits, with the live shortcut shown on the primary button; Enter/Tab are ignored during IME composition; the next
+   listing is fetched before the view switches (a generation counter drops stale navigations, typing wins), and
+   listings are kept only 5 s so a reopened picker is fresh. Not taken from T3: creating missing folders (we never
+   write) and the desktop app's native folder dialog (browser-only for now; a desktop shell could add it).
+5. **octopus-diff specifics on top.** Rows mark repositories and worktrees, `added` / `watched` badges come from the
+   projects and scan-roots queries, repository rows have an inline Add, and the status line says what the path is
+   ("has 3 repositories directly inside", "is a git repository, already added", "No folder named …"). The primary
+   button follows the target: Add repository for a repo or worktree, Watch folder for a plain folder. The add and watch
+   buttons are disabled once the listing shows the typed name does not exist; while the listing loads they stay
+   enabled and send the raw text (the daemon validates it).
+6. **One location field replaces the two path fields.** `AddProjectForm` keeps its name and both submit test ids;
+   new test ids `folderPicker`, `folderPickerInput`, `folderPickerEntry`, `folderPickerEntryAdd`, `folderPickerUp`.
+   `addProjectPathInput` / `addScanRootPathInput` remain in `TEST_IDS` (contracts are never renamed or removed) but are
+   no longer rendered; the e2e specs 01 and 12 and the web tests use `folderPickerInput`. `Dialog` now focuses a
+   `[data-autofocus="true"]` element first, so the add dialog opens with the cursor in the location field. The mock
+   backend serves the route from a virtual tree (`apps/web/mock/fs.ts`). README screenshots gain `folder-picker-*`.
+7. **Deferred.** A configurable start folder (T3 has `addProjectBaseDirectory`; ours starts at `~/`); Windows drive
+   letters as places; a preview of what a watch at depth N would find before committing to it.
+

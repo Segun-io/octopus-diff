@@ -11,6 +11,7 @@ import {
   BulkReviewRequestSchema,
   CommitsQuerySchema,
   DiffQuerySchema,
+  DirsQuerySchema,
   FilesQuerySchema,
   FocusRequestSchema,
   InboxQuerySchema,
@@ -20,6 +21,7 @@ import {
   UpdateProjectRequestSchema,
 } from '@octopus-diff/contracts';
 import { MockApiError, type MockBackend } from './backend.js';
+import { listMockDirs } from './fs.js';
 
 export interface MockRouterOptions {
   /** If set, every route except /api/health requires `Authorization: Bearer <token>`. */
@@ -117,6 +119,10 @@ export function createMockRouter(backend: MockBackend, options: MockRouterOption
       const rescanMatch = path.match(/^\/api\/scan-roots\/([^/]+)\/rescan$/);
       if (rescanMatch && method === 'POST') {
         return json(200, backend.rescanScanRoot(decodeURIComponent(rescanMatch[1] ?? '')));
+      }
+      if (path === '/api/fs/dirs' && method === 'GET') {
+        const q = parse(DirsQuerySchema, queryObject(url));
+        return json(200, listMockDirs(backend, q.path));
       }
       if (path === '/api/inbox' && method === 'GET') {
         const q = parse(InboxQuerySchema, queryObject(url));

@@ -648,11 +648,11 @@ describe('Escape closes overlays even when focus left them (ux-e2e seam fix)', (
     const { user } = setup();
     await ready();
     fireEvent.click(screen.getByTestId(TEST_IDS.addProjectButton));
-    await screen.findByTestId(TEST_IDS.addProjectPathInput);
+    await screen.findByTestId(TEST_IDS.folderPickerInput);
     (document.activeElement as HTMLElement | null)?.blur?.();
     expect(document.activeElement).toBe(document.body);
     await press(user, '{Escape}');
-    await waitFor(() => expect(screen.queryByTestId(TEST_IDS.addProjectPathInput)).toBeNull());
+    await waitFor(() => expect(screen.queryByTestId(TEST_IDS.folderPickerInput)).toBeNull());
   });
 
   it('review policy menu: Esc closes it after a choice moved focus away', async () => {

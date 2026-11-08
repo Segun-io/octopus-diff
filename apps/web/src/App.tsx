@@ -413,8 +413,11 @@ function AppShell({ eventSourceFactory }: { eventSourceFactory?: EventSourceFact
         )}
         <BulkReviewToast />
         {addProjectOpen && (
-          <Dialog title="Add project" onClose={() => store.setState({ addProjectOpen: false })}>
-            <AddProjectForm />
+          <Dialog
+            title="Add repositories"
+            onClose={() => store.setState({ addProjectOpen: false })}
+          >
+            <AddProjectForm autoFocus />
           </Dialog>
         )}
         <Notice />

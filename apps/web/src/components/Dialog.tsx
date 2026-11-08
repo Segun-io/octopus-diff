@@ -19,7 +19,9 @@ export function Dialog({
   useEscapeToClose(true, onClose);
   useEffect(() => {
     const previous = document.activeElement as HTMLElement | null;
-    const first = ref.current?.querySelector<HTMLElement>('input, button, select, [tabindex]');
+    const first =
+      ref.current?.querySelector<HTMLElement>('[data-autofocus="true"]') ??
+      ref.current?.querySelector<HTMLElement>('input, button, select, [tabindex]');
     (first ?? ref.current)?.focus();
     return () => previous?.focus?.();
   }, []);

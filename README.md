@@ -106,6 +106,12 @@ Code's `.claude/worktrees`, Conductor, Codex and hand-made worktrees alike). A *
 directory that is searched for repositories down to a depth (default 3, max 8), skipping
 `node_modules` and similar.
 
+In the UI, **Watch a folder or add a repository** (the sidebar button, the empty screen, or Settings →
+Folders) opens a folder picker that browses the daemon's machine. Click a folder to open it, or type a
+path: the part after the last `/` filters the list, `Tab` completes, and typing `.` shows hidden
+folders. Repositories and linked worktrees are marked, and a repository can be added straight from its
+row; `Enter` (or `Ctrl/Cmd+Enter` while a row is highlighted) adds or watches the folder in the path.
+
 ### Review controls, settings and themes
 
 - **Mark all as verified.** The button above the file list marks every file you can see (respecting the
@@ -206,6 +212,9 @@ The daemon serves the contents of your repositories over HTTP, so it is locked d
 - **Loopback only.** It binds `127.0.0.1` by default. Binding anything else requires
   `--allow-non-loopback` (or `"allowNonLoopback": true`); `serve` refuses otherwise. Do this only on a
   network you trust.
+- **Folder names are visible to the token holder.** The folder picker lists subfolder names anywhere
+  the daemon's user can read (names only, no file names or contents, no git process). That is no new
+  exposure: the same token can already add any repository on the machine and read its diffs.
 - **Per-install token, bearer only.** A random token is created in `<state dir>/token` (mode 0600).
   Every API request, including the live event stream, needs `Authorization: Bearer <token>`. Only
   `/api/health` is unauthenticated, and the static files of the web UI (they contain no data).
