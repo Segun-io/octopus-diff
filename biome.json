@@ -17,7 +17,8 @@
       "!**/*.tsbuildinfo",
       "!**/pnpm-lock.yaml",
       "!**/*.md",
-      "!pnpm-workspace.yaml"
+      "!pnpm-workspace.yaml",
+      "!docs/bench"
     ]
   },
   "formatter": {
