@@ -73,6 +73,7 @@ function useBuildAppModel(): AppModel {
   const onlyUnreviewed = useUi((s) => s.onlyUnreviewed);
   const showReviewed = useUi((s) => s.showReviewed);
   const selected = useUi((s) => s.selected);
+  const pinned = useUi((s) => s.pinned);
 
   const projects = useProjectsQuery();
   const scanRoots = useScanRootsQuery();
@@ -93,6 +94,7 @@ function useBuildAppModel(): AppModel {
         inboxMatchesScope ? inboxData?.entries : undefined,
         { text: filterText, onlyDirty, onlyUnreviewed },
         scanRootList,
+        pinned,
       ),
     [
       projectList,
@@ -102,6 +104,7 @@ function useBuildAppModel(): AppModel {
       onlyDirty,
       onlyUnreviewed,
       scanRootList,
+      pinned,
     ],
   );
 

@@ -4,7 +4,7 @@ import {
   reviewTargetKey,
   TEST_IDS,
 } from '@octopus-diff/contracts';
-import { memo, useEffect, useState } from 'react';
+import { memo, type ReactNode, useEffect, useState } from 'react';
 import {
   useRemoveProject,
   useRemoveScanRoot,
@@ -18,6 +18,7 @@ import {
   type FolderNode,
   isDirtySummary,
   type ProjectGroup,
+  settledWord,
   type WorktreeRow,
   worktreeLabel,
 } from '../lib/model.ts';
@@ -29,8 +30,24 @@ import { MoreIcon, ToggleButton } from './bits.tsx';
 import { ContextMenu, type MenuItem, useContextMenu } from './ContextMenu.tsx';
 import { Wordmark } from './Mark.tsx';
 
+/**
+ * The sidebar is an activity list, not a tree (DECISIONS "UX round 3", after T3 Code's
+ * Sidebar V2): the Inbox, then a block of cards for worktrees that want attention (pinned,
+ * blocked, unreviewed), then a settled tail of one-line rows (clean, verified, review off), then
+ * a compact index of folders and projects. Review marks are the settle action: marking a
+ * worktree's files verified moves it into the tail; a new patch brings it back as a card.
+ * Rows never reorder on activity.
+ */
+
+/** Collapsed-state id of the settled tail (stored next to folder ids in the `collapsed` pref). */
+export const SETTLED_SECTION_ID = 'settled';
+
 function attr(value: number | null | undefined): string {
   return value === null || value === undefined ? '' : String(value);
+}
+
+function plural(n: number, one: string, many = `${one}s`): string {
+  return `${n} ${n === 1 ? one : many}`;
 }
 
 /** Re-renders every 2 s so the activity pulse can expire (only while something is recent). */
@@ -49,122 +66,222 @@ type MenuTarget =
   | { kind: 'project'; group: ProjectGroup }
   | { kind: 'worktree'; row: WorktreeRow };
 
-const WorktreeItem = memo(function WorktreeItem({
+type RowMenu = (event: React.MouseEvent | React.KeyboardEvent, row: WorktreeRow) => void;
+
+interface RowProps {
+  row: WorktreeRow;
+  selected: boolean;
+  now: number;
+  onSelect: (id: string) => void;
+  onMenu: RowMenu;
+}
+
+/** The data attributes the e2e suite reads (TEST_IDS.worktreeItem); same on cards and rows. */
+function rowAttributes(row: WorktreeRow, selected: boolean, active: boolean) {
+  const { worktree, summary } = row;
+  const counts = summary?.counts;
+  const source = worktree.isMain ? null : worktreeSource(worktree.path);
+  return {
+    'data-testid': TEST_IDS.worktreeItem,
+    'data-worktree-id': worktree.id,
+    'data-project-id': worktree.projectId,
+    'data-branch': worktree.branch ?? '',
+    'data-dirty': String(isDirtySummary(summary)),
+    'data-ahead': attr(summary?.ahead),
+    'data-behind': attr(summary?.behind),
+    'data-staged': attr(counts?.staged ?? 0),
+    'data-unstaged': attr(counts?.unstaged ?? 0),
+    'data-untracked': attr(counts?.untracked ?? 0),
+    'data-conflicted': attr(counts?.conflicted ?? 0),
+    'data-additions': attr(summary?.additions ?? 0),
+    'data-deletions': attr(summary?.deletions ?? 0),
+    'data-main': String(worktree.isMain),
+    'data-source': source?.id ?? '',
+    'data-active': String(active),
+    'data-state': row.state,
+    'data-pinned': String(row.pinned),
+    'aria-current': selected ? ('true' as const) : undefined,
+  };
+}
+
+function rowTitle(row: WorktreeRow): string {
+  const ref = row.summary?.aheadBehindRef;
+  return `${row.worktree.path}${ref ? `\nahead/behind ${ref}` : ''}`;
+}
+
+/**
+ * A worktree's name: the project, then the branch, set apart by weight (IDENTITY.md §5). The
+ * branch takes at most half the row, so a long branch name never hides the project.
+ */
+function RowName({ row }: { row: WorktreeRow }) {
+  const { worktree } = row;
+  return (
+    <span className="flex min-w-0 items-baseline gap-1.5">
+      <span className="min-w-0 flex-1 truncate font-medium text-fg">{row.project.name}</span>
+      <span
+        className={`max-w-[55%] shrink-0 truncate ${worktree.branch ? 'text-muted' : 'italic text-muted'}`}
+      >
+        {worktreeLabel(worktree)}
+      </span>
+    </span>
+  );
+}
+
+/** `main`, the worktree source, an in-progress operation, `pinned`: the chips on a card's facts line. */
+function NameChips({ row }: { row: WorktreeRow }) {
+  const { worktree, summary } = row;
+  const source = worktree.isMain ? null : worktreeSource(worktree.path);
+  return (
+    <>
+      {worktree.isMain && (
+        <span className="od-chip" title="Main checkout">
+          main
+        </span>
+      )}
+      {source && (
+        <span className="od-chip font-mono" title={source.title}>
+          {source.label}
+        </span>
+      )}
+      {summary?.inProgress && (
+        <span className="od-chip text-warn" title={`${summary.inProgress} in progress`}>
+          {summary.inProgress}
+        </span>
+      )}
+      {row.pinned && (
+        <span className="od-chip" title="Pinned to the top on this device">
+          pinned
+        </span>
+      )}
+    </>
+  );
+}
+
+function ReviewOffBadge({ row, className = '' }: { row: WorktreeRow; className?: string }) {
+  return (
+    <span
+      data-testid={TEST_IDS.reviewOffBadge}
+      data-source={row.review.source}
+      className={`od-chip shrink-0 ${className}`}
+      title={`Review off (from ${row.review.source})`}
+    >
+      review off
+    </span>
+  );
+}
+
+/**
+ * A card: a worktree that wants attention. Two lines: the name (project, branch, chips, the
+ * unreviewed count), then the facts (files, lines, ahead/behind, conflicts).
+ */
+const WorktreeCard = memo(function WorktreeCard({
   row,
   selected,
   now,
   onSelect,
   onMenu,
-}: {
-  row: WorktreeRow;
-  selected: boolean;
-  now: number;
-  onSelect: (id: string) => void;
-  onMenu: (event: React.MouseEvent | React.KeyboardEvent, row: WorktreeRow) => void;
-}) {
+}: RowProps) {
   const { worktree, summary, error } = row;
-  const dirty = isDirtySummary(summary);
   const counts = summary?.counts;
-  const source = worktree.isMain ? null : worktreeSource(worktree.path);
   const active = isRecentlyActive(summary?.updatedAt, now);
-  const title = `${worktree.path}${summary?.aheadBehindRef ? `\nahead/behind ${summary.aheadBehindRef}` : ''}`;
+  const dirty = isDirtySummary(summary);
+  const word = settledWord(row);
   return (
     <li className="group/wt relative">
       <button
         type="button"
-        data-testid={TEST_IDS.worktreeItem}
-        data-worktree-id={worktree.id}
-        data-project-id={worktree.projectId}
-        data-branch={worktree.branch ?? ''}
-        data-dirty={String(dirty)}
-        data-ahead={attr(summary?.ahead)}
-        data-behind={attr(summary?.behind)}
-        data-staged={attr(counts?.staged ?? 0)}
-        data-unstaged={attr(counts?.unstaged ?? 0)}
-        data-untracked={attr(counts?.untracked ?? 0)}
-        data-conflicted={attr(counts?.conflicted ?? 0)}
-        data-additions={attr(summary?.additions ?? 0)}
-        data-deletions={attr(summary?.deletions ?? 0)}
-        data-main={String(worktree.isMain)}
-        data-source={source?.id ?? ''}
-        data-active={String(active)}
-        aria-current={selected ? 'true' : undefined}
-        title={title}
+        {...rowAttributes(row, selected, active)}
+        title={rowTitle(row)}
         onClick={() => onSelect(worktree.id)}
         onContextMenu={(e) => onMenu(e, row)}
-        className={`flex w-full flex-col gap-0.5 rounded-sm py-1 pr-6 pl-7 text-left ${
-          selected ? 'bg-selected' : 'hover:bg-hover'
-        } ${row.review.enabled && (dirty || !summary) ? '' : 'text-muted'}`}
+        className={`flex w-full flex-col gap-0.5 rounded-md border py-1.5 pr-7 pl-[22px] text-left ${
+          selected ? 'border-line-strong bg-selected' : 'border-line bg-canvas hover:bg-hover'
+        }`}
       >
-        <span className="relative flex items-center gap-1.5">
+        <span className="relative flex min-w-0 items-center gap-1.5">
           {active && <span className="od-pulse" aria-hidden="true" />}
-          <span
-            className={`min-w-0 truncate ${worktree.branch ? '' : 'italic text-muted'} ${
-              worktree.isMain ? 'font-medium' : ''
-            }`}
-          >
-            {worktreeLabel(worktree)}
-          </span>
-          {worktree.isMain && (
-            <span className="od-chip" title="Main checkout">
-              main
-            </span>
-          )}
-          {source && (
-            <span className="od-chip font-mono" title={source.title}>
-              {source.label}
-            </span>
-          )}
-          {summary?.inProgress && <span className="od-chip text-warn">{summary.inProgress}</span>}
-          {!row.review.enabled && (
-            <span
-              data-testid={TEST_IDS.reviewOffBadge}
-              data-source={row.review.source}
-              className="od-chip ml-auto shrink-0"
-              title={`Review off (from ${row.review.source})`}
-            >
-              review off
-            </span>
-          )}
+          <RowName row={row} />
+          <span className="ml-auto" />
+          {!row.review.enabled && <ReviewOffBadge row={row} />}
           {row.unreviewed > 0 && (
-            <span className="od-pill ml-auto" title={`${row.unreviewed} unreviewed`}>
+            <span className="od-pill shrink-0" title={`${row.unreviewed} unreviewed`}>
               {row.unreviewed}
             </span>
           )}
         </span>
-        <span className="flex flex-wrap items-center gap-x-2 font-mono text-[11px] text-muted">
-          {summary && summary.ahead !== null && summary.behind !== null && (
-            <span title={`ahead/behind ${summary.aheadBehindRef ?? ''}`}>
-              ↑{summary.ahead} ↓{summary.behind}
-            </span>
-          )}
-          {counts && counts.staged > 0 && <span title="staged">S{counts.staged}</span>}
-          {counts && counts.unstaged > 0 && <span title="unstaged">M{counts.unstaged}</span>}
-          {counts && counts.untracked > 0 && <span title="untracked">?{counts.untracked}</span>}
+        <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5 font-mono text-[11px] text-muted">
+          <NameChips row={row} />
           {counts && counts.conflicted > 0 && (
-            <span className="text-danger" title="conflicted">
-              !{counts.conflicted}
-            </span>
+            <span className="text-danger">{plural(counts.conflicted, 'conflict')}</span>
           )}
+          {summary && dirty && <span>{plural(summary.changedFiles, 'file')}</span>}
           {summary && (summary.additions > 0 || summary.deletions > 0) && (
             <span>
               <span className="text-add">+{summary.additions}</span>{' '}
               <span className="text-del">−{summary.deletions}</span>
             </span>
           )}
-          {summary && !dirty && <span className="text-faint">clean</span>}
-          {worktree.missing && <span className="text-danger">missing</span>}
-          {worktree.locked && <span className="text-faint">locked</span>}
-          {error && (
-            <span className="truncate text-danger" title={error.message}>
-              error: {error.message}
+          {summary &&
+            summary.ahead !== null &&
+            summary.behind !== null &&
+            summary.ahead + summary.behind > 0 && (
+              <span title={`ahead/behind ${summary.aheadBehindRef ?? ''}`}>
+                ↑{summary.ahead} ↓{summary.behind}
+              </span>
+            )}
+          {row.state === 'settled' && word !== 'review off' && word !== 'loading' && (
+            <span className={word === 'missing' || word === 'error' ? 'text-danger' : 'text-faint'}>
+              {word === 'error' && error ? `error: ${error.message}` : word}
             </span>
           )}
-          {!summary && !error && !worktree.missing && <span className="text-faint">…</span>}
+          {word === 'loading' && <span className="text-faint">…</span>}
         </span>
       </button>
       <MoreButton
-        label={`Actions for ${worktreeLabel(worktree)}`}
+        label={`Actions for ${row.project.name} ${worktreeLabel(worktree)}`}
+        group="wt"
+        onOpen={(e) => onMenu(e, row)}
+      />
+    </li>
+  );
+});
+
+/** A settled row: one dimmed line, the name and one word. Density is earned by settling. */
+const SettledRow = memo(function SettledRow({ row, selected, now, onSelect, onMenu }: RowProps) {
+  const { worktree, summary, error } = row;
+  const active = isRecentlyActive(summary?.updatedAt, now);
+  const word = settledWord(row);
+  return (
+    <li className="group/wt relative">
+      <button
+        type="button"
+        {...rowAttributes(row, selected, active)}
+        title={rowTitle(row)}
+        onClick={() => onSelect(worktree.id)}
+        onContextMenu={(e) => onMenu(e, row)}
+        className={`flex w-full items-center gap-1.5 rounded-sm py-1 pr-7 pl-[22px] text-left text-muted hover:text-fg ${
+          selected ? 'bg-selected text-fg' : 'hover:bg-hover'
+        }`}
+      >
+        <span className="relative flex min-w-0 flex-1 items-center gap-1.5">
+          {active && <span className="od-pulse" aria-hidden="true" />}
+          <RowName row={row} />
+        </span>
+        {row.pinned && <span className="od-chip">pinned</span>}
+        {!row.review.enabled && <ReviewOffBadge row={row} />}
+        {word !== 'review off' && (
+          <span
+            className={`shrink-0 text-[11px] ${
+              word === 'missing' || word === 'error' ? 'text-danger' : 'text-faint'
+            }`}
+            title={word === 'error' && error ? error.message : undefined}
+          >
+            {word === 'loading' ? '…' : word}
+          </span>
+        )}
+      </button>
+      <MoreButton
+        label={`Actions for ${row.project.name} ${worktreeLabel(worktree)}`}
         group="wt"
         onOpen={(e) => onMenu(e, row)}
       />
@@ -216,21 +333,44 @@ function Chevron({ open }: { open: boolean }) {
   );
 }
 
-/** Folder and project rows: how many worktrees are dirty (a word, not a dot) and the pill. */
-function StatsBadges({ dirty, unreviewed }: { dirty: number; unreviewed: number }) {
+/** Section label with a count; optionally collapsible. */
+function SectionHeader({
+  label,
+  count,
+  open,
+  onToggle,
+  children,
+}: {
+  label: string;
+  count?: number | undefined;
+  open?: boolean;
+  onToggle?: () => void;
+  children?: ReactNode;
+}) {
+  const inner = (
+    <>
+      <span className="od-label">{label}</span>
+      {count !== undefined && <span className="text-[11px] tabular-nums text-faint">{count}</span>}
+    </>
+  );
   return (
-    <span className="ml-auto flex shrink-0 items-center gap-2 text-[11px] font-normal tabular-nums">
-      {dirty > 0 && (
-        <span className="text-muted" title={`${dirty} worktrees with changes`}>
-          {dirty} dirty
-        </span>
+    <div className="mt-3 mb-1 flex h-6 items-center gap-1.5 px-1">
+      {onToggle ? (
+        <button
+          type="button"
+          aria-expanded={open}
+          aria-label={`${open ? 'Collapse' : 'Expand'} ${label.toLowerCase()}`}
+          onClick={onToggle}
+          className="flex items-center gap-1.5 rounded-sm pr-1 hover:bg-hover"
+        >
+          <Chevron open={open ?? true} />
+          {inner}
+        </button>
+      ) : (
+        inner
       )}
-      {unreviewed > 0 && (
-        <span className="od-pill" title={`${unreviewed} unreviewed`}>
-          {unreviewed}
-        </span>
-      )}
-    </span>
+      {children}
+    </div>
   );
 }
 
@@ -260,9 +400,18 @@ export function Sidebar() {
   const now = useClock(anyRecent);
   const filtering = filterText.trim() !== '' || onlyDirty || onlyUnreviewed;
   const isCollapsed = (id: string) => !filtering && collapsed.includes(id);
+  const settledOpen = !isCollapsed(SETTLED_SECTION_ID);
   const overrides = new Map(
     (settings.data?.overrides ?? []).map((o) => [reviewTargetKey(o.target), o.enabled]),
   );
+
+  // J/K or a palette jump can land on a settled worktree: the tail opens to show it.
+  const selectedIsSettled =
+    selectedWorktree !== null &&
+    model.sidebar.settled.some((r) => r.worktree.id === selectedWorktree);
+  useEffect(() => {
+    if (selectedIsSettled && !settledOpen) actions.toggleCollapsed(store, SETTLED_SECTION_ID);
+  }, [selectedIsSettled, settledOpen, store]);
 
   const policyItems = (target: ReviewPolicyTarget | null, label: string): MenuItem[] => {
     if (support !== 'ready' || !target) return [];
@@ -350,7 +499,18 @@ export function Sidebar() {
         const branch = t.row.worktree.branch;
         return [
           goto({ kind: 'worktree', worktreeId: id }, 'Open changes'),
-          ...bulkItems({ kind: 'worktree', worktreeId: id }, [id]),
+          {
+            id: 'pin',
+            label: t.row.pinned ? 'Unpin' : 'Pin to the top',
+            onSelect: () => actions.togglePinned(store, id),
+          },
+          goto(
+            { kind: 'project', projectId: t.row.project.id },
+            `Overview of ${t.row.project.name}`,
+          ),
+          ...bulkItems({ kind: 'worktree', worktreeId: id }, [id]).map((item, i) =>
+            i === 0 ? { ...item, separator: true } : item,
+          ),
           ...policyItems({ kind: 'worktree', worktreeId: id }, 'this worktree'),
           ...(branch
             ? policyItems(
@@ -363,10 +523,19 @@ export function Sidebar() {
     }
   };
 
+  const rowProps = (row: WorktreeRow) => ({
+    row,
+    now,
+    selected: selectedWorktree === row.worktree.id,
+    onSelect,
+    onMenu: (e: React.MouseEvent | React.KeyboardEvent, r: WorktreeRow) =>
+      menu.open(e, { kind: 'worktree', row: r }),
+  });
+
   return (
     <nav
       data-testid={TEST_IDS.sidebar}
-      aria-label="Folders, projects and worktrees"
+      aria-label="Worktrees, projects and folders"
       className="flex h-full min-h-0 flex-col border-r border-line bg-surface"
     >
       <div className="flex items-center gap-1 border-b border-line px-2 py-1.5">
@@ -443,7 +612,7 @@ export function Sidebar() {
           data-count={String(inboxCount)}
           aria-current={view.kind === 'inbox' ? 'true' : undefined}
           onClick={() => actions.setView(store, { kind: 'inbox' })}
-          className={`mb-1 flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left font-semibold ${
+          className={`flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left font-semibold ${
             view.kind === 'inbox' ? 'bg-selected' : 'hover:bg-hover'
           }`}
           title="Every dirty worktree of every project (g i)"
@@ -467,123 +636,140 @@ export function Sidebar() {
           <p className="px-2 py-3 text-xs text-muted">No worktrees match the filters.</p>
         )}
 
-        <ul className="flex flex-col gap-1">
-          {model.sidebar.folders.map((node) => {
-            const open = !isCollapsed(node.id);
-            const current = view.kind === 'folder' && view.scanRootId === node.id;
-            return (
-              <li key={node.id} data-folder-id={node.id}>
-                <div
-                  className={`group/folder relative flex items-center gap-1 rounded-sm pr-6 ${current ? 'bg-selected' : 'hover:bg-hover'}`}
-                >
-                  <button
-                    type="button"
-                    aria-label={open ? 'Collapse folder' : 'Expand folder'}
-                    aria-expanded={open}
-                    onClick={() => actions.toggleCollapsed(store, node.id)}
-                    className="rounded-sm p-1"
-                  >
-                    <Chevron open={open} />
-                  </button>
-                  <button
-                    type="button"
-                    aria-current={current ? 'true' : undefined}
-                    onClick={() => actions.setView(store, { kind: 'folder', scanRootId: node.id })}
-                    onContextMenu={(e) => menu.open(e, { kind: 'folder', node })}
-                    title={
-                      node.root
-                        ? `${node.root.path} (depth ${node.root.depth})`
-                        : 'Projects added without a folder'
-                    }
-                    className="flex min-w-0 flex-1 items-center gap-1.5 py-1 text-left"
-                  >
-                    <FolderIcon direct={node.id === DIRECT_FOLDER_ID} />
-                    <span className="truncate font-mono text-[11px] text-fg">{node.label}</span>
-                    <StatsBadges dirty={node.stats.dirty} unreviewed={node.stats.unreviewed} />
-                  </button>
-                  <MoreButton
-                    label={`Actions for ${node.label}`}
-                    group="folder"
-                    onOpen={(e) => menu.open(e, { kind: 'folder', node })}
-                  />
-                </div>
-                {open && (
-                  <ul className="ml-2 flex flex-col border-l border-line pl-1">
-                    {node.groups.map((group) => {
-                      const pOpen = !isCollapsed(group.project.id);
-                      const pCurrent =
-                        view.kind === 'project' && view.projectId === group.project.id;
-                      const stats = {
-                        dirty: group.allRows.filter((r) => isDirtySummary(r.summary)).length,
-                        unreviewed: group.allRows.reduce((n, r) => n + r.unreviewed, 0),
-                      };
-                      return (
-                        <li
-                          key={group.project.id}
-                          data-testid={TEST_IDS.projectItem}
-                          data-project-id={group.project.id}
-                          data-project-name={group.project.name}
-                        >
-                          <div
-                            className={`group/proj relative flex items-center gap-1 rounded-sm pr-6 ${pCurrent ? 'bg-selected' : 'hover:bg-hover'}`}
-                          >
-                            <button
-                              type="button"
-                              aria-label={pOpen ? 'Collapse project' : 'Expand project'}
-                              aria-expanded={pOpen}
-                              onClick={() => actions.toggleCollapsed(store, group.project.id)}
-                              className="rounded-sm p-1"
-                            >
-                              <Chevron open={pOpen} />
-                            </button>
-                            <button
-                              type="button"
-                              aria-current={pCurrent ? 'true' : undefined}
-                              onClick={() =>
-                                actions.setView(store, {
-                                  kind: 'project',
-                                  projectId: group.project.id,
-                                })
-                              }
-                              onContextMenu={(e) => menu.open(e, { kind: 'project', group })}
-                              title={group.project.mainWorktreePath ?? group.project.commonDir}
-                              className="flex min-w-0 flex-1 items-center gap-1.5 py-1 text-left font-semibold"
-                            >
-                              <span className="truncate">{group.project.name}</span>
-                              <StatsBadges dirty={stats.dirty} unreviewed={stats.unreviewed} />
-                            </button>
-                            <MoreButton
-                              label={`Actions for ${group.project.name}`}
-                              group="proj"
-                              onOpen={(e) => menu.open(e, { kind: 'project', group })}
-                            />
-                          </div>
-                          {pOpen && (
-                            <ul
-                              aria-label={`${group.project.name} worktrees`}
-                              className="flex flex-col"
-                            >
-                              {group.rows.map((row) => (
-                                <WorktreeItem
-                                  key={row.worktree.id}
-                                  row={row}
-                                  now={now}
-                                  selected={selectedWorktree === row.worktree.id}
-                                  onSelect={onSelect}
-                                  onMenu={(e, r) => menu.open(e, { kind: 'worktree', row: r })}
-                                />
-                              ))}
-                            </ul>
-                          )}
-                        </li>
-                      );
-                    })}
+        {totalWorktrees > 0 && model.sidebar.groups.length > 0 && (
+          <>
+            <SectionHeader label="To review" count={model.sidebar.cards.length} />
+            {model.sidebar.cards.length === 0 ? (
+              <p className="px-2 pb-1 text-[11px] text-faint">Nothing to review in this scope.</p>
+            ) : (
+              <ul data-section="cards" className="flex flex-col gap-1">
+                {model.sidebar.cards.map((row) => (
+                  <WorktreeCard key={row.worktree.id} {...rowProps(row)} />
+                ))}
+              </ul>
+            )}
+
+            {model.sidebar.settled.length > 0 && (
+              <>
+                <SectionHeader
+                  label="Settled"
+                  count={model.sidebar.settled.length}
+                  open={settledOpen}
+                  onToggle={() => actions.toggleCollapsed(store, SETTLED_SECTION_ID)}
+                />
+                {settledOpen && (
+                  <ul data-section="settled" className="flex flex-col">
+                    {model.sidebar.settled.map((row) => (
+                      <SettledRow key={row.worktree.id} {...rowProps(row)} />
+                    ))}
                   </ul>
                 )}
-              </li>
-            );
-          })}
-        </ul>
+              </>
+            )}
+          </>
+        )}
+
+        {model.sidebar.folders.length > 0 && (
+          <>
+            <SectionHeader label="Projects" count={model.sidebar.groups.length} />
+            <ul data-section="projects" className="flex flex-col gap-0.5">
+              {model.sidebar.folders.map((node) => {
+                const open = !isCollapsed(node.id);
+                const current = view.kind === 'folder' && view.scanRootId === node.id;
+                return (
+                  <li key={node.id} data-folder-id={node.id}>
+                    <div
+                      className={`group/folder relative flex items-center gap-1 rounded-sm pr-6 ${
+                        current ? 'bg-selected' : 'hover:bg-hover'
+                      }`}
+                    >
+                      <button
+                        type="button"
+                        aria-label={open ? 'Collapse folder' : 'Expand folder'}
+                        aria-expanded={open}
+                        onClick={() => actions.toggleCollapsed(store, node.id)}
+                        className="rounded-sm p-1"
+                      >
+                        <Chevron open={open} />
+                      </button>
+                      <button
+                        type="button"
+                        aria-current={current ? 'true' : undefined}
+                        onClick={() =>
+                          actions.setView(store, { kind: 'folder', scanRootId: node.id })
+                        }
+                        onContextMenu={(e) => menu.open(e, { kind: 'folder', node })}
+                        title={
+                          node.root
+                            ? `${node.root.path} (depth ${node.root.depth})`
+                            : 'Projects added without a folder'
+                        }
+                        className="flex min-w-0 flex-1 items-center gap-1.5 py-1 text-left"
+                      >
+                        <FolderIcon direct={node.id === DIRECT_FOLDER_ID} />
+                        <span className="truncate font-mono text-[11px] text-fg">{node.label}</span>
+                        <IndexStats
+                          worktrees={node.stats.worktrees}
+                          unreviewed={node.stats.unreviewed}
+                        />
+                      </button>
+                      <MoreButton
+                        label={`Actions for ${node.label}`}
+                        group="folder"
+                        onOpen={(e) => menu.open(e, { kind: 'folder', node })}
+                      />
+                    </div>
+                    {open && (
+                      <ul className="ml-2 flex flex-col border-l border-line pl-1">
+                        {node.groups.map((group) => {
+                          const pCurrent =
+                            view.kind === 'project' && view.projectId === group.project.id;
+                          const unreviewed = group.allRows.reduce((n, r) => n + r.unreviewed, 0);
+                          return (
+                            <li
+                              key={group.project.id}
+                              data-testid={TEST_IDS.projectItem}
+                              data-project-id={group.project.id}
+                              data-project-name={group.project.name}
+                              className={`group/proj relative flex items-center rounded-sm pr-6 ${
+                                pCurrent ? 'bg-selected' : 'hover:bg-hover'
+                              }`}
+                            >
+                              <button
+                                type="button"
+                                aria-current={pCurrent ? 'true' : undefined}
+                                onClick={() =>
+                                  actions.setView(store, {
+                                    kind: 'project',
+                                    projectId: group.project.id,
+                                  })
+                                }
+                                onContextMenu={(e) => menu.open(e, { kind: 'project', group })}
+                                title={group.project.mainWorktreePath ?? group.project.commonDir}
+                                className="flex min-w-0 flex-1 items-center gap-1.5 py-1 pl-2 text-left"
+                              >
+                                <span className="truncate font-medium">{group.project.name}</span>
+                                <IndexStats
+                                  worktrees={group.allRows.length}
+                                  unreviewed={unreviewed}
+                                />
+                              </button>
+                              <MoreButton
+                                label={`Actions for ${group.project.name}`}
+                                group="proj"
+                                onOpen={(e) => menu.open(e, { kind: 'project', group })}
+                              />
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          </>
+        )}
       </div>
 
       <div className="border-t border-line p-2">
@@ -611,6 +797,22 @@ export function Sidebar() {
         </span>
       ) : null}
     </nav>
+  );
+}
+
+/** Folder and project index rows: how many worktrees, and the unreviewed count if any. */
+function IndexStats({ worktrees, unreviewed }: { worktrees: number; unreviewed: number }) {
+  return (
+    <span className="ml-auto flex shrink-0 items-center gap-2 text-[11px] font-normal tabular-nums">
+      <span className="text-faint" title={plural(worktrees, 'worktree')}>
+        {worktrees}
+      </span>
+      {unreviewed > 0 && (
+        <span className="od-pill" title={`${unreviewed} unreviewed`}>
+          {unreviewed}
+        </span>
+      )}
+    </span>
   );
 }
 

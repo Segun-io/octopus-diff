@@ -246,12 +246,12 @@ describe('keyboard', () => {
     await press(user, 'k');
     expect(viewerPath()).toBe('README.md');
 
-    await press(user, 'J'); // first worktree: docs-site (detached)
+    await press(user, 'J'); // first card: docs-site (detached, mid-rebase: blocked)
     const current = () =>
       document.querySelector(`[data-testid="${TEST_IDS.worktreeItem}"][aria-current="true"]`);
     await waitFor(() => expect(current()?.getAttribute('data-branch')).toBe(''));
-    await press(user, 'J');
-    await waitFor(() => expect(current()?.getAttribute('data-branch')).toBe('trunk'));
+    await press(user, 'J'); // next card: octopus-api feat/auth (a conflict: blocked too)
+    await waitFor(() => expect(current()?.getAttribute('data-branch')).toBe('feat/auth'));
     await press(user, 'K');
     await press(user, 'K');
     await waitFor(() =>

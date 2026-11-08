@@ -407,7 +407,7 @@ describe('F2: review marks what is displayed', () => {
 });
 
 describe('folder tier, overview and palette', () => {
-  it('groups projects under their folder with an "Added directly" group, collapses and persists', async () => {
+  it('indexes projects under their folder with an "Added directly" group, collapses and persists', async () => {
     const { store } = setup();
     await ready();
     const sidebar = screen.getByTestId(TEST_IDS.sidebar);
@@ -423,12 +423,74 @@ describe('folder tier, overview and palette', () => {
     expect(worktreeItem('feat/auth').dataset).toMatchObject({ main: 'false', source: 't3' });
     expect(worktreeItem('fix/cache').dataset).toMatchObject({ main: 'false', source: 'claude' });
     expect(worktreeItem('main').dataset.main).toBe('true');
-    // collapse the folder: its worktrees disappear from the tree, the pref persists
+    // collapse the folder: its project rows disappear from the index, the pref persists
     fireEvent.click(within(code).getByLabelText('Collapse folder'));
-    expect(within(code).queryAllByTestId(TEST_IDS.worktreeItem)).toHaveLength(0);
+    expect(within(code).queryAllByTestId(TEST_IDS.projectItem)).toHaveLength(0);
     expect(store.getState().collapsed).toEqual([code.dataset.folderId]);
     fireEvent.click(within(code).getByLabelText('Expand folder'));
-    expect(within(code).queryAllByTestId(TEST_IDS.worktreeItem).length).toBeGreaterThan(0);
+    expect(within(code).queryAllByTestId(TEST_IDS.projectItem)).toHaveLength(3);
+  });
+
+  it('partitions worktrees into cards and a settled tail; marks settle, pins lift', async () => {
+    const { store, backend } = setup();
+    await ready();
+    const sidebar = screen.getByTestId(TEST_IDS.sidebar);
+    const section = (name: string) =>
+      [
+        ...(sidebar
+          .querySelector(`[data-section="${name}"]`)
+          ?.querySelectorAll('[data-testid="worktree-item"]') ?? []),
+      ].map((el) => (el as HTMLElement).dataset.branch);
+    // blocked first (docs-site is mid-rebase with a conflict), then the unreviewed ones in project order
+    expect(section('cards')).toEqual(['', 'feat/auth', 'main', 'fix/cache', 'main']);
+    // settled: clean, verified, review off, missing, error: one word each, no counts
+    expect(section('settled')).toEqual([
+      'trunk',
+      'master',
+      'old-experiment',
+      '',
+      'agent/codex-123',
+    ]);
+    expect(worktreeItem('trunk').textContent).toContain('clean');
+    expect(worktreeItem('agent/codex-123').dataset.state).toBe('settled');
+    expect(
+      within(worktreeItem('agent/codex-123')).getByTestId(TEST_IDS.reviewOffBadge).dataset.source,
+    ).toBe('branch');
+
+    // mark every file of fix/cache reviewed: it settles and says "verified"
+    const cache = worktreeItem('fix/cache');
+    const cacheId = cache.dataset.worktreeId as string;
+    const files = backend.listFiles(cacheId, { kind: 'working' }).files;
+    for (const f of files) {
+      backend.setReview({
+        projectId: cache.dataset.projectId as string,
+        scopeKind: 'working',
+        path: f.path,
+        patchHash: f.patchHash,
+        reviewed: true,
+      });
+    }
+    await waitFor(() => expect(worktreeItem('fix/cache').dataset.state).toBe('settled'));
+    expect(section('settled')).toContain('fix/cache');
+    expect(worktreeItem('fix/cache').textContent).toContain('verified');
+
+    // pin it: back to the top of the cards, whatever its state
+    fireEvent.click(
+      within(worktreeItem('fix/cache').parentElement as HTMLElement).getByLabelText(/^Actions for/),
+    );
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Pin to the top' }));
+    await waitFor(() => expect(section('cards')[0]).toBe('fix/cache'));
+    expect(store.getState().pinned).toEqual([cacheId]);
+    expect(worktreeItem('fix/cache').textContent).toContain('pinned');
+
+    // collapsing the settled tail hides its rows; selecting one of them reopens it
+    const trunkId = worktreeItem('trunk').dataset.worktreeId as string;
+    fireEvent.click(within(sidebar).getByLabelText('Collapse settled'));
+    expect(section('settled')).toEqual([]);
+    expect(store.getState().collapsed).toContain('settled');
+    store.setState({ view: { kind: 'worktree', worktreeId: trunkId } });
+    await waitFor(() => expect(section('settled')).toContain('trunk'));
+    expect(store.getState().collapsed).not.toContain('settled');
   });
 
   it('selecting a folder or project shows the Overview; the view registry routes it', async () => {

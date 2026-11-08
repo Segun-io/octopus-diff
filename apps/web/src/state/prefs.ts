@@ -35,8 +35,10 @@ export interface Prefs {
   titleCount: boolean;
   /** Ask before a bulk "mark all" that touches more than one worktree. */
   confirmBulk: boolean;
-  /** Collapsed sidebar nodes (folder / project ids). */
+  /** Collapsed sidebar nodes (folder ids, `settled`). */
   collapsed: string[];
+  /** Worktrees pinned to the top of the sidebar's card block (worktree ids). */
+  pinned: string[];
 }
 
 export const DEFAULT_PREFS: Prefs = {
@@ -52,7 +54,14 @@ export const DEFAULT_PREFS: Prefs = {
   titleCount: true,
   confirmBulk: true,
   collapsed: [],
+  pinned: [],
 };
+
+function stringList(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((x): x is string => typeof x === 'string').slice(0, 1000)
+    : [];
+}
 
 export const PREF_KEYS = Object.keys(DEFAULT_PREFS) as (keyof Prefs)[];
 
@@ -84,9 +93,8 @@ export function normalizePrefs(raw: unknown): Prefs {
       oneOf(v.reviewOffDisplay, ['dim', 'hide', 'show']) ?? DEFAULT_PREFS.reviewOffDisplay,
     titleCount: bool(v.titleCount) ?? DEFAULT_PREFS.titleCount,
     confirmBulk: bool(v.confirmBulk) ?? DEFAULT_PREFS.confirmBulk,
-    collapsed: Array.isArray(v.collapsed)
-      ? v.collapsed.filter((x): x is string => typeof x === 'string').slice(0, 1000)
-      : [],
+    collapsed: stringList(v.collapsed),
+    pinned: stringList(v.pinned),
   };
 }
 

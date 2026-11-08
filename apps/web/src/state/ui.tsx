@@ -194,4 +194,11 @@ export const actions = {
         : [...s.collapsed, id],
     }));
   },
+  togglePinned(store: UiStore, worktreeId: string) {
+    store.setState((s) => ({
+      pinned: s.pinned.includes(worktreeId)
+        ? s.pinned.filter((x) => x !== worktreeId)
+        : [...s.pinned, worktreeId],
+    }));
+  },
 };

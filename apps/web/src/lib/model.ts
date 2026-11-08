@@ -90,6 +90,41 @@ export interface WorktreeRow {
   scopeFiles: number;
   /** Effective review policy (absent from older daemons = enabled by default). */
   review: EffectiveReviewPolicy;
+  /** Where the row sits in the activity list (see `rowState`). */
+  state: RowState;
+  /** Pinned on this device: always a card, at the top, whatever its state. */
+  pinned: boolean;
+}
+
+/**
+ * A worktree's place in the sidebar's activity list (DECISIONS "UX round 3"). `blocked`: a
+ * conflict or an in-progress operation (merge, rebase, …); blocked work never settles.
+ * `attention`: unreviewed files in the current scope. `settled`: everything else, which is clean,
+ * all verified, out of the review loop, missing or failed. Only review marks move a row between
+ * the card block and the settled tail; activity never reorders rows.
+ */
+export type RowState = 'blocked' | 'attention' | 'settled';
+
+export function rowState(row: Pick<WorktreeRow, 'summary' | 'unreviewed' | 'worktree'>): RowState {
+  const s = row.summary;
+  if (s && !row.worktree.missing && (s.counts.conflicted > 0 || s.inProgress !== null)) {
+    return 'blocked';
+  }
+  if (row.unreviewed > 0) return 'attention';
+  return 'settled';
+}
+
+/** The one word a settled row says instead of its counts. */
+export type SettledWord = 'verified' | 'clean' | 'review off' | 'missing' | 'error' | 'loading';
+
+export function settledWord(
+  row: Pick<WorktreeRow, 'summary' | 'worktree' | 'error' | 'review'>,
+): SettledWord {
+  if (row.worktree.missing) return 'missing';
+  if (row.error) return 'error';
+  if (!row.summary) return 'loading';
+  if (!row.review.enabled) return 'review off';
+  return isDirtySummary(row.summary) ? 'verified' : 'clean';
 }
 
 export interface ProjectGroup {
@@ -121,7 +156,14 @@ export interface SidebarModel {
   groups: ProjectGroup[];
   /** Folder tier: scan roots (sorted by path) then "Added directly", only non-empty ones. */
   folders: FolderNode[];
-  /** Visible worktree ids in display order (for J/K). */
+  /**
+   * The card block: pinned rows, then blocked, then rows with unreviewed files, each in project
+   * and worktree order (static: activity never reorders). Filters applied.
+   */
+  cards: WorktreeRow[];
+  /** The settled tail in project and worktree order. Filters applied. */
+  settled: WorktreeRow[];
+  /** Visible worktree ids in display order, cards then settled (for J/K). */
   order: string[];
   /** Every worktree row by id, regardless of filters. */
   byId: Map<string, WorktreeRow>;
@@ -240,6 +282,7 @@ export function buildSidebar(
   inbox: readonly InboxEntry[] | undefined,
   filters: SidebarFilters,
   scanRoots?: readonly ScanRoot[],
+  pinned: readonly string[] = [],
 ): SidebarModel {
   const inboxStats = new Map<string, { unreviewed: number; files: number }>();
   for (const entry of inbox ?? []) {
@@ -247,8 +290,8 @@ export function buildSidebar(
     for (const f of entry.files) if (!f.reviewed) unreviewed++;
     inboxStats.set(entry.worktree.id, { unreviewed, files: entry.files.length });
   }
+  const pinnedSet = new Set(pinned);
   const groups: ProjectGroup[] = [];
-  const order: string[] = [];
   const byId = new Map<string, WorktreeRow>();
   const sorted = [...projects].sort((a, b) => compareProjects(a.project, b.project));
   for (const item of sorted) {
@@ -258,26 +301,34 @@ export function buildSidebar(
     for (const wt of worktrees) {
       const stats = inboxStats.get(wt.worktree.id);
       const review = effectivePolicy(wt.review);
+      const unreviewed = review.enabled ? (stats?.unreviewed ?? 0) : 0;
       const row: WorktreeRow = {
         project: item.project,
         worktree: wt.worktree,
         summary: wt.summary,
         error: wt.error,
-        unreviewed: review.enabled ? (stats?.unreviewed ?? 0) : 0,
+        unreviewed,
         scopeFiles: stats?.files ?? 0,
         review,
+        state: rowState({ summary: wt.summary, unreviewed, worktree: wt.worktree }),
+        pinned: pinnedSet.has(wt.worktree.id),
       };
       byId.set(wt.worktree.id, row);
       allRows.push(row);
       if (rowVisible(row, filters)) rows.push(row);
     }
     // A project is shown only when at least one of its worktrees is visible.
-    if (rows.length > 0) {
-      groups.push({ project: item.project, rows, allRows });
-      for (const r of rows) order.push(r.worktree.id);
-    }
+    if (rows.length > 0) groups.push({ project: item.project, rows, allRows });
   }
-  return { groups, folders: buildFolders(groups, scanRoots), order, byId };
+  const visible = groups.flatMap((g) => g.rows);
+  const cards = [
+    ...visible.filter((r) => r.pinned),
+    ...visible.filter((r) => !r.pinned && r.state === 'blocked'),
+    ...visible.filter((r) => !r.pinned && r.state === 'attention'),
+  ];
+  const settled = visible.filter((r) => !r.pinned && r.state === 'settled');
+  const order = [...cards, ...settled].map((r) => r.worktree.id);
+  return { groups, folders: buildFolders(groups, scanRoots), cards, settled, order, byId };
 }
 
 /** Inbox entries sorted like the sidebar (project name, then worktree order). */

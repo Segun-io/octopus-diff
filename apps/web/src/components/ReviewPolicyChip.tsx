@@ -112,10 +112,9 @@ export function ReviewPolicyChip({
         aria-controls={open ? menuId : undefined}
         onClick={() => setOpen((v) => !v)}
         title={`${policyLabel(policy)}. Click to change.`}
-        className={`od-btn gap-1.5 ${policy.enabled ? '' : 'border-line-strong bg-raised text-fg'}`}
+        className={`od-btn ${policy.enabled ? '' : 'border-line-strong bg-raised text-fg'}`}
       >
-        <span>Review {policy.enabled ? 'on' : 'off'}</span>
-        <span className="text-faint">({SOURCE_LABELS[policy.source]})</span>
+        Review {policy.enabled ? 'on' : 'off'}
       </button>
       {open && (
         <div
@@ -135,7 +134,8 @@ export function ReviewPolicyChip({
           }}
         >
           <p className="px-2 py-1 text-[11px] text-muted">
-            Most specific wins: worktree › branch › project › folder › default.
+            Review is {policy.enabled ? 'on' : 'off'} here, decided by{' '}
+            {SOURCE_LABELS[policy.source]}. The most specific level wins.
           </p>
           {levels.map((lvl) => {
             const key = lvl.target ? reviewTargetKey(lvl.target) : null;
