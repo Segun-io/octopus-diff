@@ -96,6 +96,8 @@ export class ReviewControls {
         stale.push(wt.worktreeId);
         continue;
       }
+      // Clean worktrees have nothing to mark and are not worth reporting as skipped.
+      if (!mayHaveFiles(wt.summary, scope)) continue;
       if (!includeDisabled) {
         const policy = this.#settings.resolve(
           policyInputFor(
@@ -112,7 +114,6 @@ export class ReviewControls {
           continue;
         }
       }
-      if (!mayHaveFiles(wt.summary, scope)) continue;
       selected.push({ wt, expected });
     }
 
