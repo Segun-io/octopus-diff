@@ -107,7 +107,68 @@ Newest last. Format: date · who · decision · reason. Contract changes are mar
 
 ## WS4 — fixtures, e2e, perf
 
-(none yet)
+All 2026-11-08 · WS4.
+
+1. **Fixture roles.** Every generated repo has a role: `control` (never modified after generation;
+   the read-only proof snapshots it), `mutable` (the `live` project: e2e specs and the agent simulator
+   edit it), `bench`, and `source` (origins, submodule source, bare seed; never registered). Reason:
+   the proof needs repos nothing is allowed to touch, while live-update/review tests need repos that
+   change.
+2. **Expectations come from a read-only git oracle** (`tools/fixtures/src/oracle.ts`) run at generation
+   time under the isolated config, plus what the generator did (special-case paths, markers). Unit tests
+   cross-check the two. Reason: hand-computing numstat for CRLF/minified/submodule cases is error-prone,
+   and git itself is the ground truth git-core must match.
+3. **Finding for WS1: porcelain `git diff` writes `.git/index` even with `--no-optional-locks`.** On
+   git 2.53, `git diff`, `git diff HEAD` and `git diff -- <path>` (anything comparing against the working
+   tree) call `refresh_index_quietly()`, take `index.lock` and rewrite the index whenever an entry is
+   stat-dirty, regardless of `--no-optional-locks` / `GIT_OPTIONAL_LOCKS=0`. `git status` honors the flag;
+   plumbing `diff-files` / `diff-index` / `diff-tree` never write. So git-core must use the plumbing
+   commands (all on the §5.5 allowlist) for `working` / `unstaged` scopes. Caveat: plumbing `--raw` lists
+   stat-dirty but content-identical files as modified (null blob sha); `--numstat` / `-p` omit them, and so
+   does `git status`. The oracle drops raw entries with no numstat line. A unit test
+   (`readonly-proof.test.ts`) pins this git behavior, and every control worktree gets **stat-dirty bait**
+   (one tracked file with an old mtime and unchanged content) so the e2e proof catches any index refresh.
+4. **Read-only proof is strict:** any filesystem event inside a control repo's git dir is a violation, not
+   just `*.lock` files (read-only git produces none). Detection = snapshot diff (size, mtime ns, inode,
+   mode, ctime of every file under the common dir, incl. `worktrees/*` and `modules/*`, plus each linked
+   worktree's `.git` file, plus `git status --porcelain=v2` per worktree) + one non-recursive `fs.watch`
+   per directory (except `objects/`, which is still in the snapshot) + a 20 ms poll for `*.lock`.
+5. **Copy detection:** the oracle runs without `-C`, so a staged copy is `added` there; e2e accepts
+   `copied` from git-core for such a file. **`unstaged` scope:** whether untracked files appear is
+   git-core's choice; e2e requires the tracked set to match exactly and tolerates extra untracked entries.
+6. **Counts semantics** asserted by e2e = porcelain v2 `XY`: `staged` = entries with X ≠ `.`, `unstaged` =
+   Y ≠ `.` (an `MM` file counts in both), `untracked` = `?`, `conflicted` = `u` entries only.
+   `changedFiles` = distinct paths in the working scope. Ahead/behind is **not asserted for detached
+   worktrees** (the contract leaves it open); `aheadBehindRef` is matched as a ref-name suffix.
+   Expected default branch of the unborn `empty` repo is `null` (no branch ref exists yet).
+7. **e2e daemon per test, in-process** (`startDaemon` in the Playwright worker; fresh state/config dir
+   under the fixture root, port 0, random token, `webRoot = apps/web/dist`, `git.env` = the isolated git
+   vars). Specs run serially in one worker because they share the mutable project. `restart()` reuses the
+   port when free and passes no startup `projects` / `scanRoots`, so persistence after restart is proven
+   from the daemon's store.
+8. **Commit scope is covered at the API level only.** `TEST_IDS` has no commit-picker id, and adding one
+   now would not reach WS3 in time; the UI specs cover working / staged / unstaged / branch via
+   `scope-select` (native `<select>` or a listbox with `option` roles).
+9. **Live-update budget = 1500 ms** (PLAN §8.5), overridable with `OCTOPUS_E2E_LIVE_BUDGET_MS` for slow CI.
+   Within the budget the file item's counts must change and the open diff must show the new text *or*
+   the `diff-updated-banner`; then the new text must be reachable (clicking the banner if needed).
+10. **Auth status codes:** a rejected foreign `Origin` may be 401/403/421, a foreign `Host` also 400; a
+    missing/wrong token must be exactly 401 with `error.code = unauthorized`. The token-on-page-load flow
+    must redirect, set an `HttpOnly; SameSite=Strict` cookie and strip the token from `Location`.
+11. **Bench and screenshot scripts live in `e2e/`** (they need Playwright and the daemon);
+    `pnpm --filter @octopus-diff/fixtures bench|screenshots` are aliases. Reason: a `fixtures → daemon`
+    dependency would create a cycle if the daemon's tests use the fixtures package. The bench runs the
+    daemon as a child process (`e2e/bench/daemon-child.mjs`, plain JS on the built `dist/`) so
+    `/proc/<pid>/stat` measures only the daemon; idle CPU includes reaped git children (`cutime`/`cstime`)
+    and is measured with the UI open on the inbox.
+12. **Preflight:** e2e global setup checks the package builds, sniffs the web bundle for TEST_IDS hooks
+    (`data-ready`, `worktree-item`; skip with `OCTOPUS_E2E_SKIP_UI_CHECK=1`), and smoke-starts the daemon
+    and registers one fixture; all problems are reported together in one message.
+13. **Screenshots use `prefers-color-scheme` emulation** for light/dark (assumes the UI follows the system
+    theme by default in a fresh browser profile).
+14. **Fixture determinism:** fixed commit clock (2026-01-01 + 1 min per commit), seeded content, and a
+    relative submodule URL (an absolute temp path in `.gitmodules` changed every sha). Same seed → same
+    shas (unit-tested).
 
 ## WS5 — CLI, packaging, docs, CI
 
