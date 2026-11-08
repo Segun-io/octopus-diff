@@ -150,6 +150,29 @@ describe('hostile repository config', () => {
     expect(found.filter((name) => name !== 'global-filter')).toEqual([]);
   });
 
+  it('re-reads config on every operation (includes can change between calls)', async () => {
+    const repo2 = fx.repo('include-later', { files: { 'x.txt': 'x\n' } });
+    const include = path.join(fx.root, 'later.inc');
+    writeFileSync(include, '');
+    fx.git(repo2, ['config', 'include.path', include]);
+    const fresh = createGitCore(fx.coreOptions());
+    try {
+      const wt = locator(repo2);
+      writeFileSync(path.join(repo2, 'x.txt'), 'changed\n');
+      await fresh.listChangedFiles(wt, { kind: 'working' });
+      clearMarkers();
+      writeFileSync(include, `[filter "late"]\n\tclean = ${script('late-filter', 'cat')}\n`);
+      fx.write(path.join(repo2, '.gitattributes'), '* filter=late\n');
+      const future = new Date(Date.now() + 60_000);
+      utimesSync(path.join(repo2, 'x.txt'), future, future);
+      await fresh.listChangedFiles(wt, { kind: 'working' });
+      await fresh.getSummary(wt);
+      expect(markerNames()).toEqual([]);
+    } finally {
+      await fresh.dispose();
+    }
+  });
+
   it('keeps the trusted global filter when a local config overrides it', async () => {
     clearMarkers();
     const future = new Date(Date.now() + 120_000);

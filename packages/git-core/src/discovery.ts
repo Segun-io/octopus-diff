@@ -233,12 +233,18 @@ export async function scan(root: string, options: ScanOptions): Promise<ScanResu
   let truncated = false;
   let lastPath = rootReal;
 
+  let failure: unknown = null;
   const report = (): void => {
-    options.onProgress?.({
-      scannedDirs,
-      foundRepos: repositories.size,
-      currentPath: lastPath,
-    });
+    if (failure !== null) return;
+    try {
+      options.onProgress?.({
+        scannedDirs,
+        foundRepos: repositories.size,
+        currentPath: lastPath,
+      });
+    } catch (error) {
+      failure = error; // A throwing callback stops the scan; scan() rejects with it.
+    }
   };
 
   const visit = async (dir: string, depth: number): Promise<void> => {
@@ -294,12 +300,20 @@ export async function scan(root: string, options: ScanOptions): Promise<ScanResu
           queue.length = 0;
           break;
         }
+        if (failure !== null) {
+          queue.length = 0;
+          break;
+        }
         const item = queue.shift() as { dir: string; depth: number };
         active += 1;
-        visit(item.dir, item.depth).finally(() => {
-          active -= 1;
-          pump();
-        });
+        visit(item.dir, item.depth)
+          .catch((error: unknown) => {
+            failure ??= error;
+          })
+          .finally(() => {
+            active -= 1;
+            pump();
+          });
       }
       if (active === 0 && queue.length === 0) resolve();
     };
@@ -307,6 +321,11 @@ export async function scan(root: string, options: ScanOptions): Promise<ScanResu
   });
   if (options.signal?.aborted) truncated = true;
   report();
+  if (failure !== null) {
+    throw failure instanceof GitCoreError
+      ? failure
+      : new GitCoreError('aborted', `scan stopped: ${String(failure)}`, {}, { cause: failure });
+  }
   return {
     repositories: [...repositories].sort(),
     scannedDirs,

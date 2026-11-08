@@ -4,7 +4,6 @@ import {
   COMMITS_LIMIT_MAX,
   type CommitInfo,
   type CreateGitCore,
-  type GitChangedFile,
   type GitCore,
   GitCoreError,
   type GitCoreOptions,
@@ -16,9 +15,8 @@ import {
 import { GitContext } from './context.js';
 import { type DiffDeps, getFileDiff, listChangedFiles } from './diff.js';
 import { detectDefaultBranch, listWorktrees, resolveProject, scan } from './discovery.js';
-import { LruCache } from './fs-utils.js';
 import { LOG_FORMAT, parseLog } from './parse/log.js';
-import { GitRunner } from './runner/runner.js';
+import { defaultBigFileThreshold, GitRunner } from './runner/runner.js';
 import { getSummary } from './summary.js';
 import { createUntrackedCache } from './untracked.js';
 
@@ -113,8 +111,11 @@ export const createGitCore: CreateGitCore = (options: GitCoreOptions = {}): GitC
         ? DEFAULTS.maxUntrackedFiles
         : Math.max(0, Math.floor(options.maxUntrackedFiles)),
     logger: options.logger ?? noopLogger,
+    bigFileThreshold: 0,
   };
+  settings.bigFileThreshold = defaultBigFileThreshold(settings.maxOutputBytes);
   const runner = new GitRunner({
+    bigFileThreshold: settings.bigFileThreshold,
     gitBinary: options.gitBinary,
     concurrency: positiveInt(options.concurrency, DEFAULTS.concurrency, 'concurrency'),
     timeoutMs: settings.timeoutMs,
@@ -123,11 +124,7 @@ export const createGitCore: CreateGitCore = (options: GitCoreOptions = {}): GitC
     logger: settings.logger,
   });
   const ctx = new GitContext(runner, settings);
-  const deps: DiffDeps = {
-    ctx,
-    untrackedCache: createUntrackedCache(),
-    immutableCache: new LruCache<string, GitChangedFile[]>(64),
-  };
+  const deps: DiffDeps = { ctx, untrackedCache: createUntrackedCache() };
   let disposed = false;
 
   /** Rejects after dispose, and maps unexpected errors to `GitCoreError`. */

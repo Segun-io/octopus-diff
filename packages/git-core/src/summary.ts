@@ -9,7 +9,7 @@ import type {
 import { bstrFromBuffer, bstrToUtf8, compareBstr } from './bstr.js';
 import type { GitContext, RepoInfo } from './context.js';
 import type { DiffDeps } from './diff.js';
-import { readStatus } from './diff.js';
+import { inspectOptions, readStatus } from './diff.js';
 import { exists, mapLimit } from './fs-utils.js';
 import { hashParts, STATE_HASH_LENGTH } from './hash.js';
 import { DiffOutputParser } from './parse/diff-output.js';
@@ -111,8 +111,12 @@ export async function getSummary(
   let conflicted = 0;
   const untrackedRaw: string[] = [];
   const dirtyKeys: string[] = [];
+  /** Paths git status reports as changed (incl. rename sources). */
+  const statusPaths = new Set<string>();
   let tracked = 0;
   for (const entry of status.entries) {
+    if (entry.kind !== 'untracked' && entry.kind !== 'ignored') statusPaths.add(entry.path);
+    if (entry.kind === 'renamed') statusPaths.add(entry.origPath);
     switch (entry.kind) {
       case 'ordinary':
       case 'renamed':
@@ -185,11 +189,7 @@ export async function getSummary(
       repo.cwd,
       untrackedKeysSorted.map((key, index) => ({ key, index })),
       deps.untrackedCache,
-      {
-        maxFiles: ctx.settings.maxUntrackedFiles,
-        readLimit: ctx.settings.maxOutputBytes,
-        executableBit: process.platform !== 'win32',
-      },
+      inspectOptions(ctx),
     ),
   ]);
 
@@ -203,6 +203,11 @@ export async function getSummary(
     parser.write(numstatOutput);
     parser.end();
     for (const entry of parser.numstat) {
+      // Stat-dirty but unchanged binary files still get a `-\t-` numstat line (see
+      // diff.ts isStatOnly); git status, which compares content, does not report them.
+      if (!statusPaths.has(entry.path) && !(entry.srcPath && statusPaths.has(entry.srcPath))) {
+        continue;
+      }
       trackedPaths.add(entry.path);
       additions += entry.added ?? 0;
       deletions += entry.deleted ?? 0;

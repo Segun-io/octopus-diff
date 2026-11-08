@@ -206,3 +206,42 @@ describe('read-only proof', () => {
     expect(statusAfter).toEqual(statusBefore);
   });
 });
+
+describe('read-only proof: split index (documented exception)', () => {
+  it('changes nothing except the mtime of .git/sharedindex.* (git freshens it on every read)', async () => {
+    const fx = createFixture();
+    const core = createGitCore(fx.coreOptions());
+    try {
+      const repo = fx.repo('split', { files: { 'a.txt': 'a\n', 'b.txt': 'b\n' } });
+      fx.git(repo, ['update-index', '--split-index']);
+      fx.write(path.join(repo, 'a.txt'), 'changed\n');
+      fx.write(path.join(repo, 'c.txt'), 'c\n');
+      fx.git(repo, ['add', 'c.txt']);
+      const gitDir = path.join(repo, '.git');
+      const before = snapshot(gitDir);
+      const wt = { projectId: hashId(gitDir), worktreeId: hashId(repo), path: repo };
+      await core.getSummary(wt);
+      for (const scope of [
+        { kind: 'working' },
+        { kind: 'staged' },
+        { kind: 'unstaged' },
+      ] as const) {
+        for (const file of await core.listChangedFiles(wt, scope))
+          await core.getFileDiff(wt, scope, file);
+      }
+      const after = snapshot(gitDir);
+      expect([...after.keys()].sort()).toEqual([...before.keys()].sort());
+      for (const [file, state] of before) {
+        const now = after.get(file) as FileState;
+        if (path.basename(file).startsWith('sharedindex.')) {
+          expect({ ...now, mtimeNs: 0n }, file).toEqual({ ...state, mtimeNs: 0n });
+        } else {
+          expect(now, file).toEqual(state);
+        }
+      }
+    } finally {
+      await core.dispose();
+      fx.dispose();
+    }
+  });
+});

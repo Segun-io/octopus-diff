@@ -32,7 +32,7 @@ export { parseWorktreeList, type WorktreeRecord } from './parse/worktrees.js';
 export { ALLOWED_SUBCOMMANDS, assertAllowedGitArgs } from './runner/allowlist.js';
 export { CONFIG_PINS } from './runner/config-pins.js';
 export { buildGitEnv, SAFETY_ENV } from './runner/env.js';
-export { buildGitArgv, GitRunner } from './runner/runner.js';
+export { buildGitArgv, GitRunner, resolveExecutable } from './runner/runner.js';
 export { CANONICAL_CONTEXT, DIFF_PINS } from './scope.js';
 export { quotePathName, synthesizeNewFilePatch } from './untracked.js';
 export { MIN_GIT_VERSION, parseGitVersion } from './version.js';

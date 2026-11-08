@@ -44,8 +44,6 @@ export interface ScopePlan {
   includeUntracked: boolean;
   /** Nothing can differ (e.g. branch scope on an unborn HEAD, or a bare repository). */
   empty: boolean;
-  /** The plan compares fixed commits (branch, commit), so results can be cached. */
-  immutableKey: string | null;
   /** Revision args use `HEAD`, which fails on an unborn branch (retry with the empty tree). */
   usesHead: boolean;
   /**
@@ -103,7 +101,6 @@ export async function planScope(
     statusBased: false,
     includeUntracked: false,
     empty: false,
-    immutableKey: null,
     usesHead: false,
     findCopies: true,
   };
@@ -161,12 +158,7 @@ export async function planScope(
       if (mergeBase.exitCode !== 0 || !mb) {
         throw new GitCoreError('not_found', `no merge base between HEAD and ${baseRef.name}`);
       }
-      return {
-        ...base,
-        kind: 'branch',
-        revArgs: [mb, head],
-        immutableKey: `branch:${mb}:${head}`,
-      };
+      return { ...base, kind: 'branch', revArgs: [mb, head] };
     }
     case 'commit': {
       let output: string;
@@ -187,12 +179,7 @@ export async function planScope(
       }
       const [sha, parent] = output.split(' ');
       if (!sha) throw new GitCoreError('not_found', `commit not found: ${scope.sha}`);
-      return {
-        ...base,
-        kind: 'commit',
-        revArgs: [parent ?? repo.emptyTree, sha],
-        immutableKey: `commit:${sha}`,
-      };
+      return { ...base, kind: 'commit', revArgs: [parent ?? repo.emptyTree, sha] };
     }
   }
 }

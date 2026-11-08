@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { CommitInfoSchema } from '@octopus-diff/contracts';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   computeFilterOverrides,
@@ -244,6 +245,7 @@ describe('patch splitting', () => {
         '+++ b/z w\t',
       ])?.key,
     ).toBe('z w');
+    expect(parseChunkHeader(['* Unmerged path nl', 'name.txt'])?.key).toBe('nl\nname.txt');
     expect(unquoteMaybe('"tab\\there"')).toBe('tab\there');
     expect(unquoteMaybe('plain')).toBe('plain');
     expect(quotePathName('a"b\\c\td')).toBe('"a\\"b\\\\c\\td"');
@@ -385,6 +387,20 @@ describe('small parsers', () => {
         committerDate: '1970-01-01T00:00:00.000Z',
       },
     ]);
+  });
+
+  it('clamps commit dates to what an ISO timestamp can express', () => {
+    const output = [OID_A, 'aaaaaaa', '', 's', 'n', 'e', '253402300800', '9999999999999', ''].join(
+      '\u0000',
+    );
+    const [commit] = parseLog(output);
+    expect(commit?.authorDate).toBe('9999-12-31T23:59:59.999Z');
+    expect(commit?.committerDate).toBe('9999-12-31T23:59:59.999Z');
+    expect(CommitInfoSchema.safeParse(commit).success).toBe(true);
+    const old = parseLog(
+      [OID_A, 'aaaaaaa', '', 's', 'n', 'e', '-99999999999', '-1', ''].join('\u0000'),
+    )[0];
+    expect(CommitInfoSchema.safeParse(old).success).toBe(true);
   });
 
   it('parses git versions', () => {

@@ -235,6 +235,18 @@ describe('scan', () => {
     expect(progress.length).toBeGreaterThan(0);
   });
 
+  it('rejects (instead of crashing) when onProgress throws', async () => {
+    const error = await core
+      .scan(scanRoot, {
+        depth: 5,
+        onProgress: () => {
+          throw new Error('client went away');
+        },
+      })
+      .catch((e: unknown) => e);
+    expect(isGitCoreError(error, 'aborted')).toBe(true);
+  });
+
   it('validates input', async () => {
     const badDepth = await core.scan(scanRoot, { depth: 99 }).catch((e: unknown) => e);
     expect(isGitCoreError(badDepth, 'invalid_argument')).toBe(true);

@@ -148,7 +148,10 @@ export function parseChunkHeader(lines: readonly string[]): ChunkInfo | null {
   const first = lines[0];
   if (first === undefined) return null;
   if (first.startsWith('* Unmerged path ')) {
-    return { kind: 'unmerged', key: first.slice('* Unmerged path '.length), srcKey: null };
+    // git prints this name unquoted, and this "chunk" is a single line: any further header
+    // lines are the rest of a name that contains newlines.
+    const name = [first.slice('* Unmerged path '.length), ...lines.slice(1)].join('\n');
+    return { kind: 'unmerged', key: name, srcKey: null };
   }
   if (first.startsWith('diff --cc ')) {
     return { kind: 'cc', key: unquoteMaybe(first.slice('diff --cc '.length)), srcKey: null };

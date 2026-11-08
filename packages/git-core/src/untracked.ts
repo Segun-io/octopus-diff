@@ -43,27 +43,15 @@ export function createUntrackedCache(): UntrackedCache {
 export interface InspectOptions {
   /** Inspect at most this many files' contents (by position in the sorted untracked list). */
   maxFiles: number;
-  /** Files larger than this are fingerprinted by stat only. */
-  readLimit: number;
   /** Platforms without an executable bit report 100644 (git's core.fileMode=false). */
   executableBit: boolean;
+  /** Files above this size are binary, as git's diff treats them (`core.bigFileThreshold`). */
+  bigFileThreshold: number;
 }
 
 /** Absolute path of a repo-relative bstr path, as a Buffer (works for non-UTF-8 names). */
 export function absolutePathBuffer(root: string, key: string): Buffer {
   return Buffer.concat([Buffer.from(root + path.sep, 'utf8'), bstrToBuffer(key)]);
-}
-
-function countLines(content: Buffer): number {
-  if (content.length === 0) return 0;
-  let lines = 0;
-  let index = content.indexOf(10);
-  while (index >= 0) {
-    lines += 1;
-    index = content.indexOf(10, index + 1);
-  }
-  if (content[content.length - 1] !== 10) lines += 1;
-  return lines;
 }
 
 async function readContent(file: Buffer): Promise<Buffer> {
@@ -75,14 +63,51 @@ async function readContent(file: Buffer): Promise<Buffer> {
   }
 }
 
-function factsFor(content: Buffer, sig: string): ContentFacts {
-  const sniff = content.subarray(0, BINARY_SNIFF_BYTES);
-  const binary = sniff.includes(0);
+const READ_CHUNK = 1024 * 1024;
+
+/** Streams a file once: SHA-256, line count and binary sniff, in O(1 MiB) memory. */
+async function factsFromFile(
+  file: Buffer,
+  sig: string,
+  bigFileThreshold: number,
+): Promise<ContentFacts> {
+  const handle = await open(file, 'r');
+  try {
+    const hash = createHash('sha256');
+    const buffer = Buffer.allocUnsafe(READ_CHUNK);
+    let total = 0;
+    let lines = 0;
+    let binary = false;
+    let last = -1;
+    for (;;) {
+      const { bytesRead } = await handle.read(buffer, 0, READ_CHUNK, null);
+      if (bytesRead === 0) break;
+      const chunk = buffer.subarray(0, bytesRead);
+      hash.update(chunk);
+      if (total < BINARY_SNIFF_BYTES && chunk.subarray(0, BINARY_SNIFF_BYTES - total).includes(0)) {
+        binary = true;
+      }
+      for (let index = chunk.indexOf(10); index >= 0; index = chunk.indexOf(10, index + 1)) {
+        lines += 1;
+      }
+      last = chunk[bytesRead - 1] as number;
+      total += bytesRead;
+    }
+    if (total > 0 && last !== 10) lines += 1;
+    // git diffs files above core.bigFileThreshold as binary; agree with it.
+    if (total > bigFileThreshold) binary = true;
+    return { sig, binary, lines: binary ? 0 : lines, contentHash: hash.digest('hex') };
+  } finally {
+    await handle.close();
+  }
+}
+
+function factsForLink(target: Buffer, sig: string): ContentFacts {
   return {
     sig,
-    binary,
-    lines: binary ? 0 : countLines(content),
-    contentHash: createHash('sha256').update(content).digest('hex'),
+    binary: false,
+    lines: target.length > 0 ? 1 : 0,
+    contentHash: createHash('sha256').update(target).digest('hex'),
   };
 }
 
@@ -91,8 +116,9 @@ function factsFor(content: Buffer, sig: string): ContentFacts {
  * in the sorted order used for the `maxFiles` cap, with `index` giving each key's position.
  *
  * patchHash of an untracked file is SHA-256 over (mode, path, SHA-256 of content): the new-file
- * patch is a pure function of those. Above the caps it is computed from the stat signature
- * instead (size, mtime, ctime, inode), which still changes whenever the file is rewritten.
+ * patch is a pure function of those. Beyond `maxFiles`, or above the big-file threshold, it is
+ * computed from the stat signature instead (size, mtime, ctime, inode), which still changes
+ * whenever the file is rewritten.
  */
 export async function inspectUntracked(
   root: string,
@@ -161,8 +187,34 @@ async function inspectOne(
     mode = '100644';
   }
 
-  const canRead = kind !== 'other' && index < options.maxFiles && size <= options.readLimit;
+  // Files above git's big-file threshold are binary for git anyway: fingerprint them by stat
+  // instead of reading them (they may be huge).
+  const big = kind === 'file' && size > options.bigFileThreshold;
+  const canRead = kind !== 'other' && index < options.maxFiles && !big;
   if (!canRead) {
+    return {
+      key,
+      kind,
+      mode,
+      size,
+      binary: big,
+      lines: null,
+      read: false,
+      statSig,
+      patchHash: hashParts(['untracked-stat', mode, key, statSig], PATCH_HASH_LENGTH),
+    };
+  }
+
+  const cacheKey = bstrFromBuffer(file);
+  const cached = cache.get(cacheKey);
+  const facts =
+    cached && cached.sig === statSig
+      ? cached
+      : await (kind === 'symlink'
+          ? readlink(file, { encoding: 'buffer' }).then((target) => factsForLink(target, statSig))
+          : factsFromFile(file, statSig, options.bigFileThreshold)
+        ).catch(() => null);
+  if (!facts) {
     return {
       key,
       kind,
@@ -175,29 +227,7 @@ async function inspectOne(
       patchHash: hashParts(['untracked-stat', mode, key, statSig], PATCH_HASH_LENGTH),
     };
   }
-
-  const cacheKey = bstrFromBuffer(file);
-  let facts = cache.get(cacheKey);
-  if (!facts || facts.sig !== statSig) {
-    try {
-      const content =
-        kind === 'symlink' ? await readlink(file, { encoding: 'buffer' }) : await readContent(file);
-      facts = factsFor(content, statSig);
-      cache.set(cacheKey, facts);
-    } catch {
-      return {
-        key,
-        kind,
-        mode,
-        size,
-        binary: false,
-        lines: null,
-        read: false,
-        statSig,
-        patchHash: hashParts(['untracked-stat', mode, key, statSig], PATCH_HASH_LENGTH),
-      };
-    }
-  }
+  cache.set(cacheKey, facts);
   return {
     key,
     kind,

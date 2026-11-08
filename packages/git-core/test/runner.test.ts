@@ -10,6 +10,7 @@ import {
   CONFIG_PINS,
   createGitCore,
   GitRunner,
+  resolveExecutable,
   SAFETY_ENV,
 } from '../src/index.js';
 import { createFixture, type Fixture } from './helpers/fixture.js';
@@ -366,6 +367,25 @@ describe('process control', () => {
     await core.dispose();
     const error = await core.version().catch((e: unknown) => e);
     expect(isGitCoreError(error, 'disposed')).toBe(true);
+  });
+
+  it('never resolves git through relative PATH entries', async () => {
+    const repoDir = path.join(fx.root, 'repo-with-git');
+    fx.write(
+      path.join(repoDir, 'git'),
+      `#!/bin/sh\ntouch "${path.join(fx.root, 'planted-ran')}"\n`,
+    );
+    chmodSync(path.join(repoDir, 'git'), 0o755);
+    const realPath = process.env.PATH ?? '';
+    expect(resolveExecutable('git', `:.:${realPath}`)).not.toBe(path.join(repoDir, 'git'));
+    expect(path.isAbsolute(resolveExecutable('git', `.:${realPath}`))).toBe(true);
+    expect(() => resolveExecutable('git', '.:relative/bin')).toThrowError(
+      expect.objectContaining({ code: 'git_not_found' }),
+    );
+    const runner = new GitRunner({ env: { PATH: `:.:${realPath}` } });
+    await runner.run(['rev-parse', '--git-dir'], { cwd: repoDir, okExitCodes: [0, 128] });
+    expect(existsSync(path.join(fx.root, 'planted-ran'))).toBe(false);
+    await runner.dispose();
   });
 
   it('refuses unsupported git versions', async () => {

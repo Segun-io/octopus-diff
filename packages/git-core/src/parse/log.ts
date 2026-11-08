@@ -5,9 +5,14 @@ import { splitNul } from './tokens.js';
 export const LOG_FORMAT = '%H%x00%h%x00%P%x00%s%x00%an%x00%ae%x00%at%x00%ct';
 const FIELDS = 8;
 
+/** ISO timestamps must have a 4-digit year (TimestampSchema); git allows any date. */
+const MIN_MS = Date.parse('0000-01-01T00:00:00.000Z');
+const MAX_MS = Date.parse('9999-12-31T23:59:59.999Z');
+
 function isoFromUnix(seconds: string): string {
-  const value = Number(seconds);
-  return new Date(Number.isFinite(value) ? value * 1000 : 0).toISOString();
+  const value = Number(seconds) * 1000;
+  const ms = Number.isFinite(value) ? Math.min(Math.max(value, MIN_MS), MAX_MS) : 0;
+  return new Date(ms).toISOString();
 }
 
 /**

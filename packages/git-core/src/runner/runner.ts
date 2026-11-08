@@ -1,5 +1,6 @@
 import { type ChildProcess, spawn } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { accessSync, constants, existsSync, statSync } from 'node:fs';
+import path from 'node:path';
 import { GitCoreError, type Logger, noopLogger } from '@octopus-diff/contracts';
 import { assertAllowedGitArgs, DIFF_FAMILY } from './allowlist.js';
 import { CONFIG_PIN_ARGS } from './config-pins.js';
@@ -13,6 +14,8 @@ export interface GitRunnerOptions {
   maxOutputBytes?: number;
   env?: Record<string, string>;
   logger?: Logger;
+  /** `core.bigFileThreshold` pinned on every call (default: max(maxOutputBytes, 1 MiB)). */
+  bigFileThreshold?: number;
 }
 
 export interface GitRunOptions {
@@ -126,8 +129,14 @@ export function withSafetyFlags(args: readonly string[]): string[] {
 }
 
 /** Full argv passed to the git binary for `args`. */
-export function buildGitArgv(args: readonly string[]): string[] {
-  return ['--no-pager', '--no-optional-locks', ...CONFIG_PIN_ARGS, ...withSafetyFlags(args)];
+export function buildGitArgv(args: readonly string[], extraPins: readonly string[] = []): string[] {
+  return [
+    '--no-pager',
+    '--no-optional-locks',
+    ...CONFIG_PIN_ARGS,
+    ...extraPins,
+    ...withSafetyFlags(args),
+  ];
 }
 
 function classifyFailure(
@@ -170,6 +179,7 @@ export class GitRunner {
   private readonly scheduler: FairScheduler;
   private readonly children = new Map<ChildProcess, (error: GitCoreError) => void>();
   private disposed = false;
+  private resolvedBinary: string | null = null;
 
   constructor(options: GitRunnerOptions = {}) {
     this.gitBinary = options.gitBinary ?? 'git';
@@ -178,6 +188,26 @@ export class GitRunner {
     this.env = buildGitEnv(process.env, options.env);
     this.logger = options.logger ?? noopLogger;
     this.scheduler = new FairScheduler(Math.max(1, Math.floor(options.concurrency ?? 4)));
+    // Diff files above the threshold as binary, so no single file's patch can exceed about
+    // twice this size while it is streamed and hashed (`core.bigFileThreshold`).
+    const threshold = options.bigFileThreshold ?? defaultBigFileThreshold(this.maxOutputBytes);
+    this.extraPins = ['-c', `core.bigFileThreshold=${Math.floor(threshold)}`];
+  }
+
+  private readonly extraPins: readonly string[];
+
+  /**
+   * Absolute path of the git executable. A bare name is looked up in the absolute entries of
+   * PATH only: spawning a bare name would let the OS resolve relative PATH entries (or, on
+   * Windows, the working directory) against the repository being inspected.
+   */
+  binary(): string {
+    if (this.resolvedBinary) return this.resolvedBinary;
+    this.resolvedBinary = resolveExecutable(
+      this.gitBinary,
+      this.env.PATH ?? process.env.PATH ?? '',
+    );
+    return this.resolvedBinary;
   }
 
   /** Runs an allowlisted git command. Rejects with `GitCoreError`. */
@@ -188,7 +218,7 @@ export class GitRunner {
     } catch (error) {
       return Promise.reject(error);
     }
-    const argv = buildGitArgv(args);
+    const argv = buildGitArgv(args, this.extraPins);
     const okExitCodes = options.okExitCodes ?? (hasNoIndex(args) ? [0, 1] : [0]);
     return this.scheduler.schedule(options.queueKey ?? options.cwd, () =>
       this.execute(argv, [...args], { ...options, okExitCodes }),
@@ -233,8 +263,15 @@ export class GitRunner {
       let stderrBytes = 0;
 
       let child: ChildProcess;
+      let binary: string;
       try {
-        child = spawn(this.gitBinary, argv, {
+        binary = this.binary();
+      } catch (error) {
+        reject(error);
+        return;
+      }
+      try {
+        child = spawn(binary, argv, {
           cwd,
           env,
           stdio: ['ignore', 'pipe', 'pipe'],
@@ -340,6 +377,40 @@ export class GitRunner {
 }
 
 const USE_PROCESS_GROUP = process.platform !== 'win32';
+
+/** Files above this size are diffed as binary (one patch then stays below ~2x this size). */
+export function defaultBigFileThreshold(maxOutputBytes: number): number {
+  return Math.max(maxOutputBytes, 1024 * 1024);
+}
+
+function isExecutableFile(file: string): boolean {
+  try {
+    if (!statSync(file).isFile()) return false;
+    if (process.platform !== 'win32') accessSync(file, constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Resolves a command to an absolute path using only absolute PATH entries. */
+export function resolveExecutable(command: string, searchPath: string): string {
+  if (command.includes('/') || command.includes('\\') || path.isAbsolute(command)) {
+    return path.resolve(command);
+  }
+  const names =
+    process.platform === 'win32' && !path.extname(command)
+      ? [`${command}.exe`, `${command}.com`]
+      : [command];
+  for (const dir of searchPath.split(path.delimiter)) {
+    if (!dir || !path.isAbsolute(dir)) continue;
+    for (const name of names) {
+      const candidate = path.join(dir, name);
+      if (isExecutableFile(candidate)) return candidate;
+    }
+  }
+  throw new GitCoreError('git_not_found', `git executable not found in PATH (${command})`);
+}
 
 function killTree(child: ChildProcess): void {
   if (USE_PROCESS_GROUP && child.pid !== undefined) {

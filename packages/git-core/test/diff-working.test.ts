@@ -268,6 +268,14 @@ describe('working / staged / unstaged scopes', () => {
     expect(link.patch).toContain('+keep.txt\n\\ No newline at end of file');
     const bin = await fileDiff(core, wt, scope, { path: 'untracked.bin' });
     expect(bin).toMatchObject({ binary: true, patch: '' });
+    fx.symlink('dir', path.join(repo, 'link-to-dir'));
+    const dirLink = await fileDiff(core, wt, scope, { path: 'link-to-dir' });
+    expect(dirLink.patch).toBe(
+      'diff --git a/link-to-dir b/link-to-dir\nnew file mode 120000\n' +
+        `index ${'0'.repeat(40)}..${fx.git(repo, ['hash-object', '--stdin'], { input: 'dir' }).trim()}\n` +
+        '--- /dev/null\n+++ b/link-to-dir\n@@ -0,0 +1 @@\n+dir\n\\ No newline at end of file\n',
+    );
+    rmSync(path.join(repo, 'link-to-dir'));
     const nested = await fileDiff(core, wt, scope, { path: 'nested-repo' });
     expect(nested).toMatchObject({ status: 'untracked', patch: '' });
   });
@@ -311,14 +319,19 @@ describe('working / staged / unstaged scopes', () => {
 
   it('ignores stat-only changes and never refreshes the index', async () => {
     const index = path.join(repo, '.git', 'index');
-    const before = statSync(index, { bigint: true });
     const future = new Date(Date.now() + 120_000);
     utimesSync(path.join(repo, 'keep.txt'), future, future);
     utimesSync(path.join(repo, 'dir', 'nested.txt'), future, future);
+    fx.write(path.join(repo, 'stable.bin'), Buffer.from([9, 0, 9]));
+    fx.git(repo, ['add', 'stable.bin']);
+    fx.git(repo, ['commit', '-q', '-m', 'stable binary', '--', 'stable.bin']);
+    utimesSync(path.join(repo, 'stable.bin'), future, future);
+    const before = statSync(index, { bigint: true });
     for (const kind of ['working', 'unstaged'] as const) {
       const files = await listFiles(core, wt, { kind });
       expect(files.map((f) => f.path)).not.toContain('keep.txt');
       expect(files.map((f) => f.path)).not.toContain('dir/nested.txt');
+      expect(files.map((f) => f.path)).not.toContain('stable.bin');
       const error = await core
         .getFileDiff(wt, { kind }, { path: 'keep.txt' })
         .catch((e: unknown) => e);
@@ -371,6 +384,31 @@ describe('large patches', () => {
   });
 
   afterAll(() => fx.dispose());
+
+  it('diffs files above core.bigFileThreshold as binary', async () => {
+    const huge = fx.repo('huge', { files: { 'huge.txt': lines(80_000, 'original') } });
+    fx.write(path.join(huge, 'huge.txt'), lines(80_000, 'rewritten'));
+    fx.write(path.join(huge, 'huge-untracked.txt'), lines(150_000, 'new'));
+    const core = createGitCore(fx.coreOptions({ maxOutputBytes: 1024 * 1024 }));
+    const wt = locator(huge);
+    try {
+      const files = await listFiles(core, wt, { kind: 'working' });
+      expectFile(files, 'huge.txt', { binary: true, additions: null });
+      expectFile(files, 'huge-untracked.txt', { binary: true, additions: null });
+      const diff = await fileDiff(
+        core,
+        wt,
+        { kind: 'working' },
+        { path: 'huge.txt' },
+        { full: true },
+      );
+      expect(diff).toMatchObject({ binary: true, patch: '' });
+      expect(diff.byteLength).toBeLessThan(1024);
+      await expectConsistentHashes(core, wt, { kind: 'working' }, files);
+    } finally {
+      await core.dispose();
+    }
+  });
 
   it('omits patches above the soft limit unless full=true', async () => {
     const core = createGitCore(fx.coreOptions({ maxPatchBytes: 4096 }));

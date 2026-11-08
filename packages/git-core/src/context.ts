@@ -1,4 +1,3 @@
-import { stat } from 'node:fs/promises';
 import path from 'node:path';
 import {
   AbsolutePathSchema,
@@ -16,6 +15,8 @@ export interface Settings {
   maxOutputBytes: number;
   maxPatchBytes: number;
   maxUntrackedFiles: number;
+  /** Pinned `core.bigFileThreshold`: larger files are diffed (and listed) as binary. */
+  bigFileThreshold: number;
   logger: Logger;
 }
 
@@ -39,6 +40,11 @@ export interface RepoInfo {
   bare: boolean;
   objectFormat: ObjectFormat;
   emptyTree: string;
+  /**
+   * Filter-driver overrides, computed at most once per GitCore operation: `repo()` returns a
+   * fresh object per call, so nothing is reused across operations (config may change).
+   */
+  filterOverrides?: Promise<Array<[string, string]>>;
 }
 
 interface CachedRepo {
@@ -46,14 +52,7 @@ interface CachedRepo {
   at: number;
 }
 
-interface CachedOverrides {
-  entries: Array<[string, string]>;
-  stamp: string;
-  at: number;
-}
-
 const REPO_TTL_MS = 30_000;
-const OVERRIDES_TTL_MS = 60_000;
 const FILTER_KEY = /^filter\.(.+)\.(clean|smudge|process|required)$/;
 const TRUSTED_SCOPES = new Set(['system', 'global', 'command']);
 
@@ -61,7 +60,6 @@ const TRUSTED_SCOPES = new Set(['system', 'global', 'command']);
 export class GitContext {
   private versionPromise: Promise<GitVersion> | null = null;
   private readonly repos = new Map<string, CachedRepo>();
-  private readonly overrides = new Map<string, CachedOverrides>();
 
   constructor(
     readonly runner: GitRunner,
@@ -105,10 +103,10 @@ export class GitContext {
   async repo(cwd: string): Promise<RepoInfo> {
     assertAbsolute(cwd);
     const cached = this.repos.get(cwd);
-    if (cached && Date.now() - cached.at < REPO_TTL_MS) return cached.info;
+    if (cached && Date.now() - cached.at < REPO_TTL_MS) return { ...cached.info };
     const info = await this.resolveRepo(cwd);
     this.repos.set(cwd, { info, at: Date.now() });
-    return info;
+    return { ...info };
   }
 
   forgetRepo(cwd: string): void {
@@ -191,14 +189,15 @@ export class GitContext {
    * driver defined in repository-local config (`local`/`worktree` scope) is untrusted: it is
    * reset to the value from system/global config if there is one (so e.g. git-lfs keeps
    * working), else emptied and made non-required, which disables it. Entries are passed via
-   * `GIT_CONFIG_COUNT`, which overrides repository config.
+   * `GIT_CONFIG_COUNT`, which overrides repository config. Read once per operation, not
+   * cached: config can include other files and depend on HEAD (`includeIf onbranch:`).
    */
-  async filterOverrides(repo: RepoInfo): Promise<Array<[string, string]>> {
-    const stamp = await this.configStamp(repo);
-    const cached = this.overrides.get(repo.gitDir);
-    if (cached && cached.stamp === stamp && Date.now() - cached.at < OVERRIDES_TTL_MS) {
-      return cached.entries;
-    }
+  filterOverrides(repo: RepoInfo): Promise<Array<[string, string]>> {
+    repo.filterOverrides ??= this.readFilterOverrides(repo);
+    return repo.filterOverrides;
+  }
+
+  private async readFilterOverrides(repo: RepoInfo): Promise<Array<[string, string]>> {
     const result = await this.runner.run(
       ['config', '--null', '--show-scope', '--get-regexp', '^filter\\.'],
       { cwd: repo.cwd, queueKey: repo.commonDir, okExitCodes: [0, 1] },
@@ -210,23 +209,7 @@ export class GitContext {
         keys: entries.map(([key]) => key),
       });
     }
-    this.overrides.set(repo.gitDir, { entries, stamp, at: Date.now() });
     return entries;
-  }
-
-  private async configStamp(repo: RepoInfo): Promise<string> {
-    const files = [path.join(repo.commonDir, 'config'), path.join(repo.gitDir, 'config.worktree')];
-    const parts = await Promise.all(
-      files.map(async (file) => {
-        try {
-          const info = await stat(file, { bigint: true });
-          return `${info.mtimeNs}:${info.size}:${info.ino}`;
-        } catch {
-          return 'missing';
-        }
-      }),
-    );
-    return parts.join('|');
   }
 }
 

@@ -236,7 +236,24 @@ describe('branch and commit scopes', () => {
     expect(isGitCoreError(missing, 'not_found')).toBe(true);
   });
 
-  it('caches immutable scopes without sharing mutable objects', async () => {
+  it("honors each worktree's .gitattributes in commit scope", async () => {
+    const commit = fx.git(repo, ['rev-parse', 'HEAD~1']).trim();
+    const linked = path.join(fx.root, 'history-attr');
+    fx.git(repo, ['worktree', 'add', '-q', '--detach', linked, 'HEAD']);
+    fx.write(path.join(linked, '.gitattributes'), '*.txt -diff\n');
+    const mainFiles = await listFiles(core, locator(repo), { kind: 'commit', sha: commit });
+    const linkedFiles = await listFiles(core, locator(linked), { kind: 'commit', sha: commit });
+    expect(mainFiles.find((f) => f.path === 'feature2.txt')?.binary).toBe(false);
+    expect(linkedFiles.find((f) => f.path === 'feature2.txt')?.binary).toBe(true);
+    await expectConsistentHashes(
+      core,
+      locator(linked),
+      { kind: 'commit', sha: commit },
+      linkedFiles,
+    );
+  });
+
+  it('returns fresh objects for repeated history queries', async () => {
     const wt = locator(repo);
     const first = await listFiles(core, wt, { kind: 'commit', sha: root });
     (first[0] as { path: string }).path = 'mutated';
@@ -256,6 +273,31 @@ describe('branch and commit scopes', () => {
     expect(all.at(-1)?.parents).toEqual([]);
     const bad = await core.listCommits(locator(repo), { limit: 0 }).catch((e: unknown) => e);
     expect(isGitCoreError(bad, 'invalid_argument')).toBe(true);
+  });
+});
+
+describe('rename pairing with narrowed pathspecs', () => {
+  it('matches the list when a pathspec would also match a directory', async () => {
+    const repo = fx.repo('narrow', {
+      files: { foo: lines(30, 'foo'), baz: lines(30, 'baz'), keep: 'k\n' },
+    });
+    fx.git(repo, ['rm', '-q', 'foo', 'baz']);
+    fx.write(path.join(repo, 'bar'), lines(30, 'foo'));
+    fx.write(path.join(repo, 'foo', 'x'), lines(30, 'baz'));
+    fx.git(repo, ['add', 'bar', 'foo/x']);
+    const wt = locator(repo);
+    for (const kind of ['working', 'staged'] as const) {
+      const files = await listFiles(core, wt, { kind });
+      await expectConsistentHashes(core, wt, { kind }, files);
+    }
+  });
+
+  it('marks a rename source as staged when status pairs differently', async () => {
+    const repo = fx.repo('rename-flags', { files: { a: lines(20, 'a') } });
+    fx.git(repo, ['mv', 'a', 'b']);
+    fx.write(path.join(repo, 'b'), lines(20, 'completely different'));
+    const files = await listFiles(core, locator(repo), { kind: 'working' });
+    expectFile(files, 'a', { status: 'deleted', staged: true });
   });
 });
 

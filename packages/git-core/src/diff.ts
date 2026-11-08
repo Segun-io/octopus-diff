@@ -33,6 +33,7 @@ import {
   unbornRevArgs,
 } from './scope.js';
 import {
+  type InspectOptions,
   inspectUntracked,
   readUntrackedContent,
   synthesizeNewFilePatch,
@@ -286,12 +287,15 @@ function mapStatus(letter: string): FileStatus {
 
 interface StatusIndex {
   tracked: Map<string, StatusEntry>;
+  /** Rename sources (`2` entries' original paths): their removal is a staged change. */
+  renameSources: Set<string>;
   conflicted: Set<string>;
   untracked: string[];
 }
 
 function indexStatus(status: StatusResult): StatusIndex {
   const tracked = new Map<string, StatusEntry>();
+  const renameSources = new Set<string>();
   const conflicted = new Set<string>();
   const untracked: string[] = [];
   for (const entry of status.entries) {
@@ -299,20 +303,27 @@ function indexStatus(status: StatusResult): StatusIndex {
     else if (entry.kind === 'ignored') continue;
     else {
       tracked.set(entry.path, entry);
+      if (entry.kind === 'renamed') renameSources.add(entry.origPath);
       if (entry.kind === 'unmerged') conflicted.add(entry.path);
     }
   }
-  return { tracked, conflicted, untracked };
+  return { tracked, renameSources, conflicted, untracked };
 }
 
 function flagsFor(
   plan: ScopePlan,
-  entry: StatusEntry | undefined,
+  index: StatusIndex | null,
+  key: string,
 ): { staged: boolean; unstaged: boolean } {
+  const entry = index?.tracked.get(key);
+  // A path git status reports only as a rename source (the diff paired it differently):
+  // its removal from the index is staged.
+  const renameSource = entry === undefined && (index?.renameSources.has(key) ?? false);
   const indexChanged =
-    entry !== undefined &&
-    (entry.kind === 'ordinary' || entry.kind === 'renamed') &&
-    entry.x !== '.';
+    renameSource ||
+    (entry !== undefined &&
+      (entry.kind === 'ordinary' || entry.kind === 'renamed') &&
+      entry.x !== '.');
   const worktreeChanged =
     entry !== undefined &&
     (entry.kind === 'unmerged' ||
@@ -348,21 +359,18 @@ function pickEntry(entries: readonly RawEntry[], key: string): RawEntry | undefi
 
 /**
  * With `diff.autoRefreshIndex=false`, a file whose stat data changed but whose content did not
- * is still reported in raw output (modified, same mode), but has no numstat entry and no patch.
- * Such entries are not changes and are dropped.
+ * is still reported in raw output (modified, same mode), but has no patch chunk (and no
+ * numstat entry, or a binary one). Such entries are not changes and are dropped.
  */
 function isStatOnly(
   entry: RawEntry,
   chunk: ChunkResult | undefined,
   numstat: NumstatEntry | undefined,
 ): boolean {
-  return (
-    !entry.combined &&
-    entry.status === 'M' &&
-    entry.srcMode === entry.dstMode &&
-    chunk === undefined &&
-    numstat === undefined
-  );
+  if (entry.combined || entry.status !== 'M' || entry.srcMode !== entry.dstMode) return false;
+  if (chunk !== undefined) return false;
+  // Text files get no numstat entry; binary files still get `-\t-` (both counts null).
+  return numstat === undefined || (numstat.added === null && numstat.deleted === null);
 }
 
 /** patchHash for a tracked entry without a patch chunk (e.g. a race, or an unmerged path). */
@@ -446,17 +454,12 @@ async function collectCombinedChunks(
 export interface DiffDeps {
   ctx: GitContext;
   untrackedCache: UntrackedCache;
-  /** Results for immutable plans (branch/commit), keyed by commonDir + plan key. */
-  immutableCache: {
-    get(key: string): GitChangedFile[] | undefined;
-    set(key: string, value: GitChangedFile[]): void;
-  };
 }
 
-function inspectOptions(ctx: GitContext) {
+export function inspectOptions(ctx: GitContext): InspectOptions {
   return {
     maxFiles: ctx.settings.maxUntrackedFiles,
-    readLimit: ctx.settings.maxOutputBytes,
+    bigFileThreshold: ctx.settings.bigFileThreshold,
     executableBit: process.platform !== 'win32',
   };
 }
@@ -476,12 +479,10 @@ export async function listChangedFiles(
   const scope = parseScope(scopeInput);
   const repo = await ctx.repo(worktree.path);
   const plan = await planScope(ctx, repo, scope, options);
+  // No caching, not even for branch/commit scopes: tree-to-tree diffs still read
+  // `.gitattributes` from the worktree (binary, diff drivers), which can differ per worktree
+  // and change over time.
   if (plan.empty) return [];
-  const cacheKey = plan.immutableKey ? `${repo.commonDir}\u0000${plan.immutableKey}` : null;
-  if (cacheKey) {
-    const cached = deps.immutableCache.get(cacheKey);
-    if (cached) return cached.map((file) => ({ ...file }));
-  }
 
   const [run, status] = await Promise.all([
     runScopeDiff(ctx, repo, plan, { head: true, patch: true }),
@@ -509,7 +510,7 @@ export async function listChangedFiles(
     );
     rows.push({
       key: entry.path,
-      file: { ...identity, ...flagsFor(plan, index?.tracked.get(entry.path)) },
+      file: { ...identity, ...flagsFor(plan, index, entry.path) },
     });
   }
 
@@ -530,13 +531,7 @@ export async function listChangedFiles(
   }
 
   rows.sort((a, b) => compareBstr(a.key, b.key));
-  const files = rows.map((row) => row.file);
-  if (cacheKey)
-    deps.immutableCache.set(
-      cacheKey,
-      files.map((file) => ({ ...file })),
-    );
-  return files;
+  return rows.map((row) => row.file);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -625,7 +620,7 @@ export async function getFileDiff(
     const usable = isValidUtf8(key) && (!renamed || isValidUtf8(identified.srcPath));
     // Copies are diffed in the whole scope: with a narrowed pathspec git could pair the
     // source as a rename instead, which would change the patch (and its hash).
-    const pathspecs =
+    let pathspecs =
       identified.status === 'C' || !usable
         ? null
         : renamed
@@ -633,14 +628,26 @@ export async function getFileDiff(
           : [bstrToUtf8(key)];
     // 2. The canonical patch, in exactly the output format listChangedFiles uses (git reports
     //    unmerged paths differently depending on the format), so identity and hash match.
-    const run = await runScopeDiff(ctx, repo, plan, {
+    const canonicalOptions: DiffRunOptions = {
       head: true,
       patch: true,
-      pathspecs,
       only,
       retain: retainCanonical,
       retainLimit: limit,
-    });
+    };
+    let run = await runScopeDiff(ctx, repo, plan, { ...canonicalOptions, pathspecs });
+    const narrowed = pickEntry(run.raw, key);
+    if (
+      pathspecs !== null &&
+      (narrowed === undefined ||
+        (!narrowed.combined &&
+          (narrowed.status !== identified.status || narrowed.srcPath !== identified.srcPath)))
+    ) {
+      // A literal pathspec also matches paths below it (`foo` matches `foo/x`), which can
+      // change rename pairing. Fall back to the whole scope so the patch matches the list.
+      pathspecs = null;
+      run = await runScopeDiff(ctx, repo, plan, { ...canonicalOptions, pathspecs });
+    }
     const entry = pickEntry(run.raw, key) ?? identified;
     const numstat = run.numstat.find((candidate) => candidate.path === key);
     let canonical = run.chunks.get(key);
@@ -714,9 +721,12 @@ async function untrackedPatch(
   if (!full && estimate > limit) return { ...empty, tooLarge: true };
 
   // `--no-index` chunks are keyed by the path as given; retain whatever chunk appears.
-  const collector = new PatchCollector({ retain: new AnyKeySet(), retainLimit: limit });
-  if (isValidUtf8(info.key)) {
-    await deps.ctx.git(
+  let collector = new PatchCollector({ retain: new AnyKeySet(), retainLimit: limit });
+  let viaGit = false;
+  if (isValidUtf8(info.key) && info.kind === 'file') {
+    // git exits 1 both for "differences" and for errors in --no-index mode, so errors are
+    // detected from stderr; then fall back to synthesizing the patch.
+    const result = await deps.ctx.git(
       repo,
       [
         'diff',
@@ -730,9 +740,13 @@ async function untrackedPatch(
       ],
       { onStdout: (data) => collector.write(bstrFromBuffer(data)) },
     );
-  } else {
+    viaGit = !/^(error|fatal):/m.test(result.stderr);
+  }
+  if (!viaGit) {
+    // Symlinks (their target is the content) and paths that cannot be passed as argv.
     const content = await readUntrackedContent(repo.cwd, info);
     if (content === null) return empty;
+    collector = new PatchCollector({ retain: new AnyKeySet(), retainLimit: limit });
     collector.write(
       synthesizeNewFilePatch(info.key, info.mode ?? '100644', content, repo.objectFormat),
     );
