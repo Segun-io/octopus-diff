@@ -211,7 +211,10 @@ GET    /api/events                              SSE: worktree.changed {worktreeI
                                                 project.added|removed, worktree.added|removed, scan.progress
 ```
 
-Auth/safety: bind `127.0.0.1` by default; require a per-install random token (cookie / bearer) and validate
+Auth/safety: bind `127.0.0.1` by default; require a per-install random token as a **bearer token only** (no
+cookies: the printed URL carries it as `#token=`, the UI moves it into port-scoped `localStorage`; static UI
+assets are public; `/api/health?challenge=` proves token possession so the CLI never hands the token to an
+impostor; see DECISIONS Phase 2 #5, #7) and validate
 `Host` and `Origin` headers to defeat DNS-rebinding and cross-site requests from other browser tabs. The API
 returns file contents of local repos, so treat it as sensitive. Binding to non-loopback needs an explicit flag.
 
@@ -221,7 +224,10 @@ All git access goes through **one runner** in `packages/git-core`:
 
 - Hard **allowlist** of subcommands: `status`, `diff`, `diff-index`, `diff-tree`, `rev-parse`, `rev-list`,
   `merge-base`, `worktree list`, `for-each-ref`, `symbolic-ref`, `show`, `cat-file`, `ls-files`, `log`,
-  `config --get` (read forms `--get`/`--get-all`/`--get-regexp`; DECISIONS WS1 #2). Anything else throws.
+  `config --get` (read forms `--get`/`--get-all`/`--get-regexp`; DECISIONS WS1 #2), `check-attr` (read forms
+  `-z`, `--stdin`, `-a`/`--all`, `--cached`; `--source` rejected; DECISIONS Phase 2 #8). Anything else throws.
+- After discovery, every invocation pins `--git-dir` and (with a work tree) `--work-tree`: repository
+  `core.worktree` never selects which files are read (security review SEC-06).
   Unit-test that `add`, `commit`, `checkout`, `reset`, `apply`, `fetch`, `gc` are rejected.
 - `--no-optional-locks` is not enough on its own: porcelain `git diff` rewrites the index when
   `diff.autoRefreshIndex` is on, so git-core pins it off (DECISIONS WS1 #4).

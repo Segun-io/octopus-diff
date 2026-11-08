@@ -64,7 +64,10 @@ export const WorktreeSchema = z.object({
   bare: z.boolean(),
   locked: z.boolean(),
   prunable: z.boolean(),
-  /** The worktree path no longer exists on disk. */
+  /**
+   * The worktree path no longer exists on disk, or is not a valid worktree of this project (its
+   * `.git` does not link back to the admin dir; forged records are reported this way).
+   */
   missing: z.boolean(),
 });
 export type Worktree = z.infer<typeof WorktreeSchema>;

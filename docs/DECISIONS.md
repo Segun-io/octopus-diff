@@ -629,6 +629,35 @@ All 2026-11-08 · WS5.
      switch: key `seen` by file + scope), F10 (tree view order), SEC-05 (warn on bidi control chars in
      diffs and file names). The auth-v2 web change is limited to token bootstrap, the API client's
      token and the SSE subscription (`main.tsx`, `api/hooks.ts`).
+7. **2026-11-08 · Auth v2 implementation choices** (`fix/auth-v2`, details in
+   `docs/reports/fix-auth-v2.md`): auth is router-matched `/api` middleware, health registered before
+   it, so routes added later are protected by construction; paths with escaped unreserved characters
+   (`/%61pi`) get 400 (SEC-10); a wrong `?token=` gets 401, a right one redirects to `/#token=`; the
+   legacy cookie is expired on any response; a token file readable by others or owned by another uid
+   is replaced atomically (SEC-11); the web client stops the event stream on 401 instead of retrying;
+   `--open` uses a 0600 launcher file (deleted after 60 s) and, on WSL, PowerShell reading the URL from
+   stdin (`wslview` dropped), with openers resolved to absolute paths and run with a sanitized `PATH`
+   (SEC-03/04); CLI output escapes control and bidi characters as `\uXXXX` (SEC-09); `serve` refuses
+   when the recorded daemon fails the proof; `token --rotate` needs a daemon restart; LAN URLs are
+   printed for wildcard binds (IPv4 for `0.0.0.0`, IPv4+IPv6 for `::`, no link-local).
+8. **2026-11-08 · git-core fix choices** (`fix/git-core`, details in `docs/reports/fix-git-core.md`):
+   `--git-dir`/`--work-tree` pinned after discovery, `core.worktree` honored only when its target links
+   back (absorbed submodules), else the main entry is reported bare (SEC-06); linked worktrees must link
+   both ways or are `prunable` + `missing`, duplicates dropped (SEC-07); scan follows symlinks only
+   within the root's realpath (SEC-08); the submodule HEAD is read from disk into the `stateHash`
+   (git 2.53's raw line for a modified gitlink has a null oid, so "hash `--raw`" did not work) and
+   submodule git dirs join `gitPaths` (F3); untracked `patchHash` = hash of the canonical new-file
+   patch, identical after `git add -N` / `git add` unless adding converts content (F4);
+   `maxUntrackedFiles` is all-or-nothing per snapshot; `check-attr` allowlisted and cached, skipped
+   when no attributes file exists (F8; cold summary +~100 ms only in repos with attributes); unreadable
+   files degrade per file (F7); `stateHash` version bumped (all hashes change once after upgrade;
+   review marks on untracked files show unreviewed once); metadata reads use `O_NONBLOCK` and require
+   regular files.
+9. **2026-11-08 · Proposal, not implemented: port-bound health proof** (residual SEC-02 relay: a
+   squatter could forward the CLI's challenge to the real daemon on another port and replay its
+   proof). Bind the proof to the port, e.g. message `octopus-diff-health:v2:<port>:<challenge>` as a new
+   optional `proofV2` field, the CLI checking it when `apiVersion` allows. Needs a contract change;
+   deferred to Phase 3.
 
 ## Phase 2 — performance review (`review/perf`, proposals for the lead)
 

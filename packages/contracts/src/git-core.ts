@@ -178,6 +178,8 @@ export interface WatchTargets {
    * `<gitDir>/index`, `<commonDir>/refs`, `<commonDir>/packed-refs`, `<commonDir>/worktrees`.
    */
   gitPaths: string[];
+  // May also include submodule git dirs (`<gitDir>/modules`, `<commonDir>/modules`): watch their
+  // HEAD and refs and attribute events to this worktree (review finding F3).
 }
 
 export const GIT_CORE_ERROR_CODES = [
