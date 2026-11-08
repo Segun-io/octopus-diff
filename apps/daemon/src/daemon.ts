@@ -20,7 +20,9 @@ import { DaemonCore } from './core.js';
 import { EventHub } from './events.js';
 import { createLogger } from './logger.js';
 import { ensurePrivateDir, resolveDirs } from './paths.js';
+import { ReviewControls } from './review-controls.js';
 import { hostForUrl, isLoopbackHost, isWildcardHost } from './security.js';
+import { SettingsService } from './settings.js';
 import { StaticFiles } from './static.js';
 import { Store } from './store.js';
 import { loadOrCreateToken } from './token.js';
@@ -63,6 +65,9 @@ export interface Daemon extends DaemonHandle {
   readonly hub: EventHub;
   readonly store: Store;
   readonly logger: Logger;
+  /** UX round 1: app settings + review-policy overrides. */
+  readonly settings: SettingsService;
+  readonly reviewControls: ReviewControls;
 }
 
 function clampDebounce(value: number | undefined, logger: Logger): number | undefined {
@@ -137,6 +142,12 @@ export const startDaemon = (async (options: DaemonOptions = {}): Promise<Daemon>
   const gitCore: GitCore =
     options.gitCore ?? createGitCore({ ...options.git, logger: options.git?.logger ?? logger });
   const version = options.version ?? DEFAULT_VERSION;
+  const settings = new SettingsService({
+    store,
+    hub,
+    logger,
+    ...(internal.now ? { now: internal.now } : {}),
+  });
 
   const watch = { ...options.watch };
   const debounceMs = clampDebounce(watch.debounceMs, logger);
@@ -161,6 +172,15 @@ export const startDaemon = (async (options: DaemonOptions = {}): Promise<Daemon>
       : {}),
     ...(internal.now ? { now: internal.now } : {}),
     ...(internal.cwd ? { cwd: internal.cwd } : {}),
+    reviewPolicy: settings,
+  });
+  const reviewControls = new ReviewControls({
+    source: core.reviewSource(),
+    settings,
+    store,
+    hub,
+    logger,
+    ...(internal.now ? { now: internal.now } : {}),
   });
 
   let server: Server | undefined;
@@ -219,6 +239,8 @@ export const startDaemon = (async (options: DaemonOptions = {}): Promise<Daemon>
       },
       staticFiles,
       hello: (): ServerEvent => ({ type: 'hello', version, startedAt: startedAt.toISOString() }),
+      settings,
+      reviewControls,
     });
 
     // Do not replace the global Request/Response: the daemon runs inside the CLI process.
@@ -283,6 +305,8 @@ export const startDaemon = (async (options: DaemonOptions = {}): Promise<Daemon>
       hub,
       store,
       logger,
+      settings,
+      reviewControls,
       close,
     };
     return daemon;
