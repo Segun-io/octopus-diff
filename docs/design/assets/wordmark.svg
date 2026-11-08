@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 220 40" width="440" height="80">
+  <!-- octopus-diff wordmark: mark + lowercase name, "-diff" in the monospace face. System font stacks only. -->
+  <style>
+    .mark { fill: #5b47d6; stroke: #5b47d6; }
+    .name { fill: #1a1d26; font: 600 22px ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; letter-spacing: -0.4px; }
+    .diff { fill: #555c6c; font: 400 20px ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace; }
+    @media (prefers-color-scheme: dark) {
+      .mark { fill: #9d90ff; stroke: #9d90ff; } .name { fill: #e4e7ee; } .diff { fill: #a4abba; }
+    }
+  </style>
+  <defs>
+    <mask id="eyes">
+      <rect width="32" height="32" fill="#fff"/>
+      <rect x="10.3" y="12" width="4.4" height="1.8" rx="0.9" fill="#000"/>
+      <rect x="17.3" y="12" width="4.4" height="1.8" rx="0.9" fill="#000"/>
+    </mask>
+  </defs>
+  <g transform="translate(4 4)">
+    <g class="mark" stroke-width="2.6" stroke-linecap="round" mask="url(#eyes)">
+      <path d="M16 3 C22 3 26 7.5 26 13.5 C26 16.5 24.5 18.5 22.5 19.5 L9.5 19.5 C7.5 18.5 6 16.5 6 13.5 C6 7.5 10 3 16 3 Z" stroke="none"/>
+      <path d="M9.5 19.5 C9.5 23 6 24 3 24.5" fill="none"/>
+      <path d="M13 19.5 C13 24 10 27 8 29" fill="none"/>
+      <path d="M16 19.5 L16 29" fill="none"/>
+      <path d="M19 19.5 C19 24 22 27 24 29" fill="none"/>
+      <path d="M22.5 19.5 C22.5 23 26 24 29 24.5" fill="none"/>
+    </g>
+  </g>
+  <text x="46" y="28" class="name">octopus<tspan class="diff">-diff</tspan></text>
+</svg>
