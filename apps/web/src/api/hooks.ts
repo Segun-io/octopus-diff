@@ -1,5 +1,6 @@
 import {
   type ApiClient,
+  ApiClientError,
   parseServerEvent,
   SERVER_EVENT_TYPES,
   type ServerEvent,
@@ -27,18 +28,16 @@ export interface EventSourceLike {
   readonly readyState: number;
 }
 
+/** Test seam only: production uses the contract client's fetch-based `subscribe`. */
 export type EventSourceFactory = (url: string) => EventSourceLike;
 
-const defaultFactory: EventSourceFactory | null =
-  typeof EventSource === 'undefined'
-    ? null
-    : (url) => new EventSource(url, { withCredentials: true }) as EventSourceLike;
-
 /**
- * Subscribes to `/api/events` (same-origin EventSource with cookie auth) and invalidates the
- * query cache precisely. Falls back to the contract client's fetch-based `subscribe`.
+ * Subscribes to `/api/events` with the contract client's fetch-based `subscribe`, which sends
+ * the bearer token (auth v2: `EventSource` cannot send headers and there is no cookie), and
+ * invalidates the query cache precisely. It reconnects with backoff; every (re)connect starts
+ * with a `hello` event. `factory` replaces the transport in tests.
  */
-export function useServerEvents(factory: EventSourceFactory | null = defaultFactory) {
+export function useServerEvents(factory: EventSourceFactory | null = null) {
   const api = useApi();
   const queryClient = useQueryClient();
   const store = useUiStore();
@@ -102,11 +101,17 @@ export function useServerEvents(factory: EventSourceFactory | null = defaultFact
 }
 
 function subscribeViaFetch(api: ApiClient, store: UiStore, handle: (event: ServerEvent) => void) {
-  return api.subscribe({
+  const sub = api.subscribe({
     onEvent: handle,
     onOpen: () => store.setState({ connection: 'open' }),
-    onError: () => store.setState({ connection: 'offline' }),
+    onError: (error) => {
+      store.setState({ connection: 'offline' });
+      // Retrying with the same (missing or wrong) token cannot succeed; the projects query shows
+      // the "not authorized" state, and opening the printed URL reloads the page.
+      if (error instanceof ApiClientError && error.code === 'unauthorized') sub.close();
+    },
   });
+  return sub;
 }
 
 /** Marks a file reviewed/unreviewed with an optimistic cache update and rollback on error. */

@@ -133,7 +133,7 @@ function ErrorBanner({ error, onRetry }: { error: unknown; onRetry: () => void }
       <p className="mt-2 text-sm text-muted">{info.detail}</p>
       {info.kind === 'auth' && (
         <pre className="mt-3 rounded bg-canvas p-2 font-mono text-xs">
-          octopus-diff serve # prints http://127.0.0.1:7428/?token=…
+          octopus-diff serve # prints http://127.0.0.1:7428/#token=…
         </pre>
       )}
       <button

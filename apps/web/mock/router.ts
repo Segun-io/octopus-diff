@@ -17,7 +17,7 @@ import {
 import { MockApiError, type MockBackend } from './backend.js';
 
 export interface MockRouterOptions {
-  /** If set, every route except /api/health requires this token (cookie or bearer). */
+  /** If set, every route except /api/health requires `Authorization: Bearer <token>`. */
   token?: string;
   /** Artificial latency in ms for every response. */
   latencyMs?: number;
@@ -62,11 +62,9 @@ function queryObject(url: URL): Record<string, string> {
   return Object.fromEntries(url.searchParams.entries());
 }
 
+/** Bearer only, like the daemon (auth v2: no cookie). */
 function authorized(request: Request, token: string): boolean {
-  const header = request.headers.get('authorization');
-  if (header === `Bearer ${token}`) return true;
-  const cookie = request.headers.get('cookie') ?? '';
-  return cookie.split(/;\s*/).includes(`octopus_diff_token=${token}`);
+  return request.headers.get('authorization') === `Bearer ${token}`;
 }
 
 export function createMockRouter(backend: MockBackend, options: MockRouterOptions = {}) {

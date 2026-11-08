@@ -61,11 +61,8 @@ export async function startMockServer(options: MockServerOptions = {}): Promise<
       const origin = `http://${host}`;
       if (req.url?.startsWith('/api/events')) {
         if (options.token) {
-          const cookie = req.headers.cookie ?? '';
-          const ok =
-            req.headers.authorization === `Bearer ${options.token}` ||
-            cookie.split(/;\s*/).includes(`octopus_diff_token=${options.token}`);
-          if (!ok) {
+          // Bearer only, like the daemon (auth v2: the UI streams events with fetch).
+          if (req.headers.authorization !== `Bearer ${options.token}`) {
             res.writeHead(401, { 'content-type': 'application/json' });
             res.end(JSON.stringify({ error: { code: 'unauthorized', message: 'missing token' } }));
             return;
