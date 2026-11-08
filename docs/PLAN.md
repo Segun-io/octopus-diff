@@ -332,7 +332,7 @@ Then run, as separate fresh sessions, in parallel: **(a)** adversarial code revi
 execution, symlink escapes), **(c)** performance pass against the bench. Triage findings, fix, re-run
 acceptance. Write `docs/reports/mvp.md` (what works, what does not, next steps).
 
-### Phase 2b — UX round 1 (2026-11-08, user-requested)
+### Phase 2b — UX round 1 (2026-11-08, user-requested) — done, see `docs/reports/ux-round-1.md`
 
 Identity and design system, theming-ready architecture, a Folder tier in the shell, "Mark all as verified" with undo, review
 policy (per worktree / branch / project / folder, ON by default for anything new) and a real Settings screen. Two parallel

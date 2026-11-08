@@ -15,7 +15,9 @@ questions. octopus-diff answers them in one browser window:
 
 It is **agent-agnostic**: it only speaks git, so it works with any tool that edits files or creates
 worktrees. Worktrees are discovered automatically, and edits show up live without a reload. Files you
-mark as reviewed stay reviewed until their patch changes, then come back as unreviewed.
+mark as reviewed stay reviewed until their patch changes, then come back as unreviewed. You steer the
+review loop: verify a whole worktree, project or folder in one click (with undo), or switch review
+off where you do not want it.
 
 ![octopus-diff: projects and worktrees on the left, changed files in the middle, a split diff on the right](docs/screenshots/diff-split-dark.png)
 
@@ -103,6 +105,30 @@ all of the repository's worktrees are discovered automatically (T3 Code's `~/.t3
 Code's `.claude/worktrees`, Conductor, Codex and hand-made worktrees alike). A *scan root* is a
 directory that is searched for repositories down to a depth (default 3, max 8), skipping
 `node_modules` and similar.
+
+### Review controls, settings and themes
+
+- **Mark all as verified.** The button above the file list marks every file you can see (respecting the
+  sidebar filters); in the Inbox it marks everything. `Shift+R` does the same from the keyboard, and the
+  context menu of a worktree, project or folder (and the folder Overview) can mark that whole level, or
+  clear it again ("Mark all as unreviewed"). A toast offers **Undo** (also `Ctrl/Cmd+Z`) for ten minutes.
+  A worktree that changed after you last looked is skipped and reported, so you never verify a diff you
+  did not see.
+- **Review on or off, per level.** The chip in the toolbar shows whether review is on for the selected
+  worktree and where that comes from. You can turn it on or off for the worktree, its branch, its
+  project, or the folder (scan root) it was discovered in; the most specific setting wins (worktree,
+  then branch, project, folder, then the default). **Review is on by default**, which is what every new
+  repository, worktree and branch gets; switch the default off in Settings to make review opt-in. A
+  worktree with review off stays visible and diffable, but it has no unreviewed badges, `n` skips it and
+  bulk actions leave it alone.
+- **Settings** (`,` or the gear in the sidebar): General, Review (the default and every override),
+  Appearance, Folders (scan roots and projects), Keyboard and About. Review settings are stored by the
+  daemon and shared by every browser that opens it; appearance and layout preferences are stored in the
+  browser, per device. The **command palette** (`Ctrl/Cmd+K`) jumps to any worktree, project or folder
+  and runs any command.
+- **Themes.** Octopus Dark, Octopus Light and a high-contrast theme; "System" follows the OS. Themes
+  are plain data files, so adding one is a one-file change: see [`docs/design/THEMING.md`](docs/design/THEMING.md).
+  The identity and palette are described in [`docs/design/IDENTITY.md`](docs/design/IDENTITY.md).
 
 ### Commands and options
 
@@ -244,6 +270,10 @@ printf 'fs.inotify.max_user_watches=524288\nfs.inotify.max_user_instances=512\n'
   binary files are shown as binary.
 - One machine: the browser and the repositories must be on the machine running the daemon (or reach
   it over a trusted network with `--allow-non-loopback`).
+- Folders are watched for repositories, not browsed: viewing a whole folder's files (read-only) is
+  designed in [`docs/design/FOLDERS.md`](docs/design/FOLDERS.md) but not built.
+- Undo for "Mark all as verified" is kept in the daemon's memory for ten minutes and is lost when it
+  restarts.
 - Not published to npm yet; no desktop app yet.
 
 ## Development

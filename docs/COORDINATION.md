@@ -1,5 +1,9 @@
 # Coordination — UX round 1 (identity, theming-ready, review controls)
 
+> **Status: integrated (2026-11-08).** All streams merged on `lead/ux-foundation` together with `main` (auth v2,
+> git-core and watcher fixes); `pnpm check` green, `pnpm test:e2e` 68 passed. Results, seams found and open items:
+> `docs/reports/ux-round-1.md`. The rest of this file is kept as the record of how the round was split.
+
 > Written by the lead on 2026-11-08, branch `lead/ux-foundation`. Two delegated sessions (both Claude Fable 5.1,
 > effort high) work **in parallel** from this commit, each in its own git worktree. This file is their shared
 > brief and the lead's merge plan. Anything not covered here: follow `AGENTS.md` and `docs/PLAN.md`.

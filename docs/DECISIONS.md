@@ -797,3 +797,25 @@ tests; full e2e 48 passed). Full text: `docs/reports/ux-web.md`, design docs in 
     would have turned review back on for a review-disabled worktree after any live update (an absent field means "enabled").
     Fixed in `api/cache.ts` (carry `review` over from the refetched projects list) with a regression test. Lesson recorded in
     COORDINATION: code that rebuilds API objects by hand must be reviewed whenever a contract gains a field.
+
+### UX round 1 — UI-level e2e (`ux/e2e`, folded in by the lead)
+
+All 2026-11-08 · ux-e2e (continued daemon session), accepted by the lead after merging with `main` (auth v2, git-core and
+watcher fixes): `pnpm check` exit 0, `pnpm test:e2e` 68 passed, read-only proof 0 violations. Full text: `docs/reports/ux-e2e.md`.
+
+19. **Overlays close on Escape through one shared `useEscapeToClose` hook** (document-level capture listener while open).
+    Found by the first UI run against the real daemon: Escape did nothing in Settings, the policy menu, the bulk confirm and
+    the add-project dialog once the focused control was disabled or removed.
+20. **zod runs jitless in the browser** (`z.config({ jitless: true })`, configured before the contracts evaluate, with zod
+    and its config pinned into one Rollup chunk) because zod's JIT probe tripped the CSP (`script-src 'self'`, no `eval`) on
+    every page load. Interim mechanism; the clean home is the contracts package (follow-up below).
+21. **Migrated v1 prefs are written back as v2 on load** (they were only migrated in memory).
+22. **Warm-reload regression accepted for this round and tracked.** Warm reload first paint 67 ms -> ~178 ms (two runs);
+    cold first paint (1018 -> ~950 ms), idle CPU, refresh write->UI (296 -> ~30 ms, from the perf review) and daemon RSS are
+    flat or better; initial JS ~145 KB gz (125 KB before). Attributed with a CPU profile to forced synchronous layout in
+    `FileList.tsx`'s viewport `useLayoutEffect` on the larger sidebar DOM (folder tier, chips, badges) plus React commit
+    work. Candidate fixes: measure the list viewport from the ResizeObserver callback, memoize sidebar rows, render row
+    details lazily. Not applied: perf-sensitive virtualized-list code is not patched without its own measurement pass.
+    Follow-ups for the contracts: move the jitless call into `packages/contracts` (removes the web's direct zod dependency
+    and the chunk pin); add test ids for the sidebar context menu, the bulk confirm dialog, the add-project dialog and the
+    Overview bulk/policy buttons.
