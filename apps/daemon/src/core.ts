@@ -43,6 +43,7 @@ import {
   type ScanRootRow,
   type Store,
 } from './store.js';
+import { gitDirOf } from './watch-identity.js';
 import { type DirtyReason, type SubscribeFn, WatcherService } from './watcher.js';
 
 export const CORE_DEFAULTS = {
@@ -642,22 +643,18 @@ export class DaemonCore {
       if (this.#closed || this.#projects.get(entry.row.id) !== entry || entry.missing) return;
       const watched = [];
       for (const e of entry.worktrees.values()) {
-        if (e.worktree.missing) continue;
-        if (!e.targets) {
-          try {
-            e.targets = await this.#git.getWatchTargets(this.#locator(e));
-          } catch (error) {
-            if (isShutdownError(error)) return;
-            this.#log.debug('watch targets unavailable', { worktreeId: e.worktree.id, error });
-          }
-        }
+        // Prunable records point at a folder whose `.git` does not lead back to this repository
+        // (broken or forged): never watch them (SEC-07).
+        if (e.worktree.missing || e.worktree.prunable) continue;
+        const targets = await this.#watchTargets(e);
+        if (targets === undefined) return;
         watched.push({
           projectId: entry.row.id,
           worktreeId: e.worktree.id,
           root: e.worktree.path,
           bare: e.worktree.bare,
           isMain: e.worktree.isMain,
-          targets: e.targets,
+          targets,
         });
       }
       if (this.#closed || this.#projects.get(entry.row.id) !== entry || entry.missing) return;
@@ -667,6 +664,40 @@ export class DaemonCore {
       this.#log.warn('watcher sync failed', { projectId: entry.row.id, error });
     });
     return entry.watchSync;
+  }
+
+  /**
+   * Watch targets of a worktree. They are re-fetched when its `.git` entry points at another git
+   * dir than the cached one (removed and re-added at the same path, review F1). If git-core
+   * still reports the old git dir (its repository cache), null is returned: the watcher then
+   * routes every git-dir event of the project to this worktree until the targets agree.
+   * Undefined on shutdown.
+   */
+  async #watchTargets(e: WorktreeEntry): Promise<WatchTargets | null | undefined> {
+    const actual = e.worktree.bare ? null : await gitDirOf(e.worktree.path);
+    if (e.targets && actual !== null && e.targets.gitDir !== actual) {
+      this.#log.debug('worktree git dir changed; refreshing watch targets', {
+        worktreeId: e.worktree.id,
+      });
+      e.targets = null;
+    }
+    if (!e.targets) {
+      try {
+        e.targets = await this.#git.getWatchTargets(this.#locator(e));
+      } catch (error) {
+        if (isShutdownError(error)) return undefined;
+        this.#log.debug('watch targets unavailable', { worktreeId: e.worktree.id, error });
+        return null;
+      }
+    }
+    if (actual !== null && e.targets.gitDir !== actual) {
+      this.#log.debug('watch targets disagree with the worktree .git file; using none for now', {
+        worktreeId: e.worktree.id,
+      });
+      e.targets = null;
+      return null;
+    }
+    return e.targets;
   }
 
   #newProjectEntry(row: ProjectRow): ProjectEntry {
@@ -913,6 +944,14 @@ export class DaemonCore {
         defaultBranch: this.#defaultBranch(project),
       })
       .then((files) => {
+        // Tracked files under ignored build directories make them watched (review F5).
+        const tracked: string[] = [];
+        for (const f of files) {
+          if (f.status === 'untracked') continue;
+          tracked.push(f.path);
+          if (f.oldPath) tracked.push(f.oldPath);
+        }
+        if (tracked.length) this.#watcher.noteTrackedPaths(entry.worktree.id, tracked);
         if (cacheable && stateHash !== null && project.worktrees.get(entry.worktree.id) === entry) {
           this.#filesCache.set(key, { stateHash, files });
           while (this.#filesCache.size > CORE_DEFAULTS.filesCacheSize) {
