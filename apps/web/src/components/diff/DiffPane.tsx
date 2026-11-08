@@ -321,9 +321,10 @@ function DiffBody({
         <div className="flex h-full min-h-0 flex-col">
           {display.truncated && (
             <Placeholder kind="truncated" title="Diff truncated">
-              The patch exceeds the daemon's hard size cap; only the first{' '}
-              {formatBytes(diff.patch.length)} are shown
-              {diff.byteLength !== null ? ` of ${formatBytes(diff.byteLength)}` : ''}.
+              The patch
+              {diff.byteLength !== null ? ` (${formatBytes(diff.byteLength)})` : ''} exceeds the
+              daemon's hard size cap; only its first{' '}
+              {diff.patch.split('\n').length.toLocaleString('en-US')} lines are shown.
             </Placeholder>
           )}
           <div className="min-h-0 flex-1">

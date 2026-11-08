@@ -20,7 +20,14 @@ export interface Commands {
   focusFilter(): void;
   goInbox(): void;
   toggleHelp(): void;
+  /** Scrolls the diff by a fraction of its height (negative = up). */
+  scrollDiff(fraction: number): void;
   selectEntry(entry: NavEntry): void;
+}
+
+/** The diff pane's scroll container (the @pierre/diffs virtualizer root or a raw <pre>). */
+export function diffScroller(): HTMLElement | null {
+  return document.querySelector<HTMLElement>('[data-diff-scroller]');
 }
 
 export const CONTEXT_STEP = 20;
@@ -136,6 +143,10 @@ export function useCommands(model: AppModel, resolvedTheme: 'light' | 'dark'): C
       toggleHelp() {
         store.setState((s) => ({ helpOpen: !s.helpOpen }));
       },
+      scrollDiff(fraction) {
+        const el = diffScroller();
+        if (el) el.scrollTop += Math.round(el.clientHeight * fraction);
+      },
       selectEntry(entry) {
         select(entry);
       },
@@ -154,6 +165,13 @@ export function isTypingTarget(target: EventTarget | null): boolean {
     return !['checkbox', 'radio', 'button', 'submit', 'reset'].includes(type);
   }
   return false;
+}
+
+function isActivatable(target: EventTarget | null): boolean {
+  return (
+    target instanceof HTMLElement &&
+    target.closest('button, a[href], summary, [role="button"]') !== null
+  );
 }
 
 export const CHORD_TIMEOUT_MS = 1200;
@@ -212,6 +230,14 @@ export function useKeyboardShortcuts(commands: Commands, enabled: boolean) {
           return run(commands.focusFilter);
         case '?':
           return run(commands.toggleHelp);
+        case ' ':
+          // Space still activates a focused button/link.
+          if (isActivatable(event.target)) return;
+          return run(() => commands.scrollDiff(event.shiftKey ? -0.85 : 0.85));
+        case 'd':
+          return run(() => commands.scrollDiff(0.5));
+        case 'u':
+          return run(() => commands.scrollDiff(-0.5));
         case 'g':
           event.preventDefault();
           pendingG = Date.now();
@@ -237,6 +263,8 @@ export const SHORTCUTS: { keys: string[]; description: string }[] = [
   { keys: ['w'], description: 'Hide / show whitespace changes' },
   { keys: ['h'], description: 'Show / hide reviewed files' },
   { keys: ['e'], description: `Expand context (+${CONTEXT_STEP} lines)` },
+  { keys: ['Space', '⇧ Space'], description: 'Scroll the diff down / up a page' },
+  { keys: ['d', 'u'], description: 'Scroll the diff down / up half a page' },
   { keys: ['t'], description: 'Toggle light / dark theme' },
   { keys: ['/'], description: 'Filter worktrees' },
   { keys: ['g', 'i'], description: 'Go to the Inbox' },

@@ -4,7 +4,7 @@
  */
 import { type FileDiffMetadata, parsePatchFiles } from '@pierre/diffs';
 import { FileDiff, Virtualizer } from '@pierre/diffs/react';
-import { memo, useMemo } from 'react';
+import { memo, useEffect, useMemo, useRef } from 'react';
 import { DIFF_THEMES, DiffWorkerPoolProvider } from './DiffWorkerPool.tsx';
 
 export interface DiffRendererProps {
@@ -39,6 +39,17 @@ export const DiffRenderer = memo(function DiffRenderer({
   theme,
 }: DiffRendererProps) {
   const files = useMemo(() => parse(patch, cacheKey), [patch, cacheKey]);
+  const wrapper = useRef<HTMLDivElement>(null);
+  // The virtualizer owns its scroll element; make it keyboard-focusable and findable for the
+  // Space / d / u scroll shortcuts.
+  useEffect(() => {
+    const scroller = wrapper.current?.firstElementChild;
+    if (!(scroller instanceof HTMLElement)) return;
+    scroller.tabIndex = 0;
+    scroller.setAttribute('data-diff-scroller', '');
+    scroller.setAttribute('role', 'region');
+    scroller.setAttribute('aria-label', 'Diff content');
+  });
   const options = useMemo(
     () => ({
       diffStyle: mode,
@@ -64,21 +75,23 @@ export const DiffRenderer = memo(function DiffRenderer({
 
   return (
     <DiffWorkerPoolProvider>
-      <Virtualizer
-        className="od-scroll h-full overflow-auto"
-        contentClassName="flex flex-col gap-3 pb-8"
-      >
-        {files.map((file, index) => (
-          <FileDiff
-            // Typechanges produce two sections (delete + add) for the same path, so the
-            // position is part of the identity; the list never reorders.
-            // biome-ignore lint/suspicious/noArrayIndexKey: stable order, duplicate names possible
-            key={`${index}:${file.prevName ?? ''}:${file.name}`}
-            fileDiff={file}
-            options={{ ...options, disableFileHeader: files.length === 1 }}
-          />
-        ))}
-      </Virtualizer>
+      <div ref={wrapper} className="h-full">
+        <Virtualizer
+          className="od-scroll h-full overflow-auto"
+          contentClassName="flex flex-col gap-3 pb-8"
+        >
+          {files.map((file, index) => (
+            <FileDiff
+              // Typechanges produce two sections (delete + add) for the same path, so the
+              // position is part of the identity; the list never reorders.
+              // biome-ignore lint/suspicious/noArrayIndexKey: stable order, duplicate names possible
+              key={`${index}:${file.prevName ?? ''}:${file.name}`}
+              fileDiff={file}
+              options={{ ...options, disableFileHeader: files.length === 1 }}
+            />
+          ))}
+        </Virtualizer>
+      </div>
     </DiffWorkerPoolProvider>
   );
 });
