@@ -43,6 +43,18 @@ import {
 } from './common.js';
 import { parseServerEvent, type ServerEvent, SseParser } from './events.js';
 import { appendScopeParams, type DiffScope } from './scope.js';
+import {
+  type AppSettingsPatch,
+  type BulkReviewRequest,
+  type BulkReviewResponse,
+  BulkReviewResponseSchema,
+  type SetReviewPolicyRequest,
+  type SettingsResponse,
+  SettingsResponseSchema,
+  type UndoReviewRequest,
+  type UndoReviewResponse,
+  UndoReviewResponseSchema,
+} from './settings.js';
 
 export type ApiClientErrorCode = ApiErrorCode | 'network' | 'invalid_response' | 'aborted';
 
@@ -128,6 +140,13 @@ export interface ApiClient {
   refreshWorktree(worktreeId: string): Promise<RefreshResponse>;
   setReview(body: ReviewRequest): Promise<ReviewResponse>;
   setFocus(body: FocusRequest): Promise<OkResponse>;
+  getSettings(): Promise<SettingsResponse>;
+  updateSettings(body: AppSettingsPatch): Promise<SettingsResponse>;
+  /** `enabled: null` clears the override. Returns the new settings state. */
+  setReviewPolicy(body: SetReviewPolicyRequest): Promise<SettingsResponse>;
+  /** "Mark all as verified" (or unverified) for a worktree, project, folder or everything. */
+  bulkReview(body: BulkReviewRequest): Promise<BulkReviewResponse>;
+  undoReview(body: UndoReviewRequest): Promise<UndoReviewResponse>;
   /** Absolute or same-origin URL of the SSE stream. */
   eventsUrl(): string;
   /** Subscribes via fetch streaming with the bearer token (browsers and Node). */
@@ -339,6 +358,15 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
       request(RefreshResponseSchema, 'POST', p(ROUTES.refreshWorktree, { worktreeId })),
     setReview: (body) => request(ReviewResponseSchema, 'PUT', ROUTES.setReview.path, { body }),
     setFocus: (body) => request(OkResponseSchema, 'PUT', ROUTES.setFocus.path, { body }),
+    getSettings: () => request(SettingsResponseSchema, 'GET', ROUTES.getSettings.path),
+    updateSettings: (body) =>
+      request(SettingsResponseSchema, 'PATCH', ROUTES.updateSettings.path, { body }),
+    setReviewPolicy: (body) =>
+      request(SettingsResponseSchema, 'PUT', ROUTES.setReviewPolicy.path, { body }),
+    bulkReview: (body) =>
+      request(BulkReviewResponseSchema, 'POST', ROUTES.bulkReview.path, { body }),
+    undoReview: (body) =>
+      request(UndoReviewResponseSchema, 'POST', ROUTES.undoReview.path, { body }),
     eventsUrl: () => url(ROUTES.events.path),
     subscribe,
   };

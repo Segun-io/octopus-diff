@@ -67,6 +67,26 @@ export const ReviewChangedEventSchema = z.object({
   reviewed: z.boolean(),
 });
 
+/**
+ * A bulk review call changed many marks at once (the per-file `review.changed` is NOT sent for
+ * each of them). Clients refetch inbox/files for the listed projects.
+ */
+export const ReviewBulkEventSchema = z.object({
+  type: z.literal('review.bulk'),
+  projectIds: z.array(IdSchema),
+  reviewed: z.boolean(),
+  changed: z.number().int().min(0),
+});
+
+/**
+ * Settings or a review-policy override changed. Clients that did not make the change refetch
+ * `GET /api/settings`, projects and the inbox (effective policies may have moved).
+ */
+export const SettingsChangedEventSchema = z.object({
+  type: z.literal('settings.changed'),
+  revision: z.number().int().min(0),
+});
+
 export const ServerEventSchema = z.discriminatedUnion('type', [
   HelloEventSchema,
   WorktreeChangedEventSchema,
@@ -77,6 +97,8 @@ export const ServerEventSchema = z.discriminatedUnion('type', [
   ProjectRemovedEventSchema,
   ScanProgressEventSchema,
   ReviewChangedEventSchema,
+  ReviewBulkEventSchema,
+  SettingsChangedEventSchema,
 ]);
 export type ServerEvent = z.infer<typeof ServerEventSchema>;
 export type ServerEventType = ServerEvent['type'];
@@ -92,6 +114,8 @@ export const SERVER_EVENT_TYPES = [
   'project.removed',
   'scan.progress',
   'review.changed',
+  'review.bulk',
+  'settings.changed',
 ] as const satisfies readonly ServerEventType[];
 
 export const SSE_HEARTBEAT_INTERVAL_MS = 15_000;

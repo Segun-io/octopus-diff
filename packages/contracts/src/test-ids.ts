@@ -77,6 +77,43 @@ export const TEST_IDS = {
   themeToggle: 'theme-toggle',
   /** Keyboard help (`?`). */
   helpDialog: 'help-dialog',
+
+  // --- UX round 1 (additive) ---------------------------------------------------------------
+  /**
+   * "Mark all as verified" for what the user is looking at (the open worktree, or the whole
+   * Inbox). `data-target` = `all` | `folder` | `project` | `worktree`, `data-count` = number of
+   * files it would mark. Disabled (`aria-disabled`) when there is nothing to mark.
+   */
+  markAllButton: 'mark-all-button',
+  /** Transient notice after a bulk change; `data-changed`, `data-reviewed`. Contains the undo button. */
+  bulkReviewToast: 'bulk-review-toast',
+  bulkReviewUndo: 'bulk-review-undo',
+  /**
+   * Review on/off control of the selected worktree (toolbar chip that opens `reviewPolicyMenu`).
+   * `data-enabled` ("true"/"false"), `data-source` (`worktree` | `branch` | `project` | `folder`
+   * | `default`).
+   */
+  reviewPolicyChip: 'review-policy-chip',
+  /** Menu with one item per target level and an "inherit" choice. */
+  reviewPolicyMenu: 'review-policy-menu',
+  /** Menu items; `data-target` (`worktree` | `branch` | `project` | `folder`), `data-state` (`on` | `off` | `inherit`). */
+  reviewPolicyItem: 'review-policy-item',
+  /** Sidebar badge on a worktree/project whose review is disabled. */
+  reviewOffBadge: 'review-off-badge',
+  /** Settings screen (opened with `,`, the sidebar gear or the command palette). */
+  settingsDialog: 'settings-dialog',
+  settingsOpenButton: 'settings-open-button',
+  /** One per settings section nav entry; `data-section` (`general` | `review` | `appearance` | `folders` | `keyboard` | `about`). */
+  settingsSection: 'settings-section',
+  /** The global "review enabled by default" switch. `aria-checked`. */
+  settingsReviewDefault: 'settings-review-default',
+  /** Appearance: the theme picker. `data-theme-id` on each `themeOption`. */
+  themePicker: 'theme-picker',
+  themeOption: 'theme-option',
+  /** Command palette (Ctrl/Cmd+K). */
+  commandPalette: 'command-palette',
+  commandPaletteInput: 'command-palette-input',
+  commandPaletteItem: 'command-palette-item',
 } as const;
 
 export type TestId = (typeof TEST_IDS)[keyof typeof TEST_IDS];

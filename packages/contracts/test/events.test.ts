@@ -70,6 +70,8 @@ describe('server events', () => {
       patchHash: 'p',
       reviewed: true,
     },
+    { type: 'review.bulk', projectIds: [id], reviewed: true, changed: 12 },
+    { type: 'settings.changed', revision: 3 },
   ];
 
   it('covers every event type in SERVER_EVENT_TYPES', () => {

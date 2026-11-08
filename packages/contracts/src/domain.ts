@@ -10,6 +10,7 @@ import {
   RepoPathSchema,
   TimestampSchema,
 } from './common.js';
+import { EffectiveReviewPolicySchema } from './settings.js';
 
 const Count = z.number().int().min(0);
 
@@ -248,6 +249,11 @@ export const WorktreeListItemSchema = z.object({
   /** Null until the first summary is computed, or when computing it failed (see `error`). */
   summary: WorktreeSummarySchema.nullable(),
   error: ApiErrorBodySchema.shape.error.nullable(),
+  /**
+   * Resolved review policy (settings.ts). Always sent by current daemons; absent means "enabled"
+   * (older daemons), so clients must treat `undefined` as `{ enabled: true, source: 'default' }`.
+   */
+  review: EffectiveReviewPolicySchema.optional(),
 });
 export type WorktreeListItem = z.infer<typeof WorktreeListItemSchema>;
 
@@ -263,5 +269,7 @@ export const InboxEntrySchema = z.object({
   worktree: WorktreeSchema,
   summary: WorktreeSummarySchema,
   files: z.array(ChangedFileSchema),
+  /** Same meaning as `WorktreeListItem.review`; absent = enabled. */
+  review: EffectiveReviewPolicySchema.optional(),
 });
 export type InboxEntry = z.infer<typeof InboxEntrySchema>;

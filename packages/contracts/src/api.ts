@@ -52,6 +52,12 @@ export const ROUTES = {
   setReview: { method: 'PUT', path: '/api/review' },
   setFocus: { method: 'PUT', path: '/api/focus' },
   events: { method: 'GET', path: '/api/events' },
+  // --- UX round 1 (additive; see settings.ts) ---
+  getSettings: { method: 'GET', path: '/api/settings' },
+  updateSettings: { method: 'PATCH', path: '/api/settings' },
+  setReviewPolicy: { method: 'PUT', path: '/api/review-policy' },
+  bulkReview: { method: 'POST', path: '/api/review/bulk' },
+  undoReview: { method: 'POST', path: '/api/review/undo' },
 } as const;
 export type RouteName = keyof typeof ROUTES;
 
@@ -156,7 +162,10 @@ export type InboxQuery = z.output<typeof InboxQuerySchema>;
 
 export const InboxResponseSchema = z.object({
   scope: DiffScopeSchema,
-  /** Worktrees with at least one changed file in `scope` (after `onlyUnreviewed` filtering). */
+  /**
+   * Worktrees with at least one changed file in `scope` (after `onlyUnreviewed` filtering).
+   * With `onlyUnreviewed`, worktrees whose review policy is disabled are left out entirely.
+   */
   entries: z.array(InboxEntrySchema),
   generatedAt: TimestampSchema,
 });
