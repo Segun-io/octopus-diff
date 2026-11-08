@@ -1,0 +1,433 @@
+// @vitest-environment jsdom
+import { createApiClient, type ServerEvent, TEST_IDS } from '@octopus-diff/contracts';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { MockBackend, type MockDataset } from '../mock/backend.ts';
+import { createMockFetch } from '../mock/router.ts';
+import { App } from '../src/App.tsx';
+import type { EventSourceLike } from '../src/api/hooks.ts';
+import { createQueryClient } from '../src/api/queries.ts';
+import { createUiStore, type UiStore } from '../src/state/ui.tsx';
+
+// @pierre/diffs needs a real browser (web components, workers); stub the renderer.
+vi.mock('../src/components/diff/DiffRenderer.tsx', () => ({
+  DiffRenderer: ({ patch, mode }: { patch: string; mode: string }) => (
+    <pre data-testid="stub-diff" data-mode={mode}>
+      {patch}
+    </pre>
+  ),
+}));
+
+class FakeEventSource implements EventSourceLike {
+  onopen: ((event: Event) => void) | null = null;
+  onerror: ((event: Event) => void) | null = null;
+  readyState = 1;
+  private listeners = new Map<string, ((event: MessageEvent) => void)[]>();
+  addEventListener(type: string, listener: (event: MessageEvent) => void) {
+    this.listeners.set(type, [...(this.listeners.get(type) ?? []), listener]);
+  }
+  dispatch(event: ServerEvent) {
+    for (const l of this.listeners.get(event.type) ?? []) {
+      l(new MessageEvent(event.type, { data: JSON.stringify(event) }));
+    }
+  }
+  close() {
+    this.readyState = 2;
+  }
+}
+
+interface Harness {
+  backend: MockBackend;
+  store: UiStore;
+  user: ReturnType<typeof userEvent.setup>;
+  requests: string[];
+}
+
+function setup(dataset: MockDataset = 'demo', opts: { token?: string } = {}): Harness {
+  const backend = new MockBackend({ dataset });
+  const mockFetch = createMockFetch(backend, opts.token ? { token: opts.token } : {});
+  const requests: string[] = [];
+  const api = createApiClient({
+    baseUrl: 'http://mock.local',
+    fetch: (input, init) => {
+      requests.push(`${init?.method ?? 'GET'} ${input}`);
+      return mockFetch(input, init);
+    },
+  });
+  const store = createUiStore({}, false);
+  const factory = () => {
+    const es = new FakeEventSource();
+    backend.subscribe((e) => es.dispatch(e));
+    queueMicrotask(() => es.onopen?.(new Event('open')));
+    return es;
+  };
+  render(
+    <App
+      api={api}
+      queryClient={createQueryClient()}
+      uiStore={store}
+      eventSourceFactory={factory}
+    />,
+  );
+  return { backend, store, user: userEvent.setup(), requests };
+}
+
+const app = () => screen.getByTestId(TEST_IDS.app);
+const viewer = () => screen.getByTestId(TEST_IDS.diffViewer);
+const viewerPath = () => viewer().getAttribute('data-path');
+
+async function ready() {
+  await waitFor(() => expect(app().getAttribute('data-ready')).toBe('true'));
+  await waitFor(() => expect(viewer().getAttribute('data-state')).toBe('ready'));
+}
+
+async function press(user: Harness['user'], keys: string) {
+  await act(async () => {
+    await user.keyboard(keys);
+  });
+}
+
+beforeEach(() => {
+  localStorage.clear();
+});
+afterEach(() => {
+  cleanup();
+  document.documentElement.className = '';
+});
+
+describe('app shell', () => {
+  it('renders the inbox, sidebar items and opens the first file', async () => {
+    setup();
+    await ready();
+    const inbox = screen.getByTestId(TEST_IDS.inboxItem);
+    expect(inbox.getAttribute('data-count')).toBe('5');
+    expect(inbox.getAttribute('aria-current')).toBe('true');
+    expect(screen.getAllByTestId(TEST_IDS.projectItem)).toHaveLength(5);
+    const auth = screen
+      .getAllByTestId(TEST_IDS.worktreeItem)
+      .find((el) => el.getAttribute('data-branch') === 'feat/auth');
+    expect(auth?.dataset).toMatchObject({
+      dirty: 'true',
+      ahead: '4',
+      behind: '0',
+      conflicted: '1',
+    });
+    const infra = screen
+      .getAllByTestId(TEST_IDS.worktreeItem)
+      .find((el) => el.getAttribute('data-branch') === 'trunk');
+    // No default branch and no upstream: ahead/behind are null → empty attributes.
+    expect(infra?.dataset).toMatchObject({ dirty: 'false', ahead: '', behind: '' });
+    expect(screen.getAllByTestId(TEST_IDS.fileGroup)).toHaveLength(5);
+    expect(viewerPath()).toBe('content/intro.md');
+    expect((await screen.findByTestId('stub-diff')).textContent).toContain('<<<<<<< HEAD');
+  });
+
+  it('shows the empty state and adds a project through the form', async () => {
+    const { user } = setup('empty');
+    await waitFor(() => screen.getByTestId(TEST_IDS.emptyState));
+    await user.type(screen.getByTestId(TEST_IDS.addProjectPathInput), '/home/dev/code/fresh');
+    await user.click(screen.getByTestId(TEST_IDS.addProjectSubmit));
+    await ready();
+    expect(screen.getAllByTestId(TEST_IDS.projectItem)[0]?.getAttribute('data-project-name')).toBe(
+      'fresh',
+    );
+  });
+
+  it('explains how to authenticate on 401', async () => {
+    setup('demo', { token: 'secret' });
+    const banner = await screen.findByTestId(TEST_IDS.errorBanner);
+    expect(banner.getAttribute('data-kind')).toBe('auth');
+    expect(banner.textContent).toContain('octopus-diff serve');
+    expect(app().getAttribute('data-ready')).toBe('false');
+  });
+});
+
+describe('keyboard', () => {
+  it('j/k move between files and J/K between worktrees; g i returns to the inbox', async () => {
+    const { user } = setup();
+    await ready();
+    await press(user, 'j');
+    expect(viewerPath()).toBe('README.md');
+    await press(user, 'j');
+    expect(viewerPath()).toBe('src/server/router.ts');
+    await press(user, 'k');
+    expect(viewerPath()).toBe('README.md');
+
+    await press(user, 'J'); // first worktree: docs-site (detached)
+    const current = () =>
+      document.querySelector(`[data-testid="${TEST_IDS.worktreeItem}"][aria-current="true"]`);
+    await waitFor(() => expect(current()?.getAttribute('data-branch')).toBe(''));
+    await press(user, 'J');
+    await waitFor(() => expect(current()?.getAttribute('data-branch')).toBe('trunk'));
+    await press(user, 'K');
+    await press(user, 'K');
+    await waitFor(() =>
+      expect(screen.getByTestId(TEST_IDS.inboxItem).getAttribute('aria-current')).toBe('true'),
+    );
+
+    fireEvent.click(
+      screen
+        .getAllByTestId(TEST_IDS.worktreeItem)
+        .find((el) => el.dataset.branch === 'fix/cache') as HTMLElement,
+    );
+    await waitFor(() => expect(viewerPath()).toBe('src/lib/cache.ts'));
+    await press(user, 'gi');
+    await waitFor(() =>
+      expect(screen.getByTestId(TEST_IDS.inboxItem).getAttribute('aria-current')).toBe('true'),
+    );
+    // Selection survives the view change because the file is in the inbox too.
+    expect(viewerPath()).toBe('src/lib/cache.ts');
+  });
+
+  it('r toggles reviewed optimistically and n jumps to the next unreviewed file', async () => {
+    const { user, requests } = setup();
+    await ready();
+    const toggle = () => screen.getByTestId(TEST_IDS.reviewToggle);
+    expect(toggle().getAttribute('aria-pressed')).toBe('false');
+    await press(user, 'r');
+    // Optimistic: the toggle flips before any refetch.
+    expect(toggle().getAttribute('aria-pressed')).toBe('true');
+    await waitFor(() =>
+      expect(requests.some((r) => r.startsWith('PUT http://mock.local/api/review'))).toBe(true),
+    );
+    const item = document.querySelector(
+      `[data-testid="${TEST_IDS.fileItem}"][data-path="content/intro.md"]`,
+    );
+    expect(item?.getAttribute('data-reviewed')).toBe('true');
+
+    await press(user, 'n');
+    expect(viewerPath()).toBe('README.md');
+    await press(user, 'r');
+    await press(user, 'n');
+    expect(viewerPath()).toBe('src/server/router.ts');
+    // Hide reviewed files: the two reviewed files leave the list.
+    fireEvent.click(screen.getByTestId(TEST_IDS.showReviewedToggle));
+    await waitFor(() =>
+      expect(
+        document.querySelector(`[data-testid="${TEST_IDS.fileItem}"][data-path="README.md"]`),
+      ).toBeNull(),
+    );
+    expect(screen.getByTestId(TEST_IDS.showReviewedToggle).getAttribute('aria-pressed')).toBe(
+      'false',
+    );
+    // Showing reviewed files again brings them back, with their checkmark.
+    fireEvent.click(screen.getByTestId(TEST_IDS.showReviewedToggle));
+    await waitFor(() =>
+      expect(
+        document
+          .querySelector(`[data-testid="${TEST_IDS.fileItem}"][data-path="README.md"]`)
+          ?.getAttribute('data-reviewed'),
+      ).toBe('true'),
+    );
+  });
+
+  it('n crosses projects from a worktree view and switches worktree', async () => {
+    const { user, store } = setup();
+    await ready();
+    fireEvent.click(
+      screen
+        .getAllByTestId(TEST_IDS.worktreeItem)
+        .find((el) => el.dataset.branch === 'fix/cache') as HTMLElement,
+    );
+    await waitFor(() => expect(viewerPath()).toBe('src/lib/cache.ts'));
+    await press(user, 'j'); // test/cache.test.ts, the last file of fix/cache
+    expect(viewerPath()).toBe('test/cache.test.ts');
+    await press(user, 'n'); // next worktree in sidebar order with unreviewed files: web-dashboard main
+    await waitFor(() => expect(viewerPath()).toBe('package.json'));
+    const view = store.getState().view;
+    expect(view.kind === 'worktree' && view.worktreeId).toBe(
+      viewer().getAttribute('data-worktree-id'),
+    );
+  });
+
+  it('s toggles split/unified and shortcuts do not fire while typing', async () => {
+    const { user } = setup();
+    await ready();
+    const modeToggle = screen.getByTestId(TEST_IDS.diffModeToggle);
+    expect(modeToggle.getAttribute('data-mode')).toBe('split');
+    await press(user, 's');
+    expect(modeToggle.getAttribute('data-mode')).toBe('unified');
+    expect(viewer().getAttribute('data-mode')).toBe('unified');
+
+    await press(user, '/');
+    const filter = screen.getByTestId(TEST_IDS.sidebarFilter) as HTMLInputElement;
+    expect(document.activeElement).toBe(filter);
+    await press(user, 'cache');
+    expect(filter.value).toBe('cache');
+    expect(viewer().getAttribute('data-mode')).toBe('unified'); // 's' was typed, not a shortcut
+    expect(viewerPath()).toBe('content/intro.md'); // 'c','a','h','e' did nothing either
+    expect(screen.getAllByTestId(TEST_IDS.worktreeItem)).toHaveLength(1);
+    await press(user, '{Escape}');
+    expect(filter.value).toBe('');
+    await press(user, '{Escape}');
+    expect(document.activeElement).not.toBe(filter);
+
+    await press(user, '?');
+    expect(screen.getByTestId(TEST_IDS.helpDialog)).toBeTruthy();
+    await press(user, '{Escape}');
+    expect(screen.queryByTestId(TEST_IDS.helpDialog)).toBeNull();
+  });
+});
+
+describe('scopes and placeholders', () => {
+  async function openAuth(user: Harness['user']) {
+    fireEvent.click(
+      screen
+        .getAllByTestId(TEST_IDS.worktreeItem)
+        .find((el) => el.dataset.branch === 'feat/auth') as HTMLElement,
+    );
+    await screen.findByTestId(TEST_IDS.fileList);
+    await waitFor(() => expect(viewer().getAttribute('data-path')).toBe('assets/logo.png'));
+    void user;
+  }
+  async function openFile(path: string) {
+    const list = await screen.findByTestId(TEST_IDS.fileList);
+    // jsdom has no layout, so pick the row through the commands instead of scrolling.
+    let item = within(list)
+      .queryAllByTestId(TEST_IDS.fileItem)
+      .find((el) => el.dataset.path === path);
+    for (let i = 0; i < 40 && !item; i++) {
+      fireEvent.keyDown(window, { key: 'j' });
+      item = within(list)
+        .queryAllByTestId(TEST_IDS.fileItem)
+        .find((el) => el.dataset.path === path);
+    }
+    if (!item) throw new Error(`file ${path} not rendered`);
+    fireEvent.click(item);
+    await waitFor(() => expect(viewerPath()).toBe(path));
+    await waitFor(() => expect(viewer().getAttribute('data-state')).toBe('ready'));
+  }
+  const placeholderKind = () =>
+    screen.queryByTestId(TEST_IDS.diffPlaceholder)?.getAttribute('data-kind');
+
+  it('shows placeholders for binary, submodule, symlink, too-large and truncated diffs', async () => {
+    const { user } = setup();
+    await ready();
+    await openAuth(user);
+    await openFile('assets/logo.png');
+    expect(placeholderKind()).toBe('binary');
+    await openFile('config/current.json');
+    expect(placeholderKind()).toBe('symlink');
+    await openFile('data/fixtures.min.json');
+    expect(placeholderKind()).toBe('too-large');
+    fireEvent.click(screen.getByTestId(TEST_IDS.diffLoadAnyway));
+    await waitFor(() => expect(placeholderKind()).toBe('truncated'));
+    expect((await screen.findByTestId('stub-diff')).textContent?.length).toBeGreaterThan(1000);
+    await openFile('scripts/deploy.sh');
+    expect(placeholderKind()).toBe('empty');
+  });
+
+  it('changes scope and requests the matching files', async () => {
+    const { requests } = setup();
+    await ready();
+    const select = screen.getByTestId(TEST_IDS.scopeSelect) as HTMLSelectElement;
+    fireEvent.change(select, { target: { value: 'staged' } });
+    await waitFor(() => expect(select.getAttribute('data-scope')).toBe('staged'));
+    await waitFor(() =>
+      expect(requests.some((r) => r.includes('/api/inbox?scope=staged'))).toBe(true),
+    );
+    await waitFor(() => expect(viewer().getAttribute('data-state')).toBe('ready'));
+    // Commit scope is only offered with a worktree selected.
+    const commitOption = within(select).getByRole('option', {
+      name: /Commit/,
+    }) as HTMLOptionElement;
+    expect(commitOption.disabled).toBe(true);
+    fireEvent.click(
+      screen
+        .getAllByTestId(TEST_IDS.worktreeItem)
+        .find((el) => el.dataset.branch === 'feat/auth') as HTMLElement,
+    );
+    await waitFor(() => expect(commitOption.disabled).toBe(false));
+    fireEvent.change(select, { target: { value: 'commit' } });
+    await waitFor(() => expect(select.getAttribute('data-scope')).toMatch(/^commit:[0-9a-f]{40}$/));
+    await waitFor(() =>
+      expect(requests.some((r) => /files\?scope=commit&sha=/.test(r))).toBe(true),
+    );
+    // Going back to the inbox resets commit scope to working.
+    fireEvent.click(screen.getByTestId(TEST_IDS.inboxItem));
+    await waitFor(() => expect(select.getAttribute('data-scope')).toBe('working'));
+  });
+
+  it('whitespace toggle requests ignoreWhitespace and keeps the file', async () => {
+    const { requests, user } = setup();
+    await ready();
+    await openAuth(user);
+    await openFile('src/format.ts');
+    fireEvent.click(screen.getByTestId(TEST_IDS.whitespaceToggle));
+    await waitFor(() =>
+      expect(requests.some((r) => r.includes('ignoreWhitespace=true'))).toBe(true),
+    );
+    await waitFor(() => expect(placeholderKind()).toBe('empty'));
+    expect(viewerPath()).toBe('src/format.ts');
+  });
+});
+
+describe('live updates', () => {
+  it('refreshes on worktree.changed, keeps the selection and shows the updated banner', async () => {
+    const { backend, requests } = setup();
+    await ready();
+    fireEvent.click(
+      screen
+        .getAllByTestId(TEST_IDS.worktreeItem)
+        .find((el) => el.dataset.branch === 'feat/auth') as HTMLElement,
+    );
+    await waitFor(() => expect(viewer().getAttribute('data-state')).toBe('ready'));
+    await waitFor(() => expect(viewerPath()).toBe('assets/logo.png'));
+    fireEvent.click(
+      within(await screen.findByTestId(TEST_IDS.fileList))
+        .getAllByTestId(TEST_IDS.fileItem)
+        .find((el) => el.dataset.path === 'src/auth/session.ts') as HTMLElement,
+    );
+    await waitFor(() => expect(viewerPath()).toBe('src/auth/session.ts'));
+    await waitFor(() => expect(viewer().getAttribute('data-state')).toBe('ready'));
+    const hash = viewer().getAttribute('data-patch-hash');
+    const worktreeId = viewer().getAttribute('data-worktree-id') ?? '';
+    const before = requests.length;
+
+    act(() => {
+      backend.mutate(worktreeId, 'edit', 'src/auth/session.ts');
+    });
+    await waitFor(() => expect(viewer().getAttribute('data-patch-hash')).not.toBe(hash));
+    expect(viewerPath()).toBe('src/auth/session.ts');
+    expect(screen.getByTestId(TEST_IDS.diffUpdatedBanner)).toBeTruthy();
+    const refetched = requests.slice(before);
+    expect(refetched.some((r) => r.includes(`/api/worktrees/${worktreeId}/files`))).toBe(true);
+    expect(refetched.some((r) => r.includes(`/api/worktrees/${worktreeId}/diff`))).toBe(true);
+    // Other worktrees' files are not refetched.
+    expect(refetched.filter((r) => r.includes('/files') && !r.includes(worktreeId))).toHaveLength(
+      0,
+    );
+  });
+
+  it('a reverted open file hands the selection to its neighbor', async () => {
+    const { backend } = setup();
+    await ready();
+    fireEvent.click(
+      screen
+        .getAllByTestId(TEST_IDS.worktreeItem)
+        .find((el) => el.dataset.branch === 'fix/cache') as HTMLElement,
+    );
+    await waitFor(() => expect(viewerPath()).toBe('src/lib/cache.ts'));
+    const worktreeId = viewer().getAttribute('data-worktree-id') ?? '';
+    act(() => {
+      // Mutation "revert" removes a random editable file; target the open one.
+      backend.mutate(worktreeId, 'revert', 'src/lib/cache.ts');
+    });
+    await waitFor(() => expect(viewerPath()).toBe('test/cache.test.ts'));
+  });
+
+  it('reports focus to the daemon', async () => {
+    const { backend } = setup();
+    await ready();
+    fireEvent.click(
+      screen
+        .getAllByTestId(TEST_IDS.worktreeItem)
+        .find((el) => el.dataset.branch === 'fix/cache') as HTMLElement,
+    );
+    const id = screen
+      .getAllByTestId(TEST_IDS.worktreeItem)
+      .find((el) => el.dataset.branch === 'fix/cache')?.dataset.worktreeId;
+    await waitFor(() => expect(backend.focus).toBe(id));
+  });
+});

@@ -1,1 +1,115 @@
 @import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme inline {
+  --color-canvas: var(--od-canvas);
+  --color-surface: var(--od-surface);
+  --color-raised: var(--od-raised);
+  --color-line: var(--od-line);
+  --color-fg: var(--od-fg);
+  --color-muted: var(--od-muted);
+  --color-faint: var(--od-faint);
+  --color-accent: var(--od-accent);
+  --color-accent-fg: var(--od-accent-fg);
+  --color-add: var(--od-add);
+  --color-del: var(--od-del);
+  --color-mod: var(--od-mod);
+  --color-warn: var(--od-warn);
+  --color-danger: var(--od-danger);
+  --color-selected: var(--od-selected);
+  --color-hover: var(--od-hover);
+  --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+}
+
+:root {
+  color-scheme: light;
+  --od-canvas: #f6f7f9;
+  --od-surface: #ffffff;
+  --od-raised: #eef0f3;
+  --od-line: #dadde3;
+  --od-fg: #1d2129;
+  --od-muted: #5b6270;
+  --od-faint: #8a909c;
+  --od-accent: #3d63dd;
+  --od-accent-fg: #ffffff;
+  --od-add: #1a7f37;
+  --od-del: #c62a2f;
+  --od-mod: #9a6700;
+  --od-warn: #9a6700;
+  --od-danger: #c62a2f;
+  --od-selected: #dfe7ff;
+  --od-hover: #eceff4;
+}
+
+:root.dark {
+  color-scheme: dark;
+  --od-canvas: #0e1014;
+  --od-surface: #15181d;
+  --od-raised: #1c2027;
+  --od-line: #2a2f38;
+  --od-fg: #e3e6eb;
+  --od-muted: #a0a6b1;
+  --od-faint: #6c7380;
+  --od-accent: #6e8cff;
+  --od-accent-fg: #0e1014;
+  --od-add: #4ac26b;
+  --od-del: #ff7b72;
+  --od-mod: #d6a243;
+  --od-warn: #d6a243;
+  --od-danger: #ff7b72;
+  --od-selected: #23304f;
+  --od-hover: #1d222a;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--od-canvas);
+  color: var(--od-fg);
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: 13px;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Visible focus rings for keyboard users everywhere. */
+:focus-visible {
+  outline: 2px solid var(--od-accent);
+  outline-offset: 1px;
+}
+
+.od-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: var(--od-line) transparent;
+}
+
+kbd {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  border: 1px solid var(--od-line);
+  background: var(--od-raised);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .od-fade-in {
+    animation: od-fade-in 160ms ease-out;
+  }
+}
+
+@keyframes od-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(-2px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}

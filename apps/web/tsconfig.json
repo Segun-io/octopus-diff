@@ -5,12 +5,12 @@
     "module": "esnext",
     "moduleResolution": "bundler",
     "jsx": "react-jsx",
-    "types": ["vite/client"],
+    "types": ["vite/client", "node"],
     "noEmit": true,
     "allowImportingTsExtensions": true,
     "declaration": false,
     "declarationMap": false,
     "sourceMap": false
   },
-  "include": ["src", "test", "vite.config.ts", "vitest.config.ts"]
+  "include": ["src", "test", "mock", "scripts", "vite.config.ts", "vitest.config.ts"]
 }
