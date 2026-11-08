@@ -66,7 +66,12 @@ describe('watch wiring in DaemonCore', () => {
     const api = client(daemon);
     await api.addProject({ path: repo.mainPath });
     await eventually(() => daemon.core.watcher.isWatched(hashId('/')), 5000);
-    const health = await api.health();
+    // The main worktree's native subscription completes asynchronously; until it does the mode
+    // reads 'polling' (no native worktree yet). Wait for the settled state instead of racing it.
+    const health = await eventually(async () => {
+      const h = await api.health();
+      return h.watcher.mode === 'mixed' ? h : null;
+    }, 5000);
     expect(health.watcher.mode).toBe('mixed');
     expect(health.watcher.warnings).toHaveLength(1);
     expect(health.watcher.warnings[0]).toMatch(/Not watching 1 worktree folder.*filesystem root/);
