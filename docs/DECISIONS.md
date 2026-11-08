@@ -720,3 +720,37 @@ All 2026-11-08 · ux-daemon, accepted by the lead after re-running `pnpm check` 
     degradation is tested. Measured (30 repos x 3 worktrees, 360 changed files): `GET /api/projects` 2.4 -> 2.6 ms, `GET
     /api/inbox` warm 4.0 -> 4.2 ms, bulk `all` cold 493 ms / warm 2.7 ms; 18,090 changed files: bulk cold 1486 ms (equal to
     the inbox's own cold aggregation), warm 51 ms.
+
+### UX round 1 — web stream (`ux/web`, folded in by the lead)
+
+All 2026-11-08 · ux-web, accepted by the lead after merging with `main` and the daemon stream (`pnpm check` exit 0, web 77
+tests; full e2e 48 passed). Full text: `docs/reports/ux-web.md`, design docs in `docs/design/` (IDENTITY, THEMING, FOLDERS).
+
+13. **Identity.** Mark = round mantle, five unequal arms, slit eyes (the literal "arms as diff lines" read as a skull at 16 px;
+    three directions were rendered and compared). Brand hue **ink violet** (`#5b47d6` light / `#9d90ff` dark) replaces the generic
+    blue: furthest from the add/delete/modified/danger hues and keeps a blue component for red-green colour-blind users.
+    `faint` text is held to AA too (paths and hints are read, not decoration); an AA contrast unit test over every registered
+    theme enforces it. System font stacks only (CSP). No new dependencies (ICO writer, contrast maths, fuzzy matching and the
+    context menu are small hand-written modules).
+14. **Themes are data.** Compiled at build time by a Vite plugin into the main stylesheet (so the external `public/theme-init.js`
+    only sets `data-theme` before first paint; the CSP forbids inline scripts); `.dark` is kept for Tailwind. Prefs v2 in the same
+    `octopus-diff:prefs` key with in-place v1 migration; one light slot and one dark slot (`{ mode, light, dark }`); unknown ids and
+    kind mismatches fall back to the brand theme of the slot. Shipped: Octopus Dark, Octopus Light, Octopus Contrast.
+15. **Review UI choices.** Inbox "mark all" sends per-worktree `paths` requests when any sidebar filter or "show reviewed" is
+    active (and several undo tokens are undone together), otherwise one `all` request; confirm-before-bulk defaults on but only
+    triggers for more than one worktree (undo always exists); review-off worktrees are dimmed in the Inbox by default
+    (`dim | hide | show`). **F2** is fixed by marking the patch on screen (the diff query cache, keyed like the pane's query), with
+    the list entry only as the loading fallback.
+16. **Shell.** Overview replaces the three-pane layout for folder/project selections; sidebar hierarchy Inbox > Folders > Projects >
+    Worktrees with "Added directly"; source chip from path patterns only (no agent integration); the activity pulse derives from
+    `summary.updatedAt` plus a 2 s tick (presentation only; needs the daemon to keep bumping `updatedAt` on every state change);
+    the sidebar gear is the only `settingsOpenButton`. View registry with `Changes` and `Overview` implemented; Files/History are
+    documented extension points in `docs/design/FOLDERS.md`, not UI.
+17. **Security/QoL findings handled here.** SEC-05: bidi/invisible characters are escaped as `⟨U+XXXX⟩` in the patch text handed to
+    the renderer (not only a banner), file names are escaped, `data-suspicious` marks rows (`patchHash` untouched). F10: pure
+    comparator (`compareTreeOrder`) so list, `j`/`k`, `n` and the tree agree. F9: seen/changed tracking keyed by file + scope.
+    Added `TEST_IDS.diffUnicodeWarning` to the contracts (additive).
+18. **Seam bug found at integration (lead).** `main`'s perf `patchInbox` rebuilt inbox entries without the new `review` field, which
+    would have turned review back on for a review-disabled worktree after any live update (an absent field means "enabled").
+    Fixed in `api/cache.ts` (carry `review` over from the refetched projects list) with a regression test. Lesson recorded in
+    COORDINATION: code that rebuilds API objects by hand must be reviewed whenever a contract gains a field.

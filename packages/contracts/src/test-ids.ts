@@ -62,6 +62,8 @@ export const TEST_IDS = {
   diffUpdatedBanner: 'diff-updated-banner',
   /** Marks the open file reviewed / unreviewed. `aria-pressed`. */
   reviewToggle: 'review-toggle',
+  /** Banner above a diff whose text contains bidi/invisible control characters (SEC-05). */
+  diffUnicodeWarning: 'diff-unicode-warning',
 
   // --- toolbar ---------------------------------------------------------------------------
   /** `data-scope` = `scopeKey(scope)`. */
