@@ -14,11 +14,17 @@ import {
   type Worktree,
 } from '@octopus-diff/contracts';
 import { bstrFromBuffer, bstrToUtf8 } from './bstr.js';
-import { assertAbsolute, type GitContext, type RepoInfo } from './context.js';
+import {
+  assertAbsolute,
+  dotGitTarget,
+  type GitContext,
+  type RepoInfo,
+  readSmallFile,
+} from './context.js';
 import { exists, realpathOrSelf } from './fs-utils.js';
 import { hashId } from './hash.js';
 import { forEachRefFormat, parseForEachRef } from './parse/refs.js';
-import { parseWorktreeList } from './parse/worktrees.js';
+import { parseWorktreeList, type WorktreeRecord } from './parse/worktrees.js';
 
 /** Hard cap on directories visited by one scan. */
 export const SCAN_MAX_DIRS = 100_000;
@@ -52,7 +58,13 @@ export async function resolveProject(ctx: GitContext, input: string): Promise<Re
   // The worktree containing the input, if any (none inside a git dir or a bare repository).
   const toplevel = repo.toplevel;
 
-  const projectRepo: RepoInfo = { ...repo, cwd: repo.commonDir };
+  // Project-level commands (worktree list, refs) run against the common dir, without a work tree.
+  const projectRepo: RepoInfo = {
+    ...repo,
+    cwd: repo.commonDir,
+    gitDir: repo.commonDir,
+    toplevel: null,
+  };
   const [worktrees, detectedDefaultBranch] = await Promise.all([
     listWorktreesIn(ctx, projectRepo),
     detectDefaultBranchIn(ctx, projectRepo),
@@ -95,15 +107,28 @@ async function listWorktreesIn(ctx: GitContext, repo: RepoInfo): Promise<Worktre
   const result = await ctx.git(repo, ['worktree', 'list', '--porcelain', ...(useZ ? ['-z'] : [])]);
   const records = parseWorktreeList(result.stdout.toString('utf8'), useZ);
   const projectId = hashId(repo.commonDir);
-  return Promise.all(
+  const adminRoot = await realpathOrSelf(path.join(repo.commonDir, 'worktrees'));
+  const mainWorkTree = await linkedMainWorkTree(ctx, repo, records[0]);
+  const worktrees = await Promise.all(
     records.map(async (record, index): Promise<Worktree> => {
-      const present = await exists(record.path);
-      const worktreePath = present ? await realpathOrSelf(record.path) : record.path;
+      const recordPath = index === 0 && mainWorkTree !== null ? mainWorkTree : record.path;
+      const present = await exists(recordPath);
+      const worktreePath = present ? await realpathOrSelf(recordPath) : recordPath;
       const branch = record.branch
         ? record.branch.startsWith('refs/heads/')
           ? record.branch.slice('refs/heads/'.length)
           : record.branch
         : null;
+      // Linked worktree records come from `<common>/worktrees/<id>/gitdir`, which anything that
+      // can write the repository can forge (SEC-07). Only trust a record whose directory points
+      // back at an admin dir of this repository that points at it; otherwise report it as
+      // prunable and missing, so it is neither watched nor summarized.
+      const linked = index > 0 && !record.bare;
+      const valid = !linked || !present || (await pointsBack(worktreePath, adminRoot));
+      // git reports the common dir itself as the main entry when the work tree is set only by
+      // `core.worktree`. Unless that work tree links back (see linkedMainWorkTree), git-core
+      // never uses it (SEC-06), and the entry is reported as bare.
+      const bare = record.bare || (index === 0 && worktreePath === repo.commonDir);
       return {
         id: hashId(worktreePath),
         projectId,
@@ -112,13 +137,59 @@ async function listWorktreesIn(ctx: GitContext, repo: RepoInfo): Promise<Worktre
         headSha: record.head,
         detached: record.detached,
         isMain: index === 0,
-        bare: record.bare,
+        bare,
         locked: record.locked,
-        prunable: record.prunable,
-        missing: !present,
+        prunable: record.prunable || !valid,
+        missing: !present || !valid,
       };
     }),
   );
+  // Two records for the same directory (a copied admin dir): keep the first.
+  const seen = new Set<string>();
+  return worktrees.filter((worktree) => {
+    if (seen.has(worktree.id)) return false;
+    seen.add(worktree.id);
+    return true;
+  });
+}
+
+/**
+ * For a main entry that git reports as the common dir although it is not bare (its work tree
+ * comes from `core.worktree`, e.g. an absorbed submodule's `.git/modules/<name>`), the work
+ * tree, if it links back: its `.git` entry must refer to this common dir. A `core.worktree`
+ * pointing anywhere else (SEC-06: `/home/user`, `../..`) is ignored. Null otherwise.
+ */
+async function linkedMainWorkTree(
+  ctx: GitContext,
+  repo: RepoInfo,
+  main: WorktreeRecord | undefined,
+): Promise<string | null> {
+  if (!main || main.bare) return null;
+  if ((await realpathOrSelf(main.path)) !== repo.commonDir) return null;
+  // With an explicit --git-dir and no --work-tree, git computes the work tree from
+  // core.worktree (or takes the cwd, the common dir, which never links back).
+  const result = await ctx.git(repo, ['rev-parse', '--show-toplevel'], { okExitCodes: [0, 128] });
+  const candidate = result.exitCode === 0 ? result.stdout.toString('utf8').trim() : '';
+  if (!candidate || !path.isAbsolute(candidate)) return null;
+  const real = await realpathOrSelf(candidate);
+  if (real === repo.commonDir) return null;
+  return (await dotGitTarget(real)) === repo.commonDir ? real : null;
+}
+
+/**
+ * True if `worktreePath/.git` refers to an admin dir directly under `adminRoot`
+ * (`<common>/worktrees`) whose `gitdir` file refers back to `worktreePath/.git`: the two-way
+ * link `git worktree add` creates.
+ */
+async function pointsBack(worktreePath: string, adminRoot: string): Promise<boolean> {
+  const admin = await dotGitTarget(worktreePath);
+  if (admin === null || path.dirname(admin) !== adminRoot) return false;
+  const content = await readSmallFile(path.join(admin, 'gitdir'));
+  if (content === null) return false;
+  const target = content.toString('utf8').replace(/[\r\n]+$/, '');
+  if (target.length === 0 || target.includes('\n') || target.includes('\u0000')) return false;
+  const back = await realpathOrSelf(path.resolve(admin, target));
+  return back === (await realpathOrSelf(path.join(worktreePath, '.git')));
 }
 
 export async function detectDefaultBranch(
@@ -277,6 +348,9 @@ export async function scan(root: string, options: ScanOptions): Promise<ScanResu
       } else if (entry.isSymbolicLink()) {
         try {
           const target = await realpath(child);
+          // Never leave the scan root through a link (SEC-08): `-> /` or `-> ../../elsewhere`
+          // would register repositories the user did not choose and walk the whole disk.
+          if (!isSameOrInside(rootReal, target)) continue;
           if (!(await stat(target)).isDirectory()) continue;
           key = target;
         } catch {
@@ -331,6 +405,12 @@ export async function scan(root: string, options: ScanOptions): Promise<ScanResu
     scannedDirs,
     truncated,
   };
+}
+
+function isSameOrInside(parent: string, child: string): boolean {
+  if (child === parent) return true;
+  const relative = path.relative(parent, child);
+  return relative.length > 0 && !relative.startsWith('..') && !path.isAbsolute(relative);
 }
 
 function looksLikeGitDir(names: Map<string, Dirent>): boolean {

@@ -34,6 +34,19 @@ export interface GitRunOptions {
   onStdout?: (chunk: Buffer) => void;
   /** Extra config entries passed via `GIT_CONFIG_COUNT` (e.g. filter neutralization). */
   configEnv?: ReadonlyArray<readonly [string, string]>;
+  /**
+   * Repository location, passed as `--git-dir` / `--work-tree` global options. An explicit
+   * work tree wins over repository config (`core.worktree`), and an explicit git dir skips
+   * discovery (SEC-06). Both must be absolute.
+   */
+  location?: GitLocation;
+  /** Written to the process's stdin, which is then closed (default: no stdin at all). */
+  input?: Buffer;
+}
+
+export interface GitLocation {
+  gitDir?: string;
+  workTree?: string;
 }
 
 export interface GitRunResult {
@@ -128,11 +141,31 @@ export function withSafetyFlags(args: readonly string[]): string[] {
   return [sub, ...flags, ...rest];
 }
 
+function locationArgs(location: GitLocation | undefined): string[] {
+  const out: string[] = [];
+  for (const [option, value] of [
+    ['--git-dir', location?.gitDir],
+    ['--work-tree', location?.workTree],
+  ] as const) {
+    if (value === undefined) continue;
+    if (!path.isAbsolute(value) || value.includes('\u0000')) {
+      throw new GitCoreError('invalid_argument', `${option} must be an absolute path: ${value}`);
+    }
+    out.push(`${option}=${value}`);
+  }
+  return out;
+}
+
 /** Full argv passed to the git binary for `args`. */
-export function buildGitArgv(args: readonly string[], extraPins: readonly string[] = []): string[] {
+export function buildGitArgv(
+  args: readonly string[],
+  extraPins: readonly string[] = [],
+  location?: GitLocation,
+): string[] {
   return [
     '--no-pager',
     '--no-optional-locks',
+    ...locationArgs(location),
     ...CONFIG_PIN_ARGS,
     ...extraPins,
     ...withSafetyFlags(args),
@@ -213,12 +246,13 @@ export class GitRunner {
   /** Runs an allowlisted git command. Rejects with `GitCoreError`. */
   run(args: readonly string[], options: GitRunOptions): Promise<GitRunResult> {
     if (this.disposed) return Promise.reject(disposedError());
+    let argv: string[];
     try {
       assertAllowedGitArgs(args);
+      argv = buildGitArgv(args, this.extraPins, options.location);
     } catch (error) {
       return Promise.reject(error);
     }
-    const argv = buildGitArgv(args, this.extraPins);
     const okExitCodes = options.okExitCodes ?? (hasNoIndex(args) ? [0, 1] : [0]);
     return this.scheduler.schedule(options.queueKey ?? options.cwd, () =>
       this.execute(argv, [...args], { ...options, okExitCodes }),
@@ -274,7 +308,7 @@ export class GitRunner {
         child = spawn(binary, argv, {
           cwd,
           env,
-          stdio: ['ignore', 'pipe', 'pipe'],
+          stdio: [options.input ? 'pipe' : 'ignore', 'pipe', 'pipe'],
           windowsHide: true,
           // Own process group on POSIX, so a timeout kills git's children too.
           detached: USE_PROCESS_GROUP,
@@ -294,6 +328,11 @@ export class GitRunner {
         finish(error);
       };
       this.children.set(child, fail);
+      if (options.input && child.stdin) {
+        // git may exit before reading everything (e.g. on an error): ignore EPIPE.
+        child.stdin.on('error', () => {});
+        child.stdin.end(options.input);
+      }
 
       const timer = setTimeout(() => {
         fail(
