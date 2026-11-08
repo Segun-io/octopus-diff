@@ -8,6 +8,8 @@ import {
   clientFactory,
   fakeDaemon,
   healthBody,
+  healthFor,
+  isHealth,
   makeDeps,
   makeTempDirs,
   shutdownSignal,
@@ -65,7 +67,8 @@ describe('serve', () => {
     });
     expect(options?.logger).toBeDefined();
 
-    expect(deps.out.text).toContain('Open:   http://127.0.0.1:45678/?token=tok123');
+    expect(deps.out.text).toContain('Open:   http://127.0.0.1:45678/#token=tok123');
+    expect(deps.out.text).not.toContain('LAN:');
     expect(deps.out.text).toContain('Press Ctrl+C to stop.');
     expect(deps.err.text).toContain('received SIGINT, shutting down');
     expect(daemon.closed).toBe(1);
@@ -108,7 +111,7 @@ describe('serve', () => {
     expect(await run(['serve', '--open'], deps, { serve: { webRootCandidates: [webDir] } })).toBe(
       0,
     );
-    expect(deps.opened).toEqual(['http://127.0.0.1:7428/?token=tok123']);
+    expect(deps.opened).toEqual(['http://127.0.0.1:7428/#token=tok123']);
   });
 
   it('keeps running when the browser cannot be opened', async () => {
@@ -243,7 +246,9 @@ describe('serve', () => {
     });
     await writeFile(path.join(dirs.stateDir, 'token'), 'existing-token\n', { mode: 0o600 });
     const api = clientFactory((req) =>
-      req.url === 'http://127.0.0.1:5555/api/health' ? { body: healthBody() } : undefined,
+      isHealth(req.url, 'http://127.0.0.1:5555')
+        ? { body: healthFor(req.url, 'existing-token') }
+        : undefined,
     );
     const daemon = fakeDaemon();
     const deps = makeDeps(dirs, {
@@ -254,8 +259,89 @@ describe('serve', () => {
     expect(await run(['serve', '--open'], deps)).toBe(0);
     expect(daemon.calls).toHaveLength(0);
     expect(deps.out.text).toContain('already running (pid 777)');
-    expect(deps.out.text).toContain('http://127.0.0.1:5555/?token=existing-token');
-    expect(deps.opened).toEqual(['http://127.0.0.1:5555/?token=existing-token']);
+    expect(deps.out.text).toContain('http://127.0.0.1:5555/#token=existing-token');
+    expect(deps.opened).toEqual(['http://127.0.0.1:5555/#token=existing-token']);
+    expect(api.requests.every((r) => r.authorization === null)).toBe(true);
+  });
+
+  it('SEC-02: never prints or opens the URL for a recorded daemon that cannot prove the token', async () => {
+    await writeRuntimeInfo(dirs.stateDir, {
+      pid: 777,
+      url: 'http://127.0.0.1:5555',
+      host: '127.0.0.1',
+      port: 5555,
+      version: '0.0.0',
+      startedAt: '2026-11-08T00:00:00.000Z',
+    });
+    await writeFile(path.join(dirs.stateDir, 'token'), 'existing-token\n', { mode: 0o600 });
+    // A squatter on the recorded port after a crash, with the pid reused by one of our processes.
+    const api = clientFactory((req) =>
+      isHealth(req.url) ? { body: healthBody({ proof: '0'.repeat(64) }) } : undefined,
+    );
+    const daemon = fakeDaemon();
+    const deps = makeDeps(dirs, {
+      loadStartDaemon: async () => daemon.startDaemon,
+      createApiClient: api.createApiClient,
+      isProcessAlive: (pid) => pid === 777,
+    });
+    expect(await run(['serve', '--open'], deps, { serve: { webRootCandidates: [webDir] } })).toBe(
+      0,
+    );
+    expect(deps.err.text).toContain('did not prove that it holds');
+    expect(deps.out.text).not.toContain('5555/#token');
+    expect(deps.out.text).not.toContain('existing-token');
+    expect(deps.opened).toEqual(['http://127.0.0.1:7428/#token=tok123']);
+    expect(daemon.calls).toHaveLength(1);
+    for (const r of api.requests) {
+      expect(r.authorization).toBeNull();
+      expect(r.url).not.toContain('existing-token');
+    }
+  });
+
+  it('prints the loopback URL and one URL per LAN address for a wildcard bind', async () => {
+    const daemon = fakeDaemon();
+    const deps = makeDeps(dirs, {
+      loadStartDaemon: async () => daemon.startDaemon,
+      networkInterfaces: () => ({
+        lo: [{ address: '127.0.0.1', family: 'IPv4', internal: true } as never],
+        eth0: [
+          { address: '192.168.1.5', family: 'IPv4', internal: false } as never,
+          { address: '2001:db8::5', family: 'IPv6', internal: false } as never,
+          { address: 'fe80::1', family: 'IPv6', internal: false } as never,
+        ],
+      }),
+    });
+    const args = ['serve', '--host', '0.0.0.0', '--allow-non-loopback', '--open'];
+    expect(await run(args, deps, { serve: { webRootCandidates: [webDir] } })).toBe(0);
+    expect(deps.out.text).toContain('Open:   http://0.0.0.0:7428/#token=tok123');
+    expect(deps.out.text).toContain('LAN:    http://192.168.1.5:7428/#token=tok123');
+    expect(deps.out.text).not.toContain('2001:db8');
+    expect(deps.out.text).toContain('plain HTTP');
+    expect(deps.opened).toEqual(['http://0.0.0.0:7428/#token=tok123']);
+
+    const dual = makeDeps(dirs, {
+      loadStartDaemon: async () => fakeDaemon().startDaemon,
+      networkInterfaces: deps.networkInterfaces,
+    });
+    await run(['serve', '--host', '::', '--allow-non-loopback'], dual, {
+      serve: { webRootCandidates: [webDir] },
+    });
+    expect(dual.out.text).toContain('LAN:    http://192.168.1.5:7428/#token=tok123');
+    expect(dual.out.text).toContain('LAN:    http://[2001:db8::5]:7428/#token=tok123');
+    expect(dual.out.text).not.toContain('fe80');
+  });
+
+  it('passes the state dir to the opener (for the private launcher file)', async () => {
+    const calls: string[][] = [];
+    const deps = makeDeps(dirs, {
+      loadStartDaemon: async () => fakeDaemon().startDaemon,
+      openUrl: async (url, _wsl, stateDir) => {
+        calls.push([url, stateDir]);
+        return 'fake';
+      },
+    });
+    await run(['serve', '--open'], deps, { serve: { webRootCandidates: [webDir] } });
+    expect(calls).toEqual([['http://127.0.0.1:7428/#token=tok123', dirs.stateDir]]);
   });
 
   it('ignores a stale runtime file whose process is gone', async () => {
@@ -301,7 +387,7 @@ describe('formatBanner', () => {
     const text = formatBanner(
       {
         url: 'http://127.0.0.1:7428',
-        authUrl: 'http://127.0.0.1:7428/?token=abc',
+        authUrl: 'http://127.0.0.1:7428/#token=abc',
         token: 'abc',
         host: '127.0.0.1',
         port: 7428,
@@ -314,7 +400,7 @@ describe('formatBanner', () => {
       null,
     );
     expect(text).toContain('octopus-diff 1.0.0 is running');
-    expect(text).toContain('Open:   http://127.0.0.1:7428/?token=abc');
+    expect(text).toContain('Open:   http://127.0.0.1:7428/#token=abc');
     expect(text).toContain('State:  ~/.local/state/octopus-diff');
     expect(text).toContain('API only');
   });

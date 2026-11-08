@@ -15,6 +15,8 @@ import { writeRuntimeInfo } from '../src/runtime.js';
 import {
   clientFactory,
   healthBody,
+  healthFor,
+  isHealth,
   makeDeps,
   makeTempDirs,
   type TempDirs,
@@ -75,7 +77,9 @@ describe('doctor', () => {
       },
     });
     expect(await run(['doctor'], missing, { doctor: { webRootCandidates: [webDir] } })).toBe(1);
-    expect(missing.out.text).toMatch(/FAIL {2}git +"git" not found on PATH/);
+    expect(missing.out.text).toMatch(
+      /FAIL {2}git +"git" not found on PATH \(absolute entries only\)/,
+    );
 
     const old = makeDeps(dirs, {
       readText: HEALTHY_PROC,
@@ -154,7 +158,10 @@ describe('doctor', () => {
     const deps = makeDeps(dirs, { readText: HEALTHY_PROC });
     let checks = await collectChecks({}, deps, { webRootCandidates: [webDir] });
     expect(byId(checks, 'state-dir')?.status).toBe('ok');
-    expect(byId(checks, 'token')).toMatchObject({ status: 'fail', fix: [`chmod 600 ${token}`] });
+    expect(byId(checks, 'token')).toMatchObject({
+      status: 'fail',
+      fix: ['octopus-diff token --rotate, then restart the daemon'],
+    });
     await chmod(token, 0o600);
     checks = await collectChecks({}, deps, { webRootCandidates: [webDir] });
     expect(byId(checks, 'token')?.status).toBe('ok');
@@ -182,8 +189,10 @@ describe('doctor', () => {
     expect(byId(checks, 'port')).toMatchObject({ status: 'fail' });
     expect(byId(checks, 'port')?.detail).toContain('127.0.0.1:8080 is in use');
 
+    await mkdir(dirs.stateDir, { recursive: true });
+    await writeFile(path.join(dirs.stateDir, 'token'), 'doctor-token\n', { mode: 0o600 });
     const api = clientFactory((req) =>
-      req.url.endsWith('/api/health') ? { body: healthBody() } : undefined,
+      isHealth(req.url) ? { body: healthFor(req.url, 'doctor-token') } : undefined,
     );
     const ours = makeDeps(dirs, {
       readText: HEALTHY_PROC,
@@ -193,6 +202,18 @@ describe('doctor', () => {
     checks = await collectChecks({}, ours, { webRootCandidates: [webDir] });
     expect(byId(checks, 'port')).toMatchObject({ status: 'ok' });
     expect(byId(checks, 'port')?.detail).toContain('already running');
+
+    // Something that answers like octopus-diff but can't prove it holds the token: a warning.
+    const fake = clientFactory((req) => (isHealth(req.url) ? { body: healthBody() } : undefined));
+    const squat = makeDeps(dirs, {
+      readText: HEALTHY_PROC,
+      probePort: async () => 'in_use',
+      createApiClient: fake.createApiClient,
+    });
+    checks = await collectChecks({}, squat, { webRootCandidates: [webDir] });
+    expect(byId(checks, 'port')).toMatchObject({ status: 'warn' });
+    expect(byId(checks, 'port')?.detail).toContain('could not prove');
+    expect(fake.requests.every((r) => r.authorization === null)).toBe(true);
   });
 
   it('recognizes the running daemon from the runtime file', async () => {
@@ -204,8 +225,11 @@ describe('doctor', () => {
       version: '0',
       startedAt: '2026-11-08T00:00:00.000Z',
     });
+    await writeFile(path.join(dirs.stateDir, 'token'), 'doctor-token\n', { mode: 0o600 });
     const api = clientFactory((req) =>
-      req.url === 'http://127.0.0.1:40002/api/health' ? { body: healthBody() } : undefined,
+      isHealth(req.url, 'http://127.0.0.1:40002')
+        ? { body: healthFor(req.url, 'doctor-token') }
+        : undefined,
     );
     const deps = makeDeps(dirs, {
       createApiClient: api.createApiClient,

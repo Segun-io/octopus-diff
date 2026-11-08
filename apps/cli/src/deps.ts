@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { createServer } from 'node:net';
-import { tmpdir } from 'node:os';
+import { networkInterfaces, tmpdir } from 'node:os';
 import {
   type ApiClient,
   type ApiClientOptions,
@@ -12,6 +12,8 @@ import { openBrowser } from './open-browser.js';
 import type { Env } from './paths.js';
 import { type ReadTextSync, readTextSync } from './platform.js';
 import { isProcessAlive } from './runtime.js';
+import type { NetworkInterfaces } from './urls.js';
+import { resolveExecutable } from './which.js';
 
 export interface Output {
   write(chunk: string): unknown;
@@ -42,7 +44,11 @@ export interface CliDeps {
   /** Loaded lazily so `doctor`/`add` don't import the daemon (and its native watcher). */
   loadStartDaemon: () => Promise<StartDaemon>;
   createApiClient: (options: ApiClientOptions) => ApiClient;
-  openUrl: (url: string, isWsl: boolean) => Promise<string>;
+  /**
+   * Opens a (tokenized) URL in the browser. `stateDir` is private (0700): the default opener
+   * writes a 0600 launcher file there so the URL never appears on a command line (SEC-04).
+   */
+  openUrl: (url: string, isWsl: boolean, stateDir: string) => Promise<string>;
   /**
    * Resolves with the signal name when the process is asked to stop (SIGINT/SIGTERM/SIGHUP). A
    * second signal while shutting down exits immediately.
@@ -52,6 +58,8 @@ export interface CliDeps {
   runProgram: RunProgram;
   readText: ReadTextSync;
   probePort: (host: string, port: number) => Promise<PortProbe>;
+  /** `os.networkInterfaces()` (LAN URLs for wildcard binds). */
+  networkInterfaces: () => NetworkInterfaces;
   now: () => Date;
   /** Max time to wait for `handle.close()` before giving up (ms). */
   shutdownTimeoutMs: number;
@@ -73,7 +81,24 @@ export function probePort(host: string, port: number): Promise<PortProbe> {
   });
 }
 
-export const runProgram: RunProgram = (command, args) =>
+/**
+ * `runProgram` that first resolves `command` to an absolute path through the absolute `PATH`
+ * entries only (SEC-03: never the cwd or an empty/relative entry). Rejects with `ENOENT` when
+ * it is not found.
+ */
+export function createRunProgram(env: Env, platform: NodeJS.Platform): RunProgram {
+  return (command, args) => {
+    const executable = resolveExecutable(command, { env, platform });
+    if (executable === null) {
+      const error: NodeJS.ErrnoException = new Error(`${command}: not found in PATH`);
+      error.code = 'ENOENT';
+      return Promise.reject(error);
+    }
+    return execProgram(executable, args);
+  };
+}
+
+const execProgram: RunProgram = (command, args) =>
   new Promise((resolve, reject) => {
     execFile(
       command,
@@ -119,12 +144,14 @@ export function defaultDeps(): CliDeps {
     stderr: process.stderr,
     loadStartDaemon: async () => (await import('@octopus-diff/daemon')).startDaemon,
     createApiClient,
-    openUrl: (url, isWsl) => openBrowser(url, process.platform, isWsl),
+    openUrl: (url, isWsl, stateDir) =>
+      openBrowser(url, { platform: process.platform, isWsl, stateDir, env: process.env }),
     waitForShutdown: processShutdownSignal(onForcedExit),
     isProcessAlive,
-    runProgram,
+    runProgram: createRunProgram(process.env, process.platform),
     readText: readTextSync,
     probePort,
+    networkInterfaces,
     now: () => new Date(),
     shutdownTimeoutMs: 10_000,
   };

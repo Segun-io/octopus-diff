@@ -8,7 +8,7 @@ import type { CliDeps } from '../deps.js';
 import { EXIT_FAILURE, EXIT_OK, errorMessage, UsageError } from '../errors.js';
 import { resolveUserPath, tildify } from '../paths.js';
 import { detectWsl, isWindowsMountPath } from '../platform.js';
-import { readRuntimeInfo, tokenFilePath } from '../runtime.js';
+import { readToken, runtimeFilePath, tokenFilePath } from '../runtime.js';
 import {
   baseUrlFor,
   loadContext,
@@ -17,7 +17,7 @@ import {
   resolveStateDir,
 } from '../settings.js';
 import { resolveWebRoot, webRootCandidates } from '../web-assets.js';
-import { probeHealth } from './daemon-client.js';
+import { findRunningDaemon, verifyDaemon } from './daemon-client.js';
 
 /** Oldest supported git: git-core owns it (it refuses older versions with `git_unsupported`). */
 export { MIN_GIT_VERSION };
@@ -68,7 +68,8 @@ async function checkGit(config: ResolvedConfig, deps: CliDeps): Promise<DoctorCh
   const title = 'git';
   let output: string;
   try {
-    // Only `git --version`, run from the temp dir: it never touches a repository.
+    // Only `git --version`, run from the temp dir: it never touches a repository. `runProgram`
+    // resolves a bare name through the absolute PATH entries only (SEC-03).
     output = (await deps.runProgram(binary, ['--version'])).stdout;
   } catch (error) {
     const missing = (error as NodeJS.ErrnoException).code === 'ENOENT';
@@ -77,7 +78,7 @@ async function checkGit(config: ResolvedConfig, deps: CliDeps): Promise<DoctorCh
       title,
       status: 'fail',
       detail: missing
-        ? `"${binary}" not found on PATH`
+        ? `"${binary}" not found on PATH (absolute entries only)`
         : `"${binary} --version" failed: ${errorMessage(error)}`,
       fix: [`install git ${need} or newer`],
     };
@@ -288,7 +289,9 @@ async function checkStateDir(stateDir: string, home: string): Promise<DoctorChec
       title: 'token file',
       status: loose ? 'fail' : 'ok',
       detail: `${tildify(token, home)} (mode ${(tst.mode & 0o777).toString(8)}${loose ? ', readable by other users' : ''})`,
-      ...(loose ? { fix: [`chmod 600 ${token}`] } : {}),
+      // It may already have been copied: replace it, don't just chmod it (SEC-11). The daemon
+      // also replaces such a file on its next start.
+      ...(loose ? { fix: [`${APP_NAME} token --rotate, then restart the daemon`] } : {}),
     });
   } catch {
     checks.push({
@@ -309,13 +312,23 @@ async function checkPort(
 ): Promise<DoctorCheck> {
   const { host, port } = resolveAddress(flags, config);
   const title = 'port';
-  const info = await readRuntimeInfo(stateDir);
-  if (info && deps.isProcessAlive(info.pid) && (await probeHealth(info.url, deps))) {
+  // A daemon only counts as ours if it proves it holds the token (health challenge, SEC-02).
+  const running = await findRunningDaemon(stateDir, deps);
+  if (running?.verified) {
     return {
       id: 'port',
       title,
       status: 'ok',
-      detail: `${APP_NAME} is running at ${info.url} (pid ${info.pid})`,
+      detail: `${APP_NAME} is running at ${running.url} (pid ${running.pid})`,
+    };
+  }
+  if (running) {
+    return {
+      id: 'port',
+      title,
+      status: 'warn',
+      detail: `${running.url} (recorded in the state dir) answers but could not prove it holds the token`,
+      fix: [`stop it, or remove ${runtimeFilePath(stateDir)}`],
     };
   }
   if (port === 0)
@@ -325,12 +338,22 @@ async function checkPort(
     return { id: 'port', title, status: 'ok', detail: `${host}:${port} is free` };
   if (probe === 'in_use') {
     const url = baseUrlFor(host, port);
-    if (await probeHealth(url, deps)) {
+    const answer = await verifyDaemon(url, await readToken(stateDir), deps).catch(() => null);
+    if (answer?.verified) {
       return {
         id: 'port',
         title,
         status: 'ok',
         detail: `${APP_NAME} is already running at ${url}`,
+      };
+    }
+    if (answer) {
+      return {
+        id: 'port',
+        title,
+        status: 'warn',
+        detail: `${host}:${port} answers like ${APP_NAME} but could not prove it holds this state dir's token`,
+        fix: ['another --state-dir or an older version? Otherwise pass --port <n>'],
       };
     }
     return {

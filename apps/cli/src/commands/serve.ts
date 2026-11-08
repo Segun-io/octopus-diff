@@ -12,8 +12,10 @@ import {
 import { createLogger } from '../logger.js';
 import { tildify } from '../paths.js';
 import { detectWsl, isWindowsMountPath } from '../platform.js';
-import { readToken, removeRuntimeInfo, writeRuntimeInfo } from '../runtime.js';
+import { removeRuntimeInfo, writeRuntimeInfo } from '../runtime.js';
 import { baseUrlFor, buildServeSettings, loadContext } from '../settings.js';
+import { oneLine } from '../terminal.js';
+import { lanAuthUrls } from '../urls.js';
 import { resolveWebRoot, webRootCandidates } from '../web-assets.js';
 import { authUrlFor, findRunningDaemon, probeHealth } from './daemon-client.js';
 
@@ -24,24 +26,33 @@ export interface ServeHooks {
   onReady?: (handle: DaemonHandle) => void;
 }
 
-/** The banner `serve` prints. The tokenized URL is the important line. */
+/**
+ * The banner `serve` prints. The `#token=` URL is the important line; for a wildcard bind
+ * (`--host 0.0.0.0` / `::`) one LAN URL per interface address follows, since a `127.0.0.1`
+ * URL is useless on other devices.
+ */
 export function formatBanner(
   handle: DaemonHandle,
   version: string,
   home: string,
   webRoot: string | null,
+  lanUrls: readonly string[] = [],
 ): string {
   const lines = [
     '',
     `  ${APP_NAME} ${version} is running`,
     '',
     `  Open:   ${handle.authUrl}`,
+    ...lanUrls.map((url) => `  LAN:    ${url}`),
     '',
     `  API:    ${handle.url}`,
-    `  State:  ${tildify(handle.stateDir, home)}`,
-    `  Web UI: ${webRoot ? tildify(webRoot, home) : 'not found (API only; run `pnpm build`)'}`,
+    `  State:  ${oneLine(tildify(handle.stateDir, home))}`,
+    `  Web UI: ${webRoot ? oneLine(tildify(webRoot, home)) : 'not found (API only; run `pnpm build`)'}`,
     '',
     '  The URL contains your access token; treat it like a password.',
+    ...(lanUrls.length > 0
+      ? ['  LAN traffic is plain HTTP: use it only on networks you trust.']
+      : []),
     '  Press Ctrl+C to stop.',
     '',
   ];
@@ -72,16 +83,30 @@ export async function runServe(
   options.logger = logger;
   const wsl = detectWsl(deps.platform, deps.env, deps.readText);
 
-  // One daemon per state dir: two would share the SQLite store and the token.
+  // One daemon per state dir: two would share the SQLite store and the token. The recorded
+  // daemon must prove it holds the token before its URL is printed or opened (SEC-02).
   const running = await findRunningDaemon(paths.stateDir, deps);
-  if (running) {
-    const token = await readToken(paths.stateDir);
-    const authUrl = token ? authUrlFor(running.url, token) : running.url;
-    deps.stdout.write(
-      `${APP_NAME} is already running (pid ${running.pid}) with this state directory.\n\n  Open:   ${authUrl}\n\n`,
+  if (running?.verified && running.token) {
+    const authUrl = authUrlFor(running.url, running.token);
+    const lan = lanAuthUrls(
+      running.info.host,
+      running.info.port,
+      running.token,
+      deps.networkInterfaces(),
     );
-    if (settings.open) await openOrWarn(authUrl, wsl.wsl, deps, err);
+    deps.stdout.write(
+      `${APP_NAME} is already running (pid ${running.pid}) with this state directory.\n\n  Open:   ${authUrl}\n` +
+        lan.map((url) => `  LAN:    ${url}\n`).join('') +
+        '\n',
+    );
+    if (settings.open) await openOrWarn(authUrl, wsl.wsl, deps, err, paths.stateDir);
     return EXIT_OK;
+  }
+  if (running) {
+    err(
+      `warning: ${running.url} (pid ${running.pid}, recorded in the state directory) did not prove ` +
+        "that it holds this state directory's token; ignoring it and starting a new daemon.",
+    );
   }
 
   const web = resolveWebRoot(settings.webRoot, hooks.webRootCandidates ?? webRootCandidates());
@@ -152,8 +177,9 @@ export async function runServe(
     );
   }
 
-  deps.stdout.write(formatBanner(handle, version, paths.home, options.webRoot ?? null));
-  if (settings.open) await openOrWarn(handle.authUrl, wsl.wsl, deps, err);
+  const lan = lanAuthUrls(handle.host, handle.port, handle.token, deps.networkInterfaces());
+  deps.stdout.write(formatBanner(handle, version, paths.home, options.webRoot ?? null, lan));
+  if (settings.open) await openOrWarn(handle.authUrl, wsl.wsl, deps, err, paths.stateDir);
   hooks.onReady?.(handle);
 
   const signal = await shutdown;
@@ -178,9 +204,10 @@ async function openOrWarn(
   isWsl: boolean,
   deps: CliDeps,
   err: (line: string) => void,
+  stateDir: string,
 ): Promise<void> {
   try {
-    await deps.openUrl(url, isWsl);
+    await deps.openUrl(url, isWsl, stateDir);
   } catch (error) {
     err(`warning: ${errorMessage(error)}`);
   }
