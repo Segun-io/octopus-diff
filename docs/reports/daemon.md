@@ -67,7 +67,8 @@ What the tests cover (all against a contract-valid in-memory `FakeGitCore` in
   cadence, unwatch + close release every subscription.
 - **Done-when (fake git-core):** `test/live.test.ts` — start daemon, register two fs-backed
   repos (one with a linked worktree), edit a file from outside → SSE `worktree.changed` arrives
-  in **< 1 s** (asserted; typically ~200–300 ms with the 150 ms debounce used in tests), review,
+  in **< 1 s** (asserted; measured 151–152 ms in 5 runs with the 150 ms debounce the tests use;
+  the default debounce is 200 ms), review,
   restart on the same state dir → registry and the review mark survive; editing again → event +
   unreviewed.
 - **SSE:** hello first, ids, replay after `Last-Event-ID` (same boot only), heartbeats, clean end
