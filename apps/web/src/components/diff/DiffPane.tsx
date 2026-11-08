@@ -19,7 +19,14 @@ import { useCommandsContext } from '../../state/commandsContext.tsx';
 import { useAppModel } from '../../state/model.tsx';
 import { actions, useUi, useUiStore } from '../../state/ui.tsx';
 import { useTheme } from '../../theme/useTheme.ts';
-import { CheckIcon, LineCounts, StatusIcon, statusLabel, WarningIcon } from '../bits.tsx';
+import {
+  CheckIcon,
+  LineCounts,
+  StatusIcon,
+  statusLabel,
+  WarningIcon,
+  WorktreeName,
+} from '../bits.tsx';
 
 const DiffRenderer = lazy(() =>
   import('./DiffRenderer.tsx').then((m) => ({ default: m.DiffRenderer })),
@@ -40,11 +47,11 @@ function Placeholder({
     <div
       data-testid={TEST_IDS.diffPlaceholder}
       data-kind={kind}
-      className="m-4 rounded-md border border-dashed border-line bg-surface p-4 text-sm"
+      className={`px-5 py-4 text-sm ${kind === 'truncated' ? 'border-b border-line bg-surface' : ''}`}
       role="note"
     >
       <p className="font-semibold">{title}</p>
-      {children && <div className="mt-2 text-xs text-muted">{children}</div>}
+      {children && <div className="mt-1 max-w-xl text-xs text-muted">{children}</div>}
     </div>
   );
 }
@@ -54,7 +61,7 @@ function RawPatch({ patch }: { patch: string }) {
   return (
     <details className="mt-3">
       <summary className="cursor-pointer text-muted">Raw patch</summary>
-      <pre className="od-scroll mt-2 max-h-80 overflow-auto rounded bg-canvas p-2 font-mono text-[11px] whitespace-pre text-fg">
+      <pre className="od-scroll mt-2 max-h-80 overflow-auto rounded-md bg-raised p-2 font-mono text-[11px] whitespace-pre text-fg">
         {patch}
       </pre>
     </details>
@@ -151,9 +158,12 @@ export function DiffPane() {
           {status && <span className="text-[11px] text-muted">{statusLabel(status)}</span>}
           {file && <LineCounts additions={file.additions} deletions={file.deletions} />}
           {row && (
-            <span className="truncate text-[11px] text-faint" title={row.worktree.path}>
-              {row.project.name} · {row.worktree.branch ?? 'detached'}
-            </span>
+            <WorktreeName
+              project={row.project.name}
+              branch={row.worktree.branch ?? 'detached'}
+              className="text-[11px] text-muted"
+              branchClassName="text-faint"
+            />
           )}
           <span className="ml-auto flex items-center gap-1.5">
             {display?.kind === 'patch' && (
@@ -161,7 +171,7 @@ export function DiffPane() {
                 <button
                   type="button"
                   onClick={commands.expandContext}
-                  className="rounded border border-line px-2 py-0.5 text-xs text-muted hover:bg-hover hover:text-fg"
+                  className="od-btn"
                   title={`Show ${CONTEXT_STEP} more context lines around each change (e)`}
                 >
                   More context
@@ -176,7 +186,7 @@ export function DiffPane() {
                     })
                   }
                   aria-pressed={contextLines >= FULL_CONTEXT}
-                  className="rounded border border-line px-2 py-0.5 text-xs text-muted hover:bg-hover hover:text-fg aria-pressed:bg-selected aria-pressed:text-fg"
+                  className="od-btn"
                   title="Expand every collapsed unchanged region"
                 >
                   {contextLines >= FULL_CONTEXT ? 'Collapse' : 'Expand all'}
@@ -195,9 +205,7 @@ export function DiffPane() {
                 onClick={commands.toggleReviewed}
                 disabled={!entry && !diff}
                 title="Mark reviewed (r)"
-                className={`flex items-center gap-1 rounded border px-2 py-0.5 text-xs font-medium ${
-                  reviewed ? 'border-add bg-add text-canvas' : 'border-line text-fg hover:bg-hover'
-                }`}
+                className={`od-btn font-medium ${reviewed ? 'border-add bg-add text-canvas' : 'text-fg'}`}
               >
                 <CheckIcon />
                 {reviewed ? 'Reviewed' : 'Mark reviewed'}
@@ -318,7 +326,7 @@ function DiffBody({
             type="button"
             data-testid={TEST_IDS.diffLoadAnyway}
             onClick={onLoadAnyway}
-            className="mt-2 rounded border border-accent px-2 py-1 text-xs text-fg hover:bg-selected"
+            className="od-btn mt-2 text-fg"
           >
             Load anyway
           </button>
@@ -364,7 +372,7 @@ function DiffBody({
             <Placeholder kind="truncated" title="Diff truncated">
               The patch
               {diff.byteLength !== null ? ` (${formatBytes(diff.byteLength)})` : ''} exceeds the
-              daemon's hard size cap; only its first{' '}
+              daemon’s hard size cap; only its first{' '}
               {diff.patch.split('\n').length.toLocaleString('en-US')} lines are shown.
             </Placeholder>
           )}

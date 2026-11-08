@@ -25,7 +25,7 @@ import { isRecentlyActive, worktreeSource } from '../lib/source.ts';
 import { useCommandsContext } from '../state/commandsContext.tsx';
 import { useAppModel } from '../state/model.tsx';
 import { actions, useUi, useUiStore, type View } from '../state/ui.tsx';
-import { Dot, MoreIcon, ToggleButton } from './bits.tsx';
+import { MoreIcon, ToggleButton } from './bits.tsx';
 import { ContextMenu, type MenuItem, useContextMenu } from './ContextMenu.tsx';
 import { Wordmark } from './Mark.tsx';
 
@@ -92,17 +92,12 @@ const WorktreeItem = memo(function WorktreeItem({
         title={title}
         onClick={() => onSelect(worktree.id)}
         onContextMenu={(e) => onMenu(e, row)}
-        className={`flex w-full flex-col gap-0.5 rounded-sm py-1 pr-6 pl-[var(--od-pad-x)] text-left ${
+        className={`flex w-full flex-col gap-0.5 rounded-sm py-1 pr-6 pl-7 text-left ${
           selected ? 'bg-selected' : 'hover:bg-hover'
-        } ${row.review.enabled ? '' : 'text-muted'}`}
+        } ${row.review.enabled && (dirty || !summary) ? '' : 'text-muted'}`}
       >
-        <span className="flex items-center gap-1.5">
-          <span
-            className={`h-1.5 w-1.5 shrink-0 rounded-full ${dirty ? 'bg-mod' : 'bg-line-strong'} ${
-              active ? 'od-pulse' : ''
-            }`}
-            aria-hidden="true"
-          />
+        <span className="relative flex items-center gap-1.5">
+          {active && <span className="od-pulse" aria-hidden="true" />}
           <span
             className={`min-w-0 truncate ${worktree.branch ? '' : 'italic text-muted'} ${
               worktree.isMain ? 'font-medium' : ''
@@ -111,46 +106,33 @@ const WorktreeItem = memo(function WorktreeItem({
             {worktreeLabel(worktree)}
           </span>
           {worktree.isMain && (
-            <span
-              className="rounded-sm border border-line px-1 text-[10px] text-faint"
-              title="Main checkout"
-            >
+            <span className="od-chip" title="Main checkout">
               main
             </span>
           )}
           {source && (
-            <span
-              className="rounded-sm bg-raised px-1 font-mono text-[10px] text-muted"
-              title={source.title}
-            >
+            <span className="od-chip font-mono" title={source.title}>
               {source.label}
             </span>
           )}
-          {summary?.inProgress && (
-            <span className="rounded-sm bg-raised px-1 text-[10px] text-warn">
-              {summary.inProgress}
-            </span>
-          )}
+          {summary?.inProgress && <span className="od-chip text-warn">{summary.inProgress}</span>}
           {!row.review.enabled && (
             <span
               data-testid={TEST_IDS.reviewOffBadge}
               data-source={row.review.source}
-              className="ml-auto shrink-0 rounded-sm border border-line px-1 text-[10px] whitespace-nowrap text-faint"
+              className="od-chip ml-auto shrink-0"
               title={`Review off (from ${row.review.source})`}
             >
               review off
             </span>
           )}
           {row.unreviewed > 0 && (
-            <span
-              className="ml-auto rounded-full bg-accent px-1.5 text-[10px] font-semibold text-accent-fg"
-              title={`${row.unreviewed} unreviewed`}
-            >
+            <span className="od-pill ml-auto" title={`${row.unreviewed} unreviewed`}>
               {row.unreviewed}
             </span>
           )}
         </span>
-        <span className="flex flex-wrap items-center gap-x-2 pl-3 font-mono text-[10.5px] text-muted">
+        <span className="flex flex-wrap items-center gap-x-2 font-mono text-[11px] text-muted">
           {summary && summary.ahead !== null && summary.behind !== null && (
             <span title={`ahead/behind ${summary.aheadBehindRef ?? ''}`}>
               ↑{summary.ahead} ↓{summary.behind}
@@ -234,32 +216,17 @@ function Chevron({ open }: { open: boolean }) {
   );
 }
 
-function StatsBadges({
-  dirty,
-  unreviewed,
-  repos,
-}: {
-  dirty: number;
-  unreviewed: number;
-  repos?: number;
-}) {
+/** Folder and project rows: how many worktrees are dirty (a word, not a dot) and the pill. */
+function StatsBadges({ dirty, unreviewed }: { dirty: number; unreviewed: number }) {
   return (
-    <span className="ml-auto flex shrink-0 items-center gap-1 font-mono text-[10px] text-faint">
-      {repos !== undefined && <span title={`${repos} repositories`}>{repos}</span>}
+    <span className="ml-auto flex shrink-0 items-center gap-2 text-[11px] font-normal tabular-nums">
       {dirty > 0 && (
-        <span
-          className="inline-flex items-center gap-0.5 text-mod"
-          title={`${dirty} dirty worktrees`}
-        >
-          <Dot />
-          {dirty}
+        <span className="text-muted" title={`${dirty} worktrees with changes`}>
+          {dirty} dirty
         </span>
       )}
       {unreviewed > 0 && (
-        <span
-          className="rounded-full bg-accent px-1.5 font-sans font-semibold text-accent-fg"
-          title={`${unreviewed} unreviewed`}
-        >
+        <span className="od-pill" title={`${unreviewed} unreviewed`}>
           {unreviewed}
         </span>
       )}
@@ -302,16 +269,7 @@ export function Sidebar() {
     const key = reviewTargetKey(target);
     const state = overrides.has(key) ? (overrides.get(key) ? 'on' : 'off') : 'inherit';
     return [
-      {
-        id: 'policy-h',
-        heading: true,
-        // The heading style is upper case; a project or branch name keeps its own case.
-        label: (
-          <>
-            Review for <span className="tracking-normal normal-case">{label}</span>
-          </>
-        ),
-      },
+      { id: 'policy-h', heading: true, label: `Review for ${label}` },
       ...(['on', 'off', 'inherit'] as const).map<MenuItem>((choice) => ({
         id: `policy-${choice}`,
         label: choice === 'inherit' ? 'Inherit' : choice === 'on' ? 'On' : 'Off',
@@ -420,31 +378,44 @@ export function Sidebar() {
           onClick={() => commands.openSettings()}
           title="Settings (,)"
           aria-label="Settings"
-          className="rounded-sm px-1 py-0.5 text-muted hover:bg-hover hover:text-fg"
+          className="od-btn od-btn-ghost"
         >
           <GearIcon />
         </button>
       </div>
       <div className="flex flex-col gap-1.5 border-b border-line p-2">
-        <input
-          data-testid={TEST_IDS.sidebarFilter}
-          data-filter-input=""
-          type="search"
-          placeholder="Filter worktrees  ( / )"
-          aria-label="Filter projects and worktrees"
-          value={filterText}
-          onChange={(e) => store.setState({ filterText: e.target.value })}
-          onKeyDown={(e) => {
-            if (e.key === 'Escape') {
-              e.preventDefault();
-              if (filterText) store.setState({ filterText: '' });
-              else (e.target as HTMLInputElement).blur();
-            } else if (e.key === 'Enter') {
-              (e.target as HTMLInputElement).blur();
-            }
-          }}
-          className="w-full rounded-md border border-line bg-canvas px-2 py-1 text-xs placeholder:text-faint focus:border-line-strong"
-        />
+        <div className="relative">
+          <input
+            data-testid={TEST_IDS.sidebarFilter}
+            data-filter-input=""
+            type="search"
+            name="filter"
+            autoComplete="off"
+            placeholder="Filter worktrees"
+            aria-label="Filter projects and worktrees"
+            aria-keyshortcuts="/"
+            value={filterText}
+            onChange={(e) => store.setState({ filterText: e.target.value })}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') {
+                e.preventDefault();
+                if (filterText) store.setState({ filterText: '' });
+                else (e.target as HTMLInputElement).blur();
+              } else if (e.key === 'Enter') {
+                (e.target as HTMLInputElement).blur();
+              }
+            }}
+            className="od-input w-full pr-7"
+          />
+          {filterText === '' && (
+            <span
+              aria-hidden="true"
+              className="pointer-events-none absolute top-1/2 right-1.5 -translate-y-1/2"
+            >
+              <kbd className="text-faint">/</kbd>
+            </span>
+          )}
+        </div>
         <div className="flex gap-1">
           <ToggleButton
             pressed={onlyDirty}
@@ -487,7 +458,7 @@ export function Sidebar() {
             />
           </svg>
           <span>Inbox</span>
-          <span className="ml-auto rounded-full bg-raised px-1.5 text-[11px] font-normal text-muted">
+          <span className="ml-auto text-[11px] font-normal tabular-nums text-muted">
             {inboxCount}
           </span>
         </button>
@@ -528,11 +499,7 @@ export function Sidebar() {
                   >
                     <FolderIcon direct={node.id === DIRECT_FOLDER_ID} />
                     <span className="truncate font-mono text-[11px] text-fg">{node.label}</span>
-                    <StatsBadges
-                      repos={node.stats.projects}
-                      dirty={node.stats.dirty}
-                      unreviewed={node.stats.unreviewed}
-                    />
+                    <StatsBadges dirty={node.stats.dirty} unreviewed={node.stats.unreviewed} />
                   </button>
                   <MoreButton
                     label={`Actions for ${node.label}`}
@@ -624,7 +591,7 @@ export function Sidebar() {
           type="button"
           data-testid={TEST_IDS.addProjectButton}
           onClick={() => store.setState({ addProjectOpen: true })}
-          className="w-full rounded-md border border-line px-2 py-1 text-xs text-muted hover:bg-hover hover:text-fg"
+          className="od-btn w-full"
         >
           Watch a folder or add a repository
         </button>

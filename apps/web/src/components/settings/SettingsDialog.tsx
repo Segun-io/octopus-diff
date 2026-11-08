@@ -123,8 +123,13 @@ export function SettingsDialog() {
               {s.label}
             </button>
           ))}
-          <div className="mt-auto px-2 pb-1 text-[10px] text-faint">
-            <kbd>,</kbd> opens · <kbd>Esc</kbd> closes
+          <div className="mt-auto flex gap-3 px-2 pb-1 text-[11px] text-faint">
+            <span>
+              <kbd>,</kbd> opens
+            </span>
+            <span>
+              <kbd>Esc</kbd> closes
+            </span>
           </div>
         </nav>
         <div className="od-scroll min-w-0 flex-1 overflow-y-auto bg-overlay p-5">
@@ -137,7 +142,7 @@ export function SettingsDialog() {
               type="button"
               onClick={close}
               aria-label="Close settings"
-              className="ml-auto flex items-center rounded-md p-1 text-muted hover:bg-hover hover:text-fg"
+              className="od-btn od-btn-ghost ml-auto"
             >
               <CloseIcon />
             </button>
@@ -243,11 +248,7 @@ function AppearancePanel() {
                 data-theme-id={theme.id}
                 onClick={() => store.setState({ theme: selectTheme(prefs, theme.id) })}
                 className={`rounded-md border p-2 text-left ${
-                  isActive
-                    ? 'border-accent bg-accent-soft'
-                    : inSlot
-                      ? 'border-line-strong'
-                      : 'border-line hover:bg-hover'
+                  isActive ? 'border-line-strong bg-accent-soft' : 'border-line hover:bg-hover'
                 }`}
               >
                 <div
@@ -271,9 +272,12 @@ function AppearancePanel() {
                   <span className="h-2 w-2 rounded-sm" style={{ background: theme.colors.del }} />
                 </div>
                 <div className="mt-1.5 text-xs font-medium">{theme.label}</div>
-                <div className="text-[10px] text-muted">
-                  {theme.kind} · {inSlot ? 'in slot' : theme.description}
-                </div>
+                <div className="text-[11px] text-muted">{theme.description}</div>
+                {inSlot && (
+                  <div className="mt-0.5 text-[11px] text-faint">
+                    {isActive ? 'Active' : `Used in ${theme.kind} mode`}
+                  </div>
+                )}
               </button>
             );
           })}
@@ -299,7 +303,7 @@ function KeyboardPanel() {
         if (rows.length === 0) return null;
         return (
           <section key={group} className="mt-3">
-            <h4 className="od-heading mb-1">{GROUP_LABELS[group]}</h4>
+            <h4 className="od-label mb-1">{GROUP_LABELS[group]}</h4>
             <table className="w-full text-xs">
               <tbody>
                 {rows.map((s) => (
@@ -374,7 +378,7 @@ function AboutPanel() {
       </dl>
       <p className="mt-4 text-[11px] text-faint">
         Everything octopus-diff does to a repository is a read. Marks and settings live in the
-        daemon's own state directory. Design notes: docs/design/.
+        daemon’s own state directory. Design notes: docs/design/.
       </p>
     </div>
   );

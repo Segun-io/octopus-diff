@@ -74,7 +74,7 @@ export function Dialog({
             type="button"
             onClick={onClose}
             aria-label="Close"
-            className="ml-auto flex items-center rounded p-1 text-muted hover:bg-hover hover:text-fg"
+            className="od-btn od-btn-ghost ml-auto"
           >
             <CloseIcon />
           </button>

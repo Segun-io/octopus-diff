@@ -140,16 +140,6 @@ export function WarningIcon(props: IconProps) {
   );
 }
 
-/** A 6 px dot in the current colour (status markers next to a count). */
-export function Dot({ className = '' }: { className?: string }) {
-  return (
-    <span
-      aria-hidden="true"
-      className={`inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-current ${className}`}
-    />
-  );
-}
-
 export function ToggleButton({
   pressed,
   onClick,
@@ -172,15 +162,34 @@ export function ToggleButton({
       title={title}
       data-testid={testId}
       onClick={onClick}
-      className={`rounded border px-2 py-0.5 text-xs transition-colors ${
-        pressed
-          ? 'border-accent bg-selected text-fg'
-          : 'border-line bg-surface text-muted hover:bg-hover hover:text-fg'
-      }`}
+      className="od-btn"
       {...extra}
     >
       {children}
     </button>
+  );
+}
+
+/**
+ * A worktree's two-part name: the project, then the branch. Weight and colour set the parts
+ * apart; no punctuation joins them (IDENTITY.md §5).
+ */
+export function WorktreeName({
+  project,
+  branch,
+  className = '',
+  branchClassName = 'text-muted',
+}: {
+  project: string;
+  branch: string;
+  className?: string;
+  branchClassName?: string;
+}) {
+  return (
+    <span className={`inline-flex min-w-0 items-baseline gap-1.5 ${className}`}>
+      <span className="truncate font-medium">{project}</span>
+      <span className={`truncate ${branchClassName}`}>{branch}</span>
+    </span>
   );
 }
 

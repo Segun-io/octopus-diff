@@ -157,15 +157,11 @@ function ErrorBanner({ error, onRetry }: { error: unknown; onRetry: () => void }
       <h1 className="text-base font-semibold text-danger">{info.title}</h1>
       <p className="mt-2 text-sm text-muted">{info.detail}</p>
       {info.kind === 'auth' && (
-        <pre className="mt-3 rounded bg-canvas p-2 font-mono text-xs">
+        <pre className="mt-3 rounded-md bg-canvas p-2 font-mono text-xs">
           octopus-diff serve # prints http://127.0.0.1:7428/#token=…
         </pre>
       )}
-      <button
-        type="button"
-        onClick={onRetry}
-        className="mt-4 rounded border border-line px-3 py-1 text-xs hover:bg-hover"
-      >
+      <button type="button" onClick={onRetry} className="od-btn mt-4">
         Retry
       </button>
     </div>
@@ -253,8 +249,11 @@ function FilePaneHeader() {
       : 'review off';
   return (
     <div className="flex h-[var(--od-row-header)] shrink-0 items-center gap-2 border-b border-line bg-surface px-[var(--od-pad-x)] text-[11px] text-muted">
-      <span className="truncate">
-        {shown < total ? `${shown}/${total}` : total} {total === 1 ? 'file' : 'files'} · {label}
+      <span className="flex min-w-0 gap-3">
+        <span className="shrink-0 tabular-nums">
+          {shown < total ? `${shown}/${total}` : total} {total === 1 ? 'file' : 'files'}
+        </span>
+        <span className="truncate tabular-nums">{label}</span>
       </span>
       <span className="ml-auto" />
       <MarkAllButton compact />

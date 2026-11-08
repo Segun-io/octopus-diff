@@ -98,7 +98,7 @@ export function ContextMenu({
     >
       {items.map((item) =>
         item.heading ? (
-          <div key={item.id} className="od-heading px-2 pt-2 pb-1 first:pt-1">
+          <div key={item.id} className="od-label px-2 pt-2 pb-1 first:pt-1">
             {item.label}
           </div>
         ) : (

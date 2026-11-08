@@ -69,32 +69,35 @@ export function AddProjectForm({ onDone }: { onDone?: () => void }) {
         <div className="flex gap-2">
           <input
             id="add-scan-root-path"
+            name="scanRootPath"
             data-testid={TEST_IDS.addScanRootPathInput}
             value={scanPath}
             onChange={(e) => setScanPath(e.target.value)}
             placeholder="~/code"
             autoComplete="off"
             spellCheck={false}
-            className="min-w-0 flex-1 rounded border border-line bg-canvas px-2 py-1 font-mono"
+            className="od-input min-w-0 flex-1 font-mono"
           />
           <label className="flex items-center gap-1 text-muted">
             depth
             <input
               type="number"
+              name="depth"
+              inputMode="numeric"
               min={0}
               max={SCAN_DEPTH_MAX}
               value={depth}
               onChange={(e) =>
                 setDepth(Math.max(0, Math.min(SCAN_DEPTH_MAX, Number(e.target.value) || 0)))
               }
-              className="w-12 rounded border border-line bg-canvas px-1 py-1"
+              className="od-input w-14 px-1.5"
             />
           </label>
           <button
             type="submit"
             data-testid={TEST_IDS.addScanRootSubmit}
             disabled={addScanRoot.isPending}
-            className="rounded bg-accent px-3 py-1 font-medium text-accent-fg disabled:opacity-50"
+            className="od-btn od-btn-primary px-3"
           >
             {addScanRoot.isPending ? 'Adding…' : 'Watch'}
           </button>
@@ -115,19 +118,20 @@ export function AddProjectForm({ onDone }: { onDone?: () => void }) {
         <div className="flex gap-2">
           <input
             id="add-project-path"
+            name="projectPath"
             data-testid={TEST_IDS.addProjectPathInput}
             value={projectPath}
             onChange={(e) => setProjectPath(e.target.value)}
             placeholder="~/code/my-repo"
             autoComplete="off"
             spellCheck={false}
-            className="min-w-0 flex-1 rounded border border-line bg-canvas px-2 py-1 font-mono"
+            className="od-input min-w-0 flex-1 font-mono"
           />
           <button
             type="submit"
             data-testid={TEST_IDS.addProjectSubmit}
             disabled={addProject.isPending}
-            className="rounded bg-accent px-3 py-1 font-medium text-accent-fg disabled:opacity-50"
+            className="od-btn od-btn-primary px-3"
           >
             {addProject.isPending ? 'Adding…' : 'Add'}
           </button>
@@ -140,7 +144,7 @@ export function AddProjectForm({ onDone }: { onDone?: () => void }) {
         {scan && (
           <p className="text-muted">
             Scan {scan.state}: {scan.scannedDirs} folders, {scan.foundRepos} repositories
-            {scan.message ? ` — ${scan.message}` : ''}
+            {scan.message ? `. ${scan.message}` : ''}
           </p>
         )}
       </div>

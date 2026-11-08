@@ -845,3 +845,69 @@ Nothing behavioural changed; no contract change. Report: `docs/reports/ux-unslop
 28. **Copy.** "Inbox zero" (cute) → "No dirty worktrees in this scope."; the tree-view tooltip and the Appearance text no
     longer name implementation details (`@pierre/trees`, `src/theme/themes/`); the empty state reads plainly. Theme
     descriptions describe the ink. Everything else kept its voice (IDENTITY.md §7).
+
+## UX round 2, second pass — unslop with the design skills (lead)
+
+All 2026-11-08 · lead, branch `ux/unslop-2`, on top of `main` at `279e80a`. Scope: `apps/web`, `docs/design`. Audited with
+the Vercel Web Interface Guidelines, the frontend-design skill and `hallmark audit apps/web` (app scope); nothing
+behavioural, no route, contract or `data-testid` changed. Report: `docs/reports/ux-unslop-2.md`. IDENTITY.md §4–§7 updated.
+
+29. **No tracked upper-case labels anywhere.** `.od-heading` (11 px, 600, upper case, 0.04 em) is gone; `.od-label` is the
+    same size and weight in sentence case, untracked. Table heads (`.od-th`), the palette's kind column (`Go to`,
+    `Command`…), the Settings "Saved on this device" chip and the context-menu headings follow. Reason: Hallmark's gate 67
+    and the frontend-design calibration both name the tracked-caps label as the first template tell, and IDENTITY.md
+    already said weight is the hierarchy; the caps strip was the loudest element after the diff and the first pass had to
+    special-case names inside it (#25). This changes a rule the first pass kept (§5 "for section headings only").
+30. **No eyebrow in Overview.** "PROJECT · ~/code" and "FOLDER" above the `h1` are cut (Hallmark 54). The name is the heading;
+    the facts (path, base branch, depth, last scan) sit under it as spaced spans. The sidebar selection already says what
+    kind of node it is.
+31. **Facts are set apart by space, not middle dots; names are pairs set in weight.** Every `A · B` string in rendered UI
+    was split: file-pane header, group headers, Overview meta, Settings Folders, palette hints (commas inside a sentence),
+    the review chip (`Review on (the default)`), the Settings footer hint, theme cards. The worktree identity
+    `project · branch` became a `WorktreeName` pair (project 500, branch `muted`) in the diff header, the palette (`parts`)
+    and the overrides table (`describeTarget().parts`). Decision on the Hallmark conflict: the ban holds for facts and for
+    three-part strings; **one** middle dot may still join exactly two name parts in plain text that cannot carry weight
+    (`title`, `aria-label`, the palette's search string, `policyLabel` → now parentheses). Hallmark's own legal clause
+    allows one dot in a byline; its script fires from two. Logged as a rule in IDENTITY.md §5.
+32. **State is a word, not a dot.** Removed: the worktree dirty/clean dot, the folder/project `●5` count, the Overview
+    `●1` cell, the toolbar connection dot and the review-chip dot; `Dot` left `bits.tsx`. Replacements: dirty worktrees in
+    `fg`, clean ones in `muted` with the word `clean`; folders and projects say `5 dirty`; Overview splits "Changes" into
+    `With changes`/`Files` and `Lines`; the connection is the word `Live`/`Offline`/`Refreshing…`; the chip says
+    `Review off` with the stronger fill it already had. Reason: Hallmark 63 bans decorative status dots, and these were
+    colour-only, which IDENTITY.md §4 forbids ("colour is never the only signal"). Kept, deliberately: the activity pulse,
+    now a 6 px ink dot with the expanding ring, positioned in the row's padding, shown only in the ten seconds after a
+    worktree changed (a live state, which Hallmark allows), static under reduced motion. Side effect: the worktree rows
+    lost the dot's indent and sat left of their project; they now indent 28 px under the project name.
+33. **One control recipe each, in `@layer components`.** `.od-btn` (+ `-primary`, `-ghost`, `-danger`), `.od-input`,
+    `.od-chip`, `.od-pill`, `.od-th`, `.od-label` replace ~20 ad-hoc Tailwind class strings across Toolbar, DiffPane,
+    Overview, Settings, forms, toasts and dialogs. Buttons are 24 px with a 6 px radius (`rounded`, 4 px, is gone from
+    controls); pressed/checked = `accentSoft` + `lineStrong` instead of the ink border of #23 (an ink outline on a toggle
+    was the loudest thing in the toolbar); `:active` exists; disabled primary buttons set fill, ink and cursor, not opacity
+    alone (Hallmark 39a). The layer keeps Tailwind utilities winning for the semantic states (`bg-add` on the reviewed
+    toggle, `bg-raised` on the review-off chip). Control height stays at the dense 24 px on purpose: PLAN density, the
+    Hallmark app range (32–40) is for pages people read, not a list of thirty worktrees; logged, not waived.
+34. **Type floor 11 px; chips are one recipe.** Every `text-[10px]`/`text-[10.5px]` (chips, sidebar meta row, table heads,
+    palette kind, Settings footer, theme cards, "decides") is now 11 px (Hallmark 75; Vercel legibility). The three chip
+    styles (bordered `main`, raised mono source, raised warn in-progress) and the bordered `review off` badge are one
+    `.od-chip` (raised, no border); the Inbox count is plain tabular text, not a second pill.
+35. **Mono stays for git's material: waived Hallmark 64 on the record.** The sidebar meta row (`↑1 ↓3 S1 M2 +15 −1`),
+    paths, branches, hashes and the `base main` button stay mono; `clean`/`error` words in Overview cells moved to the body
+    face. Reason: in this tool mono is the material, not a costume, and the figures line up only in mono. Recorded in the
+    CSS stamp.
+36. **Overlays keep hairline plus shadow (Hallmark F24, answered).** The dark themes lose a shadow against near-black; the
+    `lineStrong` hairline is the edge there, and one recipe serves both themes.
+37. **Hallmark check stamp in `styles.css`.** Three comment lines at the top of the stylesheet (checked date, inferred genre,
+    the fixed gates, the waiver, the dismissal, the answer). Reason: the audit was asked for by name and its gate 20 reads
+    the stamp; it is a comment and costs nothing. `rgb()` literals left `:root.dark`: the dark shadow now changes only
+    `--od-shadow-alpha`.
+38. **Accessibility fixes from the Vercel audit** (file:line in the report): Overview rows get a real button in the first
+    cell (keyboard reachable; the row click stays as a pointer convenience); a global `prefers-reduced-motion: reduce` rule
+    also stops Tailwind's `transition-*`/`animate-pulse`; `overscroll-behavior: contain` on scroll areas and overlays;
+    `::selection` and `caret-color` themed; the filter input's shortcut moved from the placeholder into a `kbd` hint and
+    `aria-keyshortcuts`; `name`/`inputmode` on the add-project fields; typographic apostrophes; em dashes in copy and
+    tooltips replaced; `1 files` → `1 file`. One web unit test selector changed with the markup (`td` → `td button`); no e2e
+    test changed.
+39. **Not changed, on purpose.** The wordmark's `-diff` in mono (a wordmark is Hallmark's own exception to 38iii); the
+    sidebar's porcelain shorthand (`S1 M2 ?1 !1`: a product vocabulary question, not a design one); "verified" in bulk
+    actions versus "reviewed" on the file toggle (the e2e suite pins both; unifying is a WS4 + contracts conversation);
+    the dark theme's blue cast; the mark, the palette and the icons (no asset regenerated).

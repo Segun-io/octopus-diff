@@ -63,7 +63,7 @@ export function ReviewSection() {
         <p className="text-xs font-medium">Overrides</p>
         <p className="mt-0.5 text-[11px] text-muted">
           Most specific wins: worktree, then branch, project, folder, then the default. Set them
-          from the review chip above a worktree's files or from the sidebar menus.
+          from the review chip above a worktree’s files or from the sidebar menus.
         </p>
         {overrides.length === 0 ? (
           <p className="mt-2 text-[11px] text-faint">
@@ -72,11 +72,11 @@ export function ReviewSection() {
         ) : (
           <table className="mt-2 w-full text-xs">
             <thead>
-              <tr className="text-left text-[10px] tracking-wide text-faint uppercase">
-                <th className="py-1 font-medium">Target</th>
-                <th className="py-1 font-medium">Level</th>
-                <th className="py-1 font-medium">Review</th>
-                <th className="py-1" />
+              <tr>
+                <th className="od-th">Target</th>
+                <th className="od-th">Level</th>
+                <th className="od-th">Review</th>
+                <th className="od-th" />
               </tr>
             </thead>
             <tbody>
@@ -86,7 +86,13 @@ export function ReviewSection() {
                 return (
                   <tr key={key} className="border-t border-line" data-override-kind={d.kind}>
                     <td className="max-w-80 truncate py-1.5 pr-3 font-mono" title={d.label}>
-                      {d.label}
+                      {d.parts ? (
+                        <>
+                          {d.parts[0]} <span className="text-muted">{d.parts[1]}</span>
+                        </>
+                      ) : (
+                        d.label
+                      )}
                       {!d.exists && <span className="ml-1 text-faint">(gone)</span>}
                     </td>
                     <td className="py-1.5 pr-3 text-muted">{d.detail}</td>

@@ -112,18 +112,10 @@ export function ReviewPolicyChip({
         aria-controls={open ? menuId : undefined}
         onClick={() => setOpen((v) => !v)}
         title={`${policyLabel(policy)}. Click to change.`}
-        className={`flex items-center gap-1.5 rounded-md border px-2 py-0.5 text-xs ${
-          policy.enabled
-            ? 'border-line text-muted hover:bg-hover hover:text-fg'
-            : 'border-line-strong bg-raised text-fg'
-        }`}
+        className={`od-btn gap-1.5 ${policy.enabled ? '' : 'border-line-strong bg-raised text-fg'}`}
       >
-        <span
-          aria-hidden="true"
-          className={`h-2 w-2 rounded-full ${policy.enabled ? 'bg-add' : 'bg-faint'}`}
-        />
         <span>Review {policy.enabled ? 'on' : 'off'}</span>
-        <span className="text-faint">· {SOURCE_LABELS[policy.source]}</span>
+        <span className="text-faint">({SOURCE_LABELS[policy.source]})</span>
       </button>
       {open && (
         <div
@@ -166,7 +158,7 @@ export function ReviewPolicyChip({
                   title={lvl.label}
                 >
                   {lvl.label}
-                  {effectiveHere && <span className="ml-1 text-[10px] text-accent">decides</span>}
+                  {effectiveHere && <span className="ml-1.5 text-[11px] text-muted">decides</span>}
                 </span>
                 {(['on', 'off', 'inherit'] as const).map((choice) => (
                   <button
@@ -182,11 +174,7 @@ export function ReviewPolicyChip({
                       lvl.target &&
                       choose(lvl.target, choice === 'inherit' ? null : choice === 'on')
                     }
-                    className={`rounded-sm border px-1.5 py-0.5 text-[11px] disabled:opacity-40 ${
-                      state === choice
-                        ? 'border-accent bg-accent-soft text-fg'
-                        : 'border-transparent text-muted hover:bg-hover hover:text-fg'
-                    }`}
+                    className="od-btn od-btn-ghost text-[11px] disabled:opacity-40"
                   >
                     {choice === 'inherit' ? 'Inherit' : choice === 'on' ? 'On' : 'Off'}
                   </button>

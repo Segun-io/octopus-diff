@@ -1,3 +1,9 @@
+/* Hallmark · checked: 2026-11-08 · genre: modern-minimal (inferred) · scope: app
+ * floor: 0 FAIL · fixed: 54, 63, 67, 26b, 39a, 48, F1, F16 · structural: none
+ * waive 64 · mono carries paths, branches, hashes and figures · git is the material of this tool
+ * dismissed 49 · the worktree row is a two-line button by design; its name truncates and its facts wrap
+ * answered F24 · overlays keep the hairline because the dark themes lose a shadow against near-black
+ * built: the project · redesign: polish · v2.0.0 */
 @import "tailwindcss";
 
 @custom-variant dark (&:where(.dark, .dark *));
@@ -6,7 +12,7 @@
  * Colour tokens come from the theme registry (src/theme/themes/*.ts) through the generated
  * `virtual:octopus-themes.css` (imported in main.tsx), which declares every `--od-*` custom
  * property per theme. This file only maps them to Tailwind utilities and defines the shared
- * non-colour tokens (docs/design/IDENTITY.md §6).
+ * non-colour tokens and the control recipes (docs/design/IDENTITY.md §6).
  */
 @theme inline {
   --color-canvas: var(--od-canvas);
@@ -52,11 +58,14 @@
   --od-radius-md: 6px;
   --od-radius-lg: 10px;
   /* elevation 2 (dialogs, menus, palette); levels 0 and 1 are flat surfaces with a hairline */
-  --od-shadow-2: 0 8px 24px rgb(20 23 38 / 0.14);
+  --od-shadow-alpha: 0.14;
+  --od-shadow-2: 0 8px 24px rgb(20 23 38 / var(--od-shadow-alpha));
   /* motion */
   --od-motion-fast: 120ms;
   --od-motion: 180ms;
   --od-ease: cubic-bezier(0.2, 0, 0, 1);
+  /* controls */
+  --od-control: 24px;
   /* density: compact (default) */
   --od-row: 26px;
   --od-row-header: 30px;
@@ -65,7 +74,7 @@
 }
 
 :root.dark {
-  --od-shadow-2: 0 8px 24px rgb(0 0 0 / 0.45);
+  --od-shadow-alpha: 0.45;
 }
 
 :root[data-density="comfortable"] {
@@ -85,6 +94,7 @@ body {
   margin: 0;
   background: var(--od-canvas);
   color: var(--od-fg);
+  caret-color: var(--od-fg);
   font-family: var(--font-sans);
   font-size: var(--od-font);
   line-height: 1.45;
@@ -92,7 +102,11 @@ body {
   text-rendering: optimizeLegibility;
 }
 
-/* Visible focus rings for keyboard users everywhere. */
+::selection {
+  background: var(--od-accent-soft);
+}
+
+/* Visible focus rings for keyboard users everywhere; instant, never animated. */
 :focus-visible {
   outline: 2px solid var(--od-focus);
   outline-offset: 1px;
@@ -101,13 +115,14 @@ body {
 .od-scroll {
   scrollbar-width: thin;
   scrollbar-color: var(--od-line-strong) transparent;
+  overscroll-behavior: contain;
 }
 
 kbd {
   font-family: var(--font-mono);
   font-size: 11px;
   line-height: 1;
-  padding: 2px 5px;
+  padding: 2px 4px;
   border-radius: var(--od-radius-sm);
   border: 1px solid var(--od-line-strong);
   background: var(--od-raised);
@@ -119,14 +134,13 @@ kbd {
   background: var(--od-overlay);
   border: 1px solid var(--od-line-strong);
   box-shadow: var(--od-shadow-2);
+  overscroll-behavior: contain;
 }
 
-/* Section heading: 11 px, semibold, upper case, tracked. */
-.od-heading {
+/* Section label: 11 px, semibold, sentence case, untracked (IDENTITY.md §5). Never upper case. */
+.od-label {
   font-size: 11px;
   font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
   color: var(--od-muted);
 }
 
@@ -147,9 +161,152 @@ kbd {
   flex: 0 0 auto;
 }
 
-/* Activity pulse: a worktree changed in the last ~10 s. */
+/*
+ * Control recipes (IDENTITY.md §6). They live in the components layer so a Tailwind utility on
+ * the same element still wins (e.g. `bg-add` on the reviewed toggle).
+ */
+@layer components {
+  .od-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--od-space-1);
+    height: var(--od-control);
+    padding: 0 var(--od-space-2);
+    border-radius: var(--od-radius-md);
+    border: 1px solid var(--od-line);
+    background: var(--od-surface);
+    color: var(--od-muted);
+    font-size: 12px;
+    line-height: 1;
+    white-space: nowrap;
+  }
+  .od-btn:hover:not(:disabled, [aria-disabled="true"]) {
+    background: var(--od-hover);
+    color: var(--od-fg);
+  }
+  .od-btn:active:not(:disabled, [aria-disabled="true"]) {
+    background: var(--od-selected);
+  }
+  .od-btn[aria-pressed="true"],
+  .od-btn[aria-pressed="true"]:hover,
+  .od-btn[aria-checked="true"],
+  .od-btn[aria-checked="true"]:hover {
+    background: var(--od-accent-soft);
+    border-color: var(--od-line-strong);
+    color: var(--od-fg);
+  }
+  .od-btn:disabled,
+  .od-btn[aria-disabled="true"] {
+    color: var(--od-faint);
+    cursor: default;
+  }
+  .od-btn.od-btn-primary,
+  .od-btn.od-btn-primary:hover,
+  .od-btn.od-btn-primary:active {
+    background: var(--od-accent);
+    border-color: var(--od-accent);
+    color: var(--od-accent-fg);
+    font-weight: 500;
+  }
+  .od-btn.od-btn-primary:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--od-accent) 88%, var(--od-canvas));
+  }
+  .od-btn.od-btn-primary:active:not(:disabled) {
+    background: color-mix(in srgb, var(--od-accent) 76%, var(--od-canvas));
+  }
+  .od-btn.od-btn-primary:disabled {
+    background: var(--od-accent-soft);
+    border-color: var(--od-accent-soft);
+    color: var(--od-faint);
+    cursor: default;
+  }
+  .od-btn.od-btn-ghost {
+    border-color: transparent;
+    background: transparent;
+    padding: 0 var(--od-space-1);
+  }
+  .od-btn.od-btn-ghost:hover:not(:disabled) {
+    background: var(--od-hover);
+  }
+  .od-btn.od-btn-danger {
+    color: var(--od-danger);
+  }
+  .od-btn.od-btn-danger:hover:not(:disabled) {
+    border-color: var(--od-danger);
+    background: var(--od-del-soft);
+    color: var(--od-danger);
+  }
+
+  .od-input {
+    height: var(--od-control);
+    padding: 0 var(--od-space-2);
+    border-radius: var(--od-radius-md);
+    border: 1px solid var(--od-line);
+    background: var(--od-canvas);
+    color: var(--od-fg);
+    font-size: 12px;
+  }
+  .od-input::placeholder {
+    color: var(--od-faint);
+  }
+  select.od-input {
+    padding-right: var(--od-space-1);
+  }
+
+  /* Elevation 1 chip: a state or a source next to a name (`main`, `t3`, `rebase`, `review off`). */
+  .od-chip {
+    display: inline-flex;
+    align-items: center;
+    height: 16px;
+    padding: 0 var(--od-space-1);
+    border-radius: var(--od-radius-sm);
+    background: var(--od-raised);
+    color: var(--od-muted);
+    font-size: 11px;
+    line-height: 1;
+    white-space: nowrap;
+  }
+
+  /* The unreviewed count: the only filled shape and the only pill in the frame. */
+  .od-pill {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 20px;
+    height: 16px;
+    padding: 0 var(--od-space-1);
+    border-radius: 999px;
+    background: var(--od-accent);
+    color: var(--od-accent-fg);
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Table head: sentence case in the body face, a hairline below, never tracked capitals. */
+  .od-th {
+    padding: var(--od-space-1) var(--od-space-3) var(--od-space-1) 0;
+    border-bottom: 1px solid var(--od-line);
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--od-muted);
+    text-align: left;
+    white-space: nowrap;
+  }
+}
+
+/* Activity pulse: a worktree changed in the last ~10 s. The one dot in the frame, a live state. */
 .od-pulse {
-  position: relative;
+  position: absolute;
+  left: -14px;
+  top: 50%;
+  width: 6px;
+  height: 6px;
+  transform: translateY(-50%);
+  border-radius: 50%;
+  background: var(--od-accent);
 }
 .od-pulse::after {
   content: "";
@@ -172,6 +329,19 @@ kbd {
   }
   .od-settle {
     animation: od-settle 600ms var(--od-ease);
+  }
+}
+
+/*
+ * With reduced motion there is no animation at all, only state changes. Unlayered, so it also
+ * overrides Tailwind's transition utilities (which live in the utilities layer).
+ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  ::before,
+  ::after {
+    animation: none;
+    transition: none;
   }
 }
 

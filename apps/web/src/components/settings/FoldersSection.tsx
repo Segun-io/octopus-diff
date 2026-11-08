@@ -33,7 +33,7 @@ export function FoldersSection() {
   return (
     <div className="text-xs">
       <section>
-        <h4 className="od-heading mb-1">Watched folders</h4>
+        <h4 className="od-label mb-1">Watched folders</h4>
         <p className="mb-2 text-[11px] text-muted">
           Every repository (and its worktrees) found under a folder, up to the depth, is added and
           kept in sync. Removing a folder removes the projects it discovered.
@@ -48,12 +48,14 @@ export function FoldersSection() {
               <span className="min-w-0 flex-1 truncate font-mono" title={root.path}>
                 {shortenHome(root.path)}
               </span>
-              <span className="shrink-0 text-muted">
-                depth {root.depth} · {root.projectCount}{' '}
-                {root.projectCount === 1 ? 'repo' : 'repos'}
-                {scan && scan.scanRootId === root.id && scan.state === 'scanning'
-                  ? ' · scanning…'
-                  : ''}
+              <span className="flex shrink-0 gap-3 text-muted tabular-nums">
+                <span>depth {root.depth}</span>
+                <span>
+                  {root.projectCount} {root.projectCount === 1 ? 'repo' : 'repos'}
+                </span>
+                {scan && scan.scanRootId === root.id && scan.state === 'scanning' && (
+                  <span>scanning…</span>
+                )}
               </span>
               <SmallButton
                 onClick={() => rescan.mutate(root.id)}
@@ -84,7 +86,7 @@ export function FoldersSection() {
       </section>
 
       <section className="mt-5">
-        <h4 className="od-heading mb-1">Repositories</h4>
+        <h4 className="od-label mb-1">Repositories</h4>
         {projectList.length === 0 && <p className="text-[11px] text-faint">No repositories yet.</p>}
         <ul className="flex flex-col">
           {projectList.map(({ project, worktrees }) => {
@@ -98,7 +100,7 @@ export function FoldersSection() {
                 <span className="min-w-0 flex-1">
                   <span className="font-medium">{project.name}</span>
                   <span className="ml-2 text-muted">
-                    {worktrees.length} {worktrees.length === 1 ? 'worktree' : 'worktrees'} ·{' '}
+                    {worktrees.length} {worktrees.length === 1 ? 'worktree' : 'worktrees'},{' '}
                     {root ? `from ${shortenHome(root.path)}` : 'added directly'}
                   </span>
                   <span
@@ -129,13 +131,10 @@ export function FoldersSection() {
                         value={editing.value}
                         onChange={(e) => setEditing({ id: project.id, value: e.target.value })}
                         placeholder={project.defaultBranch ?? 'main'}
-                        className="w-32 rounded-md border border-line-strong bg-canvas px-1.5 py-0.5 font-mono text-[11px]"
+                        className="od-input w-32 font-mono text-[11px]"
                       />
                       <SmallButton onClick={() => setEditing(null)}>Cancel</SmallButton>
-                      <button
-                        type="submit"
-                        className="rounded-md bg-accent px-2 py-0.5 text-[11px] font-medium text-accent-fg"
-                      >
+                      <button type="submit" className="od-btn od-btn-primary">
                         Save
                       </button>
                     </form>
@@ -145,7 +144,7 @@ export function FoldersSection() {
                       onClick={() =>
                         setEditing({ id: project.id, value: project.defaultBranchOverride ?? '' })
                       }
-                      className="rounded-md px-1.5 py-0.5 font-mono hover:bg-hover hover:text-fg"
+                      className="od-btn od-btn-ghost font-mono"
                       title="Change the default branch"
                     >
                       base: {project.defaultBranch ?? '?'}

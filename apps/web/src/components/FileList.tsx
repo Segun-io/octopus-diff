@@ -186,7 +186,7 @@ export function FileList({
             <div
               key={g.group.worktree.id}
               role="group"
-              aria-label={`${g.group.project.name} · ${worktreeLabel(g.group.worktree)}`}
+              aria-label={`${g.group.project.name}, ${worktreeLabel(g.group.worktree)}`}
               {...(grouped
                 ? {
                     'data-testid': TEST_IDS.fileGroup,
@@ -244,9 +244,15 @@ const GroupHeader = memo(function GroupHeader({
     >
       <span className="truncate font-semibold">{group.project.name}</span>
       <span className="truncate text-muted">{worktreeLabel(group.worktree)}</span>
-      <span className="ml-auto shrink-0 text-[11px] text-muted">
-        {reviewOff ? 'review off · ' : unreviewed > 0 ? `${unreviewed} unreviewed · ` : ''}
-        {shown < total ? `${shown}/${total}` : total} files
+      <span className="ml-auto flex shrink-0 gap-3 text-[11px] text-muted tabular-nums">
+        {reviewOff ? (
+          <span>review off</span>
+        ) : unreviewed > 0 ? (
+          <span>{unreviewed} unreviewed</span>
+        ) : null}
+        <span>
+          {shown < total ? `${shown}/${total}` : total} {total === 1 ? 'file' : 'files'}
+        </span>
       </span>
     </div>
   );
@@ -325,7 +331,7 @@ const FileRow = memo(function FileRow({
           </>
         )}
       </span>
-      {file.binary && <span className="text-[10px] text-faint">bin</span>}
+      {file.binary && <span className="text-[11px] text-faint">bin</span>}
       <LineCounts additions={file.additions} deletions={file.deletions} />
       <span className="w-3 shrink-0 text-add">
         {file.reviewed && (

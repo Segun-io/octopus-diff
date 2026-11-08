@@ -27,9 +27,9 @@ export const SOURCE_LABELS: Record<ReviewPolicySource, string> = {
   default: 'the default',
 };
 
-/** `Review on (default)`, `Review off (branch)` */
+/** `Review on (from the default)`, `Review off (from this branch)` */
 export function policyLabel(policy: EffectiveReviewPolicy): string {
-  return `Review ${policy.enabled ? 'on' : 'off'} · from ${SOURCE_LABELS[policy.source]}`;
+  return `Review ${policy.enabled ? 'on' : 'off'} (from ${SOURCE_LABELS[policy.source]})`;
 }
 
 export interface TargetContext {
@@ -40,8 +40,10 @@ export interface TargetContext {
 
 export interface TargetDescription {
   kind: ReviewPolicyTarget['kind'];
-  /** e.g. `octopus-api`, `octopus-api · feat/auth`, `~/code` */
+  /** e.g. `octopus-api`, `octopus-api · feat/auth`, `~/code` (plain text: titles, search) */
   label: string;
+  /** The two parts of a worktree or branch target, for rendering without punctuation. */
+  parts?: [string, string];
   detail: string;
   /** False when the target no longer exists (stale override). */
   exists: boolean;
@@ -76,6 +78,7 @@ export function describeTarget(target: ReviewPolicyTarget, ctx: TargetContext): 
       return {
         kind: 'branch',
         label: `${project?.name ?? target.projectId} · ${target.branch}`,
+        parts: [project?.name ?? target.projectId, target.branch],
         detail: 'branch',
         exists: project !== undefined,
       };
@@ -83,11 +86,11 @@ export function describeTarget(target: ReviewPolicyTarget, ctx: TargetContext): 
     case 'worktree': {
       const wt = ctx.worktrees.find((w) => w.id === target.worktreeId);
       const project = wt ? ctx.projects.find((p) => p.id === wt.projectId) : undefined;
+      const rest = wt ? `${wt.branch ?? 'detached'} (${shortenHome(wt.path)})` : '';
       return {
         kind: 'worktree',
-        label: wt
-          ? `${project?.name ?? '?'} · ${wt.branch ?? 'detached'} (${shortenHome(wt.path)})`
-          : target.worktreeId,
+        label: wt ? `${project?.name ?? '?'} · ${rest}` : target.worktreeId,
+        ...(wt ? { parts: [project?.name ?? '?', rest] as [string, string] } : {}),
         detail: 'worktree',
         exists: wt !== undefined,
       };

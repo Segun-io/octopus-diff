@@ -1,6 +1,7 @@
 # octopus-diff identity
 
-> UX round 1, stream ux-web, 2026-11-08. Source files: `docs/design/assets/mark.svg`,
+> UX round 1, stream ux-web, 2026-11-08; revised by the two unslop passes the same day (DECISIONS "UX round 2"
+> and "UX round 2, second pass"). Source files: `docs/design/assets/mark.svg`,
 > `docs/design/assets/wordmark.svg`, `apps/web/public/favicon.svg`, `apps/web/src/components/Mark.tsx`,
 > token values in `apps/web/src/theme/themes/*.ts`, non-colour tokens in `apps/web/src/styles.css`.
 
@@ -63,9 +64,10 @@ and AA contrast on every surface without a per-theme search.
 | `accentSoft` (active choice background) | `#dfe2ea` | `#282d39` | text tokens ≥ 4.5:1 on it |
 | `selected` (row / item selection) | `#e3e6ed` | `#242936` | text tokens ≥ 4.5:1 on it |
 
-Selection and hover are two steps of one neutral ramp (hover the lighter); a pressed toggle adds an ink border. The
-unreviewed count is a filled ink pill with inverted text: the only filled shape in the sidebar, so it needs no hue to be
-found. Third-party themes may carry a hue in `accent` (the test only requires contrast); the two brand themes are ink by
+Selection and hover are two steps of one neutral ramp (hover the lighter). A pressed or chosen control (a toggle, a
+policy choice, the active theme card) is `accentSoft` with a `lineStrong` border: never an ink outline, so a selection
+is never louder than the diff. The unreviewed count is a filled ink pill with inverted text: the only filled shape and
+the only pill in the frame, so it needs no hue to be found. Primary buttons are the other ink fill, one per dialog. Third-party themes may carry a hue in `accent` (the test only requires contrast); the two brand themes are ink by
 decision, and `test/theme.test.ts` checks that they stay achromatic.
 
 Colour is never the only signal: added/deleted lines keep their `+`/`−`, statuses keep their letter, review
@@ -100,27 +102,34 @@ every registered theme, so a new theme cannot ship below AA.
 
 System stacks only (CSP: no remote fonts, nothing to download, nothing to flash):
 
-- Sans: `ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif`. Body 13 px / 1.45. Labels 12 px. Captions and chips 11 px. Section headings 11 px semibold, upper case, 0.04 em tracking.
-- Mono: `ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace`. Paths, branches, hashes, counts, keys and the diff itself (12 px / 19 px line height). Numbers use `tabular-nums` wherever they line up.
-- Weight is the hierarchy, not size: 600 for the thing you are looking at (file name, project), 400 for everything else. No 700. No italics except detached HEAD.
-- Never transform user data. Project, branch, folder and file names keep their case and their font; the tracked upper-case style is for section headings only (`.od-heading`), never for a name.
+- Sans: `ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif`. One scale: 11 px captions, chips, labels and table heads; 12 px controls and dense text; 13 px body (13.5 comfortable); 14 px dialog titles; 20 px figures. Nothing under 11 px.
+- Mono: `ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace`. Paths, branches, hashes, counts, keys and the diff itself (12 px / 19 px line height). Mono is for git's own material, never a costume for a label. Numbers use `tabular-nums` wherever they line up.
+- Weight is the hierarchy, not size: 600 for the thing you are looking at (file name, project), 500 for the first part of a pair, 400 for everything else. No 700. No italics except detached HEAD.
+- **No tracked capitals, anywhere.** Section labels (`.od-label`), table heads (`.od-th`), the palette's kind column and the "where it lives" chip are the body face at 11 px, sentence case, untracked; weight and colour carry them. The upper-case eyebrow was the loudest thing in the frame after the diff and said nothing the heading did not.
+- **No eyebrow.** A heading stands alone; a kind word above it ("Project", "Folder") is cut, and the facts go below it.
+- Never transform user data. Project, branch, folder and file names keep their case and their font.
+- **Facts are set apart by space, never by punctuation.** `30 files` and `5 worktrees` are two spans with a gap, not `30 files · 5 worktrees`; a sentence uses a comma. A worktree's two-part name (project, then branch) is set as two spans, the project one weight heavier, the branch in `muted` (`WorktreeName` in `bits.tsx`, `parts` in the palette and the overrides table). The one place a middle dot survives is plain text that cannot carry weight (a `title`, an `aria-label`, a search string), joining exactly two name parts and nothing else.
 
 ## 6. Spacing, radius, elevation, motion, focus, density
 
 Shared by all themes; defined once in `apps/web/src/styles.css` as `--od-*` custom properties.
 
 - **Spacing**: a 4 px scale (`--od-space-1` 4 px … `--od-space-6` 24 px). Rows are 26 px (compact) / 30 px (comfortable); group headers 30 px.
-- **Radius**: `--od-radius-sm` 4 px (chips, kbd, rows), `--od-radius-md` 6 px (buttons, inputs, menus), `--od-radius-lg` 10 px (dialogs, the palette). Nothing is a pill except the unreviewed count badge.
+- **Radius**: `--od-radius-sm` 4 px (chips, kbd, rows), `--od-radius-md` 6 px (buttons, inputs, menus), `--od-radius-lg` 10 px (dialogs, the palette). Nothing is a pill except the unreviewed count badge (`.od-pill`).
+- **Controls**: one recipe each, defined once in `styles.css` under `@layer components` so a utility on the element still wins. `.od-btn` (24 px, `line` border, `surface` fill, `muted` text; hover `hover`/`fg`; `:active` `selected`; `aria-pressed`/`aria-checked` = `accentSoft` + `lineStrong`; disabled `faint` text, default cursor), with `od-btn-primary` (ink fill, explicit disabled fill and ink, never opacity alone), `od-btn-ghost` (no border) and `od-btn-danger`. `.od-input` (24 px, `canvas` fill, `line` border; the focus ring is the global outline, never a border change). `.od-chip` (16 px, `raised` fill, no border, 11 px) for `main`, a worktree source, an in-progress operation, `review off`, and "where a setting lives". Rows in Overview tables are reachable by keyboard: the first cell is a real button; the row only adds a pointer convenience.
 - **Elevation**: three levels. 0 = flat with a hairline (panes); 1 = `raised` background plus hairline (headers, chips); 2 = `overlay` background, `lineStrong` border and `--od-shadow-2` (`0 8px 24px rgb(0 0 0 / 0.35)` dark, `0 8px 24px rgb(20 23 38 / 0.14)` light) for dialogs, menus and the palette. No other shadows.
-- **Motion**: `--od-motion-fast` 120 ms and `--od-motion` 180 ms, `ease-out`. Used for fade/slide-in of menus, toasts and dialogs and for the activity pulse. Everything is wrapped in `@media (prefers-reduced-motion: no-preference)`; with reduced motion there is no animation at all, only state changes.
-- **Focus ring**: 2 px solid `focus`, 1 px offset, on `:focus-visible` only. Inside dark surfaces the ring colour is lighter than the accent so it keeps 3:1 against `selected`.
-- **Icons**: one stroke set on a 16-unit grid, 1.5 px stroke, round caps, `currentColor`, drawn in `components/bits.tsx` (close, more, sun, moon, warning, check) plus `Mark`. Never a font glyph for a control (☾ ✕ ⋯ ⚠ render as emoji or in a different weight depending on the platform). Arrows inside data (`↑2 ↓1`, `old → new`) are text in the mono face, and a status count gets a 6 px CSS dot (`Dot`), not a bullet character.
+- **Motion**: `--od-motion-fast` 120 ms and `--od-motion` 180 ms, `ease-out`. Used for fade/slide-in of menus, toasts and dialogs and for the activity pulse. Everything is wrapped in `@media (prefers-reduced-motion: no-preference)`, and a global `prefers-reduced-motion: reduce` rule also switches off Tailwind's transition utilities: with reduced motion there is no animation at all, only state changes.
+- **Focus ring**: 2 px solid `focus`, 1 px offset, on `:focus-visible` only, instant. Inside dark surfaces the ring colour is lighter than the accent so it keeps 3:1 against `selected`. Text selection is `accentSoft`; the caret is `fg`.
+- **Icons**: one stroke set on a 16-unit grid, 1.5 px stroke, round caps, `currentColor`, drawn in `components/bits.tsx` (close, more, sun, moon, warning, check) plus `Mark`. Never a font glyph for a control (☾ ✕ ⋯ ⚠ render as emoji or in a different weight depending on the platform). Arrows inside data (`↑2 ↓1`, `old → new`) are text in the mono face.
+- **State is a word, not a dot.** No status dots: a dirty worktree is `fg` and shows its counts, a clean one is `muted` and says `clean`; a folder says `5 dirty`; the connection says `Live`, `Offline` or `Refreshing…`; the review chip says `Review off`. Colour-only dots broke the product's own rule that colour is never the only signal. The one dot left is the activity pulse (`.od-pulse`): a live state, shown for ten seconds after a worktree changes, with a static dot under reduced motion.
 - **No boxes for numbers.** Summary figures are set as a definition list (number over label, hairlines above and below), never as a grid of tiles.
 - **Density**: `data-density="compact" | "comfortable"` on the root (a per-device preference). It changes only `--od-row` (26 / 30 px), `--od-pad-x` (8 / 10 px) and the base font size (13 / 13.5 px). Compact is the default: the product is for people who have thirty worktrees open.
 
 ## 7. Voice
 
-Short, declarative, lower case product name, no exclamation marks, no mascots talking. Empty states say
+Short, declarative, lower case product name, no exclamation marks, no mascots talking. Typographic apostrophes
+(`daemon’s`), `…` for an ellipsis, no em dashes in the interface (a full stop or a colon instead), arrows only as
+data (`a → b`, `Settings → Review` as a path). Empty states say
 what to do next ("Watch a folder", "Add a repository"), toasts say what happened and offer undo, errors say
 what to run. The mark may appear in empty states and About; it never animates except the first-run
 "nothing here yet" state, where the arms may settle once.

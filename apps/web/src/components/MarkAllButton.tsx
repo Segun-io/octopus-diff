@@ -30,11 +30,7 @@ export function MarkAllButton({ compact = false }: { compact?: boolean }) {
         if (!disabled) commands.markAll(true);
       }}
       title={`${label} (⇧ R). Right-click a sidebar item for folders and projects.`}
-      className={`flex shrink-0 items-center gap-1 rounded-md border px-2 py-0.5 text-[11px] ${
-        disabled
-          ? 'cursor-default border-line text-faint'
-          : 'border-line text-muted hover:border-add hover:bg-add-soft hover:text-fg'
-      }`}
+      className={`od-btn shrink-0 ${disabled ? '' : 'hover:border-add hover:bg-add-soft'}`}
     >
       <CheckIcon />
       {compact ? `Verify ${plan.count}` : label}

@@ -14,10 +14,20 @@ interface PaletteItem {
   id: string;
   kind: 'go' | 'command' | 'settings' | 'theme' | 'review';
   label: string;
+  /** A two-part name (project, branch) rendered with weight instead of punctuation. */
+  parts?: [string, string] | undefined;
   hint?: string | undefined;
   keys?: string[] | undefined;
   run: () => void;
 }
+
+const KIND_LABELS: Record<PaletteItem['kind'], string> = {
+  go: 'Go to',
+  command: 'Command',
+  settings: 'Settings',
+  theme: 'Theme',
+  review: 'Review',
+};
 
 /**
  * Command palette (Ctrl/Cmd+K): jump to any folder / project / worktree, run any registered
@@ -49,7 +59,7 @@ export function CommandPalette() {
         id: `go:folder:${node.id}`,
         kind: 'go',
         label: node.id === DIRECT_FOLDER_ID ? 'Added directly' : `Folder ${node.label}`,
-        hint: `${node.stats.projects} repos · ${node.stats.dirty} dirty`,
+        hint: `${node.stats.projects} repos, ${node.stats.dirty} dirty`,
         run: () => actions.setView(store, { kind: 'folder', scanRootId: node.id }),
       });
       for (const group of node.groups) {
@@ -64,7 +74,8 @@ export function CommandPalette() {
           out.push({
             id: `go:worktree:${row.worktree.id}`,
             kind: 'go',
-            label: `${group.project.name} · ${worktreeLabel(row.worktree)}`,
+            label: `${group.project.name} ${worktreeLabel(row.worktree)}`,
+            parts: [group.project.name, worktreeLabel(row.worktree)],
             hint: row.unreviewed > 0 ? `${row.unreviewed} unreviewed` : row.worktree.path,
             run: () => actions.setView(store, { kind: 'worktree', worktreeId: row.worktree.id }),
           });
@@ -172,7 +183,7 @@ export function CommandPalette() {
               close();
             }
           }}
-          className="border-b border-line bg-transparent px-4 py-3 text-sm outline-none placeholder:text-faint"
+          className="border-b border-line bg-transparent px-4 py-3 text-sm outline-none placeholder:text-faint focus:border-line-strong"
         />
         <div
           ref={listRef}
@@ -202,10 +213,17 @@ export function CommandPalette() {
                 i === index ? 'bg-selected' : 'hover:bg-hover'
               }`}
             >
-              <span className="w-14 shrink-0 text-[10px] tracking-wide text-faint uppercase">
-                {item.kind === 'go' ? 'go to' : item.kind}
+              <span className="w-14 shrink-0 text-[11px] text-faint">{KIND_LABELS[item.kind]}</span>
+              <span className="min-w-0 flex-1 truncate">
+                {item.parts ? (
+                  <>
+                    <span className="font-medium">{item.parts[0]}</span>{' '}
+                    <span className="text-muted">{item.parts[1]}</span>
+                  </>
+                ) : (
+                  item.label
+                )}
               </span>
-              <span className="min-w-0 flex-1 truncate">{item.label}</span>
               {item.hint && (
                 <span className="max-w-56 truncate text-[11px] text-faint">{item.hint}</span>
               )}
@@ -221,7 +239,7 @@ export function CommandPalette() {
             </div>
           ))}
         </div>
-        <div className="flex gap-3 border-t border-line px-3 py-1.5 text-[10px] text-faint">
+        <div className="flex gap-3 border-t border-line px-3 py-1.5 text-[11px] text-faint">
           <span>
             <kbd>↑</kbd> <kbd>↓</kbd> move
           </span>

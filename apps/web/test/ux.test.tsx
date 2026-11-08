@@ -442,7 +442,7 @@ describe('folder tier, overview and palette', () => {
     expect(heading).toBeTruthy();
     expect(screen.queryByTestId(TEST_IDS.diffViewer)).toBeNull();
     // project rows navigate to the project overview, worktree rows to changes
-    fireEvent.click(screen.getByText('octopus-api', { selector: 'td' }));
+    fireEvent.click(screen.getByText('octopus-api', { selector: 'td button' }));
     await screen.findByRole('heading', { level: 1, name: 'octopus-api' });
     expect(store.getState().view.kind).toBe('project');
     fireEvent.click(screen.getByText('feat/auth', { selector: 'td span' }));

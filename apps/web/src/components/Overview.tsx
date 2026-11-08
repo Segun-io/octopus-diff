@@ -15,16 +15,15 @@ import {
   statsOfRows,
   worktreeLabel,
 } from '../lib/model.ts';
-import { policyLabel, shortenHome } from '../lib/policy.ts';
+import { SOURCE_LABELS, shortenHome } from '../lib/policy.ts';
 import { worktreeSource } from '../lib/source.ts';
 import { useCommandsContext } from '../state/commandsContext.tsx';
 import { useAppModel } from '../state/model.tsx';
 import { actions, useUiStore, type View } from '../state/ui.tsx';
-import { Dot } from './bits.tsx';
 import { Mark } from './Mark.tsx';
 
 /**
- * Overview for a folder or a project (views/registry.ts): stats, the worktrees or projects
+ * Overview for a folder or a project (views/registry.ts): figures, the worktrees or projects
  * inside, bulk actions and the review policy of the node. Future read-only views (Files, History)
  * sit next to it; see docs/design/FOLDERS.md.
  */
@@ -64,7 +63,7 @@ function StatsRow({ stats, repos }: { stats: NodeStats; repos: boolean }) {
     <dl className="flex flex-wrap gap-x-8 gap-y-3 border-y border-line py-3">
       {repos && <Stat label="repositories" value={stats.projects} />}
       <Stat label="worktrees" value={stats.worktrees} />
-      <Stat label="with changes" value={stats.dirty} tone={stats.dirty ? 'text-mod' : undefined} />
+      <Stat label="with changes" value={stats.dirty} />
       <Stat label="unreviewed files" value={stats.unreviewed} />
       <Stat
         label="lines"
@@ -88,7 +87,7 @@ function PolicyControl({ target, label }: { target: ReviewPolicyTarget | null; l
   const state = override ? (override.enabled ? 'on' : 'off') : 'inherit';
   return (
     <div className="flex items-center gap-2 text-xs">
-      <span className="text-muted">Review for {label}:</span>
+      <span className="text-muted">Review for {label}</span>
       {(['on', 'off', 'inherit'] as const).map((choice) => (
         <button
           key={choice}
@@ -98,11 +97,7 @@ function PolicyControl({ target, label }: { target: ReviewPolicyTarget | null; l
           onClick={() =>
             setPolicy.mutate({ target, enabled: choice === 'inherit' ? null : choice === 'on' })
           }
-          className={`rounded-sm border px-2 py-0.5 ${
-            state === choice
-              ? 'border-accent bg-accent-soft text-fg'
-              : 'border-line text-muted hover:bg-hover hover:text-fg'
-          }`}
+          className="od-btn"
         >
           {choice === 'inherit' ? 'Inherit' : choice === 'on' ? 'On' : 'Off'}
         </button>
@@ -125,20 +120,54 @@ function BulkButtons({
       <button
         type="button"
         onClick={onVerified}
-        className="rounded-md border border-line px-2 py-1 text-xs text-muted hover:border-add hover:bg-add-soft hover:text-fg"
+        className="od-btn hover:border-add hover:bg-add-soft"
       >
         Mark all as verified
       </button>
-      <button
-        type="button"
-        onClick={onUnreviewed}
-        className="rounded-md border border-line px-2 py-1 text-xs text-muted hover:bg-hover hover:text-fg"
-      >
+      <button type="button" onClick={onUnreviewed} className="od-btn">
         Mark all as unreviewed
       </button>
     </div>
   );
 }
+
+/**
+ * The first cell of a row: a real button, so the row is reachable by keyboard. The row itself
+ * also accepts a pointer click (the handler is idempotent).
+ */
+function RowLink({
+  onClick,
+  children,
+  className = '',
+}: {
+  onClick: () => void;
+  children: ReactNode;
+  className?: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation();
+        onClick();
+      }}
+      className={`rounded-sm text-left hover:underline ${className}`}
+    >
+      {children}
+    </button>
+  );
+}
+
+function Figures({ additions, deletions }: { additions: number; deletions: number }) {
+  return (
+    <>
+      <span className="text-add">+{additions}</span> <span className="text-del">−{deletions}</span>
+    </>
+  );
+}
+
+const CELL = 'py-1.5 pr-3';
+const NUM = `${CELL} font-mono tabular-nums`;
 
 function FolderOverview({ node }: { node: FolderNode }) {
   const store = useUiStore();
@@ -149,20 +178,28 @@ function FolderOverview({ node }: { node: FolderNode }) {
   const target = root
     ? ({ kind: 'folder', scanRootId: root.id } as const)
     : ({ kind: 'all' } as const);
+  const direct = node.id === DIRECT_FOLDER_ID;
   return (
     <div className="od-scroll h-full overflow-y-auto p-5">
       <header className="mb-4 flex flex-wrap items-start gap-3">
         <div className="min-w-0 flex-1">
-          <div className="od-heading">
-            {node.id === DIRECT_FOLDER_ID ? 'Added directly' : 'Folder'}
-          </div>
-          <h1 className="truncate font-mono text-base font-semibold" title={root?.path}>
+          <h1
+            className={`truncate text-base font-semibold ${direct ? '' : 'font-mono'}`}
+            title={root?.path}
+          >
             {node.label}
           </h1>
-          {root && (
+          {root ? (
+            <p className="flex flex-wrap gap-x-3 text-[11px] text-muted">
+              <span>depth {root.depth}</span>
+              <span>
+                scanned{' '}
+                {root.lastScannedAt ? new Date(root.lastScannedAt).toLocaleString() : 'never'}
+              </span>
+            </p>
+          ) : (
             <p className="text-[11px] text-muted">
-              depth {root.depth} · scanned{' '}
-              {root.lastScannedAt ? new Date(root.lastScannedAt).toLocaleString() : 'never'}
+              Repositories added one by one, without a folder.
             </p>
           )}
         </div>
@@ -181,7 +218,7 @@ function FolderOverview({ node }: { node: FolderNode }) {
                 type="button"
                 onClick={() => rescan.mutate(root.id)}
                 disabled={rescan.isPending}
-                className="rounded-md border border-line px-2 py-0.5 text-xs text-muted hover:bg-hover hover:text-fg"
+                className="od-btn"
               >
                 Rescan
               </button>
@@ -192,40 +229,34 @@ function FolderOverview({ node }: { node: FolderNode }) {
       <StatsRow stats={node.stats} repos />
       <table className="mt-4 w-full text-xs">
         <thead>
-          <tr className="text-left text-[10px] tracking-wide text-faint uppercase">
-            <th className="py-1 font-medium">Repository</th>
-            <th className="py-1 font-medium">Worktrees</th>
-            <th className="py-1 font-medium">Changes</th>
-            <th className="py-1 font-medium">Unreviewed</th>
-            <th className="py-1 font-medium">Path</th>
+          <tr>
+            <th className="od-th">Repository</th>
+            <th className="od-th">Worktrees</th>
+            <th className="od-th">With changes</th>
+            <th className="od-th">Lines</th>
+            <th className="od-th">Unreviewed</th>
+            <th className="od-th">Path</th>
           </tr>
         </thead>
         <tbody>
           {node.groups.map((g) => {
             const s = statsOfRows(g.allRows);
+            const go = () => actions.setView(store, { kind: 'project', projectId: g.project.id });
             return (
-              <tr
-                key={g.project.id}
-                className="cursor-pointer border-t border-line hover:bg-hover"
-                onClick={() => actions.setView(store, { kind: 'project', projectId: g.project.id })}
-              >
-                <td className="py-1.5 pr-3 font-medium">{g.project.name}</td>
-                <td className="py-1.5 pr-3 font-mono tabular-nums">{s.worktrees}</td>
-                <td className="py-1.5 pr-3 font-mono tabular-nums">
-                  {s.dirty > 0 ? (
-                    <>
-                      <span className="inline-flex items-center gap-0.5 text-mod">
-                        <Dot />
-                        {s.dirty}
-                      </span>{' '}
-                      <span className="text-add">+{s.additions}</span>{' '}
-                      <span className="text-del">−{s.deletions}</span>
-                    </>
-                  ) : (
-                    <span className="text-faint">clean</span>
-                  )}
+              <tr key={g.project.id} className="cursor-pointer hover:bg-hover" onClick={go}>
+                <td className={CELL}>
+                  <RowLink onClick={go} className="font-medium">
+                    {g.project.name}
+                  </RowLink>
                 </td>
-                <td className="py-1.5 pr-3 font-mono tabular-nums">
+                <td className={NUM}>{s.worktrees}</td>
+                <td className={NUM}>
+                  {s.dirty > 0 ? s.dirty : <span className="font-sans text-faint">clean</span>}
+                </td>
+                <td className={NUM}>
+                  {s.dirty > 0 && <Figures additions={s.additions} deletions={s.deletions} />}
+                </td>
+                <td className={NUM}>
                   {s.unreviewed > 0 ? <span className="font-semibold">{s.unreviewed}</span> : '–'}
                 </td>
                 <td className="truncate py-1.5 font-mono text-[11px] text-faint">
@@ -243,30 +274,21 @@ function FolderOverview({ node }: { node: FolderNode }) {
 function ProjectOverview({ group }: { group: ProjectGroup }) {
   const store = useUiStore();
   const commands = useCommandsContext();
-  const model = useAppModel();
   const { project } = group;
   const ids = group.allRows.map((r) => r.worktree.id);
-  const folder = model.sidebar.folders.find((f) => f.groups.includes(group));
   const stats = statsOfRows(group.allRows);
   return (
     <div className="od-scroll h-full overflow-y-auto p-5">
       <header className="mb-4 flex flex-wrap items-start gap-3">
         <div className="min-w-0 flex-1">
-          <div className="od-heading">
-            Project
-            {folder && (
-              <>
-                {' · '}
-                <span className="font-mono font-normal tracking-normal normal-case">
-                  {folder.label}
-                </span>
-              </>
-            )}
-          </div>
           <h1 className="truncate text-base font-semibold">{project.name}</h1>
-          <p className="truncate font-mono text-[11px] text-muted" title={project.commonDir}>
-            {shortenHome(project.mainWorktreePath ?? project.commonDir)} · base{' '}
-            {project.defaultBranch ?? 'unknown'}
+          <p className="flex flex-wrap gap-x-3 text-[11px] text-muted" title={project.commonDir}>
+            <span className="truncate font-mono">
+              {shortenHome(project.mainWorktreePath ?? project.commonDir)}
+            </span>
+            <span>
+              base <span className="font-mono">{project.defaultBranch ?? 'unknown'}</span>
+            </span>
           </p>
         </div>
         <div className="flex flex-col items-end gap-2">
@@ -284,59 +306,65 @@ function ProjectOverview({ group }: { group: ProjectGroup }) {
       <StatsRow stats={stats} repos={false} />
       <table className="mt-4 w-full text-xs">
         <thead>
-          <tr className="text-left text-[10px] tracking-wide text-faint uppercase">
-            <th className="py-1 font-medium">Worktree</th>
-            <th className="py-1 font-medium">Source</th>
-            <th className="py-1 font-medium">Ahead / behind</th>
-            <th className="py-1 font-medium">Changes</th>
-            <th className="py-1 font-medium">Unreviewed</th>
-            <th className="py-1 font-medium">Review</th>
+          <tr>
+            <th className="od-th">Worktree</th>
+            <th className="od-th">Source</th>
+            <th className="od-th">Ahead / behind</th>
+            <th className="od-th">Files</th>
+            <th className="od-th">Lines</th>
+            <th className="od-th">Unreviewed</th>
+            <th className="od-th">Review</th>
           </tr>
         </thead>
         <tbody>
           {group.allRows.map((row) => {
             const s = row.summary;
             const source = row.worktree.isMain ? null : worktreeSource(row.worktree.path);
+            const dirty = s ? isDirtySummary(s) : false;
+            const go = () =>
+              actions.setView(store, { kind: 'worktree', worktreeId: row.worktree.id });
             return (
               <tr
                 key={row.worktree.id}
-                className="cursor-pointer border-t border-line hover:bg-hover"
-                onClick={() =>
-                  actions.setView(store, { kind: 'worktree', worktreeId: row.worktree.id })
-                }
+                className="cursor-pointer hover:bg-hover"
+                onClick={go}
                 title={row.worktree.path}
               >
-                <td className="py-1.5 pr-3">
-                  <span className={row.worktree.branch ? 'font-medium' : 'italic text-muted'}>
-                    {worktreeLabel(row.worktree)}
-                  </span>
-                  {row.worktree.isMain && <span className="ml-1 text-[10px] text-faint">main</span>}
+                <td className={CELL}>
+                  <RowLink onClick={go}>
+                    <span className={row.worktree.branch ? 'font-medium' : 'italic text-muted'}>
+                      {worktreeLabel(row.worktree)}
+                    </span>
+                  </RowLink>
+                  {row.worktree.isMain && (
+                    <span className="ml-1.5 text-[11px] text-faint">main</span>
+                  )}
                   {s?.inProgress && (
-                    <span className="ml-1 text-[10px] text-warn">{s.inProgress}</span>
+                    <span className="ml-1.5 text-[11px] text-warn">{s.inProgress}</span>
                   )}
                   {row.worktree.missing && (
-                    <span className="ml-1 text-[10px] text-danger">missing</span>
+                    <span className="ml-1.5 text-[11px] text-danger">missing</span>
                   )}
                 </td>
-                <td className="py-1.5 pr-3 font-mono text-[11px] text-muted">
+                <td className={`${CELL} font-mono text-[11px] text-muted`}>
                   {source?.label ?? (row.worktree.isMain ? '–' : 'plain')}
                 </td>
-                <td className="py-1.5 pr-3 font-mono tabular-nums text-muted">
+                <td className={`${NUM} text-muted`}>
                   {s && s.ahead !== null && s.behind !== null ? `↑${s.ahead} ↓${s.behind}` : '–'}
                 </td>
-                <td className="py-1.5 pr-3 font-mono tabular-nums">
-                  {s && isDirtySummary(s) ? (
-                    <>
-                      {s.changedFiles} <span className="text-add">+{s.additions}</span>{' '}
-                      <span className="text-del">−{s.deletions}</span>
-                    </>
+                <td className={NUM}>
+                  {s && dirty ? (
+                    s.changedFiles
                   ) : row.error ? (
-                    <span className="text-danger">error</span>
+                    <span className="font-sans text-danger">error</span>
                   ) : (
-                    <span className="text-faint">clean</span>
+                    <span className="font-sans text-faint">clean</span>
                   )}
                 </td>
-                <td className="py-1.5 pr-3 font-mono tabular-nums">
+                <td className={NUM}>
+                  {s && dirty && <Figures additions={s.additions} deletions={s.deletions} />}
+                </td>
+                <td className={NUM}>
                   {row.unreviewed > 0 ? (
                     <span className="font-semibold">{row.unreviewed}</span>
                   ) : (
@@ -345,7 +373,7 @@ function ProjectOverview({ group }: { group: ProjectGroup }) {
                 </td>
                 <td className="py-1.5 text-[11px] text-muted">
                   {row.review.enabled ? <span className="text-add">on</span> : <span>off</span>}{' '}
-                  <span className="text-faint">({policyLabel(row.review).split('from ')[1]})</span>
+                  <span className="text-faint">(from {SOURCE_LABELS[row.review.source]})</span>
                 </td>
               </tr>
             );

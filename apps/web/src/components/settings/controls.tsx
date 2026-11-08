@@ -83,7 +83,7 @@ export function Select<T extends string>({
       aria-label={label}
       value={value}
       onChange={(e) => onChange(e.target.value as T)}
-      className="rounded-md border border-line-strong bg-canvas px-2 py-1 text-xs text-fg"
+      className="od-input"
     >
       {options.map((o) => (
         <option key={o.value} value={o.value}>
@@ -97,7 +97,7 @@ export function Select<T extends string>({
 /** Where a setting lives (COORDINATION §2.3). */
 export function Where({ kind }: { kind: 'device' | 'daemon' }) {
   return (
-    <span className="inline-flex items-center gap-1 rounded-sm bg-raised px-1.5 py-0.5 text-[10px] font-medium tracking-wide text-muted uppercase">
+    <span className="od-chip">
       {kind === 'device' ? 'Saved on this device' : 'Shared by the daemon'}
     </span>
   );
@@ -125,11 +125,7 @@ export function SmallButton({
       title={title}
       disabled={disabled}
       data-testid={testId}
-      className={`rounded-md border px-2 py-0.5 text-[11px] disabled:opacity-50 ${
-        danger
-          ? 'border-line text-danger hover:border-danger hover:bg-del-soft'
-          : 'border-line text-muted hover:bg-hover hover:text-fg'
-      }`}
+      className={`od-btn ${danger ? 'od-btn-danger' : ''}`}
     >
       {children}
     </button>

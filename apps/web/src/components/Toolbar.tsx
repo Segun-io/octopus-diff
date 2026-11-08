@@ -96,7 +96,7 @@ export function Toolbar() {
           data-scope={scopeKey(scope)}
           value={scope.kind}
           onChange={(e) => setScopeKind(e.target.value as ScopeKind)}
-          className="rounded border border-line bg-canvas px-1 py-0.5 text-xs text-fg"
+          className="od-input"
         >
           {(Object.keys(SCOPE_LABELS) as ScopeKind[]).map((kind) => (
             <option
@@ -118,7 +118,7 @@ export function Toolbar() {
             ''
           }
           onChange={(e) => store.setState({ scope: { kind: 'commit', sha: e.target.value } })}
-          className="max-w-72 rounded border border-line bg-canvas px-1 py-0.5 font-mono text-xs text-fg"
+          className="od-input max-w-72 font-mono"
         >
           {commitList.map((c) => (
             <option key={c.sha} value={c.sha}>
@@ -136,7 +136,7 @@ export function Toolbar() {
         data-mode={diffMode}
         onClick={commands.toggleDiffMode}
         title="Split / unified (s)"
-        className="rounded border border-line bg-surface px-2 py-0.5 text-xs text-fg hover:bg-hover"
+        className="od-btn text-fg"
       >
         {diffMode === 'split' ? 'Split' : 'Unified'}
       </button>
@@ -165,7 +165,7 @@ export function Toolbar() {
           onClick={() => store.setState({ fileListLayout: layout === 'list' ? 'tree' : 'list' })}
           title="Show the files as a directory tree"
           aria-pressed={layout === 'tree'}
-          className="rounded border border-line bg-surface px-2 py-0.5 text-xs text-muted hover:bg-hover hover:text-fg aria-pressed:bg-selected aria-pressed:text-fg"
+          className="od-btn"
         >
           Tree view
         </button>
@@ -177,23 +177,11 @@ export function Toolbar() {
           data-testid={TEST_IDS.refreshIndicator}
           data-state={indicatorState}
           onClick={refreshNow}
-          title={`${indicatorLabel} — click to refresh now`}
+          title={`${indicatorLabel}. Click to refresh now.`}
           aria-label={`${indicatorLabel}. Refresh now`}
-          className="flex items-center gap-1.5 rounded px-1.5 py-0.5 text-xs text-muted hover:bg-hover"
+          className={`od-btn od-btn-ghost ${indicatorState === 'offline' ? 'text-danger' : ''}`}
         >
-          <span
-            aria-hidden="true"
-            className={`h-2 w-2 rounded-full ${
-              indicatorState === 'offline'
-                ? 'bg-danger'
-                : indicatorState === 'refreshing'
-                  ? 'animate-pulse bg-accent'
-                  : connection === 'open'
-                    ? 'bg-add'
-                    : 'bg-faint'
-            }`}
-          />
-          <span>{indicatorLabel}</span>
+          {indicatorLabel}
         </button>
         <button
           type="button"
@@ -201,7 +189,7 @@ export function Toolbar() {
           onClick={commands.toggleTheme}
           title="Toggle light / dark (t)"
           aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`}
-          className="flex items-center rounded px-1.5 py-1 text-muted hover:bg-hover hover:text-fg"
+          className="od-btn od-btn-ghost"
         >
           {theme === 'dark' ? <MoonIcon /> : <SunIcon />}
         </button>
@@ -210,7 +198,7 @@ export function Toolbar() {
           onClick={commands.toggleHelp}
           title="Keyboard shortcuts (?)"
           aria-label="Keyboard shortcuts"
-          className="rounded px-1.5 py-0.5 text-xs text-muted hover:bg-hover hover:text-fg"
+          className="od-btn od-btn-ghost"
         >
           ?
         </button>

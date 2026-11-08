@@ -35,7 +35,7 @@ export function BulkReviewToast() {
                 type="button"
                 data-testid={TEST_IDS.bulkReviewUndo}
                 onClick={() => commands.undoBulk()}
-                className="rounded-md border border-line-strong px-2 py-0.5 font-medium hover:bg-hover"
+                className="od-btn border-line-strong font-medium text-fg"
                 title="Undo (Ctrl/⌘ Z)"
               >
                 Undo
@@ -46,7 +46,7 @@ export function BulkReviewToast() {
               type="button"
               onClick={() => store.setState({ bulkToast: null })}
               aria-label="Dismiss"
-              className="flex items-center rounded-md p-1 text-muted hover:bg-hover hover:text-fg"
+              className="od-btn od-btn-ghost"
             >
               <CloseIcon />
             </button>
@@ -107,18 +107,14 @@ function ConfirmBulk({
           shown). Turn this confirmation off in Settings → General.
         </p>
         <div className="mt-3 flex justify-end gap-2">
-          <button
-            type="button"
-            onClick={() => commands.cancelBulk()}
-            className="rounded-md border border-line px-3 py-1 hover:bg-hover"
-          >
+          <button type="button" onClick={() => commands.cancelBulk()} className="od-btn px-3">
             Cancel
           </button>
           <button
             ref={ref}
             type="button"
             onClick={() => commands.confirmBulk()}
-            className="rounded-md bg-accent px-3 py-1 font-medium text-accent-fg"
+            className="od-btn od-btn-primary px-3"
           >
             Mark {reviewed ? 'verified' : 'unreviewed'}
           </button>
