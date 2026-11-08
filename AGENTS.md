@@ -15,7 +15,7 @@ deviate from it, log why in `docs/DECISIONS.md`.
 | `pnpm test` | vitest unit tests in every package (no build needed) |
 | `pnpm build` | Topological build: contracts → git-core → daemon → cli, plus web (Vite) |
 | `pnpm test:e2e` | Playwright e2e (`e2e/`) |
-| `pnpm check` | lint + typecheck + test + build |
+| `pnpm check` | lint + typecheck + build + test (build first so the CLI test can run the built bin) |
 
 Per package: `pnpm --filter <name> <script>` (names: `@octopus-diff/contracts`, `@octopus-diff/git-core`,
 `@octopus-diff/daemon`, `@octopus-diff/web`, `octopus-diff` (the CLI), `@octopus-diff/fixtures`,

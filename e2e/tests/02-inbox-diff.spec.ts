@@ -55,13 +55,17 @@ test.describe('§8.3 inbox and diff', () => {
         `clean ${worktree.name} must not be in the inbox`,
       ).toHaveCount(0);
     }
-    // Every file of a dirty worktree is listed under its group.
+    // Every file of a dirty worktree is listed under its group. The list is virtualized, so
+    // collect rows by scrolling through it instead of expecting them all in the DOM at once.
+    const listed = new Set(
+      (await app.allFileItems()).map((item) => `${item.worktreeId ?? ''}\u0000${item.path}`),
+    );
     for (const { worktree } of dirty) {
       for (const file of worktree.scopes.working ?? []) {
-        await expect(
-          app.fileItem(file.path, worktree.id),
+        expect(
+          listed.has(`${worktree.id}\u0000${file.path}`),
           `${worktree.name}: ${file.path}`,
-        ).toHaveCount(1);
+        ).toBe(true);
       }
     }
   });

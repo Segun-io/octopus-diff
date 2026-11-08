@@ -31,6 +31,7 @@
   "dependencies": {
     "@octopus-diff/contracts": "workspace:*",
     "@octopus-diff/daemon": "workspace:*",
+    "@octopus-diff/git-core": "workspace:*",
     "zod": "^4.6.7"
   },
   "devDependencies": {

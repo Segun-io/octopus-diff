@@ -1,6 +1,7 @@
 import { constants } from 'node:fs';
 import { access, stat } from 'node:fs/promises';
 import { APP_NAME } from '@octopus-diff/contracts';
+import { MIN_GIT_VERSION } from '@octopus-diff/git-core';
 import type { DoctorFlags } from '../args.js';
 import type { ResolvedConfig } from '../config.js';
 import type { CliDeps } from '../deps.js';
@@ -18,12 +19,8 @@ import {
 import { resolveWebRoot, webRootCandidates } from '../web-assets.js';
 import { probeHealth } from './daemon-client.js';
 
-/**
- * Oldest git the CLI considers supported. Provisional: WS1 (git-core) owns the real minimum and
- * feature detection; keep this in sync with it and with README.md. 2.25 is the first release
- * after `--end-of-options` (2.24) and is what Ubuntu 20.04 ships.
- */
-export const MIN_GIT_VERSION = { major: 2, minor: 25, patch: 0 } as const;
+/** Oldest supported git: git-core owns it (it refuses older versions with `git_unsupported`). */
+export { MIN_GIT_VERSION };
 export const MIN_NODE_MAJOR = 24;
 /** Below these, watching many worktrees can exhaust inotify (PLAN §5.6, §9). */
 export const RECOMMENDED_INOTIFY_WATCHES = 524_288;

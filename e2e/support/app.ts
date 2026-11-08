@@ -163,6 +163,39 @@ export class AppPage {
     return (await this.fileItems()).map((f) => f.path);
   }
 
+  /**
+   * Every file item the list can render, found by scrolling the (virtualized) file list from top
+   * to bottom. `fileItems()` only sees rows near the viewport; use this when asserting on the
+   * whole list. Restores the original scroll position afterwards.
+   */
+  async allFileItems(): Promise<FileItemInfo[]> {
+    const list = this.fileList;
+    const original = await list.evaluate((el) => el.scrollTop);
+    const seen = new Map<string, FileItemInfo>();
+    await list.evaluate((el) => {
+      el.scrollTop = 0;
+    });
+    for (let step = 0; step < 1000; step++) {
+      // Wait a frame so the virtualized list re-renders for the new scroll position.
+      await this.page.evaluate(
+        () => new Promise((resolve) => requestAnimationFrame(() => resolve(null))),
+      );
+      for (const item of await this.fileItems()) {
+        seen.set(`${item.worktreeId ?? ''}\u0000${item.path}`, item);
+      }
+      const atBottom = await list.evaluate((el) => {
+        const before = el.scrollTop;
+        el.scrollTop = before + Math.max(1, Math.floor(el.clientHeight / 2));
+        return el.scrollTop === before;
+      });
+      if (atBottom) break;
+    }
+    await list.evaluate((el, top) => {
+      el.scrollTop = top;
+    }, original);
+    return [...seen.values()];
+  }
+
   /** Clicks a file and waits until the diff viewer shows it. */
   async openFile(path: string, worktreeId?: string): Promise<void> {
     const item = this.fileItem(path, worktreeId).first();

@@ -15,9 +15,8 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # pnpm 12 fails the install when a dependency's build script is not approved; esbuild's
-  # postinstall is not needed (its platform binary ships as an optional dependency).
-  PNPM_INSTALL_FLAGS: --frozen-lockfile --config.strict-dep-builds=false
+  # Dependency build scripts are approved/denied in pnpm-workspace.yaml (`allowBuilds`).
+  PNPM_INSTALL_FLAGS: --frozen-lockfile
 
 jobs:
   check:
@@ -39,8 +38,8 @@ jobs:
       - run: pnpm install $PNPM_INSTALL_FLAGS
       - run: pnpm lint
       - run: pnpm typecheck
+      - run: pnpm build # before tests: the CLI integration test runs the built bin
       - run: pnpm test
-      - run: pnpm build
       - name: CLI smoke test
         run: |
           node apps/cli/dist/index.js --version

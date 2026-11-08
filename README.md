@@ -17,10 +17,9 @@ It is **agent-agnostic**: it only speaks git, so it works with any tool that edi
 worktrees. Worktrees are discovered automatically, and edits show up live without a reload. Files you
 mark as reviewed stay reviewed until their patch changes, then come back as unreviewed.
 
-> **Status: MVP under construction.** The CLI described below is implemented. The daemon, git layer
-> and web UI are being built in parallel and are merged as they land; until then `octopus-diff serve`
-> stops with "daemon is a placeholder". The design and the acceptance list are in
-> [`docs/PLAN.md`](docs/PLAN.md).
+> **Status: MVP.** Everything below is implemented and covered by unit and end-to-end tests. What
+> works, measured performance and known gaps are in [`docs/reports/mvp.md`](docs/reports/mvp.md); the
+> design and the acceptance list are in [`docs/PLAN.md`](docs/PLAN.md).
 
 ## Why it is safe to point at your repositories
 
@@ -45,7 +44,7 @@ repositories, in `~/.local/state/octopus-diff/`.
 ## Requirements
 
 - **Node.js ≥ 24**
-- **git ≥ 2.25** (newer versions are used when available, e.g. `worktree list -z` from 2.36)
+- **git ≥ 2.31** (older versions are refused; newer features such as `worktree list -z` from 2.36 are detected)
 - Linux, macOS, or Windows via WSL2. Native Windows is untested.
 - For development: **pnpm 12**
 
@@ -219,7 +218,7 @@ printf 'fs.inotify.max_user_watches=524288\nfs.inotify.max_user_instances=512\n'
 
 ```sh
 pnpm install
-pnpm check      # lint + typecheck + unit tests + build
+pnpm check      # lint + typecheck + build + unit tests
 pnpm test:e2e   # Playwright end-to-end tests
 ```
 

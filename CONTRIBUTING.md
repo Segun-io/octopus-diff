@@ -9,17 +9,17 @@ plan are logged in [`docs/DECISIONS.md`](docs/DECISIONS.md).
 ## Setup
 
 Requirements: **Node.js ≥ 24** (development happens on Node 26), **pnpm 12** (pinned through
-`packageManager`; `corepack enable` or `npm i -g pnpm@12` gets it), **git ≥ 2.25**.
+`packageManager`; `corepack enable` or `npm i -g pnpm@12` gets it), **git ≥ 2.31**.
 
 ```sh
 pnpm install
 pnpm check            # lint + typecheck + unit tests + build: run this before every commit
 ```
 
-pnpm 12 blocks dependency build scripts. If `pnpm install` exits with "Ignored build scripts:
-esbuild", the install itself is complete (esbuild ships its binary as an optional dependency); until
-`esbuild` is listed under `allowBuilds` in `pnpm-workspace.yaml` you can silence it with
-`pnpm install --config.strict-dep-builds=false`, which is what CI does.
+pnpm 12 blocks dependency build scripts. The ones this repo pulls in (`esbuild`, `@parcel/watcher`)
+are denied in `allowBuilds` in `pnpm-workspace.yaml`: both ship prebuilt platform binaries as
+optional dependencies, so nothing needs to run at install time. If you add a dependency whose script
+is truly required, approve it there and say why in `docs/DECISIONS.md`.
 
 ## Scripts (from the repository root)
 

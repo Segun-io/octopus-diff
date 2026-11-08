@@ -261,7 +261,7 @@ describe('version and platform helpers', () => {
     });
     expect(parseGitVersion('git version 3.0')).toEqual({ major: 3, minor: 0, patch: 0 });
     expect(parseGitVersion('nonsense')).toBeNull();
-    expect(MIN_GIT_VERSION.major).toBe(2);
+    expect(MIN_GIT_VERSION).toEqual({ major: 2, minor: 31, patch: 0 });
   });
 
   it('detects WSL', () => {

@@ -565,3 +565,16 @@ All 2026-11-08 · WS5.
    pulls `esbuild`, whose postinstall only validates/optimizes the binary; the prebuilt
    `@esbuild/linux-x64` package is used. Without the entry, pnpm 12 exits 1 on `pnpm install` even though
    the install completes (reported by WS5). Verified: `pnpm install` exits 0 and `tsx` runs.
+2. **2026-11-08 · Merge order and seams.** Merged `ws/git-core`, `ws/daemon`, `ws/web`,
+   `ws/fixtures-e2e`, `ws/cli` with `--no-ff`, no textual conflicts (ownership held; the lockfile
+   auto-merged and `pnpm install` confirmed it). Seam fixes: the CLI's `doctor` now imports
+   `MIN_GIT_VERSION` from git-core (2.31; it had a provisional 2.25 copy) and README/CONTRIBUTING say
+   git ≥ 2.31; CI and CONTRIBUTING no longer need `--config.strict-dep-builds=false`; `pnpm check` and CI
+   build **before** testing so the CLI's built-bin integration test runs instead of skipping; the e2e
+   inbox spec collects rows by scrolling the virtualized file list (`AppPage.allFileItems`) instead of
+   expecting every row in the DOM at once (UI behavior was correct).
+3. **2026-11-08 · git `diff` rewrites the index despite `--no-optional-locks`** (found by WS4,
+   reproduced by the lead on git 2.53 with a touched-but-unchanged file; `status`, `diff-files`,
+   `diff-index` don't). WS1 independently caught it with its proof test and pins
+   `diff.autoRefreshIndex=false` and filters stat-only entries; the e2e proof (control fixtures contain
+   touched-but-unchanged files) passes with 0 violations.
