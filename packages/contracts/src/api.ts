@@ -58,6 +58,8 @@ export const ROUTES = {
   setReviewPolicy: { method: 'PUT', path: '/api/review-policy' },
   bulkReview: { method: 'POST', path: '/api/review/bulk' },
   undoReview: { method: 'POST', path: '/api/review/undo' },
+  // --- folder picker (additive; see "folder picker" below) ---
+  listDirs: { method: 'GET', path: '/api/fs/dirs' },
 } as const;
 export type RouteName = keyof typeof ROUTES;
 
@@ -148,6 +150,55 @@ export type AddScanRootResponse = z.infer<typeof AddScanRootResponseSchema>;
 
 export const RescanResponseSchema = z.object({ scanRoot: ScanRootSchema });
 export type RescanResponse = z.infer<typeof RescanResponseSchema>;
+
+// --- folder picker ---------------------------------------------------------------------------
+
+/**
+ * What a directory is, judged only from its entries (no git process runs): `repo` has a `.git`
+ * directory or is a bare repository (`HEAD`, `objects/`, `refs/`), `gitfile` has a `.git` file (a
+ * linked worktree or a submodule), `dir` is neither.
+ */
+export const DirKindSchema = z.enum(['dir', 'repo', 'gitfile']);
+export type DirKind = z.infer<typeof DirKindSchema>;
+
+export const DIRS_ENTRIES_MAX = 2000;
+
+/** `path` defaults to the daemon user's home; `~` is expanded, relative paths use the daemon's cwd. */
+export const DirsQuerySchema = z.object({ path: InputPathSchema.optional() });
+export type DirsQuery = z.infer<typeof DirsQuerySchema>;
+
+export const DirEntrySchema = z.object({
+  name: z.string(),
+  /** Absolute: the listed directory joined with `name` (symlinks are not resolved). */
+  path: z.string(),
+  kind: DirKindSchema,
+  /** Name starts with `.`. */
+  hidden: z.boolean(),
+  symlink: z.boolean(),
+});
+export type DirEntry = z.infer<typeof DirEntrySchema>;
+
+/**
+ * Subdirectories of one directory, for the folder picker. Names only: no file names, no file
+ * contents, no git process. Sorted by name (case-insensitive).
+ */
+export const DirsResponseSchema = z.object({
+  /** The listed directory: absolute, symlinks resolved. */
+  path: z.string(),
+  /** Null at the filesystem root. */
+  parent: z.string().nullable(),
+  kind: DirKindSchema,
+  /** Path separator of the daemon's platform. */
+  sep: z.enum(['/', '\\']),
+  /** The daemon user's home directory (for `~` display). */
+  home: z.string(),
+  entries: z.array(DirEntrySchema),
+  /** More than `DIRS_ENTRIES_MAX` subdirectories: the rest were dropped. */
+  truncated: z.boolean(),
+  /** Starting points: home, the daemon's working directory, the filesystem root. */
+  places: z.array(z.object({ label: z.string(), path: z.string() })),
+});
+export type DirsResponse = z.infer<typeof DirsResponseSchema>;
 
 // --- inbox, files, diff, commits -------------------------------------------------------------
 

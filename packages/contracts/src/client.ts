@@ -11,6 +11,8 @@ import {
   CommitsResponseSchema,
   type DiffResponse,
   DiffResponseSchema,
+  type DirsResponse,
+  DirsResponseSchema,
   type FilesResponse,
   FilesResponseSchema,
   type FocusRequest,
@@ -147,6 +149,8 @@ export interface ApiClient {
   /** "Mark all as verified" (or unverified) for a worktree, project, folder or everything. */
   bulkReview(body: BulkReviewRequest): Promise<BulkReviewResponse>;
   undoReview(body: UndoReviewRequest): Promise<UndoReviewResponse>;
+  /** Subdirectories of `path` (default: home) for the folder picker. */
+  listDirs(params?: { path?: string }): Promise<DirsResponse>;
   /** Absolute or same-origin URL of the SSE stream. */
   eventsUrl(): string;
   /** Subscribes via fetch streaming with the bearer token (browsers and Node). */
@@ -367,6 +371,11 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
       request(BulkReviewResponseSchema, 'POST', ROUTES.bulkReview.path, { body }),
     undoReview: (body) =>
       request(UndoReviewResponseSchema, 'POST', ROUTES.undoReview.path, { body }),
+    listDirs: (params = {}) => {
+      const query = new URLSearchParams();
+      if (params.path !== undefined) query.set('path', params.path);
+      return request(DirsResponseSchema, 'GET', ROUTES.listDirs.path, { query });
+    },
     eventsUrl: () => url(ROUTES.events.path),
     subscribe,
   };

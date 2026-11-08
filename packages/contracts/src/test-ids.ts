@@ -37,6 +37,18 @@ export const TEST_IDS = {
   addProjectSubmit: 'add-project-submit',
   addScanRootPathInput: 'add-scan-root-path-input',
   addScanRootSubmit: 'add-scan-root-submit',
+  /**
+   * Folder picker (in the add dialog, empty state and Settings → Folders). The location input
+   * takes a typed path and filters the listing; `data-path` on the picker is the listed folder.
+   * `addProjectSubmit` / `addScanRootSubmit` act on the location input's path.
+   */
+  folderPicker: 'folder-picker',
+  folderPickerInput: 'folder-picker-input',
+  /** One subdirectory row: `data-path`, `data-kind` (DirKind), `data-registered`. */
+  folderPickerEntry: 'folder-picker-entry',
+  /** Adds the repository of one row directly. */
+  folderPickerEntryAdd: 'folder-picker-entry-add',
+  folderPickerUp: 'folder-picker-up',
 
   // --- file list -------------------------------------------------------------------------
   fileList: 'file-list',
