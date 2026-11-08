@@ -321,13 +321,20 @@ export class DaemonCore {
       .map((e) => this.#item(e));
   }
 
-  async addProject(inputPath: string): Promise<{ item: ProjectListItem; created: boolean }> {
+  /**
+   * Registers a repository by any path inside it (idempotent). `waitForSummaries` (default
+   * true) waits, bounded, for the first summaries so the response is complete.
+   */
+  async addProject(
+    inputPath: string,
+    options: { waitForSummaries?: boolean } = {},
+  ): Promise<{ item: ProjectListItem; created: boolean }> {
     const real = await this.#resolveDirectory(inputPath);
     const resolved = await this.#git.resolveProject(real);
     this.#assertOpen();
     const { entry, created } = this.#register(resolved, { scanRootId: null, explicit: true });
     if (!entry) throw new ApiError('internal', 'project registration failed');
-    await this.#awaitInitial([entry]);
+    if (options.waitForSummaries ?? true) await this.#awaitInitial([entry]);
     return { item: this.#item(entry), created };
   }
 

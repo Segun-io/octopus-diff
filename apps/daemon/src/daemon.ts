@@ -178,7 +178,7 @@ export const startDaemon = (async (options: DaemonOptions = {}): Promise<Daemon>
     const justProjects = new Set<string>();
     for (const path of options.projects ?? []) {
       try {
-        const { item } = await core.addProject(path);
+        const { item } = await core.addProject(path, { waitForSummaries: false });
         justProjects.add(item.project.id);
       } catch (error) {
         logger.warn('could not register project from options', { path, error });
