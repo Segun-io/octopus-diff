@@ -418,9 +418,16 @@ async function main() {
     }
     const tSummaries = Date.now();
     phases.startup = [t0, tSummaries];
-    // Let watcher subscriptions settle, then count inotify usage.
-    await sleep(1500);
-    const inotify = await inotifyStats(pid);
+    // Wait until the inotify watch count is stable for 4 s (subscriptions crawl in the background).
+    let inotify = await inotifyStats(pid);
+    let stableSince = Date.now();
+    while (Date.now() - stableSince < 4000 && Date.now() - tSummaries < 60_000) {
+      await sleep(50);
+      const next = await inotifyStats(pid);
+      if (next.watches !== inotify.watches) stableSince = Date.now();
+      inotify = next;
+    }
+    const watchersSettledMs = stableSince - t0;
     const memStartup = await memStats(pid);
     const startupSpawns = (await readSpawns(daemon.spawnFile)).filter((s) => s.t0 <= tSummaries);
     result.startup = {
@@ -430,10 +437,11 @@ async function main() {
       spawns: spawnStats(startupSpawns),
       spawnsBeforeListening: startupSpawns.filter((s) => s.t0 <= tListening).length,
       inotify,
+      watchersSettledMs,
       mem: memStartup,
     };
     log(
-      `startup: listening ${tListening - t0} ms, summaries ${tSummaries - t0} ms, ${startupSpawns.length} git spawns, inotify ${inotify.instances} instances / ${inotify.watches} watches, RSS ${memStartup.rssMiB} MiB`,
+      `startup: listening ${tListening - t0} ms, summaries ${tSummaries - t0} ms, ${startupSpawns.length} git spawns, inotify ${inotify.instances} instances / ${inotify.watches} watches (settled at ${watchersSettledMs} ms), RSS ${memStartup.rssMiB} MiB`,
     );
 
     let page: Page | null = null;
