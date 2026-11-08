@@ -122,6 +122,8 @@ export interface EventEffects {
   projects: boolean;
   inbox: boolean;
   scanRoots: boolean;
+  /** `settings.changed`: refetch settings (effective policies may have moved). */
+  settings: boolean;
   everything: boolean;
 }
 
@@ -131,6 +133,7 @@ export function emptyEffects(): EventEffects {
     projects: false,
     inbox: false,
     scanRoots: false,
+    settings: false,
     everything: false,
   };
 }
@@ -179,8 +182,31 @@ export function collectEventEffects(
     case 'review.changed':
       applyReviewToCaches(queryClient, event);
       break;
+    case 'review.bulk':
+      // Many marks at once: refetch the inbox and the files/diffs of the affected projects.
+      effects.inbox = true;
+      for (const id of worktreeIdsOfProjects(queryClient, event.projectIds)) {
+        effects.worktrees.add(id);
+      }
+      break;
+    case 'settings.changed':
+      effects.settings = true;
+      effects.projects = true;
+      effects.inbox = true;
+      break;
   }
   return effects;
+}
+
+/** Worktree ids of the given projects according to the cached projects list. */
+function worktreeIdsOfProjects(queryClient: QueryClient, projectIds: readonly string[]): string[] {
+  const projects = queryClient.getQueryData<ProjectsResponse>(queryKeys.projects());
+  const out: string[] = [];
+  for (const item of projects?.projects ?? []) {
+    if (!projectIds.includes(item.project.id)) continue;
+    for (const w of item.worktrees) out.push(w.worktree.id);
+  }
+  return out;
 }
 
 export async function flushEffects(queryClient: QueryClient, effects: EventEffects): Promise<void> {
@@ -189,6 +215,7 @@ export async function flushEffects(queryClient: QueryClient, effects: EventEffec
     return;
   }
   const tasks: Promise<void>[] = [];
+  if (effects.settings) tasks.push(queryClient.invalidateQueries({ queryKey: ['settings'] }));
   if (effects.projects)
     tasks.push(queryClient.invalidateQueries({ queryKey: queryKeys.projects() }));
   if (effects.inbox) tasks.push(queryClient.invalidateQueries({ queryKey: queryKeys.inboxAll() }));
