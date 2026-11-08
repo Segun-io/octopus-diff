@@ -21,10 +21,11 @@ export function Mark({
       height={size}
       className={className}
       aria-hidden={title ? undefined : 'true'}
-      role={title ? 'img' : undefined}
+      role="img"
+      aria-label={title ?? 'octopus-diff'}
       focusable="false"
     >
-      {title && <title>{title}</title>}
+      <title>{title ?? 'octopus-diff'}</title>
       <defs>
         <mask id={maskId}>
           <rect width="32" height="32" fill="#fff" />
