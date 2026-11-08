@@ -582,7 +582,9 @@ All 2026-11-08 · WS5.
    (`serve --host 0.0.0.0 --allow-non-loopback --allowed-host odino`, default state dir, this repo
    registered) listens on port 7428. WSL uses mirrored networking with the Hyper-V firewall, whose
    default inbound action is Block, so the lead added (via an elevated PowerShell the user approved
-   through UAC) the Hyper-V rule `octopus-diff-7428`: inbound TCP 7428 from `10.0.60.0/24` only.
+   through UAC) the Hyper-V rule `octopus-diff-7428`: inbound TCP 7428 from private ranges
+   (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`; first limited to `10.0.60.0/24`, which missed devices
+   on other VLANs).
    Revert: `Remove-NetFirewallHyperVRule -Name octopus-diff-7428` (elevated). The token is still
    required; traffic is plain HTTP on the LAN. Found while doing it: the CLI prints a `127.0.0.1` URL
    for wildcard binds; it should list the LAN addresses (follow-up).
