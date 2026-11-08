@@ -24,6 +24,22 @@ export default defineConfig({
     outDir: 'dist',
     emptyOutDir: true,
     sourcemap: true,
+    rollupOptions: {
+      output: {
+        /**
+         * `src/zod-config.ts` must run before `@octopus-diff/contracts` builds its schemas (zod
+         * probes `Function('')` then, which the CSP reports). Chunks evaluate before the chunks
+         * that import them, so zod and its config form one chunk: every chunk using zod (the
+         * contracts included) evaluates it, config included, first.
+         */
+        manualChunks(id) {
+          if (/[\\/]src[\\/]zod-config\.ts$/.test(id) || /node_modules[\\/]zod[\\/]/.test(id)) {
+            return 'zod';
+          }
+          return undefined;
+        },
+      },
+    },
   },
   worker: {
     format: 'es',

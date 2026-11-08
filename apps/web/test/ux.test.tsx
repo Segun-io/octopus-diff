@@ -627,3 +627,52 @@ describe('favicon dot (P2)', () => {
     link.remove();
   });
 });
+
+describe('Escape closes overlays even when focus left them (ux-e2e seam fix)', () => {
+  it('settings: after the focused control disappears or is disabled, Esc still closes', async () => {
+    const { user } = setup();
+    await ready();
+    await press(user, ',');
+    const dialog = await screen.findByTestId(TEST_IDS.settingsDialog);
+    fireEvent.click(within(dialog).getAllByTestId(TEST_IDS.settingsSection)[1] as HTMLElement);
+    const inherit = (await within(dialog).findAllByRole('button', { name: 'Inherit' }))[0];
+    if (!inherit) throw new Error('no override row');
+    inherit.focus();
+    fireEvent.click(inherit); // the row (and the focused button) is removed
+    await waitFor(() => expect(document.activeElement).toBe(document.body));
+    await press(user, '{Escape}');
+    await waitFor(() => expect(screen.queryByTestId(TEST_IDS.settingsDialog)).toBeNull());
+  });
+
+  it('add-project dialog: Esc closes it after focus left the form', async () => {
+    const { user } = setup();
+    await ready();
+    fireEvent.click(screen.getByTestId(TEST_IDS.addProjectButton));
+    await screen.findByTestId(TEST_IDS.addProjectPathInput);
+    (document.activeElement as HTMLElement | null)?.blur?.();
+    expect(document.activeElement).toBe(document.body);
+    await press(user, '{Escape}');
+    await waitFor(() => expect(screen.queryByTestId(TEST_IDS.addProjectPathInput)).toBeNull());
+  });
+
+  it('review policy menu: Esc closes it after a choice moved focus away', async () => {
+    const { user } = setup();
+    await ready();
+    fireEvent.click(worktreeItem('fix/cache'));
+    fireEvent.click(await screen.findByTestId(TEST_IDS.reviewPolicyChip));
+    const menu = await screen.findByTestId(TEST_IDS.reviewPolicyMenu);
+    const off = within(menu)
+      .getAllByTestId(TEST_IDS.reviewPolicyItem)
+      .find((i) => i.dataset.target === 'worktree' && i.dataset.state === 'off');
+    if (!off) throw new Error('no item');
+    fireEvent.click(off);
+    (document.activeElement as HTMLElement | null)?.blur?.();
+    await waitFor(() =>
+      expect(screen.getByTestId(TEST_IDS.reviewPolicyChip).dataset.enabled).toBe('false'),
+    );
+    expect(screen.queryByTestId(TEST_IDS.reviewPolicyMenu)).not.toBeNull();
+    await press(user, '{Escape}');
+    await waitFor(() => expect(screen.queryByTestId(TEST_IDS.reviewPolicyMenu)).toBeNull());
+    expect(document.activeElement).toBe(screen.getByTestId(TEST_IDS.reviewPolicyChip));
+  });
+});

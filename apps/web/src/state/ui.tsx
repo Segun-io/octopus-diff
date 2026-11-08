@@ -14,6 +14,7 @@ import {
   type ReviewOffDisplay,
   savePrefs,
   scopeForPref,
+  storedPrefsAreCurrent,
 } from './prefs.ts';
 import { createStore, type Store, useStoreSelector } from './store.ts';
 
@@ -117,6 +118,8 @@ export function createUiStore(initial: Partial<UiState> = {}, persist = true): U
     ...initial,
   });
   if (persist) {
+    // Write migrated (or malformed) prefs back right away, so storage holds one shape only.
+    if (!storedPrefsAreCurrent()) savePrefs(prefs);
     let last = JSON.stringify(prefsOf(store.getState()));
     store.subscribe(() => {
       const next = prefsOf(store.getState());

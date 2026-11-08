@@ -1,5 +1,6 @@
 import { TEST_IDS } from '@octopus-diff/contracts';
-import { useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
+import { useEscapeToClose } from '../lib/useEscape.ts';
 import { useCommandsContext } from '../state/commandsContext.tsx';
 import { useUi, useUiStore } from '../state/ui.tsx';
 import { CheckIcon } from './bits.tsx';
@@ -68,6 +69,8 @@ function ConfirmBulk({
 }) {
   const commands = useCommandsContext();
   const ref = useRef<HTMLButtonElement>(null);
+  const cancel = useCallback(() => commands.cancelBulk(), [commands]);
+  useEscapeToClose(true, cancel);
   useEffect(() => {
     const previous = document.activeElement as HTMLElement | null;
     ref.current?.focus();

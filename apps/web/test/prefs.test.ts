@@ -7,6 +7,7 @@ import {
   PREFS_VERSION,
   savePrefs,
   serializePrefs,
+  storedPrefsAreCurrent,
 } from '../src/state/prefs.ts';
 
 class MemoryStorage implements Storage {
@@ -83,5 +84,18 @@ describe('prefs', () => {
       theme: { mode: 'light' as const, light: 'octopus-light', dark: 'octopus-contrast' },
     };
     expect(normalizePrefs(JSON.parse(serializePrefs(prefs)))).toEqual(prefs);
+  });
+});
+
+describe('storedPrefsAreCurrent', () => {
+  it('is true for nothing stored or a v2 document, false for v1 or malformed data', () => {
+    const storage = new MemoryStorage();
+    expect(storedPrefsAreCurrent(storage)).toBe(true);
+    storage.setItem(PREFS_STORAGE_KEY, JSON.stringify({ theme: 'light' }));
+    expect(storedPrefsAreCurrent(storage)).toBe(false);
+    storage.setItem(PREFS_STORAGE_KEY, '{nope');
+    expect(storedPrefsAreCurrent(storage)).toBe(false);
+    savePrefs(DEFAULT_PREFS, storage);
+    expect(storedPrefsAreCurrent(storage)).toBe(true);
   });
 });

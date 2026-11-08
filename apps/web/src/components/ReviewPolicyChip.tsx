@@ -4,10 +4,11 @@ import {
   reviewTargetKey,
   TEST_IDS,
 } from '@octopus-diff/contracts';
-import { useEffect, useId, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { useSetReviewPolicy, useSettingsQuery } from '../api/settings.ts';
 import type { WorktreeRow } from '../lib/model.ts';
 import { policyLabel, SOURCE_LABELS } from '../lib/policy.ts';
+import { useEscapeToClose } from '../lib/useEscape.ts';
 
 type Level = Exclude<ReviewPolicyTarget['kind'], never>;
 
@@ -66,6 +67,11 @@ export function ReviewPolicyChip({
   const menuRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const menuId = useId();
+  const closeMenu = useCallback(() => {
+    setOpen(false);
+    buttonRef.current?.focus();
+  }, []);
+  useEscapeToClose(open, closeMenu);
 
   useEffect(() => {
     if (!open) return;
