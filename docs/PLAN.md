@@ -1,6 +1,7 @@
 # octopus-diff — Project Plan
 
-> Status: Phase 0 (scaffold + contracts) done on `main` (2026-11-08); Phase 1 streams in progress.
+> Status: MVP complete (Phases 0–2, 2026-11-08): see `docs/reports/mvp.md`. Phase 3 needs the user. A UX round
+> (identity, themes, settings, bulk review) is in progress on `lead/ux-foundation`, coordinated in `docs/COORDINATION.md` there.
 > This file is the source of truth for every session working on the project. If reality disagrees
 > with it, fix the code or update this file and log why in `docs/DECISIONS.md`. Never leave them out of sync.
 
@@ -211,7 +212,10 @@ GET    /api/events                              SSE: worktree.changed {worktreeI
                                                 project.added|removed, worktree.added|removed, scan.progress
 ```
 
-Auth/safety: bind `127.0.0.1` by default; require a per-install random token (cookie / bearer) and validate
+Auth/safety: bind `127.0.0.1` by default; require a per-install random token as a **bearer token only** (no
+cookies: the printed URL carries it as `#token=`, the UI moves it into port-scoped `localStorage`; static UI
+assets are public; `/api/health?challenge=` proves token possession so the CLI never hands the token to an
+impostor; see DECISIONS Phase 2 #5, #7) and validate
 `Host` and `Origin` headers to defeat DNS-rebinding and cross-site requests from other browser tabs. The API
 returns file contents of local repos, so treat it as sensitive. Binding to non-loopback needs an explicit flag.
 
@@ -221,7 +225,10 @@ All git access goes through **one runner** in `packages/git-core`:
 
 - Hard **allowlist** of subcommands: `status`, `diff`, `diff-index`, `diff-tree`, `rev-parse`, `rev-list`,
   `merge-base`, `worktree list`, `for-each-ref`, `symbolic-ref`, `show`, `cat-file`, `ls-files`, `log`,
-  `config --get` (read forms `--get`/`--get-all`/`--get-regexp`; DECISIONS WS1 #2). Anything else throws.
+  `config --get` (read forms `--get`/`--get-all`/`--get-regexp`; DECISIONS WS1 #2), `check-attr` (read forms
+  `-z`, `--stdin`, `-a`/`--all`, `--cached`; `--source` rejected; DECISIONS Phase 2 #8). Anything else throws.
+- After discovery, every invocation pins `--git-dir` and (with a work tree) `--work-tree`: repository
+  `core.worktree` never selects which files are read (security review SEC-06).
   Unit-test that `add`, `commit`, `checkout`, `reset`, `apply`, `fetch`, `gc` are rejected.
 - `--no-optional-locks` is not enough on its own: porcelain `git diff` rewrites the index when
   `diff.autoRefreshIndex` is on, so git-core pins it off (DECISIONS WS1 #4).
@@ -238,9 +245,16 @@ All git access goes through **one runner** in `packages/git-core`:
 
 ### 5.6 Watching and refresh
 
-- Per worktree: watch the working tree (ignore `.git`, `node_modules`, and common build dirs by default, and
-  honor a configurable ignore list), plus that worktree's git dir files that matter (`HEAD`, `index`,
-  refs, `worktrees/*`). Linked worktrees keep their git dir under `<common>/worktrees/<name>/`.
+- Per worktree: watch the working tree (ignore `.git`, `node_modules` and cache/tool dirs by default;
+  build-output dirs `dist`, `build`, `out`, `target`, `coverage` only where `.gitignore` / `info/exclude`
+  ignore them, so tracked build output stays live; honor a configurable ignore list), plus that worktree's
+  git dir files that matter (`HEAD`, `index`, refs, `worktrees/*`, `info/`, and submodule git dirs).
+  Linked worktrees keep their git dir under `<common>/worktrees/<name>/`.
+- Watch limits (security review SEC-07): never watch `/`, `$HOME` or its parents, top-level system dirs,
+  the temp dir, or a folder containing the repo's git dir; at most 64 watched worktrees per project (the
+  rest are polled); prunable records are not watched. Health warnings give counts and reasons, not paths.
+- Leading-edge refresh (DECISIONS `review/perf` P3): a quiet worktree refreshes on its first event; later
+  events in the window use the trailing debounce below.
 - Debounce 150–300 ms per worktree, coalesce bursts, then recompute the summary; emit `worktree.changed`
   only if `stateHash` changed. Fallback poll (30 s focused / 5 min others) in case watchers miss events.
 - Must degrade gracefully on inotify limits (WSL, big trees): log a clear warning and fall back to polling.

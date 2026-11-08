@@ -8,10 +8,14 @@ import {
 import { keepPreviousData, QueryClient, useQuery } from '@tanstack/react-query';
 import { createContext, useContext } from 'react';
 import type { FileRef } from '../lib/fileRef.ts';
+import { readToken } from './token.ts';
 
-/** The daemon serves the UI and the API from the same origin; auth is the cookie. */
-export function createBrowserApiClient(): ApiClient {
-  return createApiClient({ baseUrl: '', credentials: 'same-origin' });
+/**
+ * The daemon serves the UI and the API from the same origin. Auth is the bearer token from
+ * localStorage (see `token.ts`); no cookies are sent.
+ */
+export function createBrowserApiClient(token: string | null = readToken()): ApiClient {
+  return createApiClient({ baseUrl: '', credentials: 'omit', ...(token ? { token } : {}) });
 }
 
 export const ApiContext = createContext<ApiClient | null>(null);
@@ -154,9 +158,9 @@ export function describeError(error: unknown): {
         kind: 'auth',
         title: 'Not authorized',
         detail:
-          'This page needs the access token. Open the tokenized URL printed by `octopus-diff serve` ' +
-          '(it looks like http://127.0.0.1:7428/?token=…); the daemon then sets a cookie and this ' +
-          'page works without the token.',
+          'This page needs the access token. Open the URL printed by `octopus-diff serve` ' +
+          '(it looks like http://127.0.0.1:7428/#token=…); this browser then keeps the token for ' +
+          'this address. Run `octopus-diff status` to print the URL again.',
       };
     }
     if (error.code === 'forbidden' || error.status === 403) {

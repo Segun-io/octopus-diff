@@ -5,6 +5,7 @@ import {
   type AddScanRootResponse,
   AppSettingsPatchSchema,
   AUTH_COOKIE_NAME,
+  AUTH_FRAGMENT_PARAM,
   AUTH_QUERY_PARAM,
   BulkReviewRequestSchema,
   CommitsQuerySchema,
@@ -12,6 +13,7 @@ import {
   DiffQuerySchema,
   FilesQuerySchema,
   FocusRequestSchema,
+  HealthQuerySchema,
   IdSchema,
   InboxQuerySchema,
   type Logger,
@@ -30,22 +32,33 @@ import {
   UpdateProjectRequestSchema,
   type UpdateProjectResponse,
 } from '@octopus-diff/contracts';
-import { type Context, Hono } from 'hono';
-import { getCookie, setCookie } from 'hono/cookie';
+import { type Context, Hono, type MiddlewareHandler } from 'hono';
+import { getCookie } from 'hono/cookie';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { DaemonCore } from './core.js';
 import { ApiError, toApiError } from './errors.js';
 import type { EventHub } from './events.js';
 import type { ReviewControls } from './review-controls.js';
-import { API_CSP, type HostPolicy, isHostAllowed, isOriginAllowed, UI_CSP } from './security.js';
+import {
+  API_CSP,
+  type HostPolicy,
+  hasEncodedUnreserved,
+  isApiPath,
+  isHostAllowed,
+  isOriginAllowed,
+  UI_CSP,
+} from './security.js';
 import type { SettingsService } from './settings.js';
 import type { StaticFiles } from './static.js';
-import { tokensEqual } from './token.js';
+import { healthProof, tokensEqual } from './token.js';
 
 /** Max JSON request body. */
 export const MAX_BODY_BYTES = 1024 * 1024;
-/** 400 days: the longest cookie lifetime browsers accept. */
-export const AUTH_COOKIE_MAX_AGE_S = 34_560_000;
+/**
+ * Expires the v1 auth cookie (auth v2 never sets or reads it). Same name, `Path=/` and no
+ * `Domain` as the cookie v1 set, so browsers replace and drop it.
+ */
+export const EXPIRE_LEGACY_COOKIE = `${AUTH_COOKIE_NAME}=; Max-Age=0; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT; HttpOnly; SameSite=Strict`;
 
 export interface AppDeps {
   core: DaemonCore;
@@ -120,16 +133,12 @@ function idParam(c: Context, name: string): string {
   return parseWith(IdSchema, c.req.param(name), name);
 }
 
-function isApiPath(pathname: string): boolean {
-  return pathname === '/api' || pathname.startsWith('/api/');
-}
-
 const UNAUTHORIZED_HTML = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><title>octopus-diff: sign in</title></head>
 <body style="font-family:system-ui,sans-serif;max-width:40rem;margin:4rem auto;padding:0 1rem">
 <h1>octopus-diff</h1>
-<p>This browser is not signed in to the octopus-diff daemon.</p>
-<p>Open the URL printed by <code>octopus-diff serve</code> (it ends in <code>?token=…</code>).
+<p>This link does not contain the current access token of this octopus-diff daemon.</p>
+<p>Open the URL printed by <code>octopus-diff serve</code> (it ends in <code>#token=…</code>).
 The token is also stored in the daemon's state directory, in the file <code>token</code>.</p>
 </body></html>
 `;
@@ -147,10 +156,11 @@ export function createApp(deps: AppDeps): Hono {
   const app = new Hono();
 
   // Security headers on every response (set after the handler so they cannot be dropped).
+  // Path decisions use `c.req.path`: the path Hono routes on (SEC-10).
   app.use('*', async (c, next) => {
     const started = performance.now();
     await next();
-    const pathname = new URL(c.req.url).pathname;
+    const pathname = c.req.path;
     const headers = c.res.headers;
     try {
       headers.set('X-Content-Type-Options', 'nosniff');
@@ -164,6 +174,10 @@ export function createApp(deps: AppDeps): Hono {
       }
       if (isApiPath(pathname) || !headers.has('Cache-Control'))
         headers.set('Cache-Control', 'no-store');
+      // Auth v2 has no cookie; drop the v1 cookie (it held the token) wherever it shows up.
+      if (getCookie(c, AUTH_COOKIE_NAME) !== undefined) {
+        headers.append('Set-Cookie', EXPIRE_LEGACY_COOKIE);
+      }
     } catch {
       // Immutable headers (should not happen: every response is built here).
     }
@@ -187,56 +201,28 @@ export function createApp(deps: AppDeps): Hono {
       logger.warn('rejected cross-origin request', { origin: origin ?? null });
       return errorResponse(c, new ApiError('forbidden', 'cross-origin requests are not allowed'));
     }
-    const pathname = new URL(c.req.url).pathname;
-    if (isApiPath(pathname) && c.req.header('sec-fetch-site') === 'cross-site') {
-      return errorResponse(c, new ApiError('forbidden', 'cross-site requests are not allowed'));
+    // SEC-10: the router decodes `%61` to `a`, raw-URL checks would not; refuse the ambiguity.
+    if (hasEncodedUnreserved(new URL(c.req.url).pathname)) {
+      return errorResponse(
+        c,
+        new ApiError('bad_request', 'percent-encoded unreserved characters in the path'),
+      );
     }
     return next();
   });
 
-  // Token: Bearer header or cookie; `?token=` on a page load sets the cookie and redirects.
-  app.use('*', async (c, next) => {
-    const url = new URL(c.req.url);
-    const pathname = url.pathname;
-    const method = c.req.method;
-    const queryToken = url.searchParams.get(AUTH_QUERY_PARAM);
-    if (queryToken !== null && !isApiPath(pathname) && (method === 'GET' || method === 'HEAD')) {
-      if (!tokensEqual(queryToken, token)) {
-        return c.html(UNAUTHORIZED_HTML, 401, {
-          'WWW-Authenticate': 'Bearer realm="octopus-diff"',
-        });
-      }
-      setCookie(c, AUTH_COOKIE_NAME, token, {
-        httpOnly: true,
-        sameSite: 'Strict',
-        path: '/',
-        maxAge: AUTH_COOKIE_MAX_AGE_S,
-      });
-      url.searchParams.delete(AUTH_QUERY_PARAM);
-      const search = url.searchParams.toString();
-      // Same-origin relative target only: collapse leading slashes (no `//host` redirects).
-      const target = `/${pathname.replace(/^\/+/, '')}`;
-      c.header('Cache-Control', 'no-store');
-      return c.redirect(`${target}${search ? `?${search}` : ''}`, 302);
+  // API-only rules are registered as `/api` middleware, so Hono matches them with the same
+  // router (and the same decoded path) as the API routes themselves.
+  const onApi = (handler: MiddlewareHandler) => {
+    app.use('/api', handler);
+    app.use('/api/*', handler);
+  };
+
+  onApi(async (c, next) => {
+    if (c.req.header('sec-fetch-site') === 'cross-site') {
+      return errorResponse(c, new ApiError('forbidden', 'cross-site requests are not allowed'));
     }
-    if (pathname === ROUTES.health.path) return next();
-    const authorization = c.req.header('authorization');
-    const bearer = authorization ? /^Bearer\s+(\S+)\s*$/i.exec(authorization)?.[1] : undefined;
-    const cookie = getCookie(c, AUTH_COOKIE_NAME);
-    const ok =
-      (bearer !== undefined && tokensEqual(bearer, token)) ||
-      (cookie !== undefined && tokensEqual(cookie, token));
-    if (ok) return next();
-    const wantsHtml =
-      !isApiPath(pathname) &&
-      (method === 'GET' || method === 'HEAD') &&
-      (c.req.header('accept') ?? '').includes('text/html');
-    c.header('WWW-Authenticate', 'Bearer realm="octopus-diff"');
-    if (wantsHtml) return c.html(UNAUTHORIZED_HTML, 401);
-    return errorResponse(
-      c,
-      new ApiError('unauthorized', authorization || cookie ? 'invalid token' : 'missing token'),
-    );
+    return next();
   });
 
   const route = (name: RouteName, handler: (c: Context) => Promise<Response> | Response) => {
@@ -244,7 +230,28 @@ export function createApp(deps: AppDeps): Hono {
     app.on(method, path, handler);
   };
 
-  route('health', async (c) => c.json(await core.health()));
+  // Health is the one unauthenticated API route: registered before the auth middleware, so its
+  // handler answers before that middleware would run. `?challenge=` adds a proof that this
+  // daemon holds the token (SEC-02/SEC-12) without revealing it.
+  route('health', async (c) => {
+    const query = parseWith(HealthQuerySchema, c.req.query(), 'query');
+    const body = await core.health();
+    if (query.challenge !== undefined) body.proof = healthProof(token, query.challenge);
+    return c.json(body);
+  });
+
+  // Every other API route, including `/api/events`, needs `Authorization: Bearer <token>`.
+  // No cookie and no `?token=` (auth v2): browsers hold no ambient credential for this daemon.
+  onApi(async (c, next) => {
+    const authorization = c.req.header('authorization');
+    const bearer = authorization ? /^Bearer\s+(\S+)\s*$/i.exec(authorization)?.[1] : undefined;
+    if (bearer !== undefined && tokensEqual(bearer, token)) return next();
+    c.header('WWW-Authenticate', 'Bearer realm="octopus-diff"');
+    return errorResponse(
+      c,
+      new ApiError('unauthorized', authorization ? 'invalid token' : 'missing token'),
+    );
+  });
 
   route('listProjects', async (c) => {
     const body: ProjectsResponse = { projects: await core.listProjects() };
@@ -379,13 +386,31 @@ export function createApp(deps: AppDeps): Hono {
   app.all('/api/*', (c) => errorResponse(c, new ApiError('not_found', 'no such API route')));
   app.all('/api', (c) => errorResponse(c, new ApiError('not_found', 'no such API route')));
 
-  // Static web UI.
+  // Static web UI: public (no secrets in it; Host/Origin checks above still apply). Only
+  // non-API paths get here, since every `/api` path is answered above.
   app.on(['GET', 'HEAD'], '*', async (c) => {
+    const url = new URL(c.req.url);
+    const queryToken = url.searchParams.get(AUTH_QUERY_PARAM);
+    if (queryToken !== null) {
+      // v1 links (`/?token=`): move the token into the fragment, which the web app stores in
+      // localStorage; a fragment never reaches servers, logs or `Referer`. No cookie.
+      if (!tokensEqual(queryToken, token)) {
+        return c.html(UNAUTHORIZED_HTML, 401, { 'Cache-Control': 'no-store' });
+      }
+      url.searchParams.delete(AUTH_QUERY_PARAM);
+      const search = url.searchParams.toString();
+      // Same-origin relative target only: collapse leading slashes (no `//host` redirects).
+      const target = `/${url.pathname.replace(/^\/+/, '')}`;
+      c.header('Cache-Control', 'no-store');
+      return c.redirect(
+        `${target}${search ? `?${search}` : ''}#${AUTH_FRAGMENT_PARAM}=${encodeURIComponent(token)}`,
+        302,
+      );
+    }
     if (!staticFiles) {
       return errorResponse(c, new ApiError('not_found', 'the web UI is not available (API only)'));
     }
-    const pathname = new URL(c.req.url).pathname;
-    const result = await staticFiles.lookup(pathname, {
+    const result = await staticFiles.lookup(url.pathname, {
       head: c.req.method === 'HEAD',
       acceptsHtml: (c.req.header('accept') ?? '').includes('text/html'),
     });

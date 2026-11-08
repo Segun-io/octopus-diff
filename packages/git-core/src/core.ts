@@ -13,7 +13,7 @@ import {
   type WorktreeLocator,
 } from '@octopus-diff/contracts';
 import { GitContext } from './context.js';
-import { type DiffDeps, getFileDiff, listChangedFiles } from './diff.js';
+import { createAttributeCache, type DiffDeps, getFileDiff, listChangedFiles } from './diff.js';
 import { detectDefaultBranch, listWorktrees, resolveProject, scan } from './discovery.js';
 import { LOG_FORMAT, parseLog } from './parse/log.js';
 import { defaultBigFileThreshold, GitRunner } from './runner/runner.js';
@@ -90,6 +90,13 @@ async function getWatchTargets(ctx: GitContext, worktree: WorktreeLocator): Prom
     path.join(commonDir, 'worktrees'),
     path.join(commonDir, 'config'),
     path.join(commonDir, 'info', 'exclude'),
+    path.join(commonDir, 'info', 'attributes'),
+    // Git dirs of absorbed submodules (`modules/<name>`, nested for nested submodules). A
+    // commit or checkout inside a submodule changes the superproject's patch for its gitlink
+    // (F3); what matters below these is `HEAD`, `refs/**`, `packed-refs` and `reftable/**`,
+    // not `objects`, `logs` or `index`.
+    path.join(gitDir, 'modules'),
+    path.join(commonDir, 'modules'),
   ];
   if (gitDir !== commonDir) gitPaths.push(path.join(gitDir, 'refs'));
   return {
@@ -124,7 +131,11 @@ export const createGitCore: CreateGitCore = (options: GitCoreOptions = {}): GitC
     logger: settings.logger,
   });
   const ctx = new GitContext(runner, settings);
-  const deps: DiffDeps = { ctx, untrackedCache: createUntrackedCache() };
+  const deps: DiffDeps = {
+    ctx,
+    untrackedCache: createUntrackedCache(),
+    attributeCache: createAttributeCache(),
+  };
   let disposed = false;
 
   /** Rejects after dispose, and maps unexpected errors to `GitCoreError`. */
@@ -174,6 +185,7 @@ export const createGitCore: CreateGitCore = (options: GitCoreOptions = {}): GitC
     dispose: async () => {
       disposed = true;
       deps.untrackedCache.clear();
+      deps.attributeCache.clear();
       await runner.dispose();
     },
   };

@@ -54,6 +54,10 @@ export interface ConfigFlags extends GlobalFlags {
   path?: boolean;
 }
 
+export interface TokenFlags extends GlobalFlags {
+  rotate?: boolean;
+}
+
 export type ParsedCommand =
   | { command: 'help'; topic?: string }
   | { command: 'version' }
@@ -61,9 +65,10 @@ export type ParsedCommand =
   | { command: 'add'; flags: AddFlags }
   | { command: 'status'; flags: StatusFlags }
   | { command: 'doctor'; flags: DoctorFlags }
-  | { command: 'config'; flags: ConfigFlags };
+  | { command: 'config'; flags: ConfigFlags }
+  | { command: 'token'; flags: TokenFlags };
 
-export const COMMANDS = ['serve', 'add', 'status', 'doctor', 'config', 'help'] as const;
+export const COMMANDS = ['serve', 'add', 'status', 'doctor', 'config', 'token', 'help'] as const;
 
 const GLOBAL_OPTIONS = {
   config: { type: 'string', short: 'c' },
@@ -305,6 +310,20 @@ function parseConfigCommand(args: readonly string[]): ParsedCommand {
   };
 }
 
+function parseToken(args: readonly string[]): ParsedCommand {
+  const { values } = parse(
+    'token',
+    args,
+    { ...GLOBAL_OPTIONS, rotate: { type: 'boolean' } },
+    false,
+  );
+  if (values.help) return { command: 'help', topic: 'token' };
+  return {
+    command: 'token',
+    flags: defined({ ...globalFlags(values), rotate: bool(values, 'rotate') }),
+  };
+}
+
 /**
  * Parses the command line (without `node` and the script path). With no command, or when the
  * first argument is an option, the command is `serve`, so `npx octopus-diff` just starts.
@@ -327,6 +346,8 @@ export function parseCommandLine(argv: readonly string[]): ParsedCommand {
       return parseDoctor(rest);
     case 'config':
       return parseConfigCommand(rest);
+    case 'token':
+      return parseToken(rest);
     default:
       throw new UsageError(`unknown command "${first}" (commands: ${COMMANDS.join(', ')})`);
   }

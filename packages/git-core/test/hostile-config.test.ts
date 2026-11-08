@@ -90,6 +90,17 @@ describe('hostile repository config', () => {
     utimesSync(path.join(repo, 'b.txt'), future, future);
     utimesSync(path.join(repo, 'trusted.txt'), future, future);
     writeFileSync(path.join(repo, 'new.txt'), 'new\n');
+    // An untracked nested repository with its own hostile config (git-core reads its HEAD
+    // from the filesystem), and an untracked file whose diff attribute names the evil driver
+    // (git check-attr only reports the name).
+    const nested = path.join(repo, 'nested');
+    fx.git(repo, ['init', '-q', 'nested']);
+    fx.write(path.join(nested, 'n.txt'), 'n\n');
+    fx.git(nested, ['add', 'n.txt']);
+    fx.git(nested, ['commit', '-q', '-m', 'n']);
+    fx.git(nested, ['config', 'core.fsmonitor', script('nested-fsmonitor', 'exit 0')]);
+    fx.git(nested, ['config', 'filter.evil.clean', script('nested-filter', 'cat')]);
+    writeFileSync(path.join(repo, 'driver.txt'), 'uses diff=evil\n');
   });
 
   afterAll(async () => {
@@ -144,6 +155,10 @@ describe('hostile repository config', () => {
       }
     }
     expect(diffs).toBeGreaterThan(3);
+    const untracked = (await core.listChangedFiles(wt, { kind: 'working' })).filter(
+      (file) => file.status === 'untracked',
+    );
+    expect(untracked.map((file) => file.path).sort()).toEqual(['driver.txt', 'nested', 'new.txt']);
     expect(worktrees).toHaveLength(1);
     const found = markerNames();
     // The user's own global filter driver is still honored (git-lfs keeps working) ...

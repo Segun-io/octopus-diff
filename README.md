@@ -78,6 +78,7 @@ octopus-diff add ~/code/other       # register a repository with the running dae
 octopus-diff add --scan ~/agents    # add a scan root (discovers repositories below it)
 octopus-diff status                 # is it running? prints the URL again
 octopus-diff doctor                 # check git, Node, inotify limits, WSL, paths, port, web assets
+octopus-diff token --rotate         # replace the access token (then restart the daemon)
 ```
 
 `serve` is also the default command, so plain `octopus-diff` starts the daemon.
@@ -85,12 +86,17 @@ octopus-diff doctor                 # check git, Node, inotify limits, WSL, path
 `serve` prints a line like this:
 
 ```
-  Open:   http://127.0.0.1:7428/?token=3f9c…
+  Open:   http://127.0.0.1:7428/#token=3f9c…
 ```
 
-Open that URL. The token logs the browser in (it becomes an HttpOnly cookie and is removed from the
-address bar). **Treat the URL like a password**: anyone with it can read the diffs of every registered
-repository. Stop the daemon with Ctrl+C.
+Open that URL. The page keeps the token in the browser's `localStorage` for that address and removes
+it from the address bar; later visits to `http://127.0.0.1:7428/` (and new tabs) stay signed in.
+**Treat the URL like a password**: anyone with it can read the diffs of every registered repository.
+Stop the daemon with Ctrl+C.
+
+With `--host 0.0.0.0` or `--host ::` (plus `--allow-non-loopback`), `serve` and `status` also print
+one `LAN:` URL per network address of the machine, since a `127.0.0.1` URL does not work on other
+devices. That traffic is plain HTTP: use it only on a network you trust.
 
 A *project* is a git repository. You can add any directory inside it, including a linked worktree;
 all of the repository's worktrees are discovered automatically (T3 Code's `~/.t3/worktrees`, Claude
@@ -107,15 +113,17 @@ directory that is searched for repositories down to a depth (default 3, max 8), 
 | `status` | `-o, --open` · `--json` · `--url <url>` · `-p, --port <n>` · `--host <addr>` |
 | `doctor` | `--json` · `-p, --port <n>` · `--host <addr>` · `--web-root <dir>` |
 | `config` | `--path` (print the config file path) · `--schema` (print its JSON Schema) |
+| `token` | `--rotate` (replace the access token; without it, shows where the token file is) |
 | every command | `-c, --config <file>` · `--config-dir <dir>` · `--state-dir <dir>` · `--log-level debug\|info\|warn\|error\|silent` · `-h, --help` |
 
 `octopus-diff help <command>` prints the details. Exit codes: `0` success, `1` failure (daemon not
 running, port in use, a `doctor` check failed, …), `2` bad command line or invalid config file.
 
 `add` and `status` talk to the daemon that `serve` started: `serve` records its address in
-`<state dir>/daemon.json`, and the token is read from `<state dir>/token`. If no daemon is running,
-`add` says so and exits 1; start one with `octopus-diff serve` (paths given to `serve` or listed in the
-config file are registered at startup).
+`<state dir>/daemon.json`, and the token is read from `<state dir>/token`. Before sending the token,
+they check that the daemon proves it holds the same token (see the security model); otherwise they
+refuse. If no daemon is running, `add` says so and exits 1; start one with `octopus-diff serve` (paths
+given to `serve` or listed in the config file are registered at startup).
 
 ### Configuration file
 
@@ -137,7 +145,9 @@ was read and the effective values.
   "watch": {
     "enabled": true,               // false = poll + manual refresh only
     "forcePolling": false,         // true = never use native watchers (WSL /mnt/*, NFS)
-    "ignore": ["vendor", ".venv"], // added to the built-in ignores (.git, node_modules, build dirs)
+    "ignore": ["vendor", ".venv"], // added to the built-in ignores (.git, node_modules, caches);
+                                   // dist/build/out/target/coverage are skipped only where git ignores
+                                   // them; add e.g. "build" here to skip a huge untracked build tree
     "debounceMs": 200,             // 150–300
     "pollFocusedMs": 30000,
     "pollIdleMs": 300000
@@ -160,6 +170,7 @@ bundled UI; omit it normally.
 | `~/.config/octopus-diff/config.json` | optional config file (`$XDG_CONFIG_HOME`) |
 | `~/.local/state/octopus-diff/token` | access token, mode 0600 (`$XDG_STATE_HOME`) |
 | `~/.local/state/octopus-diff/daemon.json` | address and pid of the running daemon (removed on exit) |
+| `~/.local/state/octopus-diff/open-*.html` | short-lived page `--open` hands to the browser opener (mode 0600, deleted after a minute) |
 | `~/.local/state/octopus-diff/` | project registry and review marks (SQLite) |
 
 ## Security model
@@ -169,18 +180,37 @@ The daemon serves the contents of your repositories over HTTP, so it is locked d
 - **Loopback only.** It binds `127.0.0.1` by default. Binding anything else requires
   `--allow-non-loopback` (or `"allowNonLoopback": true`); `serve` refuses otherwise. Do this only on a
   network you trust.
-- **Per-install token.** A random token is created in `<state dir>/token` (mode 0600). Every API
-  request needs it, as `Authorization: Bearer <token>` or as the `octopus_diff_token` cookie
-  (HttpOnly, SameSite=Strict). The printed URL carries it once as `?token=`; the daemon then sets the
-  cookie and redirects to a URL without it. Only `/api/health` is unauthenticated. To rotate the token,
-  stop the daemon, delete the token file and start it again.
+- **Per-install token, bearer only.** A random token is created in `<state dir>/token` (mode 0600).
+  Every API request, including the live event stream, needs `Authorization: Bearer <token>`. Only
+  `/api/health` is unauthenticated, and the static files of the web UI (they contain no data).
+- **No cookies.** Browsers send a cookie to *every* port on the same host, so a cookie holding the
+  token would leak to any other local web server you visit. Instead, the printed URL carries the
+  token in its fragment (`#token=…`), which browsers never send to a server, log, or put in a
+  `Referer`. The web app moves it into `localStorage` (which is scoped to the exact origin, port
+  included), strips it from the address bar, and sends it as a bearer header. Old `?token=` links
+  redirect to `#token=`. If a browser still has the cookie an older version set, the daemon expires it.
+- **The CLI checks the daemon before trusting it.** Another local user could start a fake server on
+  the daemon's port. `status`, `add` and `serve` (when a daemon is already running) first call
+  `/api/health?challenge=<random>`; the daemon answers with an HMAC-SHA256 of the challenge keyed by
+  the token. Only a daemon whose answer matches gets the token or has its URL printed or opened.
+- **The URL stays off command lines.** `--open` gives the browser opener a short-lived 0600 file in
+  the state directory that redirects to the URL (on WSL, PowerShell gets the URL on stdin), because
+  other local users can read a process's command line. Openers and `doctor`'s `git` are resolved to
+  absolute paths from the absolute `PATH` entries only, never from the current directory.
+- **Rotating the token.** `octopus-diff token --rotate` writes a new token. A running daemon keeps
+  the old one until it restarts: stop it and run `octopus-diff serve` again, then open the new URL.
+  Browsers signed in with the old token must open the new URL too. If the daemon finds its token file
+  readable or writable by other users, it replaces the token (the old one may have been copied) and
+  logs a warning.
 - **Host and Origin checks.** The `Host` header must be a loopback name or address (or one listed in
   `--allowed-host`), which defeats DNS-rebinding attacks. A request with an `Origin` header must come
   from the daemon's own origin, so other websites open in your browser cannot read your diffs.
 - **No write endpoints toward repositories.** The only writes are octopus-diff's own state (project
   list, review marks, focus) in the state directory.
 
-`octopus-diff doctor` checks that the token file is not readable by other users.
+`octopus-diff doctor` checks that the token file is not readable by other users. Output printed by
+the CLI has terminal control and bidi characters escaped, since repository names and paths come
+from repository content.
 
 ## Platform notes
 
@@ -200,8 +230,8 @@ printf 'fs.inotify.max_user_watches=524288\nfs.inotify.max_user_instances=512\n'
 - Keep repositories in the Linux filesystem (e.g. `~/code`). On `/mnt/c/…` (Windows drives) git is
   much slower, and file watching does not see edits made by Windows programs. If you must use
   `/mnt/*`, run `serve --poll` (or set `"watch": { "forcePolling": true }`).
-- `--open` opens your Windows browser through `wslview` (from `wslu`) or PowerShell, falling back to
-  `xdg-open`. The URL works from Windows because WSL2 forwards `localhost`.
+- `--open` opens your Windows browser through PowerShell (`Start-Process`, with the URL on stdin),
+  falling back to `xdg-open`. The URL works from Windows because WSL2 forwards `localhost`.
 - Without systemd, `/etc/sysctl.d` is not applied at WSL start; run `sudo sysctl --system` after each
   start or add it to the `[boot]` command in `/etc/wsl.conf`.
 

@@ -30,6 +30,11 @@ export class PatchHasher {
     this.hash.update(data, 'latin1');
   }
 
+  updateBytes(data: Uint8Array): void {
+    this.bytes += data.length;
+    this.hash.update(data);
+  }
+
   digest(): string {
     return this.hash.digest('hex').slice(0, PATCH_HASH_LENGTH);
   }

@@ -47,6 +47,7 @@ import {
   type ScanRootRow,
   type Store,
 } from './store.js';
+import { gitDirOf } from './watch-identity.js';
 import { type DirtyReason, type SubscribeFn, WatcherService } from './watcher.js';
 
 export const CORE_DEFAULTS = {
@@ -92,8 +93,13 @@ interface WorktreeEntry {
   lastHash: string | null;
   attempted: boolean;
   targets: WatchTargets | null;
+  /** The folder may have been recycled: compare `targets.gitDir` with its `.git` (F1). */
+  checkGitDir: boolean;
   refresher: Coalescer;
 }
+
+/** How long a removed worktree id is remembered: git-core caches repository info for 5 min. */
+const RECYCLE_WINDOW_MS = 5 * 60_000;
 
 interface ProjectEntry {
   row: ProjectRow;
@@ -174,6 +180,8 @@ export class DaemonCore {
   readonly #scanRoots = new Map<string, ScanState>();
   readonly #filesCache = new Map<string, { stateHash: string; files: GitChangedFile[] }>();
   readonly #filesInflight = new Map<string, Promise<GitChangedFile[]>>();
+  /** Worktree ids removed recently (id → time), to spot a path re-added soon after (F1). */
+  readonly #recentlyRemoved = new Map<string, number>();
   #gitVersion: string | null = null;
   #timers: NodeJS.Timeout[] = [];
   #closed = false;
@@ -204,6 +212,7 @@ export class DaemonCore {
         const entry = this.#projects.get(projectId);
         if (entry) void this.#relist(entry);
       },
+      onWorktreeReplaced: (worktreeId) => this.#onWorktreeReplaced(worktreeId),
     };
     if (watch.debounceMs !== undefined) watcherOptions.debounceMs = watch.debounceMs;
     if (watch.pollFocusedMs !== undefined) watcherOptions.pollFocusedMs = watch.pollFocusedMs;
@@ -609,11 +618,17 @@ export class DaemonCore {
           if (wasMissing && !wt.missing) {
             existing.error = null;
             existing.attempted = false;
+            existing.checkGitDir = true;
           }
         }
         next.set(wt.id, existing);
       } else {
-        next.set(wt.id, this.#newWorktreeEntry(wt, entry.row.id));
+        const created = this.#newWorktreeEntry(wt, entry.row.id);
+        const removedAt = this.#recentlyRemoved.get(wt.id);
+        if (removedAt !== undefined && Date.now() - removedAt < RECYCLE_WINDOW_MS) {
+          created.checkGitDir = true;
+        }
+        next.set(wt.id, created);
         added.push(wt.id);
         changed = true;
       }
@@ -623,6 +638,7 @@ export class DaemonCore {
         removed.push(id);
         changed = true;
         this.#invalidateWorktreeFiles(id);
+        this.#rememberRemoved(id);
       }
     }
     entry.worktrees = next;
@@ -651,22 +667,18 @@ export class DaemonCore {
       if (this.#closed || this.#projects.get(entry.row.id) !== entry || entry.missing) return;
       const watched = [];
       for (const e of entry.worktrees.values()) {
-        if (e.worktree.missing) continue;
-        if (!e.targets) {
-          try {
-            e.targets = await this.#git.getWatchTargets(this.#locator(e));
-          } catch (error) {
-            if (isShutdownError(error)) return;
-            this.#log.debug('watch targets unavailable', { worktreeId: e.worktree.id, error });
-          }
-        }
+        // Prunable records point at a folder whose `.git` does not lead back to this repository
+        // (broken or forged): never watch them (SEC-07).
+        if (e.worktree.missing || e.worktree.prunable) continue;
+        const targets = await this.#watchTargets(e);
+        if (targets === undefined) return;
         watched.push({
           projectId: entry.row.id,
           worktreeId: e.worktree.id,
           root: e.worktree.path,
           bare: e.worktree.bare,
           isMain: e.worktree.isMain,
-          targets: e.targets,
+          targets,
         });
       }
       if (this.#closed || this.#projects.get(entry.row.id) !== entry || entry.missing) return;
@@ -676,6 +688,64 @@ export class DaemonCore {
       this.#log.warn('watcher sync failed', { projectId: entry.row.id, error });
     });
     return entry.watchSync;
+  }
+
+  #rememberRemoved(worktreeId: string): void {
+    const now = Date.now();
+    for (const [id, at] of this.#recentlyRemoved) {
+      if (now - at >= RECYCLE_WINDOW_MS) this.#recentlyRemoved.delete(id);
+    }
+    this.#recentlyRemoved.set(worktreeId, now);
+  }
+
+  /** The watcher saw a worktree folder deleted or replaced: re-check its targets (F1). */
+  #onWorktreeReplaced(worktreeId: string): void {
+    for (const project of this.#projects.values()) {
+      const e = project.worktrees.get(worktreeId);
+      if (!e) continue;
+      e.checkGitDir = true;
+      void this.#syncWatcher(project);
+      return;
+    }
+  }
+
+  /**
+   * Watch targets of a worktree. When the folder may have been recycled (`checkGitDir`), its
+   * `.git` entry is read and the targets are re-fetched if it points at another git dir (review
+   * F1). If git-core still reports the old git dir (its repository cache), null is returned:
+   * the watcher then routes every git-dir event of the project to this worktree until the two
+   * agree. Undefined on shutdown.
+   */
+  async #watchTargets(e: WorktreeEntry): Promise<WatchTargets | null | undefined> {
+    const check = e.checkGitDir && !e.worktree.bare;
+    if (!check) e.checkGitDir = false;
+    if (e.targets && !check) return e.targets;
+    const actual = check ? await gitDirOf(e.worktree.path) : null;
+    if (e.targets && actual !== null && e.targets.gitDir !== actual) {
+      this.#log.debug('worktree git dir changed; refreshing watch targets', {
+        worktreeId: e.worktree.id,
+      });
+      e.targets = null;
+    }
+    if (!e.targets) {
+      try {
+        e.targets = await this.#git.getWatchTargets(this.#locator(e));
+      } catch (error) {
+        if (isShutdownError(error)) return undefined;
+        this.#log.debug('watch targets unavailable', { worktreeId: e.worktree.id, error });
+        return null;
+      }
+    }
+    if (actual !== null && e.targets.gitDir !== actual) {
+      this.#log.debug('watch targets disagree with the worktree .git file; using none for now', {
+        worktreeId: e.worktree.id,
+      });
+      e.targets = null;
+      return null;
+    }
+    // Keep checking while the `.git` entry can't be read (the folder may be coming back).
+    if (actual !== null) e.checkGitDir = false;
+    return e.targets;
   }
 
   #newProjectEntry(row: ProjectRow): ProjectEntry {
@@ -699,6 +769,7 @@ export class DaemonCore {
       lastHash: null,
       attempted: false,
       targets: null,
+      checkGitDir: false,
       refresher: new Coalescer(() => this.#computeSummary(entry)),
     };
     return entry;
@@ -935,6 +1006,14 @@ export class DaemonCore {
         defaultBranch: this.#defaultBranch(project),
       })
       .then((files) => {
+        // Tracked files under ignored build directories make them watched (review F5).
+        const tracked: string[] = [];
+        for (const f of files) {
+          if (f.status === 'untracked') continue;
+          tracked.push(f.path);
+          if (f.oldPath) tracked.push(f.oldPath);
+        }
+        if (tracked.length) this.#watcher.noteTrackedPaths(entry.worktree.id, tracked);
         if (cacheable && stateHash !== null && project.worktrees.get(entry.worktree.id) === entry) {
           this.#filesCache.set(key, { stateHash, files });
           while (this.#filesCache.size > CORE_DEFAULTS.filesCacheSize) {

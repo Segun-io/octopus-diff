@@ -17,6 +17,7 @@ import {
   healthBody,
   makeTempDirs,
   projectItem,
+  proofFor,
   shutdownSignal,
   type TempDirs,
 } from './helpers.js';
@@ -27,7 +28,10 @@ async function readBody(req: IncomingMessage): Promise<unknown> {
   return text === '' ? undefined : JSON.parse(text);
 }
 
-/** Minimal daemon: token file (0600), unauthenticated /api/health, bearer-protected POST /api/projects. */
+/**
+ * Minimal daemon: token file (0600), unauthenticated /api/health (with the challenge proof),
+ * bearer-protected POST /api/projects.
+ */
 const stubDaemon: StartDaemon = async (options = {}) => {
   const stateDir = options.stateDir ?? '';
   const token = randomBytes(16).toString('hex');
@@ -40,7 +44,12 @@ const stubDaemon: StartDaemon = async (options = {}) => {
         res.writeHead(status, { 'content-type': 'application/json' });
         res.end(JSON.stringify(body));
       };
-      if (req.url === '/api/health') return send(200, healthBody());
+      const url = new URL(req.url ?? '/', 'http://stub');
+      if (url.pathname === '/api/health') {
+        // Like the daemon: ?challenge= gets an HMAC proof of the token.
+        const challenge = url.searchParams.get('challenge');
+        return send(200, healthBody(challenge ? { proof: proofFor(token, challenge) } : {}));
+      }
       if (req.headers.authorization !== `Bearer ${token}`) {
         return send(401, { error: { code: 'unauthorized', message: 'missing token' } });
       }
@@ -62,7 +71,7 @@ const stubDaemon: StartDaemon = async (options = {}) => {
   const url = `http://${host}:${port}`;
   const handle: DaemonHandle = {
     url,
-    authUrl: `${url}/?token=${token}`,
+    authUrl: `${url}/#token=${token}`,
     token,
     host,
     port,
@@ -145,6 +154,9 @@ describe('serve + add + status over real HTTP', () => {
     expect(statusCode).toBe(0);
     expect(statusDeps.out.text).toMatch(/is running at http:\/\/127\.0\.0\.1:\d+/);
     expect(statusDeps.out.text).toContain('projects:  1 (1 worktrees)');
+    expect(statusDeps.out.text).toMatch(
+      /Open: {6}http:\/\/127\.0\.0\.1:\d+\/#token=[0-9a-f]{32}\n/,
+    );
 
     // After shutdown the daemon is gone and `add` says so.
     const after = liveDeps({});
