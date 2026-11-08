@@ -1,6 +1,5 @@
 import { type FileDiff, TEST_IDS } from '@octopus-diff/contracts';
 import { lazy, type ReactNode, Suspense, useEffect, useMemo, useRef, useState } from 'react';
-import { useResolvedTheme } from '../../api/hooks.ts';
 import { describeError, useDiffQuery } from '../../api/queries.ts';
 import {
   classifyDiff,
@@ -13,6 +12,7 @@ import { CONTEXT_STEP, DEFAULT_CONTEXT } from '../../state/commands.ts';
 import { useCommandsContext } from '../../state/commandsContext.tsx';
 import { useAppModel } from '../../state/model.tsx';
 import { actions, useUi, useUiStore } from '../../state/ui.tsx';
+import { useTheme } from '../../theme/useTheme.ts';
 import { CheckIcon, LineCounts, StatusIcon, statusLabel } from '../bits.tsx';
 
 const DiffRenderer = lazy(() =>
@@ -67,7 +67,8 @@ export function DiffPane() {
   const diffMode = useUi((s) => s.diffMode);
   const ignoreWhitespace = useUi((s) => s.ignoreWhitespace);
   const fileOptions = useUi((s) => s.fileOptions);
-  const theme = useResolvedTheme();
+  const appTheme = useTheme();
+  const theme = appTheme.kind;
   const key = selected ? fileRefKey(selected) : null;
   const opts = (key && fileOptions[key]) || {};
   const query = useDiffQuery(selected, model.scope, {
@@ -229,6 +230,7 @@ export function DiffPane() {
             display={display}
             mode={diffMode}
             theme={theme}
+            diffTheme={appTheme.diff.theme}
             ignoreWhitespace={ignoreWhitespace}
             context={opts.context}
             onLoadAnyway={() => key && actions.setFileOptions(store, key, { ...opts, full: true })}
@@ -244,6 +246,7 @@ function DiffBody({
   display,
   mode,
   theme,
+  diffTheme,
   ignoreWhitespace,
   context,
   onLoadAnyway,
@@ -252,6 +255,7 @@ function DiffBody({
   display: DiffDisplay;
   mode: 'split' | 'unified';
   theme: 'light' | 'dark';
+  diffTheme: string;
   ignoreWhitespace: boolean;
   context: number | undefined;
   onLoadAnyway: () => void;
@@ -334,6 +338,7 @@ function DiffBody({
                 cacheKey={`${diff.patchHash}:${ignoreWhitespace ? 'w' : ''}:${context ?? ''}`}
                 mode={mode}
                 theme={theme}
+                diffTheme={diffTheme}
               />
             </Suspense>
           </div>

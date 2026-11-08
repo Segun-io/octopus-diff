@@ -13,6 +13,8 @@ export interface DiffRendererProps {
   cacheKey: string;
   mode: 'split' | 'unified';
   theme: 'light' | 'dark';
+  /** Shiki theme name from the active app theme (`ThemeDefinition.diff.theme`). */
+  diffTheme?: string;
 }
 
 /** Overrides so the diff surface follows the app palette. */
@@ -37,6 +39,7 @@ export const DiffRenderer = memo(function DiffRenderer({
   cacheKey,
   mode,
   theme,
+  diffTheme,
 }: DiffRendererProps) {
   const files = useMemo(() => parse(patch, cacheKey), [patch, cacheKey]);
   const wrapper = useRef<HTMLDivElement>(null);
@@ -53,7 +56,7 @@ export const DiffRenderer = memo(function DiffRenderer({
   const options = useMemo(
     () => ({
       diffStyle: mode,
-      theme: DIFF_THEMES,
+      theme: diffTheme ? { dark: diffTheme, light: diffTheme } : DIFF_THEMES,
       themeType: theme,
       hunkSeparators: 'line-info' as const,
       lineDiffType: 'word-alt' as const,
@@ -62,7 +65,7 @@ export const DiffRenderer = memo(function DiffRenderer({
       tokenizeMaxLineLength: 1000,
       unsafeCSS: UNSAFE_CSS,
     }),
-    [mode, theme],
+    [mode, theme, diffTheme],
   );
 
   if (!files || files.length === 0) {

@@ -1,13 +1,14 @@
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import { defaultClientConditions, defineConfig } from 'vite';
+import { octopusThemesPlugin } from './src/theme/vite-plugin.ts';
 
 // The daemon serves the built assets (apps/web/dist) and the API from the same origin.
 // In dev, `/api` is proxied to a daemon (or WS3's mock server) on OCTOPUS_DIFF_API.
 const apiTarget = process.env.OCTOPUS_DIFF_API ?? 'http://127.0.0.1:7428';
 
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  plugins: [react(), tailwindcss(), octopusThemesPlugin()],
   resolve: {
     // Resolve workspace packages to their TypeScript sources (no prebuild needed).
     conditions: ['@octopus-diff/source', ...defaultClientConditions],

@@ -1,12 +1,25 @@
 import { DEFAULT_SCOPE, type DiffScope } from '@octopus-diff/contracts';
 import { createContext, type ReactNode, useContext, useState } from 'react';
 import { type FileRef, fileRefKey } from '../lib/fileRef.ts';
+import type { ThemePrefs } from '../theme/registry.ts';
+import {
+  DEFAULT_PREFS,
+  type Density,
+  type DiffMode,
+  type FileListLayout,
+  loadPrefs,
+  PREF_KEYS,
+  type Prefs,
+  type ReviewOffDisplay,
+  savePrefs,
+  scopeForPref,
+} from './prefs.ts';
 import { createStore, type Store, useStoreSelector } from './store.ts';
 
+export { PREFS_STORAGE_KEY } from './prefs.ts';
+export type { Density, DiffMode, FileListLayout, ReviewOffDisplay, ThemePrefs };
+
 export type View = { kind: 'inbox' } | { kind: 'worktree'; worktreeId: string };
-export type DiffMode = 'split' | 'unified';
-export type ThemePreference = 'system' | 'light' | 'dark';
-export type FileListLayout = 'list' | 'tree';
 export type ConnectionState = 'connecting' | 'open' | 'offline';
 
 /** Per-file view options that change the diff request (reset when the file changes). */
@@ -23,20 +36,14 @@ export interface ScanStatus {
   message: string | null;
 }
 
-export interface UiState {
+/** Transient state plus every persisted preference (see `Prefs`). */
+export interface UiState extends Prefs {
   view: View;
   selected: FileRef | null;
   scope: DiffScope;
-  diffMode: DiffMode;
-  ignoreWhitespace: boolean;
-  showReviewed: boolean;
   filterText: string;
   onlyDirty: boolean;
   onlyUnreviewed: boolean;
-  theme: ThemePreference;
-  fileListLayout: FileListLayout;
-  /** Show the unreviewed count in the document title: `(12) octopus-diff`. */
-  titleCount: boolean;
   helpOpen: boolean;
   addProjectOpen: boolean;
   fileOptions: Record<string, FileViewOptions>;
@@ -46,32 +53,14 @@ export interface UiState {
   notice: { id: number; text: string } | null;
 }
 
-/** Preferences persisted to localStorage. */
-const PERSISTED_KEYS = [
-  'diffMode',
-  'ignoreWhitespace',
-  'showReviewed',
-  'theme',
-  'fileListLayout',
-  'titleCount',
-] as const satisfies readonly (keyof UiState)[];
-type Persisted = Pick<UiState, (typeof PERSISTED_KEYS)[number]>;
-
-export const PREFS_STORAGE_KEY = 'octopus-diff:prefs';
-
 export const DEFAULT_UI_STATE: UiState = {
+  ...DEFAULT_PREFS,
   view: { kind: 'inbox' },
   selected: null,
   scope: DEFAULT_SCOPE,
-  diffMode: 'split',
-  ignoreWhitespace: false,
-  showReviewed: true,
   filterText: '',
   onlyDirty: false,
   onlyUnreviewed: false,
-  theme: 'system',
-  fileListLayout: 'list',
-  titleCount: true,
   helpOpen: false,
   addProjectOpen: false,
   fileOptions: {},
@@ -80,56 +69,30 @@ export const DEFAULT_UI_STATE: UiState = {
   notice: null,
 };
 
-function safeStorage(): Storage | null {
-  try {
-    return typeof localStorage === 'undefined' ? null : localStorage;
-  } catch {
-    return null;
-  }
-}
-
-export function loadPrefs(): Partial<Persisted> {
-  const raw = safeStorage()?.getItem(PREFS_STORAGE_KEY);
-  if (!raw) return {};
-  try {
-    const parsed = JSON.parse(raw) as Record<string, unknown>;
-    const out: Partial<Persisted> = {};
-    if (parsed.diffMode === 'split' || parsed.diffMode === 'unified')
-      out.diffMode = parsed.diffMode;
-    if (typeof parsed.ignoreWhitespace === 'boolean')
-      out.ignoreWhitespace = parsed.ignoreWhitespace;
-    if (typeof parsed.showReviewed === 'boolean') out.showReviewed = parsed.showReviewed;
-    if (parsed.theme === 'system' || parsed.theme === 'light' || parsed.theme === 'dark') {
-      out.theme = parsed.theme;
-    }
-    if (parsed.fileListLayout === 'list' || parsed.fileListLayout === 'tree') {
-      out.fileListLayout = parsed.fileListLayout;
-    }
-    if (typeof parsed.titleCount === 'boolean') out.titleCount = parsed.titleCount;
-    return out;
-  } catch {
-    return {};
-  }
-}
-
 export type UiStore = Store<UiState>;
 
+export function prefsOf(state: UiState): Prefs {
+  const out = {} as Record<keyof Prefs, unknown>;
+  for (const key of PREF_KEYS) out[key] = state[key];
+  return out as unknown as Prefs;
+}
+
 export function createUiStore(initial: Partial<UiState> = {}, persist = true): UiStore {
+  const prefs = persist ? loadPrefs() : DEFAULT_PREFS;
   const store = createStore<UiState>({
     ...DEFAULT_UI_STATE,
-    ...(persist ? loadPrefs() : {}),
+    ...prefs,
+    scope: scopeForPref(prefs.defaultScope),
     ...initial,
   });
   if (persist) {
-    let last = '';
+    let last = JSON.stringify(prefsOf(store.getState()));
     store.subscribe(() => {
-      const state = store.getState();
-      const prefs: Record<string, unknown> = {};
-      for (const key of PERSISTED_KEYS) prefs[key] = state[key];
-      const json = JSON.stringify(prefs);
+      const next = prefsOf(store.getState());
+      const json = JSON.stringify(next);
       if (json === last) return;
       last = json;
-      safeStorage()?.setItem(PREFS_STORAGE_KEY, json);
+      savePrefs(next);
     });
   }
   return store;

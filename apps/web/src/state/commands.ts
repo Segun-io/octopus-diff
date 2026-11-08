@@ -121,7 +121,8 @@ export function useCommands(model: AppModel, resolvedTheme: 'light' | 'dark'): C
         store.setState((s) => ({ showReviewed: !s.showReviewed }));
       },
       toggleTheme() {
-        store.setState({ theme: latest.current.resolvedTheme === 'dark' ? 'light' : 'dark' });
+        const mode = latest.current.resolvedTheme === 'dark' ? 'light' : 'dark';
+        store.setState((s) => ({ theme: { ...s.theme, mode } }));
       },
       expandContext() {
         const m = latest.current.model;

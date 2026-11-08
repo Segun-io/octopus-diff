@@ -27,6 +27,8 @@ import { useCommands, useKeyboardShortcuts } from './state/commands.ts';
 import { CommandsContext } from './state/commandsContext.tsx';
 import { AppModelProvider, useAppModel } from './state/model.tsx';
 import { actions, type UiStore, UiStoreProvider, useUi, useUiStore } from './state/ui.tsx';
+import { applyTheme } from './theme/apply.ts';
+import { useTheme } from './theme/useTheme.ts';
 
 // @pierre/trees (and its preact runtime) only loads when the tree layout is used.
 const FileTreeView = lazy(() =>
@@ -57,12 +59,13 @@ export function App({ api, queryClient, uiStore, eventSourceFactory }: AppProps)
   );
 }
 
-function useApplyTheme(theme: 'light' | 'dark') {
+function useApplyTheme() {
+  const theme = useTheme();
+  const density = useUi((s) => s.density);
   useLayoutEffect(() => {
-    const root = document.documentElement;
-    root.classList.toggle('dark', theme === 'dark');
-    root.style.colorScheme = theme;
-  }, [theme]);
+    applyTheme(theme);
+    document.documentElement.dataset.density = density;
+  }, [theme, density]);
 }
 
 /** Keeps the selection valid as data refreshes (PLAN §4.2: preserve selection). */
@@ -177,7 +180,7 @@ function AppShell({ eventSourceFactory }: { eventSourceFactory?: EventSourceFact
   const selected = useUi((s) => s.selected);
   const titleCount = useUi((s) => s.titleCount);
 
-  useApplyTheme(theme);
+  useApplyTheme();
   useDocumentTitle(model.unreviewedTotal, titleCount);
   useServerEvents(eventSourceFactory);
   const focusWorktree =

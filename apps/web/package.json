@@ -18,7 +18,8 @@
     "preview:mock": "tsx --conditions=@octopus-diff/source mock/preview.ts",
     "check:browser": "tsx scripts/browser-check.ts",
     "perf": "tsx scripts/perf.ts",
-    "icons": "tsx scripts/icons.ts"
+    "icons": "tsx scripts/icons.ts",
+    "shots": "tsx scripts/shots.ts"
   },
   "dependencies": {
     "@octopus-diff/contracts": "workspace:*",
