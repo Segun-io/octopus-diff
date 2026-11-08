@@ -1,6 +1,7 @@
 # octopus-diff — Project Plan
 
-> Status: Phase 0 (scaffold + contracts) done on `main` (2026-11-08); Phase 1 streams in progress.
+> Status: MVP complete (Phases 0–2, 2026-11-08): see `docs/reports/mvp.md`. Phase 3 needs the user. A UX round
+> (identity, themes, settings, bulk review) is in progress on `lead/ux-foundation`, coordinated in `docs/COORDINATION.md` there.
 > This file is the source of truth for every session working on the project. If reality disagrees
 > with it, fix the code or update this file and log why in `docs/DECISIONS.md`. Never leave them out of sync.
 
