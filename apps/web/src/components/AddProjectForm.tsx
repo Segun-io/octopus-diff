@@ -55,47 +55,16 @@ export function AddProjectForm({ onDone }: { onDone?: () => void }) {
         className="flex flex-col gap-1.5"
         onSubmit={(e) => {
           e.preventDefault();
-          if (projectPath.trim()) addProject.mutate(projectPath.trim());
-        }}
-      >
-        <label htmlFor="add-project-path" className="font-semibold">
-          Add a repository
-        </label>
-        <p className="text-muted">Any folder inside a git repo, including a linked worktree.</p>
-        <div className="flex gap-2">
-          <input
-            id="add-project-path"
-            data-testid={TEST_IDS.addProjectPathInput}
-            value={projectPath}
-            onChange={(e) => setProjectPath(e.target.value)}
-            placeholder="~/code/my-repo"
-            autoComplete="off"
-            spellCheck={false}
-            className="min-w-0 flex-1 rounded border border-line bg-canvas px-2 py-1 font-mono"
-          />
-          <button
-            type="submit"
-            data-testid={TEST_IDS.addProjectSubmit}
-            disabled={addProject.isPending}
-            className="rounded bg-accent px-3 py-1 font-medium text-accent-fg disabled:opacity-50"
-          >
-            {addProject.isPending ? 'Adding…' : 'Add'}
-          </button>
-        </div>
-      </form>
-
-      <form
-        className="flex flex-col gap-1.5"
-        onSubmit={(e) => {
-          e.preventDefault();
           if (scanPath.trim()) addScanRoot.mutate(scanPath.trim());
         }}
       >
         <label htmlFor="add-scan-root-path" className="font-semibold">
-          Scan a folder for repositories
+          Watch a folder
         </label>
         <p className="text-muted">
-          Every repo (and its worktrees) found up to the given depth is added.
+          Every repository (and its worktrees) found up to the given depth is added and kept in
+          sync, e.g. <code className="font-mono">~/code</code> or{' '}
+          <code className="font-mono">~/.t3/worktrees</code>.
         </p>
         <div className="flex gap-2">
           <input
@@ -127,7 +96,40 @@ export function AddProjectForm({ onDone }: { onDone?: () => void }) {
             disabled={addScanRoot.isPending}
             className="rounded bg-accent px-3 py-1 font-medium text-accent-fg disabled:opacity-50"
           >
-            {addScanRoot.isPending ? 'Adding…' : 'Scan'}
+            {addScanRoot.isPending ? 'Adding…' : 'Watch'}
+          </button>
+        </div>
+      </form>
+
+      <form
+        className="flex flex-col gap-1.5"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (projectPath.trim()) addProject.mutate(projectPath.trim());
+        }}
+      >
+        <label htmlFor="add-project-path" className="font-semibold">
+          Or add one repository
+        </label>
+        <p className="text-muted">Any folder inside a git repo, including a linked worktree.</p>
+        <div className="flex gap-2">
+          <input
+            id="add-project-path"
+            data-testid={TEST_IDS.addProjectPathInput}
+            value={projectPath}
+            onChange={(e) => setProjectPath(e.target.value)}
+            placeholder="~/code/my-repo"
+            autoComplete="off"
+            spellCheck={false}
+            className="min-w-0 flex-1 rounded border border-line bg-canvas px-2 py-1 font-mono"
+          />
+          <button
+            type="submit"
+            data-testid={TEST_IDS.addProjectSubmit}
+            disabled={addProject.isPending}
+            className="rounded bg-accent px-3 py-1 font-medium text-accent-fg disabled:opacity-50"
+          >
+            {addProject.isPending ? 'Adding…' : 'Add'}
           </button>
         </div>
       </form>

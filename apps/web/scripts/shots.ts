@@ -56,6 +56,22 @@ const STATES: Record<string, Step> = {
     await page.locator('[data-testid="review-policy-chip"]').click();
     await page.waitForTimeout(300);
   },
+  folder: async (page) => {
+    await page.locator('[data-folder-id] button[title^="/home/dev/code"]').first().click();
+    await page.waitForTimeout(400);
+  },
+  project: async (page) => {
+    await page
+      .locator('[data-testid="project-item"][data-project-name="octopus-api"] .od-heading')
+      .click();
+    await page.waitForTimeout(400);
+  },
+  'context-menu': async (page) => {
+    await page
+      .locator('[data-testid="worktree-item"][data-branch="feat/auth"]')
+      .click({ button: 'right' });
+    await page.waitForTimeout(300);
+  },
   help: async (page) => {
     await page.keyboard.press('?');
     await page.waitForTimeout(300);

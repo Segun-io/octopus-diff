@@ -394,3 +394,111 @@ describe('F2: review marks what is displayed', () => {
     );
   });
 });
+
+describe('folder tier, overview and palette', () => {
+  it('groups projects under their folder with an "Added directly" group, collapses and persists', async () => {
+    const { store } = setup();
+    await ready();
+    const sidebar = screen.getByTestId(TEST_IDS.sidebar);
+    const folders = [...sidebar.querySelectorAll<HTMLElement>('[data-folder-id]')];
+    expect(folders.map((f) => f.textContent?.includes('Added directly'))).toEqual([false, true]);
+    const code = folders[0] as HTMLElement;
+    expect(
+      within(code)
+        .getAllByTestId(TEST_IDS.projectItem)
+        .map((p) => p.dataset.projectName),
+    ).toEqual(['docs-site', 'octopus-api', 'web-dashboard']);
+    // main vs linked and the source chip
+    expect(worktreeItem('feat/auth').dataset).toMatchObject({ main: 'false', source: 't3' });
+    expect(worktreeItem('fix/cache').dataset).toMatchObject({ main: 'false', source: 'claude' });
+    expect(worktreeItem('main').dataset.main).toBe('true');
+    // collapse the folder: its worktrees disappear from the tree, the pref persists
+    fireEvent.click(within(code).getByLabelText('Collapse folder'));
+    expect(within(code).queryAllByTestId(TEST_IDS.worktreeItem)).toHaveLength(0);
+    expect(store.getState().collapsed).toEqual([code.dataset.folderId]);
+    fireEvent.click(within(code).getByLabelText('Expand folder'));
+    expect(within(code).queryAllByTestId(TEST_IDS.worktreeItem).length).toBeGreaterThan(0);
+  });
+
+  it('selecting a folder or project shows the Overview; the view registry routes it', async () => {
+    const { store } = setup();
+    await ready();
+    const sidebar = screen.getByTestId(TEST_IDS.sidebar);
+    const code = sidebar.querySelector<HTMLElement>('[data-folder-id]') as HTMLElement;
+    fireEvent.click(within(code).getByTitle('/home/dev/code (depth 3)'));
+    expect(store.getState().view).toEqual({ kind: 'folder', scanRootId: code.dataset.folderId });
+    const heading = await screen.findByRole('heading', { level: 1, name: '~/code' });
+    expect(heading).toBeTruthy();
+    expect(screen.queryByTestId(TEST_IDS.diffViewer)).toBeNull();
+    // project rows navigate to the project overview, worktree rows to changes
+    fireEvent.click(screen.getByText('octopus-api', { selector: 'td' }));
+    await screen.findByRole('heading', { level: 1, name: 'octopus-api' });
+    expect(store.getState().view.kind).toBe('project');
+    fireEvent.click(screen.getByText('feat/auth', { selector: 'td span' }));
+    await waitFor(() => expect(store.getState().view).toMatchObject({ kind: 'worktree' }));
+    await waitFor(() => expect(viewer().getAttribute('data-state')).toBe('ready'));
+  });
+
+  it('Ctrl+K opens the palette; fuzzy search and Enter navigate; commands run', async () => {
+    const { user, store } = setup();
+    await ready();
+    await press(user, '{Control>}k{/Control}');
+    const palette = await screen.findByTestId(TEST_IDS.commandPalette);
+    const input = within(palette).getByTestId(TEST_IDS.commandPaletteInput);
+    expect(document.activeElement).toBe(input);
+    await user.type(input, 'fixcache');
+    const items = within(palette).getAllByTestId(TEST_IDS.commandPaletteItem);
+    expect(items[0]?.dataset.id).toContain('go:worktree:');
+    expect(items[0]?.textContent).toContain('fix/cache');
+    await press(user, '{Enter}');
+    await waitFor(() => expect(screen.queryByTestId(TEST_IDS.commandPalette)).toBeNull());
+    expect(store.getState().view).toEqual({
+      kind: 'worktree',
+      worktreeId: worktreeItem('fix/cache').dataset.worktreeId,
+    });
+    // a command: open settings → review
+    await press(user, '{Control>}k{/Control}');
+    await user.type(
+      within(await screen.findByTestId(TEST_IDS.commandPalette)).getByTestId(
+        TEST_IDS.commandPaletteInput,
+      ),
+      'settings review',
+    );
+    await press(user, '{Enter}');
+    await screen.findByTestId(TEST_IDS.settingsDialog);
+    expect(store.getState().settingsSection).toBe('review');
+    // a theme
+    await press(user, '{Escape}');
+    await press(user, '{Control>}k{/Control}');
+    await user.type(
+      within(await screen.findByTestId(TEST_IDS.commandPalette)).getByTestId(
+        TEST_IDS.commandPaletteInput,
+      ),
+      'theme contrast',
+    );
+    await press(user, '{Enter}');
+    await waitFor(() => expect(document.documentElement.dataset.theme).toBe('octopus-contrast'));
+  });
+
+  it('context menu on a project offers bulk and policy actions', async () => {
+    const { backend } = setup();
+    await ready();
+    const project = screen
+      .getAllByTestId(TEST_IDS.projectItem)
+      .find((p) => p.dataset.projectName === 'web-dashboard') as HTMLElement;
+    fireEvent.click(within(project).getByLabelText('Actions for web-dashboard'));
+    const menu = await screen.findByRole('menu');
+    const off = within(menu)
+      .getAllByTestId(TEST_IDS.reviewPolicyItem)
+      .find((i) => i.dataset.state === 'off');
+    fireEvent.click(off as HTMLElement);
+    await waitFor(() => expect(backend.overrides.size).toBe(3));
+    await waitFor(() =>
+      expect(within(worktreeItem('main')).queryByTestId(TEST_IDS.reviewOffBadge)).toBeNull(),
+    );
+    const web = screen
+      .getAllByTestId(TEST_IDS.worktreeItem)
+      .filter((w) => w.dataset.projectId === project.dataset.projectId);
+    expect(web.every((w) => within(w).queryByTestId(TEST_IDS.reviewOffBadge) !== null)).toBe(true);
+  });
+});
