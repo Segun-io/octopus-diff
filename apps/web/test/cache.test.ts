@@ -181,6 +181,43 @@ describe('SSE → cache invalidation', () => {
     for (const fn of unsubscribe) fn();
   });
 
+  it('keeps the effective review policy on a patched inbox entry (review-disabled stays disabled)', async () => {
+    const { backend, qc, a } = seeded();
+    const mockFetch = createMockFetch(backend);
+    const api = createApiClient({ baseUrl: 'http://mock.local', fetch: mockFetch });
+    const unsubscribe = [
+      new QueryObserver(qc, { queryKey: queryKeys.projects(), queryFn: () => api.listProjects() }),
+      new QueryObserver(qc, {
+        queryKey: queryKeys.inbox({ kind: 'working' }),
+        queryFn: () => api.inbox({ scope: { kind: 'working' } }),
+      }),
+    ].map((observer) => observer.subscribe(() => {}));
+    await api.setReviewPolicy({
+      target: { kind: 'worktree', worktreeId: a.worktree.id },
+      enabled: false,
+    });
+    await qc.invalidateQueries({ queryKey: queryKeys.projects() });
+    await qc.invalidateQueries({ queryKey: queryKeys.inboxAll() });
+    const entryOf = () =>
+      qc
+        .getQueryData<InboxResponse>(queryKeys.inbox({ kind: 'working' }))
+        ?.entries.find((e) => e.worktree.id === a.worktree.id);
+    expect(entryOf()?.review).toEqual({ enabled: false, source: 'worktree' });
+
+    backend.mutate(a.worktree.id, 'edit');
+    const stateHash = backend.listFiles(a.worktree.id, { kind: 'working' }).stateHash;
+    const effects = collectEventEffects(
+      qc,
+      { type: 'worktree.changed', projectId: a.project.id, worktreeId: a.worktree.id, stateHash },
+      emptyEffects(),
+      { reconnect: false },
+    );
+    await flushEffects(qc, effects, api);
+    // Patched, not refetched, and the policy survived the patch.
+    expect(entryOf()?.review).toEqual({ enabled: false, source: 'worktree' });
+    for (const fn of unsubscribe) fn();
+  });
+
   it('skips worktree.changed when the cached stateHash already matches', () => {
     const { qc, a } = seeded();
     const projects = qc.getQueryData<{

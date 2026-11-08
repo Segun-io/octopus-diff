@@ -278,6 +278,10 @@ async function patchInbox(
               worktree: r.loc.worktree,
               summary: r.loc.summary,
               files: r.files,
+              // Effective review policy comes from the (already refetched) projects list, as
+              // the daemon attaches the same value to inbox entries. Dropping it would turn
+              // review back on for a review-disabled worktree after any live update.
+              ...(r.loc.review ? { review: r.loc.review } : {}),
             }
           : null,
       );
