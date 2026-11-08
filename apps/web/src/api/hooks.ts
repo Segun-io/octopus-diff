@@ -46,7 +46,15 @@ export function useServerEvents(factory: EventSourceFactory | null = defaultFact
   useEffect(() => {
     let effects = emptyEffects();
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let lastFlush = 0;
     let helloCount = 0;
+    const flush = () => {
+      timer = undefined;
+      lastFlush = Date.now();
+      const batch = effects;
+      effects = emptyEffects();
+      void flushEffects(queryClient, batch);
+    };
     const handle = (event: ServerEvent) => {
       if (event.type === 'hello') helloCount++;
       if (event.type === 'scan.progress') {
@@ -62,12 +70,10 @@ export function useServerEvents(factory: EventSourceFactory | null = defaultFact
       }
       collectEventEffects(queryClient, event, effects, { reconnect: helloCount > 1 });
       if (timer === undefined) {
-        timer = setTimeout(() => {
-          timer = undefined;
-          const batch = effects;
-          effects = emptyEffects();
-          void flushEffects(queryClient, batch);
-        }, EVENT_BATCH_MS);
+        // After a quiet period, flush on the next tick (one event after an edit is the common
+        // case); within EVENT_BATCH_MS of the last flush, batch (bursts across many worktrees).
+        const quiet = Date.now() - lastFlush >= EVENT_BATCH_MS;
+        timer = setTimeout(flush, quiet ? 0 : EVENT_BATCH_MS);
       }
     };
 
