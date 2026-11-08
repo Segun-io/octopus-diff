@@ -1,11 +1,11 @@
 import type { ThemeDefinition } from '../tokens.ts';
 
-/** The brand light theme: paper white, the same violet brand hue, darker for contrast. */
+/** The brand light theme: paper white, black ink as the accent (docs/design/IDENTITY.md §4). */
 export const octopusLight: ThemeDefinition = {
   id: 'octopus-light',
   label: 'Octopus Light',
   kind: 'light',
-  description: 'Paper white, violet accent. The default by day.',
+  description: 'Black ink on paper. The default by day.',
   colors: {
     canvas: '#f4f5f9',
     surface: '#ffffff',
@@ -16,12 +16,12 @@ export const octopusLight: ThemeDefinition = {
     fg: '#1a1d26',
     muted: '#555c6c',
     faint: '#5d6576',
-    accent: '#5b47d6',
+    accent: '#1a1d26',
     accentFg: '#ffffff',
-    accentSoft: '#e9e5fb',
-    selected: '#e7e3fa',
+    accentSoft: '#dfe2ea',
+    selected: '#e3e6ed',
     hover: '#eceef4',
-    focus: '#5b47d6',
+    focus: '#1a1d26',
     add: '#136b2f',
     addSoft: '#e3f5e8',
     del: '#b91f25',

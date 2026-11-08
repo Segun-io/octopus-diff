@@ -19,7 +19,7 @@ import { useCommandsContext } from '../../state/commandsContext.tsx';
 import { useAppModel } from '../../state/model.tsx';
 import { actions, useUi, useUiStore } from '../../state/ui.tsx';
 import { useTheme } from '../../theme/useTheme.ts';
-import { CheckIcon, LineCounts, StatusIcon, statusLabel } from '../bits.tsx';
+import { CheckIcon, LineCounts, StatusIcon, statusLabel, WarningIcon } from '../bits.tsx';
 
 const DiffRenderer = lazy(() =>
   import('./DiffRenderer.tsx').then((m) => ({ default: m.DiffRenderer })),
@@ -213,8 +213,8 @@ export function DiffPane() {
           role="alert"
           className="flex items-center gap-2 border-b border-warn/40 bg-raised px-3 py-1 text-xs"
         >
-          <span className="text-warn" aria-hidden="true">
-            ⚠
+          <span className="flex items-center text-warn" aria-hidden="true">
+            <WarningIcon />
           </span>
           <span>
             This file contains {describeSuspicious(suspicious)}. They are shown as ⟨U+…⟩ below; the

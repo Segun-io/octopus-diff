@@ -62,6 +62,94 @@ export function CheckIcon({ className = '' }: { className?: string }) {
   );
 }
 
+/**
+ * Stroke icons on a 16-unit grid: one weight (1.5), `currentColor`, never a font glyph (glyphs such
+ * as ☾ ✕ ⋯ ⚠ render as emoji or in another weight depending on the platform).
+ */
+function Svg({
+  children,
+  size = 14,
+  className = '',
+}: {
+  children: ReactNode;
+  size?: number;
+  className?: string;
+}) {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      width={size}
+      height={size}
+      aria-hidden="true"
+      focusable="false"
+      className={className}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      {children}
+    </svg>
+  );
+}
+
+type IconProps = { size?: number; className?: string };
+
+export function CloseIcon(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M4 4l8 8M12 4l-8 8" />
+    </Svg>
+  );
+}
+
+export function MoreIcon(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <circle cx="3.5" cy="8" r="1.1" fill="currentColor" stroke="none" />
+      <circle cx="8" cy="8" r="1.1" fill="currentColor" stroke="none" />
+      <circle cx="12.5" cy="8" r="1.1" fill="currentColor" stroke="none" />
+    </Svg>
+  );
+}
+
+export function SunIcon(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <circle cx="8" cy="8" r="3" />
+      <path d="M8 1.5V3M8 13v1.5M1.5 8H3M13 8h1.5M3.4 3.4l1.06 1.06M11.54 11.54l1.06 1.06M3.4 12.6l1.06-1.06M11.54 4.46l1.06-1.06" />
+    </Svg>
+  );
+}
+
+export function MoonIcon(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M13.5 9.6A5.6 5.6 0 0 1 6.4 2.5a5.6 5.6 0 1 0 7.1 7.1z" />
+    </Svg>
+  );
+}
+
+export function WarningIcon(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M8 2.5L14 13H2z" />
+      <path d="M8 6.5v3M8 11.5h.01" />
+    </Svg>
+  );
+}
+
+/** A 6 px dot in the current colour (status markers next to a count). */
+export function Dot({ className = '' }: { className?: string }) {
+  return (
+    <span
+      aria-hidden="true"
+      className={`inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-current ${className}`}
+    />
+  );
+}
+
 export function ToggleButton({
   pressed,
   onClick,

@@ -7,7 +7,7 @@ import { useScanRootsQuery, useSettingsSupport } from '../api/settings.ts';
 import { useCommandsContext } from '../state/commandsContext.tsx';
 import { useAppModel } from '../state/model.tsx';
 import { useUi, useUiStore } from '../state/ui.tsx';
-import { ToggleButton } from './bits.tsx';
+import { MoonIcon, SunIcon, ToggleButton } from './bits.tsx';
 import { ReviewPolicyChip } from './ReviewPolicyChip.tsx';
 
 const SCOPE_LABELS: Record<ScopeKind, string> = {
@@ -163,7 +163,7 @@ export function Toolbar() {
         <button
           type="button"
           onClick={() => store.setState({ fileListLayout: layout === 'list' ? 'tree' : 'list' })}
-          title="Show the files as a directory tree (@pierre/trees)"
+          title="Show the files as a directory tree"
           aria-pressed={layout === 'tree'}
           className="rounded border border-line bg-surface px-2 py-0.5 text-xs text-muted hover:bg-hover hover:text-fg aria-pressed:bg-selected aria-pressed:text-fg"
         >
@@ -201,9 +201,9 @@ export function Toolbar() {
           onClick={commands.toggleTheme}
           title="Toggle light / dark (t)"
           aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`}
-          className="rounded px-1.5 py-0.5 text-sm hover:bg-hover"
+          className="flex items-center rounded px-1.5 py-1 text-muted hover:bg-hover hover:text-fg"
         >
-          {theme === 'dark' ? '☾' : '☀'}
+          {theme === 'dark' ? <MoonIcon /> : <SunIcon />}
         </button>
         <button
           type="button"

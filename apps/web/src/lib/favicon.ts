@@ -19,7 +19,7 @@ export function faviconWithDot(): string {
   const arms = MARK_ARMS.map((d) => `<path d="${d}" fill="none"/>`).join('');
   const svg =
     `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">` +
-    `<style>.m{fill:#5b47d6;stroke:#5b47d6}@media(prefers-color-scheme:dark){.m{fill:#9d90ff;stroke:#9d90ff}}</style>` +
+    `<style>.m{fill:#1a1d26;stroke:#1a1d26}@media(prefers-color-scheme:dark){.m{fill:#e4e7ee;stroke:#e4e7ee}}</style>` +
     `<mask id="e"><rect width="32" height="32" fill="#fff"/>` +
     `<rect x="10.3" y="12" width="4.4" height="1.8" rx=".9"/><rect x="17.3" y="12" width="4.4" height="1.8" rx=".9"/>` +
     `<circle cx="26" cy="6" r="7" fill="#000"/></mask>` +

@@ -25,7 +25,7 @@ import { isRecentlyActive, worktreeSource } from '../lib/source.ts';
 import { useCommandsContext } from '../state/commandsContext.tsx';
 import { useAppModel } from '../state/model.tsx';
 import { actions, useUi, useUiStore, type View } from '../state/ui.tsx';
-import { ToggleButton } from './bits.tsx';
+import { Dot, MoreIcon, ToggleButton } from './bits.tsx';
 import { ContextMenu, type MenuItem, useContextMenu } from './ContextMenu.tsx';
 import { Wordmark } from './Mark.tsx';
 
@@ -213,9 +213,9 @@ function MoreButton({
       aria-label={label}
       aria-haspopup="menu"
       onClick={onOpen}
-      className={`absolute top-1 right-1 rounded-sm px-1 text-[11px] text-faint opacity-0 hover:bg-raised hover:text-fg focus:opacity-100 ${MORE_VISIBILITY[group]}`}
+      className={`absolute top-1 right-1 flex items-center rounded-sm p-0.5 text-faint opacity-0 hover:bg-raised hover:text-fg focus:opacity-100 ${MORE_VISIBILITY[group]}`}
     >
-      ⋯
+      <MoreIcon size={12} />
     </button>
   );
 }
@@ -247,8 +247,12 @@ function StatsBadges({
     <span className="ml-auto flex shrink-0 items-center gap-1 font-mono text-[10px] text-faint">
       {repos !== undefined && <span title={`${repos} repositories`}>{repos}</span>}
       {dirty > 0 && (
-        <span className="text-mod" title={`${dirty} dirty worktrees`}>
-          ●{dirty}
+        <span
+          className="inline-flex items-center gap-0.5 text-mod"
+          title={`${dirty} dirty worktrees`}
+        >
+          <Dot />
+          {dirty}
         </span>
       )}
       {unreviewed > 0 && (
@@ -298,7 +302,16 @@ export function Sidebar() {
     const key = reviewTargetKey(target);
     const state = overrides.has(key) ? (overrides.get(key) ? 'on' : 'off') : 'inherit';
     return [
-      { id: 'policy-h', heading: true, label: `Review for ${label}` },
+      {
+        id: 'policy-h',
+        heading: true,
+        // The heading style is upper case; a project or branch name keeps its own case.
+        label: (
+          <>
+            Review for <span className="tracking-normal normal-case">{label}</span>
+          </>
+        ),
+      },
       ...(['on', 'off', 'inherit'] as const).map<MenuItem>((choice) => ({
         id: `policy-${choice}`,
         label: choice === 'inherit' ? 'Inherit' : choice === 'on' ? 'On' : 'Off',
@@ -567,7 +580,7 @@ export function Sidebar() {
                               }
                               onContextMenu={(e) => menu.open(e, { kind: 'project', group })}
                               title={group.project.mainWorktreePath ?? group.project.commonDir}
-                              className="od-heading flex min-w-0 flex-1 items-center gap-1 py-1 text-left"
+                              className="flex min-w-0 flex-1 items-center gap-1.5 py-1 text-left font-semibold"
                             >
                               <span className="truncate">{group.project.name}</span>
                               <StatsBadges dirty={stats.dirty} unreviewed={stats.unreviewed} />
@@ -613,7 +626,7 @@ export function Sidebar() {
           onClick={() => store.setState({ addProjectOpen: true })}
           className="w-full rounded-md border border-line px-2 py-1 text-xs text-muted hover:bg-hover hover:text-fg"
         >
-          + Watch a folder or add a repository
+          Watch a folder or add a repository
         </button>
       </div>
 

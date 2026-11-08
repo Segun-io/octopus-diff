@@ -2,11 +2,11 @@
   <title>octopus-diff</title>
   <!-- octopus-diff wordmark: mark + lowercase name, "-diff" in the monospace face. System font stacks only. -->
   <style>
-    .mark { fill: #5b47d6; stroke: #5b47d6; }
+    .mark { fill: #1a1d26; stroke: #1a1d26; }
     .name { fill: #1a1d26; font: 600 22px ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; letter-spacing: -0.4px; }
     .diff { fill: #555c6c; font: 400 20px ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace; }
     @media (prefers-color-scheme: dark) {
-      .mark { fill: #9d90ff; stroke: #9d90ff; } .name { fill: #e4e7ee; } .diff { fill: #a4abba; }
+      .mark { fill: #e4e7ee; stroke: #e4e7ee; } .name { fill: #e4e7ee; } .diff { fill: #a4abba; }
     }
   </style>
   <defs>

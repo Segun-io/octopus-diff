@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { AA_TEXT, AA_UI, contrast } from '../src/theme/contrast.ts';
+import { AA_TEXT, AA_UI, contrast, parseHex } from '../src/theme/contrast.ts';
 import { themesToCss } from '../src/theme/css.ts';
 import {
   DEFAULT_THEME_IDS,
@@ -80,11 +80,24 @@ describe('theme registry', () => {
     }
   });
 
-  it('keeps the brand hue distinct from the semantic hues', () => {
+  it('keeps the accent distinct from the semantic colours', () => {
     for (const theme of THEMES) {
       const c = theme.colors;
       for (const semantic of ['add', 'del', 'mod', 'danger'] as const) {
         expect(c.accent).not.toBe(c[semantic]);
+      }
+    }
+  });
+
+  it('keeps the brand themes achromatic: the accent is ink, not a hue (IDENTITY.md §4)', () => {
+    for (const id of Object.values(DEFAULT_THEME_IDS)) {
+      const theme = THEMES.find((t) => t.id === id);
+      expect(theme).toBeDefined();
+      if (!theme) continue;
+      for (const token of ['accent', 'focus', 'accentSoft', 'selected'] as const) {
+        const [r, g, b] = parseHex(theme.colors[token]);
+        // The dark neutrals carry a blue cast (canvas #0b0d14); a cast is not a hue. Violet was 0x6d.
+        expect(Math.max(r, g, b) - Math.min(r, g, b), `${id}.${token}`).toBeLessThanOrEqual(24);
       }
     }
   });

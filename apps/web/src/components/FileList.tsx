@@ -10,7 +10,7 @@ import {
 } from '../lib/model.ts';
 import { escapeSuspicious, hasSuspicious } from '../lib/unicode.ts';
 import { useUi } from '../state/ui.tsx';
-import { CheckIcon, LineCounts, StatusIcon, statusLabel } from './bits.tsx';
+import { CheckIcon, LineCounts, StatusIcon, statusLabel, WarningIcon } from './bits.tsx';
 
 /** Row heights per density (mirrors `--od-row` / `--od-row-header` in styles.css). */
 export const ROW_HEIGHTS = {
@@ -303,12 +303,12 @@ const FileRow = memo(function FileRow({
       <StatusIcon status={file.status} />
       {suspicious && (
         <span
-          className="shrink-0 text-warn"
+          className="flex shrink-0 items-center text-warn"
           role="img"
           aria-label="File name contains invisible or bidirectional characters"
           title="File name contains invisible or bidirectional characters (shown as ⟨U+…⟩)"
         >
-          ⚠
+          <WarningIcon size={12} />
         </span>
       )}
       <span className="flex min-w-0 flex-1 items-baseline gap-1 overflow-hidden whitespace-nowrap">

@@ -1,11 +1,14 @@
 import type { ThemeDefinition } from '../tokens.ts';
 
-/** The brand dark theme: ink black with a blue cast, violet accent (docs/design/IDENTITY.md). */
+/**
+ * The brand dark theme: ink black with a blue cast. The accent is ink itself (the `fg` colour), so
+ * every hue on screen belongs to the diff (docs/design/IDENTITY.md §4).
+ */
 export const octopusDark: ThemeDefinition = {
   id: 'octopus-dark',
   label: 'Octopus Dark',
   kind: 'dark',
-  description: 'Ink black, violet accent. The default at night.',
+  description: 'White ink on black. The default at night.',
   colors: {
     canvas: '#0b0d14',
     surface: '#10131b',
@@ -16,12 +19,12 @@ export const octopusDark: ThemeDefinition = {
     fg: '#e4e7ee',
     muted: '#a4abba',
     faint: '#8e96a6',
-    accent: '#9d90ff',
+    accent: '#e4e7ee',
     accentFg: '#0b0d14',
-    accentSoft: '#2a2850',
-    selected: '#242746',
+    accentSoft: '#282d39',
+    selected: '#242936',
     hover: '#181c27',
-    focus: '#b3a8ff',
+    focus: '#f0f2f7',
     add: '#5ccb7f',
     addSoft: '#12301d',
     del: '#ff8a80',

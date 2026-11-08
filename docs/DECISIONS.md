@@ -819,3 +819,29 @@ watcher fixes): `pnpm check` exit 0, `pnpm test:e2e` 68 passed, read-only proof 
     Follow-ups for the contracts: move the jitless call into `packages/contracts` (removes the web's direct zod dependency
     and the chunk pin); add test ids for the sidebar context menu, the bulk confirm dialog, the add-project dialog and the
     Overview bulk/policy buttons.
+
+## UX round 2 — unslop pass on identity and chrome (lead)
+
+All 2026-11-08 · lead, branch `ux/unslop`, on top of `main` at `28fddc8`. Scope: `apps/web`, `docs/design`, brand assets.
+Nothing behavioural changed; no contract change. Report: `docs/reports/ux-unslop.md`.
+
+23. **The brand accent is ink, not violet.** `accent`/`focus`/`accentSoft`/`selected` of the two brand themes are now neutral
+    (`#1a1d26` on paper, `#e4e7ee` on black; see IDENTITY.md §4). Reason: violet is the default hue of generated UIs and made
+    the product look templated; an achromatic frame also keeps the product's own rule ("the diff is the picture, everything
+    else is the frame") and is distance-maximal from every semantic hue for every kind of colour vision. The theme test now
+    asserts the brand themes stay achromatic; third-party themes may still use a hue. Favicon, mark, wordmark, app icons,
+    the favicon-dot data URI and the contact sheet were regenerated. The dark theme's `color-scheme`, canvas and
+    `theme-color` are unchanged, so nothing flashes for existing users; a stored v2 preference needs no migration.
+24. **No font glyphs as controls.** ☾ ☀ ✕ ⋯ ⚠ and the ● bullet were replaced by a six-icon stroke set in `bits.tsx` (one
+    weight, `currentColor`) and a CSS `Dot`. Reason: glyphs render as colour emoji on Windows and at a different weight per
+    platform; they are the most visible "assembled, not designed" tell. Arrows inside data (`↑2 ↓1`, `a → b`) stay text.
+25. **Project names are no longer upper-cased in the sidebar.** They were set in the tracked upper-case heading style, which
+    transforms user data (`iOS` became `IOS`) and made the tree read as three levels of labels. Projects are now base size,
+    semibold, normal case; worktrees regular; folders mono (they are paths). Rule added to IDENTITY.md §5.
+26. **Overview figures are a definition list, not stat tiles.** The bordered "big number in a card" grid is the dashboard
+    cliché; the figures now sit on one line between two hairlines (number over label), with +/− in their semantic colours.
+27. **One elevation for overlays.** `Dialog` and the bottom notice used their own border/shadow (`shadow-2xl`, `shadow-lg`);
+    both now use `.od-overlay`, so every floating surface has the same background, border and shadow as IDENTITY.md §6 says.
+28. **Copy.** "Inbox zero" (cute) → "No dirty worktrees in this scope."; the tree-view tooltip and the Appearance text no
+    longer name implementation details (`@pierre/trees`, `src/theme/themes/`); the empty state reads plainly. Theme
+    descriptions describe the ink. Everything else kept its voice (IDENTITY.md §7).

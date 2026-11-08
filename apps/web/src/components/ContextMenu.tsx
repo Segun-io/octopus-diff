@@ -1,4 +1,5 @@
 import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
+import { CheckIcon } from './bits.tsx';
 
 export interface MenuItem {
   id: string;
@@ -126,7 +127,7 @@ export function ContextMenu({
             } ${item.checked ? 'bg-selected' : ''}`}
           >
             <span className="flex-1">{item.label}</span>
-            {item.checked && <span className="text-accent">●</span>}
+            {item.checked && <CheckIcon className="shrink-0 text-fg" />}
           </button>
         ),
       )}

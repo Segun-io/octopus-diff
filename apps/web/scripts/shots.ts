@@ -62,7 +62,8 @@ const STATES: Record<string, Step> = {
   },
   project: async (page) => {
     await page
-      .locator('[data-testid="project-item"][data-project-name="octopus-api"] .od-heading')
+      .locator('[data-testid="project-item"][data-project-name="octopus-api"] button[title]')
+      .first()
       .click();
     await page.waitForTimeout(400);
   },

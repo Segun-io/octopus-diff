@@ -26,8 +26,8 @@ const designAssets = path.join(webRoot, '../../docs/design/assets');
 
 /** Brand colours (keep in sync with src/theme/themes/octopus-{dark,light}.ts). */
 const INK = '#0b0d14';
-const VIOLET_DARK = '#9d90ff';
-const VIOLET_LIGHT = '#5b47d6';
+const INK_DARK = '#e4e7ee';
+const INK_LIGHT = '#1a1d26';
 const PAPER = '#f4f5f9';
 
 function markSvg(fill: string, size: number): string {
@@ -95,18 +95,18 @@ async function main() {
   const browser = await chromium.launch();
   const page = await browser.newPage({ deviceScaleFactor: 1 });
 
-  // favicon.ico: transparent, dark-scheme violet (tab strips are mostly dark; the SVG favicon
-  // is adaptive and preferred by browsers that support it).
+  // favicon.ico: transparent, dark-scheme ink (tab strips are mostly dark; the SVG favicon is
+  // adaptive and preferred by browsers that support it).
   const icoSizes = [16, 32, 48];
   const icoImages = [];
   for (const size of icoSizes) {
-    icoImages.push({ size, png: await shot(page, markSvg(VIOLET_DARK, size), size, true) });
+    icoImages.push({ size, png: await shot(page, markSvg(INK_DARK, size), size, true) });
   }
   await writeFile(path.join(publicDir, 'favicon.ico'), buildIco(icoImages));
 
-  // App icons: solid ink background, violet mark.
-  const any = (size: number) => shot(page, tile(size, INK, VIOLET_DARK, 0.62), size, false);
-  const maskable = (size: number) => shot(page, tile(size, INK, VIOLET_DARK, 0.5), size, false);
+  // App icons: solid canvas background, ink mark.
+  const any = (size: number) => shot(page, tile(size, INK, INK_DARK, 0.62), size, false);
+  const maskable = (size: number) => shot(page, tile(size, INK, INK_DARK, 0.5), size, false);
   await writeFile(path.join(publicDir, 'apple-touch-icon.png'), await any(180));
   await writeFile(path.join(publicDir, 'icon-192.png'), await any(192));
   await writeFile(path.join(publicDir, 'icon-512.png'), await any(512));
@@ -118,11 +118,11 @@ async function main() {
   const row = (bg: string, fill: string, label: string) =>
     `<div style="display:flex;align-items:flex-end;gap:24px;padding:24px;background:${bg};color:${fill};font:12px ui-monospace,monospace">
       ${sizes.map((s) => `<div style="display:flex;flex-direction:column;align-items:center;gap:8px">${markSvg(fill, s)}<span>${s}</span></div>`).join('')}
-      <div style="display:flex;flex-direction:column;align-items:center;gap:8px">${tile(96, INK, VIOLET_DARK, 0.62)}<span>icon</span></div>
-      <div style="display:flex;flex-direction:column;align-items:center;gap:8px"><div style="border-radius:50%;overflow:hidden">${tile(96, INK, VIOLET_DARK, 0.5)}</div><span>maskable</span></div>
+      <div style="display:flex;flex-direction:column;align-items:center;gap:8px">${tile(96, INK, INK_DARK, 0.62)}<span>icon</span></div>
+      <div style="display:flex;flex-direction:column;align-items:center;gap:8px"><div style="border-radius:50%;overflow:hidden">${tile(96, INK, INK_DARK, 0.5)}</div><span>maskable</span></div>
       <span style="align-self:flex-start;margin-left:auto">${label}</span>
     </div>`;
-  const sheet = `${row(PAPER, VIOLET_LIGHT, 'octopus-light #5b47d6')}${row(INK, VIOLET_DARK, 'octopus-dark #9d90ff')}`;
+  const sheet = `${row(PAPER, INK_LIGHT, 'octopus-light #1a1d26')}${row(INK, INK_DARK, 'octopus-dark #e4e7ee')}`;
   await page.setViewportSize({ width: 1100, height: 1200 });
   await page.setContent(`<!doctype html><html><body style="margin:0">${sheet}</body></html>`);
   const body = page.locator('body');

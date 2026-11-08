@@ -1,4 +1,5 @@
 import { type ReviewPolicyTarget, reviewTargetKey } from '@octopus-diff/contracts';
+import type { ReactNode } from 'react';
 import {
   useRescanScanRoot,
   useSetReviewPolicy,
@@ -19,6 +20,7 @@ import { worktreeSource } from '../lib/source.ts';
 import { useCommandsContext } from '../state/commandsContext.tsx';
 import { useAppModel } from '../state/model.tsx';
 import { actions, useUiStore, type View } from '../state/ui.tsx';
+import { Dot } from './bits.tsx';
 import { Mark } from './Mark.tsx';
 
 /**
@@ -47,28 +49,33 @@ function Missing({ what }: { what: string }) {
   );
 }
 
-function Stat({ label, value, tone }: { label: string; value: string | number; tone?: string }) {
+/** One figure of the summary line: the number, then its label. No box around it. */
+function Stat({ label, value, tone }: { label: string; value: ReactNode; tone?: string }) {
   return (
-    <div className="rounded-md border border-line bg-surface px-3 py-2">
-      <div className={`font-mono text-lg tabular-nums ${tone ?? 'text-fg'}`}>{value}</div>
-      <div className="text-[11px] text-muted">{label}</div>
+    <div className="flex flex-col">
+      <dt className="order-2 text-[11px] text-muted">{label}</dt>
+      <dd className={`order-1 font-mono text-xl tabular-nums ${tone ?? 'text-fg'}`}>{value}</dd>
     </div>
   );
 }
 
 function StatsRow({ stats, repos }: { stats: NodeStats; repos: boolean }) {
   return (
-    <div className="grid grid-cols-[repeat(auto-fit,minmax(110px,1fr))] gap-2">
+    <dl className="flex flex-wrap gap-x-8 gap-y-3 border-y border-line py-3">
       {repos && <Stat label="repositories" value={stats.projects} />}
       <Stat label="worktrees" value={stats.worktrees} />
       <Stat label="with changes" value={stats.dirty} tone={stats.dirty ? 'text-mod' : undefined} />
+      <Stat label="unreviewed files" value={stats.unreviewed} />
       <Stat
-        label="unreviewed files"
-        value={stats.unreviewed}
-        tone={stats.unreviewed ? 'text-accent' : undefined}
+        label="lines"
+        value={
+          <>
+            <span className="text-add">+{stats.additions}</span>{' '}
+            <span className="text-del">−{stats.deletions}</span>
+          </>
+        }
       />
-      <Stat label="lines" value={`+${stats.additions} −${stats.deletions}`} />
-    </div>
+    </dl>
   );
 }
 
@@ -207,7 +214,10 @@ function FolderOverview({ node }: { node: FolderNode }) {
                 <td className="py-1.5 pr-3 font-mono tabular-nums">
                   {s.dirty > 0 ? (
                     <>
-                      <span className="text-mod">●{s.dirty}</span>{' '}
+                      <span className="inline-flex items-center gap-0.5 text-mod">
+                        <Dot />
+                        {s.dirty}
+                      </span>{' '}
                       <span className="text-add">+{s.additions}</span>{' '}
                       <span className="text-del">−{s.deletions}</span>
                     </>
@@ -216,7 +226,7 @@ function FolderOverview({ node }: { node: FolderNode }) {
                   )}
                 </td>
                 <td className="py-1.5 pr-3 font-mono tabular-nums">
-                  {s.unreviewed > 0 ? <span className="text-accent">{s.unreviewed}</span> : '–'}
+                  {s.unreviewed > 0 ? <span className="font-semibold">{s.unreviewed}</span> : '–'}
                 </td>
                 <td className="truncate py-1.5 font-mono text-[11px] text-faint">
                   {shortenHome(g.project.mainWorktreePath ?? g.project.commonDir)}
@@ -242,7 +252,17 @@ function ProjectOverview({ group }: { group: ProjectGroup }) {
     <div className="od-scroll h-full overflow-y-auto p-5">
       <header className="mb-4 flex flex-wrap items-start gap-3">
         <div className="min-w-0 flex-1">
-          <div className="od-heading">Project{folder ? ` · ${folder.label}` : ''}</div>
+          <div className="od-heading">
+            Project
+            {folder && (
+              <>
+                {' · '}
+                <span className="font-mono font-normal tracking-normal normal-case">
+                  {folder.label}
+                </span>
+              </>
+            )}
+          </div>
           <h1 className="truncate text-base font-semibold">{project.name}</h1>
           <p className="truncate font-mono text-[11px] text-muted" title={project.commonDir}>
             {shortenHome(project.mainWorktreePath ?? project.commonDir)} · base{' '}
@@ -317,7 +337,11 @@ function ProjectOverview({ group }: { group: ProjectGroup }) {
                   )}
                 </td>
                 <td className="py-1.5 pr-3 font-mono tabular-nums">
-                  {row.unreviewed > 0 ? <span className="text-accent">{row.unreviewed}</span> : '–'}
+                  {row.unreviewed > 0 ? (
+                    <span className="font-semibold">{row.unreviewed}</span>
+                  ) : (
+                    '–'
+                  )}
                 </td>
                 <td className="py-1.5 text-[11px] text-muted">
                   {row.review.enabled ? <span className="text-add">on</span> : <span>off</span>}{' '}

@@ -1,5 +1,6 @@
 import { type ReactNode, useEffect, useRef } from 'react';
 import { useEscapeToClose } from '../lib/useEscape.ts';
+import { CloseIcon } from './bits.tsx';
 
 /** Accessible modal: focuses itself on open, traps Tab, closes on Escape, restores focus. */
 export function Dialog({
@@ -65,7 +66,7 @@ export function Dialog({
         data-testid={testId}
         tabIndex={-1}
         onKeyDown={onKeyDown}
-        className="od-fade-in max-h-[76vh] w-[min(560px,92vw)] overflow-auto rounded-lg border border-line bg-surface p-4 shadow-2xl"
+        className="od-overlay od-fade-in max-h-[76vh] w-[min(560px,92vw)] overflow-auto rounded-lg p-4"
       >
         <div className="mb-3 flex items-center">
           <h2 className="text-sm font-semibold">{title}</h2>
@@ -73,9 +74,9 @@ export function Dialog({
             type="button"
             onClick={onClose}
             aria-label="Close"
-            className="ml-auto rounded px-1.5 text-muted hover:bg-hover hover:text-fg"
+            className="ml-auto flex items-center rounded p-1 text-muted hover:bg-hover hover:text-fg"
           >
-            ✕
+            <CloseIcon />
           </button>
         </div>
         {children}

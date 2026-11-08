@@ -14,6 +14,7 @@ import type { Prefs } from '../../state/prefs.ts';
 import { actions, useUi, useUiStore } from '../../state/ui.tsx';
 import { selectTheme, THEMES } from '../../theme/registry.ts';
 import { useTheme } from '../../theme/useTheme.ts';
+import { CloseIcon } from '../bits.tsx';
 import { Mark, Wordmark } from '../Mark.tsx';
 import { Select, SettingRow, Switch, Where } from './controls.tsx';
 import { FoldersSection } from './FoldersSection.tsx';
@@ -136,9 +137,9 @@ export function SettingsDialog() {
               type="button"
               onClick={close}
               aria-label="Close settings"
-              className="ml-auto rounded-md px-1.5 text-muted hover:bg-hover hover:text-fg"
+              className="ml-auto flex items-center rounded-md p-1 text-muted hover:bg-hover hover:text-fg"
             >
-              ✕
+              <CloseIcon />
             </button>
           </div>
           {section === 'general' && <PrefsPanel items={GENERAL_ITEMS} />}
@@ -223,8 +224,7 @@ function AppearancePanel() {
       <div className="py-2.5">
         <p className="text-xs font-medium">Theme</p>
         <p className="mt-0.5 text-[11px] text-muted">
-          One light and one dark slot; picking a theme switches to it. Themes are files in{' '}
-          <code className="font-mono">src/theme/themes/</code>.
+          One light and one dark slot; picking a theme switches to it.
         </p>
         <fieldset
           data-testid={TEST_IDS.themePicker}

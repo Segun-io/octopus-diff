@@ -28,7 +28,7 @@ the arms' unequal lengths (five arms, no two alike, like the lines of a hunk) an
 ## 2. The mark
 
 - Geometry on a 32-unit grid: mantle `M16 3 C22 3 26 7.5 26 13.5 C26 16.5 24.5 18.5 22.5 19.5 L9.5 19.5 C7.5 18.5 6 16.5 6 13.5 C6 7.5 10 3 16 3 Z`; five arms as 2.6-unit round-capped strokes; eyes as two `4.4 × 1.8` rounded slits cut out with a mask.
-- One colour only, always. Default fills: brand violet `#5b47d6` on light, `#9d90ff` on dark (the favicon switches with `prefers-color-scheme`). In the UI the mark uses `currentColor` and is coloured with the `accent` token.
+- One colour only, always, and that colour is ink. Default fills: `#1a1d26` on light, `#e4e7ee` on dark (the `fg` tokens; the favicon switches with `prefers-color-scheme`). In the UI the mark uses `currentColor` and is coloured with the `accent` token, which is ink in the brand themes.
 - Clear space: 1/8 of the mark's width on every side. Minimum size 12 px (the eyes vanish below 14 px, which is fine: the silhouette carries it).
 - Never add a second colour, a gradient, a face, more arms or a shadow. Never rotate it.
 - App icon (maskable): the mark at 62 % of the canvas, centred, on a solid `canvas`-coloured square (`#0b0d14`); the maskable variant keeps the mark inside the 80 % safe zone.
@@ -43,19 +43,30 @@ mirrors it with system font stacks (CSP forbids remote fonts, so there is no cus
 
 ## 4. Colour
 
-### Brand hue
+### Ink, not a hue
 
-**Ink violet.** An octopus has ink; the product is about reading what was written. Violet is the hue furthest
-from every semantic colour in the diff (green add, red delete, amber modified/warn, red danger) and it stays
-distinct for deuteranopes and protanopes, for whom green and red collapse toward amber: violet keeps its blue
-component. It replaces the previous generic blue `#3d63dd`.
+**The frame is achromatic.** In the brand themes the `accent` token is ink: the `fg` colour itself (`#1a1d26` on
+light, `#e4e7ee` on dark). Every hue on screen then means something: green added, red deleted, amber modified or
+in progress, red danger, and the syntax colours inside the diff. Nothing in the frame competes with the picture.
+
+This replaced the first identity's violet (`#5b47d6` / `#9d90ff`, same day, 2026-11-08; see DECISIONS "UX round 2").
+Violet had a story (ink, distance from the semantic hues), but it is also the default hue of nearly every generated
+dashboard and chat product of the last two years, and it made the tool read as produced from a template rather than
+for a job. Ink is harder to mistake and truer to the name: a black octopus on paper, a white one on black, a stamp.
+It also keeps what violet was chosen for: maximal distance from every semantic hue for every kind of colour vision,
+and AA contrast on every surface without a per-theme search.
 
 | Role | Light | Dark | Contrast |
 |---|---|---|---|
-| Brand / `accent` | `#5b47d6` | `#9d90ff` | ≥ 5.0:1 on every surface |
-| `focus` ring | `#5b47d6` | `#b3a8ff` | ≥ 5.0:1 on every surface |
-| `accentSoft` (tinted chip / active background) | `#e9e5fb` | `#2a2850` | text tokens ≥ 4.6:1 on it |
-| `selected` (row / item selection) | `#e7e3fa` | `#242746` | text tokens ≥ 4.6:1 on it |
+| Brand / `accent` | `#1a1d26` | `#e4e7ee` | ≥ 12:1 on every surface |
+| `focus` ring | `#1a1d26` | `#f0f2f7` | ≥ 3:1 on every surface (in fact ≥ 12:1) |
+| `accentSoft` (active choice background) | `#dfe2ea` | `#282d39` | text tokens ≥ 4.5:1 on it |
+| `selected` (row / item selection) | `#e3e6ed` | `#242936` | text tokens ≥ 4.5:1 on it |
+
+Selection and hover are two steps of one neutral ramp (hover the lighter); a pressed toggle adds an ink border. The
+unreviewed count is a filled ink pill with inverted text: the only filled shape in the sidebar, so it needs no hue to be
+found. Third-party themes may carry a hue in `accent` (the test only requires contrast); the two brand themes are ink by
+decision, and `test/theme.test.ts` checks that they stay achromatic.
 
 Colour is never the only signal: added/deleted lines keep their `+`/`−`, statuses keep their letter, review
 state keeps the check mark, review-off keeps its badge text, focus keeps its ring.
@@ -73,7 +84,7 @@ state keeps the check mark, review-off keeps its badge text, focus keeps its rin
 | `fg` | `#1a1d26` | `#e4e7ee` | primary text |
 | `muted` | `#555c6c` | `#a4abba` | secondary text |
 | `faint` | `#5d6576` | `#8e96a6` | tertiary text (paths, hints); still ≥ 4.6:1 |
-| `accent` / `accentFg` | `#5b47d6` / `#ffffff` | `#9d90ff` / `#0b0d14` | brand, primary buttons, unreviewed badge |
+| `accent` / `accentFg` | `#1a1d26` / `#ffffff` | `#e4e7ee` / `#0b0d14` | brand, primary buttons, unreviewed badge (ink: see above) |
 | `add` / `addSoft` | `#136b2f` / `#e3f5e8` | `#5ccb7f` / `#12301d` | additions, reviewed |
 | `del` / `delSoft` | `#b91f25` / `#fbe5e5` | `#ff8a80` / `#3a1b1b` | deletions |
 | `mod` | `#7d5200` | `#e0ae52` | modified, in-progress operations |
@@ -92,6 +103,7 @@ System stacks only (CSP: no remote fonts, nothing to download, nothing to flash)
 - Sans: `ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif`. Body 13 px / 1.45. Labels 12 px. Captions and chips 11 px. Section headings 11 px semibold, upper case, 0.04 em tracking.
 - Mono: `ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace`. Paths, branches, hashes, counts, keys and the diff itself (12 px / 19 px line height). Numbers use `tabular-nums` wherever they line up.
 - Weight is the hierarchy, not size: 600 for the thing you are looking at (file name, project), 400 for everything else. No 700. No italics except detached HEAD.
+- Never transform user data. Project, branch, folder and file names keep their case and their font; the tracked upper-case style is for section headings only (`.od-heading`), never for a name.
 
 ## 6. Spacing, radius, elevation, motion, focus, density
 
@@ -102,6 +114,8 @@ Shared by all themes; defined once in `apps/web/src/styles.css` as `--od-*` cust
 - **Elevation**: three levels. 0 = flat with a hairline (panes); 1 = `raised` background plus hairline (headers, chips); 2 = `overlay` background, `lineStrong` border and `--od-shadow-2` (`0 8px 24px rgb(0 0 0 / 0.35)` dark, `0 8px 24px rgb(20 23 38 / 0.14)` light) for dialogs, menus and the palette. No other shadows.
 - **Motion**: `--od-motion-fast` 120 ms and `--od-motion` 180 ms, `ease-out`. Used for fade/slide-in of menus, toasts and dialogs and for the activity pulse. Everything is wrapped in `@media (prefers-reduced-motion: no-preference)`; with reduced motion there is no animation at all, only state changes.
 - **Focus ring**: 2 px solid `focus`, 1 px offset, on `:focus-visible` only. Inside dark surfaces the ring colour is lighter than the accent so it keeps 3:1 against `selected`.
+- **Icons**: one stroke set on a 16-unit grid, 1.5 px stroke, round caps, `currentColor`, drawn in `components/bits.tsx` (close, more, sun, moon, warning, check) plus `Mark`. Never a font glyph for a control (☾ ✕ ⋯ ⚠ render as emoji or in a different weight depending on the platform). Arrows inside data (`↑2 ↓1`, `old → new`) are text in the mono face, and a status count gets a 6 px CSS dot (`Dot`), not a bullet character.
+- **No boxes for numbers.** Summary figures are set as a definition list (number over label, hairlines above and below), never as a grid of tiles.
 - **Density**: `data-density="compact" | "comfortable"` on the root (a per-device preference). It changes only `--od-row` (26 / 30 px), `--od-pad-x` (8 / 10 px) and the base font size (13 / 13.5 px). Compact is the default: the product is for people who have thirty worktrees open.
 
 ## 7. Voice

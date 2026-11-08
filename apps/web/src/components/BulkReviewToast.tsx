@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef } from 'react';
 import { useEscapeToClose } from '../lib/useEscape.ts';
 import { useCommandsContext } from '../state/commandsContext.tsx';
 import { useUi, useUiStore } from '../state/ui.tsx';
-import { CheckIcon } from './bits.tsx';
+import { CheckIcon, CloseIcon } from './bits.tsx';
 
 /** Toast after a bulk mark (undo inside) and the confirm dialog before a multi-worktree one. */
 export function BulkReviewToast() {
@@ -46,9 +46,9 @@ export function BulkReviewToast() {
               type="button"
               onClick={() => store.setState({ bulkToast: null })}
               aria-label="Dismiss"
-              className="rounded-md px-1 text-muted hover:bg-hover hover:text-fg"
+              className="flex items-center rounded-md p-1 text-muted hover:bg-hover hover:text-fg"
             >
-              ✕
+              <CloseIcon />
             </button>
           </div>
         )}

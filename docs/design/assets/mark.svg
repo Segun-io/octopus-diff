@@ -2,8 +2,8 @@
   <title>octopus-diff</title>
   <!-- octopus-diff mark (docs/design/IDENTITY.md). One colour; the eyes are cut out. -->
   <style>
-    .m { fill: #5b47d6; stroke: #5b47d6; }
-    @media (prefers-color-scheme: dark) { .m { fill: #9d90ff; stroke: #9d90ff; } }
+    .m { fill: #1a1d26; stroke: #1a1d26; }
+    @media (prefers-color-scheme: dark) { .m { fill: #e4e7ee; stroke: #e4e7ee; } }
   </style>
   <defs>
     <mask id="eyes">

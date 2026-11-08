@@ -139,9 +139,7 @@ function Notice() {
       className="pointer-events-none fixed bottom-4 left-1/2 z-40 -translate-x-1/2"
     >
       {notice && (
-        <div className="od-fade-in rounded-md border border-line bg-raised px-3 py-1.5 text-xs shadow-lg">
-          {notice.text}
-        </div>
+        <div className="od-overlay od-fade-in rounded-md px-3 py-1.5 text-xs">{notice.text}</div>
       )}
     </div>
   );
@@ -187,9 +185,9 @@ function EmptyState() {
         </div>
       </div>
       <p className="mb-4 text-sm text-muted">
-        Watch a folder where your repositories and worktrees live. Every repo and every worktree
-        inside it shows up here, with live diffs as agents edit code. Nothing is ever written to a
-        repository.
+        Watch a folder where your repositories and worktrees live. Every repository and every
+        worktree inside it shows up here, and the diffs update as files change. Nothing is ever
+        written to a repository.
       </p>
       <div className="rounded-lg border border-line bg-surface p-4">
         <AddProjectForm />
@@ -381,9 +379,7 @@ function AppShell({ eventSourceFactory }: { eventSourceFactory?: EventSourceFact
                 grouped={inbox}
                 onSelect={onSelectEntry}
                 emptyMessage={
-                  inbox
-                    ? 'Inbox zero: no dirty worktrees in this scope.'
-                    : 'No changes in this scope.'
+                  inbox ? 'No dirty worktrees in this scope.' : 'No changes in this scope.'
                 }
               />
             )}
