@@ -69,7 +69,7 @@ function useSelectionRepair() {
   const model = useAppModel();
   const store = useUiStore();
   const lastIndex = useRef(0);
-  const { entries, visible, viewReady, selectedKey, view } = model;
+  const { entries, globalEntries, visible, viewReady, selectedKey, view } = model;
   const viewKey = view.kind === 'inbox' ? 'inbox' : view.worktreeId;
   const lastView = useRef(viewKey);
 
@@ -85,9 +85,17 @@ function useSelectionRepair() {
       if (visibleIndex !== -1) lastIndex.current = visibleIndex;
       return;
     }
+    // In the inbox, a selection hidden by the sidebar filters still exists: keep it open.
+    if (
+      selectedKey !== null &&
+      view.kind === 'inbox' &&
+      globalEntries.some((e) => e.key === selectedKey)
+    ) {
+      return;
+    }
     const next = repairSelection(entries, selectedKey, lastIndex.current, visible);
     actions.select(store, next ? toFileRef(next.worktreeId, next.file) : null);
-  }, [entries, visible, viewReady, selectedKey, viewKey, store]);
+  }, [entries, globalEntries, visible, viewReady, selectedKey, viewKey, view.kind, store]);
 }
 
 function Notice() {
