@@ -332,6 +332,16 @@ describe('working / staged / unstaged scopes', () => {
     expect(after.ino).toBe(before.ino);
   });
 
+  it('works the same when the locator points at a subdirectory', async () => {
+    const fromRoot = await listFiles(core, wt, { kind: 'working' });
+    const fromSubdir = await listFiles(
+      core,
+      { ...wt, path: path.join(repo, 'dir') },
+      { kind: 'working' },
+    );
+    expect(fromSubdir).toEqual(fromRoot);
+  });
+
   it('caps untracked inspection with maxUntrackedFiles', async () => {
     // Sorted by raw bytes the first two untracked entries are `nested-repo/` (a directory, never
     // read) and the non-UTF-8 file, so exactly one file gets line counts.

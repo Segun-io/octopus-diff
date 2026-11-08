@@ -50,18 +50,7 @@ export async function resolveProject(ctx: GitContext, input: string): Promise<Re
   }
 
   // The worktree containing the input, if any (none inside a git dir or a bare repository).
-  let toplevel: string | null = null;
-  const inside = await ctx.runner.run(['rev-parse', '--is-inside-work-tree'], {
-    cwd: dir,
-    queueKey: repo.commonDir,
-  });
-  if (inside.stdout.toString('utf8').trim() === 'true') {
-    const top = await ctx.runner.run(['rev-parse', '--show-toplevel'], {
-      cwd: dir,
-      queueKey: repo.commonDir,
-    });
-    toplevel = await realpathOrSelf(top.stdout.toString('utf8').replace(/\n$/, ''));
-  }
+  const toplevel = repo.toplevel;
 
   const projectRepo: RepoInfo = { ...repo, cwd: repo.commonDir };
   const [worktrees, detectedDefaultBranch] = await Promise.all([

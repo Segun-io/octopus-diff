@@ -30,6 +30,8 @@ export const EMPTY_TREE: Readonly<Record<ObjectFormat, string>> = {
 export interface RepoInfo {
   /** Directory git runs in: the worktree root, or the git dir of a bare repository. */
   cwd: string;
+  /** Realpath of the worktree root containing the resolved path; null outside a worktree. */
+  toplevel: string | null;
   /** This worktree's git dir (realpath). */
   gitDir: string;
   /** The common git dir (realpath). */
@@ -126,12 +128,13 @@ export class GitContext {
         '--git-common-dir',
         '--is-bare-repository',
         '--show-object-format',
+        '--is-inside-work-tree',
+        '--show-prefix',
       ],
       { cwd },
     );
-    const [gitDir = '', commonDir = '', bare = '', format = ''] = result.stdout
-      .toString('utf8')
-      .split('\n');
+    const [gitDir = '', commonDir = '', bare = '', format = '', inside = '', prefix = ''] =
+      result.stdout.toString('utf8').split('\n');
     if (!gitDir || !commonDir) {
       throw new GitCoreError('git_failed', 'git rev-parse returned no git dir', {
         cwd,
@@ -139,8 +142,15 @@ export class GitContext {
       });
     }
     const objectFormat: ObjectFormat = format.trim() === 'sha256' ? 'sha256' : 'sha1';
+    let toplevel: string | null = null;
+    if (inside.trim() === 'true') {
+      // `--show-prefix` is the path from the worktree root to cwd, e.g. `src/lib/`.
+      const depth = prefix.split('/').filter((segment) => segment.length > 0).length;
+      toplevel = await realpathOrSelf(path.resolve(cwd, ...Array<string>(depth).fill('..')));
+    }
     return {
-      cwd,
+      cwd: toplevel ?? cwd,
+      toplevel,
       gitDir: await realpathOrSelf(path.resolve(cwd, gitDir)),
       commonDir: await realpathOrSelf(path.resolve(cwd, commonDir)),
       bare: bare.trim() === 'true',
