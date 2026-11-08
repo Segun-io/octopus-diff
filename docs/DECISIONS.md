@@ -952,3 +952,59 @@ behavioural, no route, contract or `data-testid` changed. Report: `docs/reports/
 7. **Deferred.** A configurable start folder (T3 has `addProjectBaseDirectory`; ours starts at `~/`); Windows drive
    letters as places; a preview of what a watch at depth N would find before committing to it.
 
+||||||| parent of e3c3c0c (docs: UX round 3 decisions, identity rules, plan and README for the activity-list sidebar; stream report)
+
+## UX round 3 — the sidebar as an activity list (lead)
+
+All 2026-11-08 · lead, branch `ux/sidebar-activity`, on top of `main` at `4c3cde3`. Scope: `apps/web`, `docs/`. Brief from the
+user: explore a new way of showing the sidebar elements and project grouping, learn from T3 Chat's thread list and T3 Code's
+"settled" status, and simplify review status without losing its core. Report: `docs/reports/ux-sidebar.md`.
+
+40. **The sidebar is an activity list, not a tree.** Order, top to bottom: Inbox; **To review**, a block of two-line cards
+    (worktrees that want attention); **Settled**, a collapsible tail of one-line rows (clean, verified, review off,
+    missing, failed); **Projects**, a compact index of folders and projects (one row each, click opens the Overview,
+    right-click or `⋯` opens the same menu as before). The Inbox → Folders → Projects → Worktrees tree of UX round 1 is
+    gone. Reason: the tree becomes a long, permanently expanded list as soon as a few agents run, and it sorts by where a
+    worktree lives rather than by whether it needs you. Learned from T3 Code's Sidebar V2 (PR #4026/#4068, MIT; ideas only,
+    no code): one flat list; active work as cards and finished work as slim rows; "density is earned by settling";
+    "blocked work never settles"; "activity never reorders rows, only settling moves them"; project identity as chrome
+    on the row rather than as a container. Not adopted from it: creation-time or recency sorting and timestamps (our
+    `summary.updatedAt` is when the summary was computed, not when the worktree changed, so a recency tail would lie;
+    rows stay in project and worktree order), a project-scope chip strip (thirty repositories do not fit a chip row; the
+    text filter already scopes by project name), and tail paging (we have tens of worktrees, not hundreds of threads, and
+    every row must stay in the DOM for the acceptance tests). From T3 Chat's thread list: one list with hover-revealed
+    actions and pinned items; its grouping by day was not adopted for the same timestamp reason.
+41. **Settling is the review loop itself; no new state is stored.** A worktree is a card when it is *blocked* (a conflict
+    or an in-progress merge/rebase/cherry-pick/…) or has unreviewed files in the current scope; it is settled otherwise.
+    "Mark all as verified" is therefore the manual settle, `r` on the last file settles too, and a new patch (the
+    patch-hash key no longer matching) brings the worktree back as a card automatically, which is exactly T3 Code's
+    "new activity un-settles". The model is `rowState()` and `settledWord()` in `lib/model.ts`; `buildSidebar` returns
+    `cards` and `settled`. Blocked rows come first in the card block and never settle, even with zero unreviewed files.
+    Review-off worktrees are settled by definition (the user opted them out) and keep the `review off` badge the e2e
+    suite reads (`TEST_IDS.reviewOffBadge`, `data-source`).
+42. **Pinning (per device).** A worktree can be pinned from its menu; pinned worktrees are always cards, at the top, with a
+    `pinned` chip, whatever their state. Stored in the `pinned` pref (`localStorage`, additive to prefs v2; no version
+    bump, `normalizePrefs` tolerates its absence). The one thing taken from T3 Chat's sidebar besides the single list.
+43. **Review status, simplified.** Gone from the sidebar: the folder and project `N dirty` words, the per-worktree
+    `S1 M2 ?1 !1` porcelain shorthand (the open question of #39 is now decided: a card says `N files`, `+a −d`, `↑x ↓y`
+    only when either is non-zero, and `N conflicts` in the danger colour; staged/unstaged/untracked remain as `data-*`
+    attributes and in the file list's status letters), the `main`/source/in-progress chips on settled rows (they stay on
+    cards, on the facts line, and in the Overview). A card carries exactly one number, the unreviewed pill; a settled row
+    carries exactly one word. Folder and project index rows carry the worktree count and the pill. The toolbar chip reads
+    `Review on` / `Review off`; where it comes from moved into its `title` and the first line of its menu
+    (`Review is off here, decided by this branch.`). `data-enabled`/`data-source` and the menu's `data-target`/`data-state`
+    are unchanged. What stays as the core: patch-hash keyed marks, the policy chain worktree > branch > project > folder >
+    default, bulk mark with undo, `n`, `onlyUnreviewed`, the file-level toggle.
+44. **Keyboard and collapse.** `J`/`K` walk the cards first, then the settled tail (DOM order = `sidebar.order`). The tail
+    collapses with a chevron (pref `collapsed` gets the id `settled`, next to folder ids) and reopens by itself when the
+    selected worktree is in it (a palette jump, `J`/`K`, `n` into a review-off worktree). Folders in the Projects index
+    collapse as before; project rows have no children, so no chevron.
+45. **Tests.** `ux.test.tsx`: the folder-tier test now asserts the Projects index (projects under their folder, collapse
+    hides project rows) and a new test covers the partition, settling by marks, pinning and the collapsed tail reopening;
+    `app.test.tsx`: the `J`/`K` expectation follows the new order (docs-site, then `feat/auth`, both blocked). No e2e
+    test changed: every `data-testid` and `data-*` attribute of worktree, project and folder rows is kept, plus new
+    `data-state` (`blocked` | `attention` | `settled`) and `data-pinned` on worktree rows.
+46. **Not done, on purpose.** No daemon change: a true "last changed" timestamp per worktree would let the settled tail sort
+    by recency and show `2 h ago`; proposed for the daemon (`WorktreeSummary.changedAt`, additive) in the report, not
+    built here. No project-scope filter beyond the text filter. No paging of the tail. "verified" vs "reviewed" wording
+    still pinned by the e2e suite (#39).

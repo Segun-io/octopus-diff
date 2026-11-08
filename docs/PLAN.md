@@ -91,9 +91,14 @@ References to read (do not fork):
 
 Three-pane layout, dark and light themes:
 
-1. **Sidebar**: projects → worktrees. Each worktree shows branch, ahead/behind (local refs only), and
-   counts (staged / unstaged / untracked / conflicted, +adds −dels). Filters: text filter, "only dirty",
-   "only unreviewed". Top entry **Inbox** = every dirty worktree of every project.
+1. **Sidebar**: an activity list (DECISIONS "UX round 3"). Top entry **Inbox** = every dirty worktree of every
+   project. Then **To review**: a card per worktree that wants attention (pinned, blocked by a conflict or an
+   in-progress operation, or with unreviewed files in the current scope), showing project, branch, the unreviewed
+   count, files, +adds −dels, ahead/behind (local refs only) and conflicts. Then **Settled**: one-line rows for
+   everything else (clean, verified, review off, missing, failed), collapsible. Then **Projects**: an index of
+   folders (scan roots) and projects, each opening its Overview. Rows keep a static project and worktree order;
+   only review marks move a worktree between the cards and the tail. Filters: text filter, "only dirty",
+   "only unreviewed".
 2. **File list** (`@pierre/trees`): changed files for the selected worktree (or, in Inbox mode, grouped by
    project → worktree). Status icons, +/− counts, reviewed checkmark.
 3. **Diff viewer** (`@pierre/diffs`): split / unified toggle, hide-whitespace toggle, collapsed unchanged

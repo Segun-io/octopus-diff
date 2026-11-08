@@ -114,6 +114,13 @@ row; `Enter` (or `Ctrl/Cmd+Enter` while a row is highlighted) adds or watches th
 
 ### Review controls, settings and themes
 
+- **The sidebar is an activity list.** Under the Inbox, **To review** shows a card for every worktree that
+  wants attention: it has unreviewed files, a conflict or an operation in progress, or you pinned it. Below,
+  **Settled** lists everything else as one dimmed line each (`clean`, `verified`, `review off`, `missing`).
+  Marking a worktree's files verified moves it into the tail; the next change an agent makes brings it back as
+  a card. Rows never reorder on activity. **Projects** at the bottom is an index of your folders and
+  repositories; a click opens the Overview, right-click (or `⋯`) the actions. Pin a worktree from its menu to
+  keep it at the top.
 - **Mark all as verified.** The button above the file list marks every file you can see (respecting the
   sidebar filters); in the Inbox it marks everything. `Shift+R` does the same from the keyboard, and the
   context menu of a worktree, project or folder (and the folder Overview) can mark that whole level, or
