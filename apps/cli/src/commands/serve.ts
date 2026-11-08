@@ -13,9 +13,9 @@ import { createLogger } from '../logger.js';
 import { tildify } from '../paths.js';
 import { detectWsl, isWindowsMountPath } from '../platform.js';
 import { readToken, removeRuntimeInfo, writeRuntimeInfo } from '../runtime.js';
-import { buildServeSettings, loadContext } from '../settings.js';
+import { baseUrlFor, buildServeSettings, loadContext } from '../settings.js';
 import { resolveWebRoot, webRootCandidates } from '../web-assets.js';
-import { authUrlFor, findRunningDaemon } from './daemon-client.js';
+import { authUrlFor, findRunningDaemon, probeHealth } from './daemon-client.js';
 
 export interface ServeHooks {
   /** Web root candidates (tests point these at temp dirs). */
@@ -110,6 +110,8 @@ export async function runServe(
   }
 
   const startDaemon = await deps.loadStartDaemon();
+  // Listen for signals before starting, so Ctrl+C during startup still shuts down cleanly.
+  const shutdown = deps.waitForShutdown();
   let handle: DaemonHandle;
   try {
     handle = await startDaemon(options);
@@ -117,9 +119,13 @@ export async function runServe(
     const host = options.host ?? '';
     const port = options.port ?? 0;
     if (hasErrorCode(error, 'EADDRINUSE')) {
+      const other = await probeHealth(baseUrlFor(host, port), deps);
       throw new CliError(
-        `port ${port} on ${host} is already in use. Pass --port <n> (or --port 0 for any free port), ` +
-          'or stop the program using it.',
+        `port ${port} on ${host} is already in use` +
+          (other
+            ? ` by another ${APP_NAME} daemon (${other.version}, different --state-dir?)`
+            : '') +
+          '. Pass --port <n> (or --port 0 for any free port), or stop the program using it.',
       );
     }
     if (hasErrorCode(error, 'EACCES')) {
@@ -150,7 +156,7 @@ export async function runServe(
   if (settings.open) await openOrWarn(handle.authUrl, wsl.wsl, deps, err);
   hooks.onReady?.(handle);
 
-  const signal = await deps.waitForShutdown();
+  const signal = await shutdown;
   err(`\nreceived ${signal}, shutting down…`);
   let exitCode = EXIT_OK;
   try {

@@ -62,8 +62,9 @@ which points at `src/index.ts`. typecheck, vitest and Vite use it, so nothing ne
 `tsconfig.build.json` clears it, so `tsc` builds against the dependencies' `dist/`, and plain Node runs
 the built CLI from `dist/`. New packages must follow the same pattern (see an existing `package.json`).
 
-The CLI build copies `apps/web/dist` into `apps/cli/dist/web`; `octopus-diff serve` serves the UI from
-there (or from `apps/web/dist` in a checkout, or from `--web-root`).
+The CLI build copies `apps/web/dist` into `apps/cli/dist/web`, so a packed CLI carries its UI. In a
+checkout, `octopus-diff serve` prefers `apps/web/dist` (so rebuilding only the web app is enough), then
+`apps/cli/dist/web`; `--web-root <dir>` overrides both.
 
 ## Conventions
 

@@ -1,22 +1,38 @@
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readTextSync } from './platform.js';
 
 /**
  * Where the built web UI can be found, in order:
  *
- * 1. `<cli package>/dist/web` — copied there by the CLI build (`scripts/copy-web-assets.mjs`), so a
+ * 1. In the octopus-diff workspace (`../web/package.json` is `@octopus-diff/web`): `apps/web/dist`,
+ *    so a fresh `pnpm --filter @octopus-diff/web build` is picked up without rebuilding the CLI.
+ * 2. `<cli package>/dist/web`: copied there by the CLI build (`scripts/copy-web-assets.mjs`), so a
  *    packed/installed CLI carries its own UI.
- * 2. `<cli package>/../web/dist` — the workspace build of `apps/web` (dev runs from `src/` via tsx,
- *    or a CLI build made before the web build existed).
  *
- * `--web-root` / config `webRoot` override both.
+ * The workspace check matters: in an installed package `../web` would be some unrelated
+ * `node_modules/web`. `--web-root` / config `webRoot` override both.
  */
-export function webRootCandidates(moduleUrl: string = import.meta.url): string[] {
-  // This module lives in `<pkg>/src/` (dev) or `<pkg>/dist/` (built); either way the package
-  // root is one level up.
+export function webRootCandidates(
+  moduleUrl: string = import.meta.url,
+  readText: (file: string) => string | null = readTextSync,
+): string[] {
+  // This module lives in `<pkg>/src/` (dev) or `<pkg>/dist/` (built or bundled); either way the
+  // package root is one level up.
   const packageRoot = path.resolve(path.dirname(fileURLToPath(moduleUrl)), '..');
-  return [path.join(packageRoot, 'dist', 'web'), path.resolve(packageRoot, '..', 'web', 'dist')];
+  const bundled = path.join(packageRoot, 'dist', 'web');
+  const webPackage = path.resolve(packageRoot, '..', 'web');
+  let isWorkspace = false;
+  try {
+    const pkg = JSON.parse(readText(path.join(webPackage, 'package.json')) ?? 'null') as {
+      name?: unknown;
+    } | null;
+    isWorkspace = pkg?.name === '@octopus-diff/web';
+  } catch {
+    isWorkspace = false;
+  }
+  return isWorkspace ? [path.join(webPackage, 'dist'), bundled] : [bundled];
 }
 
 export function hasWebAssets(dir: string, exists: (p: string) => boolean = existsSync): boolean {

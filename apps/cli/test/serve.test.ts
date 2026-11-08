@@ -136,6 +136,37 @@ describe('serve', () => {
     expect(deps.err.text).toContain('--port 0');
   });
 
+  it('says when the busy port belongs to another octopus-diff daemon', async () => {
+    const inUse = Object.assign(new Error('listen EADDRINUSE'), { code: 'EADDRINUSE' });
+    const api = clientFactory((req) =>
+      req.url === 'http://127.0.0.1:7428/api/health' ? { body: healthBody() } : undefined,
+    );
+    const deps = makeDeps(dirs, {
+      loadStartDaemon: async () => fakeDaemon({ fail: inUse }).startDaemon,
+      createApiClient: api.createApiClient,
+    });
+    expect(await run(['serve'], deps, { serve: { webRootCandidates: [webDir] } })).toBe(1);
+    expect(deps.err.text).toContain('already in use by another octopus-diff daemon (9.9.9');
+  });
+
+  it('registers for signals before starting, so an early Ctrl+C still closes the daemon', async () => {
+    const order: string[] = [];
+    const daemon = fakeDaemon();
+    const deps = makeDeps(dirs, {
+      loadStartDaemon: async () => async (options) => {
+        order.push('start');
+        return daemon.startDaemon(options);
+      },
+      waitForShutdown: () => {
+        order.push('listen');
+        return Promise.resolve('SIGINT');
+      },
+    });
+    expect(await run(['serve'], deps, { serve: { webRootCandidates: [webDir] } })).toBe(0);
+    expect(order).toEqual(['listen', 'start']);
+    expect(daemon.closed).toBe(1);
+  });
+
   it('reports other startup failures', async () => {
     const daemon = fakeDaemon({ fail: new Error('daemon is a placeholder until WS2 lands') });
     const deps = makeDeps(dirs, { loadStartDaemon: async () => daemon.startDaemon });

@@ -1,7 +1,7 @@
 // Copies the built web UI (apps/web/dist) into dist/web so the CLI package carries its own UI.
 // Runs after `tsc` in `pnpm build`. `@octopus-diff/web` is a devDependency of this package, so
 // `pnpm -r build` builds the web app first. If the web build is missing (e.g. only the CLI was
-// built), this warns and exits 0: at runtime the CLI also looks in ../web/dist.
+// built), this warns and exits 0: in the workspace the CLI serves apps/web/dist directly anyway.
 import { cp, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
