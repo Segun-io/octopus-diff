@@ -104,7 +104,7 @@ export function useCommands(model: AppModel, resolvedTheme: 'light' | 'dark'): C
         stateHashes: m.stateHashes,
         disabled: m.disabledWorktrees,
         inboxUnfiltered: m.inboxUnfiltered,
-        view: m.view.kind,
+        view: m.view.kind === 'inbox' ? 'inbox' : 'worktree',
       });
     };
     const runPlan = (p: BulkPlan, reviewed: boolean) => {

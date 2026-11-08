@@ -20,7 +20,15 @@ import { createStore, type Store, useStoreSelector } from './store.ts';
 export { PREFS_STORAGE_KEY } from './prefs.ts';
 export type { Density, DiffMode, FileListLayout, ReviewOffDisplay, ThemePrefs };
 
-export type View = { kind: 'inbox' } | { kind: 'worktree'; worktreeId: string };
+/**
+ * What the main pane shows. Shaped as a path through Inbox → folder → project → worktree so new
+ * views need no shell changes (views/registry.ts).
+ */
+export type View =
+  | { kind: 'inbox' }
+  | { kind: 'folder'; scanRootId: string }
+  | { kind: 'project'; projectId: string }
+  | { kind: 'worktree'; worktreeId: string };
 export type ConnectionState = 'connecting' | 'open' | 'offline';
 
 /** Per-file view options that change the diff request (reset when the file changes). */
@@ -154,7 +162,7 @@ export const actions = {
   setView(store: UiStore, view: View) {
     const state = store.getState();
     const scope =
-      view.kind === 'inbox' && state.scope.kind === 'commit' ? DEFAULT_SCOPE : state.scope;
+      view.kind !== 'worktree' && state.scope.kind === 'commit' ? DEFAULT_SCOPE : state.scope;
     store.setState({ view, scope });
   },
   setFileOptions(store: UiStore, key: string, options: FileViewOptions) {

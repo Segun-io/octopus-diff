@@ -8,6 +8,7 @@ import type {
   InboxEntry,
   Project,
   ProjectListItem,
+  ScanRoot,
   Worktree,
   WorktreeListItem,
   WorktreeSummary,
@@ -65,14 +66,125 @@ export interface WorktreeRow {
 export interface ProjectGroup {
   project: Project;
   rows: WorktreeRow[];
+  /** All rows of the project, filters ignored (for aggregates and bulk targets). */
+  allRows: WorktreeRow[];
+}
+
+export interface NodeStats {
+  projects: number;
+  worktrees: number;
+  dirty: number;
+  unreviewed: number;
+  additions: number;
+  deletions: number;
+}
+
+/** A scan root (folder) with the projects it discovered; `root === null` = added directly. */
+export interface FolderNode {
+  id: string;
+  root: ScanRoot | null;
+  label: string;
+  groups: ProjectGroup[];
+  stats: NodeStats;
 }
 
 export interface SidebarModel {
   groups: ProjectGroup[];
+  /** Folder tier: scan roots (sorted by path) then "Added directly", only non-empty ones. */
+  folders: FolderNode[];
   /** Visible worktree ids in display order (for J/K). */
   order: string[];
   /** Every worktree row by id, regardless of filters. */
   byId: Map<string, WorktreeRow>;
+}
+
+export function emptyStats(): NodeStats {
+  return { projects: 0, worktrees: 0, dirty: 0, unreviewed: 0, additions: 0, deletions: 0 };
+}
+
+export function statsOfRows(rows: readonly WorktreeRow[]): NodeStats {
+  const stats = emptyStats();
+  stats.worktrees = rows.length;
+  for (const row of rows) {
+    if (isDirtySummary(row.summary)) stats.dirty++;
+    stats.unreviewed += row.unreviewed;
+    stats.additions += row.summary?.additions ?? 0;
+    stats.deletions += row.summary?.deletions ?? 0;
+  }
+  return stats;
+}
+
+export function statsOfGroups(groups: readonly ProjectGroup[]): NodeStats {
+  const stats = emptyStats();
+  stats.projects = groups.length;
+  for (const g of groups) {
+    const s = statsOfRows(g.allRows);
+    stats.worktrees += s.worktrees;
+    stats.dirty += s.dirty;
+    stats.unreviewed += s.unreviewed;
+    stats.additions += s.additions;
+    stats.deletions += s.deletions;
+  }
+  return stats;
+}
+
+export const DIRECT_FOLDER_ID = 'direct';
+
+function shortHome(path: string): string {
+  return path.replace(/^\/(?:home|Users)\/[^/]+(?=\/|$)/, '~');
+}
+
+/** Groups project groups under their scan root; projects without one go to "Added directly". */
+export function buildFolders(
+  groups: readonly ProjectGroup[],
+  scanRoots: readonly ScanRoot[] | undefined,
+): FolderNode[] {
+  const roots = [...(scanRoots ?? [])].sort((a, b) => cmp(a.path, b.path));
+  const byRoot = new Map<string, ProjectGroup[]>();
+  const direct: ProjectGroup[] = [];
+  for (const g of groups) {
+    const id = g.project.scanRootId;
+    if (id === null) {
+      direct.push(g);
+      continue;
+    }
+    const list = byRoot.get(id);
+    if (list) list.push(g);
+    else byRoot.set(id, [g]);
+  }
+  const out: FolderNode[] = [];
+  for (const root of roots) {
+    const list = byRoot.get(root.id);
+    if (!list || list.length === 0) continue;
+    byRoot.delete(root.id);
+    out.push({
+      id: root.id,
+      root,
+      label: shortHome(root.path),
+      groups: list,
+      stats: statsOfGroups(list),
+    });
+  }
+  // Scan roots the scan-roots query does not know (yet): show them by id.
+  for (const [id, list] of byRoot) {
+    out.push({
+      id,
+      root: null,
+      label: `folder ${id.slice(0, 6)}`,
+      groups: list,
+      stats: statsOfGroups(list),
+    });
+  }
+  if (direct.length > 0) {
+    out.push({
+      id: DIRECT_FOLDER_ID,
+      root: null,
+      label: 'Added directly',
+      groups: direct,
+      stats: statsOfGroups(direct),
+    });
+  }
+  return out;
 }
 
 export function isDirtySummary(summary: WorktreeSummary | null): boolean {
@@ -98,6 +210,7 @@ export function buildSidebar(
   projects: readonly ProjectListItem[],
   inbox: readonly InboxEntry[] | undefined,
   filters: SidebarFilters,
+  scanRoots?: readonly ScanRoot[],
 ): SidebarModel {
   const inboxStats = new Map<string, { unreviewed: number; files: number }>();
   for (const entry of inbox ?? []) {
@@ -111,6 +224,7 @@ export function buildSidebar(
   const sorted = [...projects].sort((a, b) => compareProjects(a.project, b.project));
   for (const item of sorted) {
     const rows: WorktreeRow[] = [];
+    const allRows: WorktreeRow[] = [];
     const worktrees = [...item.worktrees].sort((a, b) => compareWorktrees(a.worktree, b.worktree));
     for (const wt of worktrees) {
       const stats = inboxStats.get(wt.worktree.id);
@@ -125,16 +239,16 @@ export function buildSidebar(
         review,
       };
       byId.set(wt.worktree.id, row);
+      allRows.push(row);
       if (rowVisible(row, filters)) rows.push(row);
     }
-    // Project-name matches keep the project visible even when filters hide every worktree? No:
-    // a project is shown only when at least one of its worktrees is visible.
+    // A project is shown only when at least one of its worktrees is visible.
     if (rows.length > 0) {
-      groups.push({ project: item.project, rows });
+      groups.push({ project: item.project, rows, allRows });
       for (const r of rows) order.push(r.worktree.id);
     }
   }
-  return { groups, order, byId };
+  return { groups, folders: buildFolders(groups, scanRoots), order, byId };
 }
 
 /** Inbox entries sorted like the sidebar (project name, then worktree order). */

@@ -1,6 +1,7 @@
 import type { DiffScope, EffectiveReviewPolicy, InboxEntry } from '@octopus-diff/contracts';
 import { createContext, type ReactNode, useContext, useMemo } from 'react';
 import { inboxScopeFor, useFilesQuery, useInboxQuery, useProjectsQuery } from '../api/queries.ts';
+import { useScanRootsQuery } from '../api/settings.ts';
 import { fileRefKey } from '../lib/fileRef.ts';
 import {
   buildSidebar,
@@ -21,6 +22,7 @@ export interface AppModel {
   view: View;
   scope: DiffScope;
   projects: ReturnType<typeof useProjectsQuery>;
+  scanRoots: ReturnType<typeof useScanRootsQuery>;
   inbox: ReturnType<typeof useInboxQuery>;
   files: ReturnType<typeof useFilesQuery>;
   sidebar: SidebarModel;
@@ -72,6 +74,7 @@ function useBuildAppModel(): AppModel {
   const selected = useUi((s) => s.selected);
 
   const projects = useProjectsQuery();
+  const scanRoots = useScanRootsQuery();
   const inbox = useInboxQuery(scope);
   const worktreeId = view.kind === 'worktree' ? view.worktreeId : null;
   const files = useFilesQuery(worktreeId, scope);
@@ -81,14 +84,24 @@ function useBuildAppModel(): AppModel {
   // While the inbox for a new scope loads, the previous scope's data is only a placeholder.
   const inboxMatchesScope = inboxData !== undefined && !inbox.isPlaceholderData;
 
+  const scanRootList = scanRoots.data?.scanRoots;
   const sidebar = useMemo(
     () =>
-      buildSidebar(projectList ?? [], inboxMatchesScope ? inboxData?.entries : undefined, {
-        text: filterText,
-        onlyDirty,
-        onlyUnreviewed,
-      }),
-    [projectList, inboxData, inboxMatchesScope, filterText, onlyDirty, onlyUnreviewed],
+      buildSidebar(
+        projectList ?? [],
+        inboxMatchesScope ? inboxData?.entries : undefined,
+        { text: filterText, onlyDirty, onlyUnreviewed },
+        scanRootList,
+      ),
+    [
+      projectList,
+      inboxData,
+      inboxMatchesScope,
+      filterText,
+      onlyDirty,
+      onlyUnreviewed,
+      scanRootList,
+    ],
   );
 
   const inboxEntries = useMemo(() => sortInboxEntries(inboxData?.entries ?? []), [inboxData]);
@@ -121,6 +134,7 @@ function useBuildAppModel(): AppModel {
       }
       return out;
     }
+    if (view.kind !== 'worktree') return [];
     const row = sidebar.byId.get(view.worktreeId);
     if (!row || !filesData) return [];
     return [{ project: row.project, worktree: row.worktree, files: sortFiles(filesData.files) }];
@@ -196,7 +210,9 @@ function useBuildAppModel(): AppModel {
       ? inboxData !== undefined &&
         !inbox.isPlaceholderData &&
         inboxScopeFor(scope).kind === inboxData.scope.kind
-      : filesData !== undefined && sidebar.byId.has(view.worktreeId);
+      : view.kind === 'worktree'
+        ? filesData !== undefined && sidebar.byId.has(view.worktreeId)
+        : projectList !== undefined;
 
   const selectedKey = selected ? fileRefKey(selected) : null;
   const selectedEntry = useMemo(
@@ -218,6 +234,7 @@ function useBuildAppModel(): AppModel {
     view,
     scope,
     projects,
+    scanRoots,
     inbox,
     files,
     sidebar,

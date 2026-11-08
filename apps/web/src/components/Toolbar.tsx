@@ -18,21 +18,6 @@ const SCOPE_LABELS: Record<ScopeKind, string> = {
   commit: 'Commit…',
 };
 
-function GearIcon() {
-  return (
-    <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
-      <path
-        d="M6.6 1.5h2.8l.4 1.9 1.6.9 1.8-.6 1.4 2.4-1.4 1.3v1.8l1.4 1.3-1.4 2.4-1.8-.6-1.6.9-.4 1.9H6.6l-.4-1.9-1.6-.9-1.8.6L1.4 11l1.4-1.3V7.9L1.4 6.6l1.4-2.4 1.8.6 1.6-.9z"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.2"
-        strokeLinejoin="round"
-      />
-      <circle cx="8" cy="8.4" r="2" fill="none" stroke="currentColor" strokeWidth="1.2" />
-    </svg>
-  );
-}
-
 export function Toolbar() {
   const store = useUiStore();
   const model = useAppModel();
@@ -228,16 +213,6 @@ export function Toolbar() {
           className="rounded px-1.5 py-0.5 text-xs text-muted hover:bg-hover hover:text-fg"
         >
           ?
-        </button>
-        <button
-          type="button"
-          data-testid={TEST_IDS.settingsOpenButton}
-          onClick={() => commands.openSettings()}
-          title="Settings (,)"
-          aria-label="Settings"
-          className="rounded px-1.5 py-0.5 text-xs text-muted hover:bg-hover hover:text-fg"
-        >
-          <GearIcon />
         </button>
       </span>
     </div>
