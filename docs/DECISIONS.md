@@ -998,7 +998,9 @@ user: explore a new way of showing the sidebar elements and project grouping, le
 44. **Keyboard and collapse.** `J`/`K` walk the cards first, then the settled tail (DOM order = `sidebar.order`). The tail
     collapses with a chevron (pref `collapsed` gets the id `settled`, next to folder ids) and reopens by itself when the
     selected worktree is in it (a palette jump, `J`/`K`, `n` into a review-off worktree). Folders in the Projects index
-    collapse as before; project rows have no children, so no chevron.
+    collapse as before; project rows have no children, so no chevron. Cards and settled rows are one `<ul>` keyed by
+    worktree id, with the section headers as presentation items: a worktree that settles or wakes up moves inside the
+    list instead of remounting (found by the e2e scopes test, which clicks a row while the inbox for a new scope lands).
 45. **Tests.** `ux.test.tsx`: the folder-tier test now asserts the Projects index (projects under their folder, collapse
     hides project rows) and a new test covers the partition, settling by marks, pinning and the collapsed tail reopening;
     `app.test.tsx`: the `J`/`K` expectation follows the new order (docs-site, then `feat/auth`, both blocked). No e2e

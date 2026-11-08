@@ -41,7 +41,19 @@ worktrees); the Overview, palette and bulk/policy flows unchanged.
 
 ## Verification
 
-Filled in from real runs on this worktree (Node 26.13.0, WSL2); see the end of this file.
+Node 26.13.0, git 2.53.0, WSL2, worktree `~/.t3/worktrees/octopus-diff/ux-sidebar`, after rebasing onto `main` at
+`8a4f259` (folder picker). Real command output:
+
+| Command | Result |
+|---|---|
+| `pnpm check` (lint, typecheck, build, unit tests) | exit 0. `Checked 311 files … No fixes applied`; tests: contracts 71, git-core 126, web **107** (96 before: one sidebar test rewritten, one added, one `J`/`K` expectation updated), fixtures 48, daemon 155, e2e (vitest) 5, cli 139; all passed |
+| `pnpm test:e2e` | **68 passed (2.1 m)**; `read-only proof: 12 control repos, 3130 lock polls, 0 violation(s)`. No e2e spec changed |
+| `pnpm --filter @octopus-diff/e2e screenshots` | 10 README screenshots regenerated from the fixtures (`docs/screenshots/*`) |
+| `pnpm --filter @octopus-diff/web shots` (mock server, `demo` dataset, both brand themes, 1440 and 960 wide) | inspected inbox, worktree, context menu and policy menu; found and fixed the name truncation (branch capped at half the row, chips moved to the facts line) and `↑0 ↓0` noise |
+
+One seam found by the suite and fixed before the final run: with cards and settled rows in two separate lists, a
+worktree whose state changed while the inbox for a new scope arrived was remounted, and `03-scopes` lost the element it
+was about to click (`Element is not attached to the DOM`). Cards and rows now share one keyed list.
 
 ## Decisions
 

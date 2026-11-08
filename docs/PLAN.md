@@ -1,7 +1,7 @@
 # octopus-diff — Project Plan
 
-> Status: MVP complete (Phases 0–2, 2026-11-08): see `docs/reports/mvp.md`. Phase 3 needs the user. A UX round
-> (identity, themes, settings, bulk review) is in progress on `lead/ux-foundation`, coordinated in `docs/COORDINATION.md` there.
+> Status: MVP complete (Phases 0–2, 2026-11-08): see `docs/reports/mvp.md`. Phase 3 needs the user. UX rounds 1–3
+> (identity, themes, settings, bulk review; two unslop passes; the activity-list sidebar) are done: `docs/reports/ux-*.md`.
 > This file is the source of truth for every session working on the project. If reality disagrees
 > with it, fix the code or update this file and log why in `docs/DECISIONS.md`. Never leave them out of sync.
 
@@ -344,6 +344,13 @@ policy (per worktree / branch / project / folder, ON by default for anything new
 streams, `ux-web` and `ux-daemon`; brief, ownership, behaviour spec, merge plan and acceptance (UX-1…UX-8) are in
 `docs/COORDINATION.md`; decisions in `docs/DECISIONS.md` ("UX round 1"). New contract surface: `packages/contracts/src/settings.ts`,
 routes `/api/settings`, `/api/review-policy`, `/api/review/bulk`, `/api/review/undo`, events `review.bulk` and `settings.changed`.
+
+### Phase 2c — UX rounds 2 and 3 (2026-11-08, user-requested) — done
+
+Round 2: two unslop passes on identity and chrome (`docs/reports/ux-unslop.md`, `ux-unslop-2.md`; DECISIONS #23–#39).
+Round 3: the sidebar became an activity list (cards to review, a settled tail, a projects index, pinning) and review
+status was simplified, after T3 Code's Sidebar V2 and T3 Chat's thread list (`docs/reports/ux-sidebar.md`; DECISIONS
+#40–#46). A folder picker for adding repositories landed in parallel (DECISIONS "Folder picker").
 
 ### Phase 3 — After the MVP (needs user input; do not start autonomously)
 

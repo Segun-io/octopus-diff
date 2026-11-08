@@ -437,12 +437,12 @@ describe('folder tier, overview and palette', () => {
     const sidebar = screen.getByTestId(TEST_IDS.sidebar);
     const section = (name: string) =>
       [
-        ...(sidebar
-          .querySelector(`[data-section="${name}"]`)
-          ?.querySelectorAll('[data-testid="worktree-item"]') ?? []),
-      ].map((el) => (el as HTMLElement).dataset.branch);
+        ...sidebar.querySelectorAll<HTMLElement>(
+          `li[data-section="${name}"] [data-testid="worktree-item"]`,
+        ),
+      ].map((el) => el.dataset.branch);
     // blocked first (docs-site is mid-rebase with a conflict), then the unreviewed ones in project order
-    expect(section('cards')).toEqual(['', 'feat/auth', 'main', 'fix/cache', 'main']);
+    expect(section('card')).toEqual(['', 'feat/auth', 'main', 'fix/cache', 'main']);
     // settled: clean, verified, review off, missing, error: one word each, no counts
     expect(section('settled')).toEqual([
       'trunk',
@@ -479,7 +479,7 @@ describe('folder tier, overview and palette', () => {
       within(worktreeItem('fix/cache').parentElement as HTMLElement).getByLabelText(/^Actions for/),
     );
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Pin to the top' }));
-    await waitFor(() => expect(section('cards')[0]).toBe('fix/cache'));
+    await waitFor(() => expect(section('card')[0]).toBe('fix/cache'));
     expect(store.getState().pinned).toEqual([cacheId]);
     expect(worktreeItem('fix/cache').textContent).toContain('pinned');
 

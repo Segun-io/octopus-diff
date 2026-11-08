@@ -170,114 +170,111 @@ function ReviewOffBadge({ row, className = '' }: { row: WorktreeRow; className?:
   );
 }
 
+/** The facts line of a card: chips, conflicts, files, lines, ahead/behind, or the settled word. */
+function CardFacts({ row }: { row: WorktreeRow }) {
+  const { summary, error } = row;
+  const counts = summary?.counts;
+  const word = settledWord(row);
+  return (
+    <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5 font-mono text-[11px] text-muted">
+      <NameChips row={row} />
+      {counts && counts.conflicted > 0 && (
+        <span className="text-danger">{plural(counts.conflicted, 'conflict')}</span>
+      )}
+      {summary && isDirtySummary(summary) && <span>{plural(summary.changedFiles, 'file')}</span>}
+      {summary && (summary.additions > 0 || summary.deletions > 0) && (
+        <span>
+          <span className="text-add">+{summary.additions}</span>{' '}
+          <span className="text-del">−{summary.deletions}</span>
+        </span>
+      )}
+      {summary &&
+        summary.ahead !== null &&
+        summary.behind !== null &&
+        summary.ahead + summary.behind > 0 && (
+          <span title={`ahead/behind ${summary.aheadBehindRef ?? ''}`}>
+            ↑{summary.ahead} ↓{summary.behind}
+          </span>
+        )}
+      {row.state === 'settled' && word !== 'review off' && word !== 'loading' && (
+        <span className={word === 'missing' || word === 'error' ? 'text-danger' : 'text-faint'}>
+          {word === 'error' && error ? `error: ${error.message}` : word}
+        </span>
+      )}
+      {word === 'loading' && <span className="text-faint">…</span>}
+    </span>
+  );
+}
+
 /**
- * A card: a worktree that wants attention. Two lines: the name (project, branch, chips, the
- * unreviewed count), then the facts (files, lines, ahead/behind, conflicts).
+ * One worktree in the activity list. As a **card** (pinned, blocked or unreviewed): two lines,
+ * the name with the unreviewed count, then the facts. As a **settled row**: one dimmed line, the
+ * name and one word; density is earned by settling. Both variants share the same `<li><button>`
+ * skeleton and live in one keyed list, so a worktree that settles or wakes up keeps its DOM node
+ * (the e2e suite clicks rows while the inbox for a new scope arrives).
  */
-const WorktreeCard = memo(function WorktreeCard({
+const WorktreeItem = memo(function WorktreeItem({
   row,
+  variant,
   selected,
   now,
   onSelect,
   onMenu,
-}: RowProps) {
+}: RowProps & { variant: 'card' | 'settled' }) {
   const { worktree, summary, error } = row;
-  const counts = summary?.counts;
   const active = isRecentlyActive(summary?.updatedAt, now);
-  const dirty = isDirtySummary(summary);
   const word = settledWord(row);
+  const card = variant === 'card';
   return (
-    <li className="group/wt relative">
+    <li className={`group/wt relative ${card ? 'mb-1' : ''}`} data-section={variant}>
       <button
         type="button"
         {...rowAttributes(row, selected, active)}
         title={rowTitle(row)}
         onClick={() => onSelect(worktree.id)}
         onContextMenu={(e) => onMenu(e, row)}
-        className={`flex w-full flex-col gap-0.5 rounded-md border py-1.5 pr-7 pl-[22px] text-left ${
-          selected ? 'border-line-strong bg-selected' : 'border-line bg-canvas hover:bg-hover'
-        }`}
+        className={
+          card
+            ? `flex w-full flex-col gap-0.5 rounded-md border py-1.5 pr-7 pl-[22px] text-left ${
+                selected ? 'border-line-strong bg-selected' : 'border-line bg-canvas hover:bg-hover'
+              }`
+            : `flex w-full items-center gap-1.5 rounded-sm py-1 pr-7 pl-[22px] text-left text-muted hover:text-fg ${
+                selected ? 'bg-selected text-fg' : 'hover:bg-hover'
+              }`
+        }
       >
-        <span className="relative flex min-w-0 items-center gap-1.5">
+        <span className={`relative flex min-w-0 items-center gap-1.5 ${card ? '' : 'flex-1'}`}>
           {active && <span className="od-pulse" aria-hidden="true" />}
           <RowName row={row} />
-          <span className="ml-auto" />
-          {!row.review.enabled && <ReviewOffBadge row={row} />}
-          {row.unreviewed > 0 && (
-            <span className="od-pill shrink-0" title={`${row.unreviewed} unreviewed`}>
-              {row.unreviewed}
-            </span>
+          {card && (
+            <>
+              <span className="ml-auto" />
+              {!row.review.enabled && <ReviewOffBadge row={row} />}
+              {row.unreviewed > 0 && (
+                <span className="od-pill shrink-0" title={`${row.unreviewed} unreviewed`}>
+                  {row.unreviewed}
+                </span>
+              )}
+            </>
           )}
         </span>
-        <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5 font-mono text-[11px] text-muted">
-          <NameChips row={row} />
-          {counts && counts.conflicted > 0 && (
-            <span className="text-danger">{plural(counts.conflicted, 'conflict')}</span>
-          )}
-          {summary && dirty && <span>{plural(summary.changedFiles, 'file')}</span>}
-          {summary && (summary.additions > 0 || summary.deletions > 0) && (
-            <span>
-              <span className="text-add">+{summary.additions}</span>{' '}
-              <span className="text-del">−{summary.deletions}</span>
-            </span>
-          )}
-          {summary &&
-            summary.ahead !== null &&
-            summary.behind !== null &&
-            summary.ahead + summary.behind > 0 && (
-              <span title={`ahead/behind ${summary.aheadBehindRef ?? ''}`}>
-                ↑{summary.ahead} ↓{summary.behind}
+        {card ? (
+          <CardFacts row={row} />
+        ) : (
+          <>
+            {row.pinned && <span className="od-chip">pinned</span>}
+            {!row.review.enabled && <ReviewOffBadge row={row} />}
+            {word !== 'review off' && (
+              <span
+                className={`shrink-0 text-[11px] ${
+                  word === 'missing' || word === 'error' ? 'text-danger' : 'text-faint'
+                }`}
+                title={word === 'error' && error ? error.message : undefined}
+              >
+                {word === 'loading' ? '…' : word}
               </span>
             )}
-          {row.state === 'settled' && word !== 'review off' && word !== 'loading' && (
-            <span className={word === 'missing' || word === 'error' ? 'text-danger' : 'text-faint'}>
-              {word === 'error' && error ? `error: ${error.message}` : word}
-            </span>
-          )}
-          {word === 'loading' && <span className="text-faint">…</span>}
-        </span>
-      </button>
-      <MoreButton
-        label={`Actions for ${row.project.name} ${worktreeLabel(worktree)}`}
-        group="wt"
-        onOpen={(e) => onMenu(e, row)}
-      />
-    </li>
-  );
-});
-
-/** A settled row: one dimmed line, the name and one word. Density is earned by settling. */
-const SettledRow = memo(function SettledRow({ row, selected, now, onSelect, onMenu }: RowProps) {
-  const { worktree, summary, error } = row;
-  const active = isRecentlyActive(summary?.updatedAt, now);
-  const word = settledWord(row);
-  return (
-    <li className="group/wt relative">
-      <button
-        type="button"
-        {...rowAttributes(row, selected, active)}
-        title={rowTitle(row)}
-        onClick={() => onSelect(worktree.id)}
-        onContextMenu={(e) => onMenu(e, row)}
-        className={`flex w-full items-center gap-1.5 rounded-sm py-1 pr-7 pl-[22px] text-left text-muted hover:text-fg ${
-          selected ? 'bg-selected text-fg' : 'hover:bg-hover'
-        }`}
-      >
-        <span className="relative flex min-w-0 flex-1 items-center gap-1.5">
-          {active && <span className="od-pulse" aria-hidden="true" />}
-          <RowName row={row} />
-        </span>
-        {row.pinned && <span className="od-chip">pinned</span>}
-        {!row.review.enabled && <ReviewOffBadge row={row} />}
-        {word !== 'review off' && (
-          <span
-            className={`shrink-0 text-[11px] ${
-              word === 'missing' || word === 'error' ? 'text-danger' : 'text-faint'
-            }`}
-            title={word === 'error' && error ? error.message : undefined}
-          >
-            {word === 'loading' ? '…' : word}
-          </span>
+          </>
         )}
       </button>
       <MoreButton
@@ -637,36 +634,35 @@ export function Sidebar() {
         )}
 
         {totalWorktrees > 0 && model.sidebar.groups.length > 0 && (
-          <>
-            <SectionHeader label="To review" count={model.sidebar.cards.length} />
-            {model.sidebar.cards.length === 0 ? (
-              <p className="px-2 pb-1 text-[11px] text-faint">Nothing to review in this scope.</p>
-            ) : (
-              <ul data-section="cards" className="flex flex-col gap-1">
-                {model.sidebar.cards.map((row) => (
-                  <WorktreeCard key={row.worktree.id} {...rowProps(row)} />
-                ))}
-              </ul>
+          // One list for cards and settled rows (headers are list items), keyed by worktree id:
+          // a row that settles or wakes up moves inside the list instead of remounting.
+          <ul aria-label="Worktrees" className="flex flex-col">
+            <li role="presentation">
+              <SectionHeader label="To review" count={model.sidebar.cards.length} />
+            </li>
+            {model.sidebar.cards.length === 0 && (
+              <li role="presentation" className="px-2 pb-1 text-[11px] text-faint">
+                Nothing to review in this scope.
+              </li>
             )}
-
+            {model.sidebar.cards.map((row) => (
+              <WorktreeItem key={row.worktree.id} variant="card" {...rowProps(row)} />
+            ))}
             {model.sidebar.settled.length > 0 && (
-              <>
+              <li role="presentation">
                 <SectionHeader
                   label="Settled"
                   count={model.sidebar.settled.length}
                   open={settledOpen}
                   onToggle={() => actions.toggleCollapsed(store, SETTLED_SECTION_ID)}
                 />
-                {settledOpen && (
-                  <ul data-section="settled" className="flex flex-col">
-                    {model.sidebar.settled.map((row) => (
-                      <SettledRow key={row.worktree.id} {...rowProps(row)} />
-                    ))}
-                  </ul>
-                )}
-              </>
+              </li>
             )}
-          </>
+            {settledOpen &&
+              model.sidebar.settled.map((row) => (
+                <WorktreeItem key={row.worktree.id} variant="settled" {...rowProps(row)} />
+              ))}
+          </ul>
         )}
 
         {model.sidebar.folders.length > 0 && (
