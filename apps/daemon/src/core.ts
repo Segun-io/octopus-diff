@@ -67,6 +67,8 @@ export interface CoreOptions {
   /** Internal knobs (tests, benchmarks). */
   relistMs?: number;
   maxWaitMs?: number;
+  /** Refresh quiet worktrees on their first watcher event (default true). */
+  leadingEdge?: boolean;
   pollDegradedFocusedMs?: number;
   subscribe?: SubscribeFn;
   initialSummaryWaitMs?: number;
@@ -187,6 +189,7 @@ export class DaemonCore {
       forcePolling: watch.forcePolling ?? false,
       ignore: watch.ignore ?? [],
       relistMs: this.#relistMs,
+      leadingEdge: options.leadingEdge ?? true,
       logger: this.#log,
       onWorktreeDirty: (id, reason) => this.#onWorktreeDirty(id, reason),
       onWorktreeListDirty: (projectId) => {

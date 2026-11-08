@@ -77,6 +77,11 @@ export interface WatchedWorktree {
 
 export interface WatcherServiceOptions {
   enabled?: boolean;
+  /**
+   * Refresh a quiet worktree on its first event instead of after the debounce; later events
+   * within the debounce window still coalesce into one trailing refresh (default false).
+   */
+  leadingEdge?: boolean;
   forcePolling?: boolean;
   ignore?: readonly string[];
   debounceMs?: number;
@@ -105,6 +110,8 @@ interface WorktreeState {
   burstStart: number;
   pendingReason: DirtyReason;
   poll: NodeJS.Timeout | undefined;
+  /** When this worktree last fired a refresh (any reason); 0 = never. */
+  lastFireAt: number;
 }
 
 interface ProjectState {
@@ -204,6 +211,7 @@ export class WatcherService {
     const debounceMs = options.debounceMs ?? WATCH_DEFAULTS.debounceMs;
     this.#opts = {
       enabled: options.enabled ?? true,
+      leadingEdge: options.leadingEdge ?? false,
       forcePolling: options.forcePolling ?? false,
       debounceMs: Math.max(0, debounceMs),
       maxWaitMs: Math.max(debounceMs, options.maxWaitMs ?? WATCH_DEFAULTS.maxWaitMs),
@@ -306,6 +314,16 @@ export class WatcherService {
     const st = this.#worktrees.get(worktreeId);
     if (!st || this.#closed) return;
     const now = Date.now();
+    if (
+      this.#opts.leadingEdge &&
+      st.debounce === undefined &&
+      now - st.lastFireAt >= this.#opts.debounceMs
+    ) {
+      // Quiet worktree: refresh now. Events in the next debounce window (the rest of the same
+      // save or commit) start the normal trailing debounce below.
+      this.#fire(st, reason);
+      return;
+    }
     if (st.debounce === undefined) {
       st.burstStart = now;
       st.pendingReason = reason;
@@ -401,6 +419,7 @@ export class WatcherService {
       burstStart: 0,
       pendingReason: 'fs',
       poll: undefined,
+      lastFireAt: 0,
     };
     this.#worktrees.set(info.worktreeId, st);
     this.#schedulePoll(info.worktreeId);
@@ -644,6 +663,7 @@ export class WatcherService {
 
   #fire(st: WorktreeState, reason: DirtyReason): void {
     if (this.#closed || this.#worktrees.get(st.info.worktreeId) !== st) return;
+    st.lastFireAt = Date.now();
     this.#schedulePoll(st.info.worktreeId);
     try {
       this.#onDirty(st.info.worktreeId, reason);

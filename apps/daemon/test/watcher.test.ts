@@ -110,6 +110,27 @@ describe('WatcherService', () => {
     expect(rec.dirty.every((d) => d.id === 'main' && d.reason === 'fs')).toBe(true);
   });
 
+  it('with leadingEdge, refreshes a quiet worktree at once and still coalesces the burst', async () => {
+    const layout = await makeLayout();
+    const { watcher, rec } = makeWatcher({ leadingEdge: true });
+    await watcher.setProject('p1', layout.common, layout.worktrees);
+
+    const started = Date.now();
+    await writeFile(path.join(layout.main, 'src', 'a.ts'), 'x');
+    await eventually(() => rec.dirty.some((d) => d.id === 'main'), 2000);
+    expect((rec.dirty.find((d) => d.id === 'main')?.at ?? 0) - started).toBeLessThan(120);
+
+    await sleep(400);
+    const mark = rec.dirty.length;
+    for (let i = 0; i < 20; i++)
+      await writeFile(path.join(layout.main, 'src', `f${i % 3}.ts`), `x${i}`);
+    await sleep(600);
+    const fires = rec.dirty.slice(mark).filter((d) => d.id === 'main');
+    // One leading refresh plus one trailing refresh for the rest of the burst.
+    expect(fires.length).toBeGreaterThanOrEqual(1);
+    expect(fires.length).toBeLessThanOrEqual(3);
+  });
+
   it('ignores node_modules, .git internals and extra ignore entries', async () => {
     const layout = await makeLayout();
     await mkdir(path.join(layout.main, 'generated'), { recursive: true });

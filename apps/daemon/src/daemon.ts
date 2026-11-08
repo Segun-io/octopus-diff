@@ -42,6 +42,8 @@ export interface DaemonInternals {
   relistMs?: number;
   /** Max delay of a debounced refresh during a continuous burst (default 1000 ms). */
   maxWaitMs?: number;
+  /** Refresh a quiet worktree on its first watcher event, then debounce (default true). */
+  leadingEdge?: boolean;
   /** Poll interval of the focused worktree when native watching is unavailable (default 5 s). */
   pollDegradedFocusedMs?: number;
   /** Replaces `@parcel/watcher`'s subscribe (simulate inotify failures). */
@@ -154,6 +156,7 @@ export const startDaemon = (async (options: DaemonOptions = {}): Promise<Daemon>
     watch,
     ...(internal.relistMs !== undefined ? { relistMs: internal.relistMs } : {}),
     ...(internal.maxWaitMs !== undefined ? { maxWaitMs: internal.maxWaitMs } : {}),
+    ...(internal.leadingEdge !== undefined ? { leadingEdge: internal.leadingEdge } : {}),
     ...(internal.pollDegradedFocusedMs !== undefined
       ? { pollDegradedFocusedMs: internal.pollDegradedFocusedMs }
       : {}),
