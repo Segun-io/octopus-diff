@@ -374,7 +374,8 @@ async function main() {
   let largeDiff: { root: string; rel: string } | null = null;
   if (largeDiffLines > 0) {
     const root = projects[0] as string;
-    const rel = 'src/module-000.ts';
+    // The last module sorts last in the file list, so it is not the auto-selected first file.
+    const rel = `src/module-${String(Number(args.files) - 1).padStart(3, '0')}.ts`;
     const lines = Array.from(
       { length: largeDiffLines },
       (_, i) => `export const generated${i} = { id: ${i}, name: 'item-${i}', tags: ['a', 'b'] };`,
@@ -387,6 +388,7 @@ async function main() {
 
   let daemon: DaemonChild | null = null;
   let browser: Browser | null = null;
+  let closeSub: (() => void) | null = null;
   const result: Record<string, unknown> = {
     args,
     layout: { repos, worktreesPerRepo, bigFiles, nodeModulesFiles, generationMs },
@@ -400,6 +402,7 @@ async function main() {
     const client = createApiClient({ baseUrl: daemon.url, token: daemon.token });
     const events: Array<{ at: number; event: ServerEvent }> = [];
     const sub = client.subscribe({ onEvent: (event) => events.push({ at: Date.now(), event }) });
+    closeSub = () => sub.close();
     let worktreeCount = 0;
     for (;;) {
       const { projects: list } = await client.listProjects();
@@ -447,6 +450,24 @@ async function main() {
             w.__longTasks.push({ start: e.startTime, duration: e.duration });
         }).observe({ type: 'longtask', buffered: true });
       });
+      const consoleLines: string[] = [];
+      result.console = consoleLines;
+      page.on('console', (m) => consoleLines.push(`${m.type()}: ${m.text()}`.slice(0, 300)));
+      page.on('pageerror', (e) => consoleLines.push(`pageerror: ${e.message}`.slice(0, 300)));
+      page.on('worker', (w) => consoleLines.push(`worker started: ${w.url().split('/').pop()}`));
+      page.context().on('response', (r) => {
+        if (r.status() >= 300)
+          consoleLines.push(
+            `HTTP ${r.status()} ${new URL(r.url()).pathname} (${r.request().resourceType()})`,
+          );
+      });
+      page
+        .context()
+        .on('requestfailed', (r) =>
+          consoleLines.push(
+            `request failed ${new URL(r.url()).pathname}: ${r.failure()?.errorText}`,
+          ),
+        );
       cdp = await page.context().newCDPSession(page);
       await cdp.send('Performance.enable');
       const started = Date.now();
@@ -651,7 +672,16 @@ async function main() {
         const ltBefore = await page.evaluate(
           () => (window as unknown as { __longTasks: unknown[] }).__longTasks.length,
         );
+        // Open another file first, so the large one is fetched and rendered on click.
+        await page
+          .locator(`[data-testid="${TEST_IDS.fileItem}"]:not([data-path="${ld.rel}"])`)
+          .first()
+          .click();
+        await sleep(1000);
         const m0 = await pageMetrics(cdp);
+        await cdp.send('Profiler.enable');
+        await cdp.send('Profiler.setSamplingInterval', { interval: 500 });
+        await cdp.send('Profiler.start');
         const tClick = Date.now();
         await page
           .locator(`[data-testid="${TEST_IDS.fileItem}"][data-path="${ld.rel}"]`)
@@ -664,15 +694,33 @@ async function main() {
           .waitFor({ timeout: 60_000 });
         const tReady = Date.now();
         await sleep(2000);
+        const { profile } = (await cdp.send('Profiler.stop')) as { profile: unknown };
+        await writeFile(join(OUT, 'page-large-diff.cpuprofile'), JSON.stringify(profile));
         const m1 = await pageMetrics(cdp);
         const res = await apiResources(page, tClick);
         // Scroll the diff to the bottom in steps and record frame times.
         const frames = await page.evaluate(async () => {
           const viewer = document.querySelector('[data-testid="diff-viewer"]');
-          const scrollers = [viewer, ...(viewer ? viewer.querySelectorAll('*') : [])].filter(
-            (el): el is HTMLElement =>
-              el instanceof HTMLElement && el.scrollHeight > el.clientHeight + 10,
-          );
+          const all: Element[] = [];
+          // No nested named functions here: tsx would inject a `__name` helper the page lacks.
+          const stack: Array<Element | ShadowRoot> = viewer ? [viewer] : [];
+          if (viewer) all.push(viewer);
+          while (stack.length > 0) {
+            const root = stack.pop() as Element | ShadowRoot;
+            for (const el of root.querySelectorAll('*')) {
+              all.push(el);
+              if (el.shadowRoot) stack.push(el.shadowRoot);
+            }
+            if (root instanceof Element && root.shadowRoot) stack.push(root.shadowRoot);
+          }
+          const scrollers = all
+            .filter(
+              (el): el is HTMLElement =>
+                el instanceof HTMLElement &&
+                el.scrollHeight > el.clientHeight + 10 &&
+                getComputedStyle(el).overflowY !== 'visible',
+            )
+            .sort((a, b) => b.scrollHeight - a.scrollHeight);
           const el = scrollers[0];
           if (!el) return { frames: [] as number[], scrollHeight: 0 };
           const out: number[] = [];
@@ -781,6 +829,7 @@ async function main() {
     result.final = { mem: await memStats(pid), inotify: await inotifyStats(pid) };
     result.phases = phases;
   } finally {
+    closeSub?.();
     await browser?.close().catch(() => {});
     if (daemon) await stopChild(daemon.child);
     await writeFile(join(OUT, 'profile.json'), `${JSON.stringify(result, null, 2)}\n`);
