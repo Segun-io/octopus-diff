@@ -221,8 +221,10 @@ All git access goes through **one runner** in `packages/git-core`:
 
 - Hard **allowlist** of subcommands: `status`, `diff`, `diff-index`, `diff-tree`, `rev-parse`, `rev-list`,
   `merge-base`, `worktree list`, `for-each-ref`, `symbolic-ref`, `show`, `cat-file`, `ls-files`, `log`,
-  `config --get`. Anything else throws. Unit-test that `add`, `commit`, `checkout`, `reset`, `apply`,
-  `fetch`, `gc` are rejected.
+  `config --get` (read forms `--get`/`--get-all`/`--get-regexp`; DECISIONS WS1 #2). Anything else throws.
+  Unit-test that `add`, `commit`, `checkout`, `reset`, `apply`, `fetch`, `gc` are rejected.
+- `--no-optional-locks` is not enough on its own: porcelain `git diff` rewrites the index when
+  `diff.autoRefreshIndex` is on, so git-core pins it off (DECISIONS WS1 #4).
 - Always `--no-optional-locks` (and env `GIT_OPTIONAL_LOCKS=0`) so a read never takes `index.lock` and never
   collides with an agent running `git`. Also `GIT_TERMINAL_PROMPT=0`, `GIT_PAGER=cat`, `LC_ALL=C`.
 - Always `--no-ext-diff --no-textconv` on diffs; prefer `-z` machine formats (`status --porcelain=v2 -z

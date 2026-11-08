@@ -1,0 +1,190 @@
+import {
+  type DiffScope,
+  DiffScopeSchema,
+  GitCoreError,
+  isGitCoreError,
+  RefNameSchema,
+  type ScopeOptions,
+} from '@octopus-diff/contracts';
+import type { GitContext, RepoInfo } from './context.js';
+import { detectDefaultBranchRef, type ResolvedRef, resolveRefName } from './discovery.js';
+
+/**
+ * Flags on every `git diff` git-core runs, so that output does not depend on user or repo
+ * config: full object names, fixed prefixes, rename detection, Myers, no hunk merging, short
+ * submodule format, submodules reported only when their commit changes, no orderfile.
+ * Copy detection is added per scope (`ScopePlan.findCopies`).
+ */
+export const DIFF_PINS: readonly string[] = [
+  '--no-abbrev',
+  '--full-index',
+  '--src-prefix=a/',
+  '--dst-prefix=b/',
+  '--find-renames',
+  '--diff-algorithm=myers',
+  '--indent-heuristic',
+  '--inter-hunk-context=0',
+  '--ignore-submodules=dirty',
+  '--submodule=short',
+  '-O/dev/null',
+  '--no-relative',
+];
+
+/** Context lines of the canonical patch (patchHash is always computed from it). */
+export const CANONICAL_CONTEXT = 3;
+
+/** How to produce the diff for one scope. */
+export interface ScopePlan {
+  kind: DiffScope['kind'];
+  /** Revision arguments placed before `--`, e.g. `['HEAD']` or `['--cached', 'HEAD']`. */
+  revArgs: string[];
+  /** working / staged / unstaged: file flags and conflicts come from `git status`. */
+  statusBased: boolean;
+  /** working: untracked files are part of the scope. */
+  includeUntracked: boolean;
+  /** Nothing can differ (e.g. branch scope on an unborn HEAD, or a bare repository). */
+  empty: boolean;
+  /** Revision args use `HEAD`, which fails on an unborn branch (retry with the empty tree). */
+  usesHead: boolean;
+  /**
+   * Detect copies (`--find-copies`). Only for scopes that do not read the worktree: with
+   * `diff.autoRefreshIndex=false`, stat-dirty but unchanged files count as modified and would
+   * become copy sources, so results would depend on stat state rather than content.
+   */
+  findCopies: boolean;
+}
+
+export function parseScope(scope: unknown): DiffScope {
+  const parsed = DiffScopeSchema.safeParse(scope);
+  if (!parsed.success) {
+    throw new GitCoreError('invalid_argument', `invalid diff scope: ${parsed.error.message}`);
+  }
+  return parsed.data;
+}
+
+export function parseDefaultBranch(options: ScopeOptions | undefined): string | null {
+  const value = options?.defaultBranch;
+  if (value === undefined || value === null) return null;
+  if (!RefNameSchema.safeParse(value).success) {
+    throw new GitCoreError('invalid_argument', `invalid default branch: ${value}`);
+  }
+  return value;
+}
+
+/** Resolves `options.defaultBranch` (or auto-detects it) to a full ref; null if none exists. */
+export async function resolveDefaultBranch(
+  ctx: GitContext,
+  repo: RepoInfo,
+  options: ScopeOptions | undefined,
+): Promise<ResolvedRef | null> {
+  const name = parseDefaultBranch(options);
+  if (name !== null) return resolveRefName(ctx, repo, name);
+  return detectDefaultBranchRef(ctx, repo);
+}
+
+/** Full HEAD commit id, or null for an unborn branch. */
+export async function resolveHead(ctx: GitContext, repo: RepoInfo): Promise<string | null> {
+  const result = await ctx.git(repo, ['rev-parse', '--quiet', '--verify', 'HEAD^{commit}'], {
+    okExitCodes: [0, 1],
+  });
+  const sha = result.stdout.toString('utf8').trim();
+  return result.exitCode === 0 && sha ? sha : null;
+}
+
+export async function planScope(
+  ctx: GitContext,
+  repo: RepoInfo,
+  scope: DiffScope,
+  options: ScopeOptions | undefined,
+): Promise<ScopePlan> {
+  const base: Omit<ScopePlan, 'kind' | 'revArgs'> = {
+    statusBased: false,
+    includeUntracked: false,
+    empty: false,
+    usesHead: false,
+    findCopies: true,
+  };
+  switch (scope.kind) {
+    case 'working':
+      return {
+        ...base,
+        kind: 'working',
+        revArgs: ['HEAD'],
+        statusBased: true,
+        includeUntracked: true,
+        usesHead: true,
+        empty: repo.bare,
+        findCopies: false,
+      };
+    case 'staged':
+      return {
+        ...base,
+        kind: 'staged',
+        revArgs: ['--cached', 'HEAD'],
+        statusBased: true,
+        usesHead: true,
+        empty: repo.bare,
+      };
+    case 'unstaged':
+      return {
+        ...base,
+        kind: 'unstaged',
+        revArgs: [],
+        statusBased: true,
+        empty: repo.bare,
+        findCopies: false,
+      };
+    case 'branch': {
+      const [head, baseRef] = await Promise.all([
+        resolveHead(ctx, repo),
+        scope.base !== undefined
+          ? resolveRefName(ctx, repo, scope.base)
+          : resolveDefaultBranch(ctx, repo, options),
+      ]);
+      if (!baseRef) {
+        const wanted = scope.base ?? parseDefaultBranch(options);
+        throw wanted
+          ? new GitCoreError('not_found', `base ref not found: ${wanted}`)
+          : new GitCoreError(
+              'invalid_argument',
+              'branch scope needs a base: no default branch was given or detected',
+            );
+      }
+      if (!head) return { ...base, kind: 'branch', revArgs: [], empty: true };
+      const mergeBase = await ctx.git(repo, ['merge-base', head, baseRef.oid], {
+        okExitCodes: [0, 1],
+      });
+      const mb = mergeBase.stdout.toString('utf8').trim();
+      if (mergeBase.exitCode !== 0 || !mb) {
+        throw new GitCoreError('not_found', `no merge base between HEAD and ${baseRef.name}`);
+      }
+      return { ...base, kind: 'branch', revArgs: [mb, head] };
+    }
+    case 'commit': {
+      let output: string;
+      try {
+        const result = await ctx.git(repo, [
+          'rev-list',
+          '--parents',
+          '--max-count=1',
+          `${scope.sha}^{commit}`,
+          '--',
+        ]);
+        output = result.stdout.toString('utf8').trim();
+      } catch (error) {
+        if (isGitCoreError(error, 'git_failed')) {
+          throw new GitCoreError('not_found', `commit not found: ${scope.sha}`, error.details);
+        }
+        throw error;
+      }
+      const [sha, parent] = output.split(' ');
+      if (!sha) throw new GitCoreError('not_found', `commit not found: ${scope.sha}`);
+      return { ...base, kind: 'commit', revArgs: [parent ?? repo.emptyTree, sha] };
+    }
+  }
+}
+
+/** Revision args with `HEAD` replaced by the empty tree (for unborn branches). */
+export function unbornRevArgs(plan: ScopePlan, repo: RepoInfo): string[] {
+  return plan.revArgs.map((arg) => (arg === 'HEAD' ? repo.emptyTree : arg));
+}

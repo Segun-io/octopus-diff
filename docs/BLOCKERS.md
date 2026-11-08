@@ -15,7 +15,13 @@ Resolved items move to the bottom with the resolution.
 
 ### WS1 — git-core
 
-(none)
+1. **2026-11-08 · WS1 · `pnpm install` exits non-zero on a fresh worktree** with
+   `ERR_PNPM_IGNORED_BUILDS: Ignored build scripts: esbuild@0.28.2` (pnpm 12 denies dependency
+   build scripts by default; only `@parcel/watcher` is listed in `allowBuilds`). *Impact:* none
+   for WS1 (all packages install; esbuild works through its prebuilt `@esbuild/linux-x64`
+   binary), but CI's `pnpm install` step would fail. *Fix (lead/WS5, root config):* add
+   `esbuild: false` (or `true`) under `allowBuilds` in `pnpm-workspace.yaml`. Not changed by WS1
+   (root config is out of scope).
 
 ### WS2 — daemon
 
