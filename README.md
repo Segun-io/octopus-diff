@@ -17,6 +17,8 @@ It is **agent-agnostic**: it only speaks git, so it works with any tool that edi
 worktrees. Worktrees are discovered automatically, and edits show up live without a reload. Files you
 mark as reviewed stay reviewed until their patch changes, then come back as unreviewed.
 
+![octopus-diff: projects and worktrees on the left, changed files in the middle, a split diff on the right](docs/screenshots/diff-split-dark.png)
+
 > **Status: MVP.** Everything below is implemented and covered by unit and end-to-end tests. What
 > works, measured performance and known gaps are in [`docs/reports/mvp.md`](docs/reports/mvp.md); the
 > design and the acceptance list are in [`docs/PLAN.md`](docs/PLAN.md).

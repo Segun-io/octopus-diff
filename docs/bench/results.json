@@ -1,0 +1,204 @@
+{
+  "generatedAt": "2026-11-08T10:00:18.263Z",
+  "environment": {
+    "platform": "linux 6.18.54.1-microsoft-standard-WSL2",
+    "cpu": "AMD Ryzen 7 7800X3D 8-Core Processor",
+    "cores": 12,
+    "node": "v26.13.0",
+    "git": "git version 2.53.0"
+  },
+  "layout": {
+    "repos": 30,
+    "worktreesPerRepo": 3,
+    "worktrees": 90,
+    "generationMs": 5246
+  },
+  "startup": {
+    "listeningMs": 1044,
+    "allSummariesMs": 1103
+  },
+  "firstPaint": {
+    "coldMs": 1018,
+    "warmMs": 67,
+    "firstContentfulPaintMs": 76
+  },
+  "idleCpu": {
+    "supported": true,
+    "durationMs": 60032,
+    "averagePercent": 0.3831309685300729,
+    "averageSelfPercent": 0.1832365501665566,
+    "maxIntervalPercent": 14.99034268159229,
+    "intervals": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      2,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      4,
+      14.99,
+      2,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "rssBytes": 149413888
+  },
+  "refresh": {
+    "iterations": 15,
+    "sse": {
+      "count": 15,
+      "min": 214,
+      "max": 218,
+      "mean": 216.06666666666666,
+      "p50": 216,
+      "p90": 217,
+      "p95": 218
+    },
+    "ui": {
+      "count": 15,
+      "min": 289,
+      "max": 298,
+      "mean": 295.1333333333333,
+      "p50": 296,
+      "p90": 297,
+      "p95": 298
+    },
+    "samples": [
+      {
+        "worktree": "/tmp/octopus-diff-bench-Egzbg6/bench/bench-01",
+        "sseMs": 216,
+        "uiMs": 290
+      },
+      {
+        "worktree": "/tmp/octopus-diff-bench-Egzbg6/bench/worktrees/bench-01-wt1",
+        "sseMs": 217,
+        "uiMs": 289
+      },
+      {
+        "worktree": "/tmp/octopus-diff-bench-Egzbg6/bench/worktrees/bench-01-wt2",
+        "sseMs": 216,
+        "uiMs": 297
+      },
+      {
+        "worktree": "/tmp/octopus-diff-bench-Egzbg6/bench/bench-02",
+        "sseMs": 215,
+        "uiMs": 296
+      },
+      {
+        "worktree": "/tmp/octopus-diff-bench-Egzbg6/bench/worktrees/bench-02-wt1",
+        "sseMs": 218,
+        "uiMs": 294
+      },
+      {
+        "worktree": "/tmp/octopus-diff-bench-Egzbg6/bench/worktrees/bench-02-wt2",
+        "sseMs": 217,
+        "uiMs": 296
+      },
+      {
+        "worktree": "/tmp/octopus-diff-bench-Egzbg6/bench/bench-03",
+        "sseMs": 215,
+        "uiMs": 297
+      },
+      {
+        "worktree": "/tmp/octopus-diff-bench-Egzbg6/bench/worktrees/bench-03-wt1",
+        "sseMs": 216,
+        "uiMs": 297
+      },
+      {
+        "worktree": "/tmp/octopus-diff-bench-Egzbg6/bench/worktrees/bench-03-wt2",
+        "sseMs": 216,
+        "uiMs": 294
+      },
+      {
+        "worktree": "/tmp/octopus-diff-bench-Egzbg6/bench/bench-04",
+        "sseMs": 214,
+        "uiMs": 296
+      },
+      {
+        "worktree": "/tmp/octopus-diff-bench-Egzbg6/bench/worktrees/bench-04-wt1",
+        "sseMs": 216,
+        "uiMs": 293
+      },
+      {
+        "worktree": "/tmp/octopus-diff-bench-Egzbg6/bench/worktrees/bench-04-wt2",
+        "sseMs": 217,
+        "uiMs": 298
+      },
+      {
+        "worktree": "/tmp/octopus-diff-bench-Egzbg6/bench/bench-05",
+        "sseMs": 215,
+        "uiMs": 296
+      },
+      {
+        "worktree": "/tmp/octopus-diff-bench-Egzbg6/bench/worktrees/bench-05-wt1",
+        "sseMs": 216,
+        "uiMs": 297
+      },
+      {
+        "worktree": "/tmp/octopus-diff-bench-Egzbg6/bench/worktrees/bench-05-wt2",
+        "sseMs": 217,
+        "uiMs": 297
+      }
+    ]
+  },
+  "targets": {
+    "firstPaintMs": 3000,
+    "idleCpuPercent": 10,
+    "refreshMs": 1000
+  },
+  "pass": {
+    "firstPaint": true,
+    "idleCpu": true,
+    "refreshSse": true,
+    "refreshUi": true
+  }
+}
