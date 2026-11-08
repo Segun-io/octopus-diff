@@ -11,6 +11,7 @@ import {
   rowVisible,
   type SidebarModel,
   sortFiles,
+  sortFilesTreeOrder,
   sortInboxEntries,
   type VisiblePredicate,
   visibleIf,
@@ -119,6 +120,7 @@ function useBuildAppModel(): AppModel {
   }, [inboxEntries]);
 
   const reviewOffDisplay = useUi((s) => s.reviewOffDisplay);
+  const fileListLayout = useUi((s) => s.fileListLayout);
   const filesData = files.data;
   const groups = useMemo<FileGroup[]>(() => {
     if (view.kind === 'inbox') {
@@ -137,7 +139,10 @@ function useBuildAppModel(): AppModel {
     if (view.kind !== 'worktree') return [];
     const row = sidebar.byId.get(view.worktreeId);
     if (!row || !filesData) return [];
-    return [{ project: row.project, worktree: row.worktree, files: sortFiles(filesData.files) }];
+    // F10: in the tree layout, j/k/n follow the tree's displayed order.
+    const sorted =
+      fileListLayout === 'tree' ? sortFilesTreeOrder(filesData.files) : sortFiles(filesData.files);
+    return [{ project: row.project, worktree: row.worktree, files: sorted }];
   }, [
     view,
     inboxEntries,
@@ -148,6 +153,7 @@ function useBuildAppModel(): AppModel {
     onlyDirty,
     onlyUnreviewed,
     reviewOffDisplay,
+    fileListLayout,
   ]);
 
   const entries = useMemo(() => flattenGroups(groups), [groups]);

@@ -144,3 +144,26 @@ describe('planBulk', () => {
     expect(clear.requests[0]?.scope).toEqual({ kind: 'working' });
   });
 });
+
+describe('unicode (SEC-05)', () => {
+  it('finds, counts, describes and escapes bidi and invisible characters', async () => {
+    const { describeSuspicious, escapeSuspicious, findSuspicious, hasSuspicious } = await import(
+      '../src/lib/unicode.ts'
+    );
+    const text = 'user‮ ⁦// admin⁩ ⁦';
+    expect(hasSuspicious(text)).toBe(true);
+    expect(hasSuspicious(text)).toBe(true); // stateless across calls
+    expect(hasSuspicious('plain')).toBe(false);
+    const found = findSuspicious(text);
+    expect(found.map((f) => [f.codePoint.toString(16), f.count])).toEqual([
+      ['2066', 2],
+      ['202e', 1],
+      ['2069', 1],
+    ]);
+    expect(describeSuspicious(found)).toBe(
+      '4 invisible or bidirectional characters: U+2066 ×2, U+202E, U+2069',
+    );
+    expect(escapeSuspicious('a‮evil.txt')).toBe('a⟨U+202E⟩evil.txt');
+    expect(escapeSuspicious('﻿x​')).toBe('⟨U+FEFF⟩x⟨U+200B⟩');
+  });
+});

@@ -8,6 +8,7 @@ import {
   type VisiblePredicate,
   worktreeLabel,
 } from '../lib/model.ts';
+import { escapeSuspicious, hasSuspicious } from '../lib/unicode.ts';
 import { CheckIcon, LineCounts, StatusIcon, statusLabel } from './bits.tsx';
 
 export const ROW_HEIGHT = 26;
@@ -255,7 +256,9 @@ const FileRow = memo(function FileRow({
   onSelect: (entry: NavEntry) => void;
 }) {
   const { file } = entry;
-  const { dir, base } = splitPath(file.path);
+  const suspicious =
+    hasSuspicious(file.path) || (file.oldPath ? hasSuspicious(file.oldPath) : false);
+  const { dir, base } = splitPath(suspicious ? escapeSuspicious(file.path) : file.path);
   const rename = renameLabel(file);
   const key = fileRefKey(toFileRef(entry.worktreeId, file));
   return (
@@ -271,6 +274,7 @@ const FileRow = memo(function FileRow({
       {...(file.oldPath ? { 'data-old-path': file.oldPath } : {})}
       data-status={file.status}
       data-reviewed={String(file.reviewed)}
+      data-suspicious={suspicious ? 'true' : undefined}
       data-worktree-id={entry.worktreeId}
       data-additions={file.additions === null ? '' : String(file.additions)}
       data-deletions={file.deletions === null ? '' : String(file.deletions)}
@@ -282,12 +286,22 @@ const FileRow = memo(function FileRow({
       style={{ top, height: ROW_HEIGHT }}
     >
       <StatusIcon status={file.status} />
+      {suspicious && (
+        <span
+          className="shrink-0 text-warn"
+          role="img"
+          aria-label="File name contains invisible or bidirectional characters"
+          title="File name contains invisible or bidirectional characters (shown as ⟨U+…⟩)"
+        >
+          ⚠
+        </span>
+      )}
       <span className="flex min-w-0 flex-1 items-baseline gap-1 overflow-hidden whitespace-nowrap">
         {rename ? (
           <span className="truncate" dir="auto">
-            <span className="text-muted">{file.oldPath}</span>
+            <span className="text-muted">{escapeSuspicious(file.oldPath ?? '')}</span>
             <span className="text-faint"> → </span>
-            <span className="font-medium">{file.path}</span>
+            <span className="font-medium">{escapeSuspicious(file.path)}</span>
           </span>
         ) : (
           <>

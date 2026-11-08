@@ -443,6 +443,9 @@ export class MockBackend {
       this.file('src/components/Table.tsx', 'modified'),
       this.file('src/styles.css', 'modified', { lines: 40 }),
       this.file('package.json', 'modified', { lines: 30, staged: true, unstaged: false }),
+      // Trojan Source (SEC-05): bidi controls in the content and in a file name.
+      this.file('src/lib/access.ts', 'modified', { kind: 'trojan', lines: 12 }),
+      this.file('src/lib/a\u202Eevil.txt', 'untracked', { lines: 4 }),
     ];
     this.makeWorktree(web, { branch: 'agent/codex-123', ahead: 0, behind: 5 });
 

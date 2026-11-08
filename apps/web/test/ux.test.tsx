@@ -105,6 +105,17 @@ function bodyOf<T>(request: Harness['requests'][number] | undefined): T {
   return request.body as T;
 }
 
+function worktreeOf(projectName: string, branch: string): HTMLElement {
+  const project = screen
+    .getAllByTestId(TEST_IDS.projectItem)
+    .find((p) => p.dataset.projectName === projectName);
+  const el = screen
+    .getAllByTestId(TEST_IDS.worktreeItem)
+    .find((e) => e.dataset.branch === branch && e.dataset.projectId === project?.dataset.projectId);
+  if (!el) throw new Error(`no worktree ${projectName} ${branch}`);
+  return el;
+}
+
 function worktreeItem(branch: string): HTMLElement {
   const el = screen.getAllByTestId(TEST_IDS.worktreeItem).find((e) => e.dataset.branch === branch);
   if (!el) throw new Error(`no worktree item ${branch}`);
@@ -267,7 +278,7 @@ describe('mark all as verified', () => {
     await ready();
     await press(user, 'R');
     const toast = await screen.findByTestId(TEST_IDS.bulkReviewToast);
-    expect(toast.dataset.changed).toBe('28');
+    expect(toast.dataset.changed).toBe('30');
     const bulk = requests.find((r) => r.url.endsWith('/api/review/bulk'));
     expect(bulk?.body).toMatchObject({ target: { kind: 'all' } });
     expect(
@@ -281,7 +292,7 @@ describe('mark all as verified', () => {
     const confirm = await screen.findByRole('alertdialog');
     expect(confirm.textContent).toContain('Across 5 worktrees');
     fireEvent.click(within(confirm).getByText(/^Mark verified$/));
-    await waitFor(() => expect(backend.reviews.size).toBe(28));
+    await waitFor(() => expect(backend.reviews.size).toBe(30));
   });
 
   it('respects a hidden-reviewed filter: only unreviewed visible files are sent', async () => {
@@ -500,5 +511,100 @@ describe('folder tier, overview and palette', () => {
       .getAllByTestId(TEST_IDS.worktreeItem)
       .filter((w) => w.dataset.projectId === project.dataset.projectId);
     expect(web.every((w) => within(w).queryByTestId(TEST_IDS.reviewOffBadge) !== null)).toBe(true);
+  });
+});
+
+describe('F9, F10 and SEC-05', () => {
+  it('switching scope does not show the "changed on disk" banner (F9)', async () => {
+    // Like real git-core, give each scope its own patchHash.
+    const { store } = setup('demo', {
+      wrap: (fetch) => async (input, init) => {
+        const res = await fetch(input, init);
+        const url = String(input);
+        if (url.includes('/diff?')) {
+          const body = await res.json();
+          body.diff.patchHash = `${body.diff.patchHash.slice(0, 32)}${body.scope.kind}`.padEnd(
+            40,
+            '0',
+          );
+          return new Response(JSON.stringify(body), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          });
+        }
+        return res;
+      },
+    });
+    await ready();
+    fireEvent.click(worktreeOf('octopus-api', 'main'));
+    await waitFor(() => expect(viewer().getAttribute('data-path')).toBe('README.md'));
+    fireEvent.click(
+      document.querySelector(
+        `[data-testid="${TEST_IDS.fileItem}"][data-path="src/server/router.ts"]`,
+      ) as HTMLElement,
+    );
+    await waitFor(() => expect(viewer().getAttribute('data-state')).toBe('ready'));
+    const hashBefore = viewer().getAttribute('data-patch-hash');
+    store.setState({ scope: { kind: 'staged' } });
+    await waitFor(() => expect(viewer().getAttribute('data-patch-hash')).not.toBe(hashBefore));
+    await waitFor(() => expect(viewer().getAttribute('data-state')).toBe('ready'));
+    expect(screen.queryByTestId(TEST_IDS.diffUpdatedBanner)).toBeNull();
+  });
+
+  it('tree layout orders j/k by the tree (folders first, case-insensitive) (F10)', async () => {
+    const { user, store } = setup();
+    await ready();
+    fireEvent.click(worktreeItem('feat/auth'));
+    await waitFor(() => expect(viewer().getAttribute('data-worktree-id')).not.toBe(''));
+    const order = () => store.getState().selected?.path;
+    store.setState({ fileListLayout: 'tree' });
+    // first entry in tree order is inside the deepest-first folder, not the byte-first path
+    await waitFor(() => expect(order()).toBeDefined());
+    const visited: string[] = [];
+    for (let i = 0; i < 6; i++) {
+      await press(user, 'j');
+      visited.push(order() ?? '');
+    }
+    // folders (assets, config, data, docs, notes, scripts, src/…) come before top-level files
+    expect(visited.every((p) => p.includes('/'))).toBe(true);
+    const idx = (p: string) => visited.indexOf(p);
+    expect(idx('config/current.json')).toBeLessThan(idx('data/fixtures.min.json'));
+  });
+
+  it('flags bidi / invisible characters in names and patches (SEC-05)', async () => {
+    const { user } = setup();
+    await ready();
+    fireEvent.click(worktreeOf('web-dashboard', 'main'));
+    await waitFor(() => expect(viewer().getAttribute('data-worktree-id')).not.toBe(''));
+    await waitFor(() =>
+      expect(screen.getAllByTestId(TEST_IDS.fileItem).map((f) => f.dataset.path)).toContain(
+        'src/lib/access.ts',
+      ),
+    );
+    const evil = document.querySelector(
+      `[data-testid="${TEST_IDS.fileItem}"][data-suspicious="true"]`,
+    ) as HTMLElement;
+    expect(
+      evil,
+      screen
+        .getAllByTestId(TEST_IDS.fileItem)
+        .map((f) => f.dataset.path)
+        .join(','),
+    ).toBeTruthy();
+    expect(evil.textContent).toContain('⟨U+202E⟩');
+    expect(within(evil).getByRole('img', { name: /invisible or bidirectional/ })).toBeTruthy();
+    fireEvent.click(
+      document.querySelector(
+        `[data-testid="${TEST_IDS.fileItem}"][data-path="src/lib/access.ts"]`,
+      ) as HTMLElement,
+    );
+    const warning = await screen.findByTestId('diff-unicode-warning');
+    expect(warning.textContent).toContain('U+202E');
+    await waitFor(() =>
+      expect(screen.getByTestId('stub-diff').textContent ?? '').toContain('⟨U+202E⟩'),
+    );
+    expect(screen.getByTestId('stub-diff').textContent).not.toContain('\u202E');
+    await press(user, 'k');
+    await waitFor(() => expect(screen.queryByTestId('diff-unicode-warning')).toBeNull());
   });
 });

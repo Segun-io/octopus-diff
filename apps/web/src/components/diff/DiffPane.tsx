@@ -1,4 +1,4 @@
-import { type FileDiff, TEST_IDS } from '@octopus-diff/contracts';
+import { type FileDiff, scopeKey, TEST_IDS } from '@octopus-diff/contracts';
 import { lazy, type ReactNode, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { describeError, useDiffQuery } from '../../api/queries.ts';
 import {
@@ -8,6 +8,12 @@ import {
   repairTruncatedPatch,
 } from '../../lib/diffKind.ts';
 import { fileRefKey } from '../../lib/fileRef.ts';
+import {
+  describeSuspicious,
+  escapeSuspicious,
+  findSuspicious,
+  hasSuspicious,
+} from '../../lib/unicode.ts';
 import { CONTEXT_STEP, DEFAULT_CONTEXT } from '../../state/commands.ts';
 import { useCommandsContext } from '../../state/commandsContext.tsx';
 import { useAppModel } from '../../state/model.tsx';
@@ -83,16 +89,26 @@ export function DiffPane() {
   const reviewed = diff?.reviewed ?? entry?.file.reviewed ?? false;
   const row = selected ? model.sidebar.byId.get(selected.worktreeId) : undefined;
 
-  // "Updated" banner: the open file's patchHash changed underneath the reader.
+  // "Updated" banner: the open file's patchHash changed underneath the reader. Keyed by file
+  // AND scope (F9): the same file has a different hash per scope, which is not a change.
+  const seenKey = key === null ? null : `${key}|${scopeKey(model.scope)}`;
   const seen = useRef<{ key: string; hash: string } | null>(null);
   const [updatedKey, setUpdatedKey] = useState<string | null>(null);
+  const placeholder = query.isPlaceholderData;
   useEffect(() => {
-    if (!diff || !key) return;
+    // Placeholder data is the previous scope's diff for the same file: not a change on disk.
+    if (!diff || !seenKey || placeholder) return;
     const prev = seen.current;
-    if (prev && prev.key === key && prev.hash !== diff.patchHash) setUpdatedKey(key);
-    if (prev?.key !== key) setUpdatedKey(null);
-    seen.current = { key, hash: diff.patchHash };
-  }, [diff, key]);
+    if (prev && prev.key === seenKey && prev.hash !== diff.patchHash) setUpdatedKey(seenKey);
+    if (prev?.key !== seenKey) setUpdatedKey(null);
+    seen.current = { key: seenKey, hash: diff.patchHash };
+  }, [diff, seenKey, placeholder]);
+
+  // SEC-05: invisible / bidirectional characters in the path or the patch are made visible.
+  const suspicious = useMemo(() => {
+    const text = `${selected?.path ?? ''}\n${diff?.patch ?? ''}`;
+    return hasSuspicious(text) ? findSuspicious(text) : [];
+  }, [selected?.path, diff?.patch]);
 
   const display = useMemo<DiffDisplay | null>(
     () => (diff ? classifyDiff(diff, ignoreWhitespace) : null),
@@ -124,12 +140,12 @@ export function DiffPane() {
           <h2 className="min-w-0 truncate font-mono text-xs" title={selected.path}>
             {file?.oldPath && file.oldPath !== selected.path ? (
               <>
-                <span className="text-muted">{file.oldPath}</span>
+                <span className="text-muted">{escapeSuspicious(file.oldPath)}</span>
                 <span className="text-faint"> → </span>
-                <span>{selected.path}</span>
+                <span>{escapeSuspicious(selected.path)}</span>
               </>
             ) : (
-              selected.path
+              escapeSuspicious(selected.path)
             )}
           </h2>
           {status && <span className="text-[11px] text-muted">{statusLabel(status)}</span>}
@@ -191,7 +207,22 @@ export function DiffPane() {
         </header>
       )}
 
-      {updatedKey !== null && updatedKey === key && (
+      {suspicious.length > 0 && (
+        <div
+          data-testid="diff-unicode-warning"
+          role="alert"
+          className="flex items-center gap-2 border-b border-warn/40 bg-raised px-3 py-1 text-xs"
+        >
+          <span className="text-warn" aria-hidden="true">
+            ⚠
+          </span>
+          <span>
+            This file contains {describeSuspicious(suspicious)}. They are shown as ⟨U+…⟩ below; the
+            code may not read the way it runs.
+          </span>
+        </div>
+      )}
+      {updatedKey !== null && updatedKey === seenKey && (
         <div
           data-testid={TEST_IDS.diffUpdatedBanner}
           role="status"
@@ -340,7 +371,9 @@ function DiffBody({
           <div className="min-h-0 flex-1">
             <Suspense fallback={<p className="p-4 text-xs text-muted">Loading diff renderer…</p>}>
               <DiffRenderer
-                patch={display.truncated ? repairTruncatedPatch(diff.patch) : diff.patch}
+                patch={escapeSuspicious(
+                  display.truncated ? repairTruncatedPatch(diff.patch) : diff.patch,
+                )}
                 cacheKey={`${diff.patchHash}:${ignoreWhitespace ? 'w' : ''}:${context ?? ''}`}
                 mode={mode}
                 theme={theme}

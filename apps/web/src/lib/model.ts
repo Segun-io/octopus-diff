@@ -39,6 +39,35 @@ export function sortFiles(files: readonly ChangedFile[]): ChangedFile[] {
   return [...files].sort(compareFiles);
 }
 
+/**
+ * The tree view's display order (`@pierre/trees` default comparator, review F10): at the first
+ * differing level, folders before files, dot-items first, then case-insensitive by name.
+ */
+export function compareTreeOrder(a: string, b: string): number {
+  const as = a.split('/');
+  const bs = b.split('/');
+  const depth = Math.min(as.length, bs.length);
+  for (let i = 0; i < depth; i++) {
+    const an = as[i] ?? '';
+    const bn = bs[i] ?? '';
+    if (an === bn) continue;
+    const aFolder = i < as.length - 1;
+    const bFolder = i < bs.length - 1;
+    if (aFolder !== bFolder) return aFolder ? -1 : 1;
+    const aDot = an.startsWith('.');
+    const bDot = bn.startsWith('.');
+    if (aDot !== bDot) return aDot ? -1 : 1;
+    const c = an.toLowerCase().localeCompare(bn.toLowerCase());
+    if (c !== 0) return c;
+    return cmp(an, bn);
+  }
+  return as.length - bs.length;
+}
+
+export function sortFilesTreeOrder(files: readonly ChangedFile[]): ChangedFile[] {
+  return [...files].sort((a, b) => compareTreeOrder(a.path, b.path) || compareFiles(a, b));
+}
+
 // --- sidebar --------------------------------------------------------------------------------
 
 export interface SidebarFilters {
