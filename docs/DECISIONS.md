@@ -85,3 +85,34 @@ Newest last. Format: date · who · decision · reason. Contract changes are mar
     `@biomejs/biome`, `vitest`, `@types/node`, `tsx`). `@pierre/trees` pulls `@pierre/theming@1.0.0`, whose
     peer `@pierre/theme@^1.1.0` is unmet (2.0.0 installed via `@pierre/diffs`); harmless so far, WS3 to
     watch.
+22. **[contracts] `TEST_IDS`** (`packages/contracts/src/test-ids.ts`): stable `data-testid` values and
+    data attributes shared by the web UI (WS3) and Playwright (WS4), so both can be built in parallel
+    without guessing each other's selectors. The UI also gets a minimal add-project / add-scan-root form
+    (needed for the empty state); PLAN §4.2 does not list one, but a first-run user would otherwise have
+    no way in except the CLI.
+23. **Per-stream sections** below (and in `BLOCKERS.md`): each stream writes only under its own heading,
+    so five branches appending to the same file merge without conflicts.
+
+## WS1 — git-core
+
+(none yet)
+
+## WS2 — daemon
+
+(none yet)
+
+## WS3 — web
+
+(none yet)
+
+## WS4 — fixtures, e2e, perf
+
+(none yet)
+
+## WS5 — CLI, packaging, docs, CI
+
+(none yet)
+
+## Phase 2 — integration (lead)
+
+(none yet)

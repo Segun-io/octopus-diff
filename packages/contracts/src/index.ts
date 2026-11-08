@@ -12,3 +12,4 @@ export * from './domain.js';
 export * from './events.js';
 export * from './git-core.js';
 export * from './scope.js';
+export * from './test-ids.js';

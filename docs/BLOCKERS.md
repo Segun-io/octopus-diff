@@ -13,6 +13,30 @@ Resolved items move to the bottom with the resolution.
    `sudo apt install libnss3 libnspr4 libasound2t64` (or `sudo pnpm --filter @octopus-diff/e2e exec
    playwright install-deps chromium`), then delete `~/.cache/octopus-diff-dev/`.
 
+### WS1 — git-core
+
+(none)
+
+### WS2 — daemon
+
+(none)
+
+### WS3 — web
+
+(none)
+
+### WS4 — fixtures, e2e, perf
+
+(none)
+
+### WS5 — CLI, packaging, docs, CI
+
+(none)
+
+### Phase 2 — integration (lead)
+
+(none)
+
 ## Resolved
 
 (none yet)
