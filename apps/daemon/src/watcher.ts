@@ -164,6 +164,14 @@ export function buildWorktreeIgnores(extra: readonly string[] = []): string[] {
   return [...out];
 }
 
+/** Timer jitter (±25 %): every worktree and project is armed at startup, so fixed intervals
+ * would make all relists (60 s) and fallback polls (5 min) fire in the same second. */
+export const TIMER_JITTER = 0.25;
+
+function jittered(ms: number): number {
+  return Math.max(1, Math.round(ms * (1 + TIMER_JITTER * (2 * Math.random() - 1))));
+}
+
 function isLockFile(p: string): boolean {
   return p.endsWith('.lock');
 }
@@ -607,7 +615,7 @@ export class WatcherService {
       if (this.#closed || this.#projects.get(project.projectId) !== project) return;
       this.#onListDirty(project.projectId, 'timer');
       this.#scheduleRelist(project);
-    }, this.#opts.relistMs);
+    }, jittered(this.#opts.relistMs));
     project.relist.unref();
   }
 
@@ -624,10 +632,13 @@ export class WatcherService {
     const st = this.#worktrees.get(worktreeId);
     if (!st || this.#closed) return;
     clearTimeout(st.poll);
-    st.poll = setTimeout(() => {
-      st.poll = undefined;
-      this.#fire(st, 'poll');
-    }, this.pollIntervalFor(worktreeId));
+    st.poll = setTimeout(
+      () => {
+        st.poll = undefined;
+        this.#fire(st, 'poll');
+      },
+      jittered(this.pollIntervalFor(worktreeId)),
+    );
     st.poll.unref();
   }
 
