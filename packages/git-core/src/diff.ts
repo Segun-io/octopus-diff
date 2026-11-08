@@ -704,20 +704,24 @@ async function attributeState(
  * The `diff` attribute of untracked paths, so `binary` / `-diff` / `diff` attributes give the
  * same verdict as git's diff after `git add` (F8). Asks `git check-attr -z --stdin diff` (one
  * call) only for paths whose verdict is not cached for the current attribute sources, and
- * not at all when no source exists or contents are not read anyway (over the cap). Keys are
- * bstr; a trailing `/` (nested repositories) is dropped.
+ * not at all when no source exists or contents are not read anyway (over the cap, unless
+ * `wanted` is given). Keys are bstr; a trailing `/` (nested repositories) is dropped. The
+ * cache key covers all of `rawKeys` (every untracked path of the status snapshot); `wanted`
+ * limits which verdicts are looked up and returned (getFileDiff needs one).
  */
 export async function readDiffAttributes(
   deps: DiffDeps,
   repo: RepoInfo,
   rawKeys: readonly string[],
-  untrackedCount: number,
   entries: readonly StatusEntry[],
+  wanted?: readonly string[],
 ): Promise<Map<string, DiffAttribute>> {
   const { ctx } = deps;
-  const keys = rawKeys.filter((key) => !key.endsWith('/'));
-  if (keys.length === 0 || untrackedCount > ctx.settings.maxUntrackedFiles) return new Map();
-  const state = await attributeState(ctx, repo, keys, entries);
+  const all = rawKeys.filter((key) => !key.endsWith('/'));
+  const keys = wanted ? wanted.filter((key) => !key.endsWith('/')) : all;
+  if (keys.length === 0) return new Map();
+  if (!wanted && rawKeys.length > ctx.settings.maxUntrackedFiles) return new Map();
+  const state = await attributeState(ctx, repo, all, entries);
   if (!state.mayApply) return new Map();
   const cacheKey = repo.toplevel ?? repo.gitDir;
   const cached = state.stateKey === null ? undefined : deps.attributeCache.get(cacheKey);
@@ -770,7 +774,6 @@ export async function listChangedFiles(
       deps,
       repo,
       untracked.map((entry) => entry.path),
-      untracked.length,
       snapshot.entries,
     );
   });
@@ -1012,7 +1015,9 @@ export async function getFileDiff(
     (raw) => (raw.endsWith('/') ? raw.slice(0, -1) : raw) === key,
   );
   if (rawKey === undefined) throw notFound();
-  const attributes = await readDiffAttributes(deps, repo, [rawKey], 0, status?.entries ?? []);
+  const attributes = await readDiffAttributes(deps, repo, index.untracked, status?.entries ?? [], [
+    rawKey,
+  ]);
   const [info] = await inspectUntracked(
     repo.cwd,
     [rawKey],

@@ -1,9 +1,9 @@
 import { createHash, type Hash } from 'node:crypto';
-import { lstat, open, readlink, stat } from 'node:fs/promises';
+import { lstat, readlink, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { bstrFromBuffer, bstrToBuffer } from './bstr.js';
 import type { ObjectFormat } from './context.js';
-import { LruCache, mapLimit } from './fs-utils.js';
+import { LruCache, mapLimit, openRegularFile, readFileHead } from './fs-utils.js';
 import { hashParts, PATCH_HASH_LENGTH, PatchHasher } from './hash.js';
 
 /** git's binary heuristic: a NUL byte within the first 8000 bytes (xdiff FIRST_FEW_BYTES). */
@@ -76,7 +76,8 @@ export function absolutePathBuffer(root: string, key: string): Buffer {
 }
 
 async function readContent(file: Buffer): Promise<Buffer> {
-  const handle = await open(file, 'r');
+  const handle = await openRegularFile(file, { noFollow: true });
+  if (!handle) throw new Error('not a regular file');
   try {
     return await handle.readFile();
   } finally {
@@ -239,7 +240,8 @@ async function factsFromFile(
   options: InspectOptions,
   attribute: DiffAttribute | undefined,
 ): Promise<ContentFacts> {
-  const handle = await open(file, 'r');
+  const handle = await openRegularFile(file, { noFollow: true });
+  if (!handle) throw new ContentChanged();
   try {
     const first = blobHasher(options.objectFormat, size);
     const buffer = Buffer.allocUnsafe(Math.min(READ_CHUNK, Math.max(size, 1)));
@@ -508,18 +510,8 @@ export interface NestedHead {
 }
 
 async function readSmall(file: string, max = SMALL_FILE): Promise<string | null> {
-  try {
-    const handle = await open(bstrToBuffer(file), 'r');
-    try {
-      const buffer = Buffer.alloc(max);
-      const { bytesRead } = await handle.read(buffer, 0, max, 0);
-      return bstrFromBuffer(buffer.subarray(0, bytesRead));
-    } finally {
-      await handle.close();
-    }
-  } catch {
-    return null;
-  }
+  const content = await readFileHead(bstrToBuffer(file), max);
+  return content === null ? null : bstrFromBuffer(content);
 }
 
 async function refStorageSig(file: string): Promise<string> {

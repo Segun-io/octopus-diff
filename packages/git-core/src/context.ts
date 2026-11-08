@@ -1,4 +1,4 @@
-import { lstat, open, stat } from 'node:fs/promises';
+import { lstat, stat } from 'node:fs/promises';
 import path from 'node:path';
 import {
   AbsolutePathSchema,
@@ -7,7 +7,7 @@ import {
   isGitCoreError,
   type Logger,
 } from '@octopus-diff/contracts';
-import { realpathOrSelf } from './fs-utils.js';
+import { readFileHead, realpathOrSelf } from './fs-utils.js';
 import type { GitLocation, GitRunner, GitRunOptions, GitRunResult } from './runner/runner.js';
 import { MIN_GIT_VERSION, parseGitVersion } from './version.js';
 
@@ -264,20 +264,9 @@ export function repoLocation(repo: RepoInfo): GitLocation {
 
 const GITFILE_MAX_BYTES = 4096;
 
-/** Reads at most `max` bytes of a small file; null if it cannot be read. */
-export async function readSmallFile(file: string, max = GITFILE_MAX_BYTES): Promise<Buffer | null> {
-  try {
-    const handle = await open(file, 'r');
-    try {
-      const buffer = Buffer.alloc(max);
-      const { bytesRead } = await handle.read(buffer, 0, max, 0);
-      return buffer.subarray(0, bytesRead);
-    } finally {
-      await handle.close();
-    }
-  } catch {
-    return null;
-  }
+/** Reads at most `max` bytes of a small regular file; null if it cannot be read. */
+export function readSmallFile(file: string, max = GITFILE_MAX_BYTES): Promise<Buffer | null> {
+  return readFileHead(file, max);
 }
 
 /**

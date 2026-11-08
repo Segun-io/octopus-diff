@@ -1,11 +1,13 @@
 /**
  * Regression tests for review-code F3, F4, F7 and F8 (docs/reports/review-code.md).
  */
+import { spawnSync } from 'node:child_process';
 import { chmodSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { GitChangedFile, GitCore, WorktreeLocator } from '@octopus-diff/contracts';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createGitCore } from '../src/index.js';
+import { nestedRepoHead } from '../src/untracked.js';
 import { expectConsistentHashes, fileDiff, listFiles, locator } from './helpers/core.js';
 import { createFixture, type Fixture, lines } from './helpers/fixture.js';
 
@@ -123,6 +125,21 @@ describe('F4: an untracked file keeps its patchHash through git add -N and git a
     const added = (await working(wt)).get('inner') as GitChangedFile;
     expect(added).toMatchObject({ status: 'added', newMode: '160000' });
     expect(added.patchHash).toBe(moved.patchHash);
+  });
+
+  it.skipIf(process.platform === 'win32')('never blocks on a FIFO', async () => {
+    // git does not list FIFOs as untracked files at all.
+    const repo = fx.repo('f4-fifo', { files: { 'r.txt': 'r\n' } });
+    if (spawnSync('mkfifo', [path.join(repo, 'pipe')]).status !== 0) return; // no mkfifo
+    expect((await core.getSummary(locator(repo))).changedFiles).toBe(0);
+    // A nested repository whose HEAD is a FIFO: git itself blocks on it (until the runner's
+    // timeout), but git-core's own HEAD reader must return at once.
+    const inner = path.join(fx.root, 'fifo-inner');
+    fx.git(fx.root, ['init', '-q', inner]);
+    rmSync(path.join(inner, '.git', 'HEAD'));
+    spawnSync('mkfifo', [path.join(inner, '.git', 'HEAD')]);
+    const head = await nestedRepoHead(Buffer.from(inner));
+    expect(head).toMatchObject({ sha: null, fingerprint: 'no-head' });
   });
 
   it('an unborn nested repository still changes hash when its HEAD changes', async () => {
@@ -299,6 +316,10 @@ describe('F8: attribute sources (check-attr is skipped only when none can apply)
       expect(afterFirst).toBeGreaterThan(0);
       await c.getSummary(locator(repo));
       await c.listChangedFiles(locator(repo), { kind: 'working' });
+      expect(count()).toBe(afterFirst);
+      // A single file's diff reuses (and keeps) the worktree's cached verdicts.
+      await c.getFileDiff(locator(repo), { kind: 'working' }, { path: 'x.dat' });
+      await c.getSummary(locator(repo));
       expect(count()).toBe(afterFirst);
       // A new path is asked about; known ones are not re-asked.
       fx.write(path.join(repo, 'z.dat'), 'z\n');

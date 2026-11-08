@@ -244,21 +244,17 @@ export async function getSummary(
   })();
 
   const untrackedKeysSorted = [...untrackedRaw].sort(compareBstr);
-  const untrackedPromise = readDiffAttributes(
-    deps,
-    repo,
-    untrackedKeysSorted,
-    untrackedRaw.length,
-    status.entries,
-  ).then(async (attributes) => ({
-    attributes,
-    infos: await inspectUntracked(
-      repo.cwd,
-      untrackedKeysSorted,
-      deps.untrackedCache,
-      inspectOptions(ctx, repo, untrackedRaw.length, attributes),
-    ),
-  }));
+  const untrackedPromise = readDiffAttributes(deps, repo, untrackedKeysSorted, status.entries).then(
+    async (attributes) => ({
+      attributes,
+      infos: await inspectUntracked(
+        repo.cwd,
+        untrackedKeysSorted,
+        deps.untrackedCache,
+        inspectOptions(ctx, repo, untrackedRaw.length, attributes),
+      ),
+    }),
+  );
   const [numstatResult, aheadBehind, inProgress, signatures, untracked] = await Promise.all([
     numstatPromise,
     aheadBehindPromise,
