@@ -162,4 +162,189 @@ describe('mock backend implements the contract', () => {
     expect((err as ApiClientError).status).toBe(401);
     await expect(locked.health()).resolves.toMatchObject({ ok: true });
   });
+
+  it('settings, review policy and effective policies follow the contract resolver', async () => {
+    const backend = new MockBackend({ dataset: 'demo' });
+    const api = clientFor(backend);
+    const initial = await api.getSettings();
+    expect(initial.settings.review.defaultEnabled).toBe(true);
+    expect(initial.overrides).toHaveLength(2);
+    const { projects } = await api.listProjects();
+    const legacy = projects.find((p) => p.project.name === 'legacy-tool');
+    expect(legacy?.worktrees[0]?.review).toEqual({ enabled: false, source: 'project' });
+    const web = projects.find((p) => p.project.name === 'web-dashboard');
+    const agent = web?.worktrees.find((w) => w.worktree.branch === 'agent/codex-123');
+    expect(agent?.review).toEqual({ enabled: false, source: 'branch' });
+    const main = web?.worktrees.find((w) => w.worktree.isMain);
+    expect(main?.review).toEqual({ enabled: true, source: 'default' });
+
+    const events: ServerEvent[] = [];
+    backend.subscribe((e) => events.push(e));
+    // worktree override wins over the project default; revision increases.
+    const wt = main?.worktree.id ?? '';
+    const after = await api.setReviewPolicy({
+      target: { kind: 'worktree', worktreeId: wt },
+      enabled: false,
+    });
+    expect(after.revision).toBe(initial.revision + 1);
+    expect(events.at(-1)).toEqual({ type: 'settings.changed', revision: after.revision });
+    const inbox = await api.inbox({ onlyUnreviewed: true });
+    expect(inbox.entries.some((e) => e.worktree.id === wt)).toBe(false);
+    const inboxAll = await api.inbox();
+    expect(inboxAll.entries.find((e) => e.worktree.id === wt)?.review).toEqual({
+      enabled: false,
+      source: 'worktree',
+    });
+    // inherit again
+    const cleared = await api.setReviewPolicy({
+      target: { kind: 'worktree', worktreeId: wt },
+      enabled: null,
+    });
+    expect(cleared.overrides.some((o) => o.target.kind === 'worktree')).toBe(false);
+    // no-op changes keep the revision and emit nothing (like the daemon)
+    const eventsBefore = events.length;
+    const same = await api.updateSettings({ review: { defaultEnabled: true } });
+    expect(same.revision).toBe(cleared.revision);
+    const sameAgain = await api.setReviewPolicy({
+      target: { kind: 'worktree', worktreeId: wt },
+      enabled: null,
+    });
+    expect(sameAgain.revision).toBe(cleared.revision);
+    expect(events.length).toBe(eventsBefore);
+    // overrides are ordered folder, project, branch, worktree
+    const kinds = cleared.overrides.map((o) => o.target.kind);
+    expect(kinds).toEqual(
+      [...kinds].sort(
+        (a, b) =>
+          ['folder', 'project', 'branch', 'worktree'].indexOf(a) -
+          ['folder', 'project', 'branch', 'worktree'].indexOf(b),
+      ),
+    );
+    // default off makes everything without an override opt-in
+    const off = await api.updateSettings({ review: { defaultEnabled: false } });
+    expect(off.settings.review.defaultEnabled).toBe(false);
+    const list = await api.listProjects();
+    expect(
+      list.projects.find((p) => p.project.name === 'web-dashboard')?.worktrees[0]?.review,
+    ).toEqual({
+      enabled: false,
+      source: 'default',
+    });
+    // targets must exist; branch targets only need the project
+    await expect(
+      api.setReviewPolicy({
+        target: { kind: 'worktree', worktreeId: 'f'.repeat(16) },
+        enabled: true,
+      }),
+    ).rejects.toMatchObject({ code: 'not_found' });
+    await expect(
+      api.setReviewPolicy({
+        target: { kind: 'branch', projectId: web?.project.id ?? '', branch: 'no/such' },
+        enabled: true,
+      }),
+    ).resolves.toMatchObject({ revision: expect.any(Number) });
+    // removing the project removes its overrides
+    await api.removeProject(web?.project.id ?? '');
+    const last = await api.getSettings();
+    expect(
+      last.overrides.filter(
+        (o) =>
+          o.target.kind !== 'folder' &&
+          'projectId' in o.target &&
+          o.target.projectId === web?.project.id,
+      ),
+    ).toHaveLength(0);
+  });
+
+  it('bulk review marks the current state, respects stale/disabled/paths, and undoes exactly', async () => {
+    const backend = new MockBackend({ dataset: 'demo' });
+    const api = clientFor(backend);
+    const events: ServerEvent[] = [];
+    backend.subscribe((e) => events.push(e));
+    const { projects } = await api.listProjects();
+    const auth = projects
+      .flatMap((p) => p.worktrees)
+      .find((w) => w.worktree.branch === 'feat/auth');
+    const authId = auth?.worktree.id ?? '';
+    const files = await api.listFiles(authId);
+
+    // paths only with worktree targets
+    await expect(
+      api.bulkReview({ target: { kind: 'all' }, paths: [{ path: 'README.md' }] }),
+    ).rejects.toMatchObject({ code: 'bad_request' });
+
+    // stale: the user never saw this state
+    const stale = await api.bulkReview({
+      target: { kind: 'worktree', worktreeId: authId },
+      expectedStateHashes: { [authId]: 'deadbeef' },
+    });
+    expect(stale).toMatchObject({ changed: 0, stale: [authId], undoToken: null });
+
+    // two files of one worktree
+    const two = files.files.slice(0, 2);
+    const res = await api.bulkReview({
+      target: { kind: 'worktree', worktreeId: authId },
+      paths: two.map((f) => ({ path: f.path, ...(f.rawPath ? { rawPath: f.rawPath } : {}) })),
+      expectedStateHashes: { [authId]: files.stateHash },
+    });
+    expect(res).toMatchObject({
+      changed: 2,
+      unchanged: 0,
+      worktrees: 1,
+      stale: [],
+      skippedDisabled: [],
+    });
+    expect(res.undoToken).toBeTruthy();
+    expect(events.filter((e) => e.type === 'review.bulk')).toHaveLength(1);
+    expect(events.filter((e) => e.type === 'review.changed')).toHaveLength(0);
+    const after = await api.listFiles(authId);
+    expect(
+      after.files
+        .filter((f) => f.reviewed)
+        .map((f) => f.path)
+        .sort(),
+    ).toEqual(two.map((f) => f.path).sort());
+
+    // again: unchanged
+    const again = await api.bulkReview({
+      target: { kind: 'worktree', worktreeId: authId },
+      paths: two.map((f) => ({ path: f.path, ...(f.rawPath ? { rawPath: f.rawPath } : {}) })),
+    });
+    expect(again).toMatchObject({ changed: 0, unchanged: 2, undoToken: null });
+
+    // all: disabled worktrees are skipped unless includeDisabled
+    const all = await api.bulkReview({ target: { kind: 'all' } });
+    expect(all.changed).toBeGreaterThan(0);
+    expect(all.skippedDisabled.length).toBe(0); // the disabled worktrees in the demo have no files
+    const inbox = await api.inbox({ onlyUnreviewed: true });
+    expect(inbox.entries).toHaveLength(0);
+
+    // undo the "all" call: exactly its rows; the two earlier marks stay
+    const undone = await api.undoReview({ undoToken: all.undoToken ?? '' });
+    expect(undone.restored).toBe(all.changed);
+    const afterUndo = await api.listFiles(authId);
+    expect(afterUndo.files.filter((f) => f.reviewed)).toHaveLength(2);
+    await expect(api.undoReview({ undoToken: all.undoToken ?? '' })).rejects.toMatchObject({
+      code: 'not_found',
+    });
+
+    // mark all unreviewed (inverse), then undo restores the marks
+    const clear = await api.bulkReview({
+      target: { kind: 'worktree', worktreeId: authId },
+      reviewed: false,
+    });
+    expect(clear.changed).toBe(2);
+    await api.undoReview({ undoToken: clear.undoToken ?? '' });
+    expect((await api.listFiles(authId)).files.filter((f) => f.reviewed)).toHaveLength(2);
+
+    // expired tokens are gone
+    const t = await api.bulkReview({
+      target: { kind: 'project', projectId: auth?.worktree.projectId ?? '' },
+      reviewed: false,
+    });
+    backend.now = () => Date.now() + 11 * 60 * 1000;
+    await expect(api.undoReview({ undoToken: t.undoToken ?? '' })).rejects.toMatchObject({
+      code: 'not_found',
+    });
+  });
 });

@@ -1,6 +1,7 @@
-import type { DiffScope, InboxEntry } from '@octopus-diff/contracts';
+import type { DiffScope, EffectiveReviewPolicy, InboxEntry } from '@octopus-diff/contracts';
 import { createContext, type ReactNode, useContext, useMemo } from 'react';
 import { inboxScopeFor, useFilesQuery, useInboxQuery, useProjectsQuery } from '../api/queries.ts';
+import { useScanRootsQuery } from '../api/settings.ts';
 import { fileRefKey } from '../lib/fileRef.ts';
 import {
   buildSidebar,
@@ -10,16 +11,19 @@ import {
   rowVisible,
   type SidebarModel,
   sortFiles,
+  sortFilesTreeOrder,
   sortInboxEntries,
   type VisiblePredicate,
   visibleIf,
 } from '../lib/model.ts';
+import { effectivePolicy } from '../lib/policy.ts';
 import { useUi, type View } from './ui.tsx';
 
 export interface AppModel {
   view: View;
   scope: DiffScope;
   projects: ReturnType<typeof useProjectsQuery>;
+  scanRoots: ReturnType<typeof useScanRootsQuery>;
   inbox: ReturnType<typeof useInboxQuery>;
   files: ReturnType<typeof useFilesQuery>;
   sidebar: SidebarModel;
@@ -36,6 +40,16 @@ export interface AppModel {
   viewReady: boolean;
   selectedKey: string | null;
   selectedEntry: NavEntry | undefined;
+  /** Unreviewed files across every worktree in the review loop (current scope). */
+  unreviewedTotal: number;
+  /** Worktrees whose review policy is disabled. */
+  disabledWorktrees: ReadonlySet<string>;
+  /** Current `stateHash` per worktree (from the projects list), for bulk `expectedStateHashes`. */
+  stateHashes: ReadonlyMap<string, string>;
+  /** Inbox view with no sidebar filter and no hidden file: a bulk "all" matches what is shown. */
+  inboxUnfiltered: boolean;
+  /** Effective policy of the selected worktree view (null in the Inbox). */
+  viewPolicy: EffectiveReviewPolicy | null;
 }
 
 const AppModelContext = createContext<AppModel | null>(null);
@@ -61,6 +75,7 @@ function useBuildAppModel(): AppModel {
   const selected = useUi((s) => s.selected);
 
   const projects = useProjectsQuery();
+  const scanRoots = useScanRootsQuery();
   const inbox = useInboxQuery(scope);
   const worktreeId = view.kind === 'worktree' ? view.worktreeId : null;
   const files = useFilesQuery(worktreeId, scope);
@@ -70,14 +85,24 @@ function useBuildAppModel(): AppModel {
   // While the inbox for a new scope loads, the previous scope's data is only a placeholder.
   const inboxMatchesScope = inboxData !== undefined && !inbox.isPlaceholderData;
 
+  const scanRootList = scanRoots.data?.scanRoots;
   const sidebar = useMemo(
     () =>
-      buildSidebar(projectList ?? [], inboxMatchesScope ? inboxData?.entries : undefined, {
-        text: filterText,
-        onlyDirty,
-        onlyUnreviewed,
-      }),
-    [projectList, inboxData, inboxMatchesScope, filterText, onlyDirty, onlyUnreviewed],
+      buildSidebar(
+        projectList ?? [],
+        inboxMatchesScope ? inboxData?.entries : undefined,
+        { text: filterText, onlyDirty, onlyUnreviewed },
+        scanRootList,
+      ),
+    [
+      projectList,
+      inboxData,
+      inboxMatchesScope,
+      filterText,
+      onlyDirty,
+      onlyUnreviewed,
+      scanRootList,
+    ],
   );
 
   const inboxEntries = useMemo(() => sortInboxEntries(inboxData?.entries ?? []), [inboxData]);
@@ -94,6 +119,8 @@ function useBuildAppModel(): AppModel {
     return map;
   }, [inboxEntries]);
 
+  const reviewOffDisplay = useUi((s) => s.reviewOffDisplay);
+  const fileListLayout = useUi((s) => s.fileListLayout);
   const filesData = files.data;
   const groups = useMemo<FileGroup[]>(() => {
     if (view.kind === 'inbox') {
@@ -102,14 +129,20 @@ function useBuildAppModel(): AppModel {
       for (const entry of inboxEntries) {
         const row = sidebar.byId.get(entry.worktree.id);
         if (row && !rowVisible(row, filters)) continue;
+        const enabled = row ? row.review.enabled : effectivePolicy(entry.review).enabled;
+        if (!enabled && reviewOffDisplay === 'hide') continue;
         const group = sortedInboxFiles.get(entry.worktree.id);
         if (group) out.push(group);
       }
       return out;
     }
+    if (view.kind !== 'worktree') return [];
     const row = sidebar.byId.get(view.worktreeId);
     if (!row || !filesData) return [];
-    return [{ project: row.project, worktree: row.worktree, files: sortFiles(filesData.files) }];
+    // F10: in the tree layout, j/k/n follow the tree's displayed order.
+    const sorted =
+      fileListLayout === 'tree' ? sortFilesTreeOrder(filesData.files) : sortFiles(filesData.files);
+    return [{ project: row.project, worktree: row.worktree, files: sorted }];
   }, [
     view,
     inboxEntries,
@@ -119,9 +152,44 @@ function useBuildAppModel(): AppModel {
     filterText,
     onlyDirty,
     onlyUnreviewed,
+    reviewOffDisplay,
+    fileListLayout,
   ]);
 
   const entries = useMemo(() => flattenGroups(groups), [groups]);
+
+  const disabledWorktrees = useMemo(() => {
+    const out = new Set<string>();
+    for (const row of sidebar.byId.values()) if (!row.review.enabled) out.add(row.worktree.id);
+    for (const entry of inboxEntries) {
+      if (!sidebar.byId.has(entry.worktree.id) && !effectivePolicy(entry.review).enabled) {
+        out.add(entry.worktree.id);
+      }
+    }
+    return out;
+  }, [sidebar, inboxEntries]);
+
+  const stateHashes = useMemo(() => {
+    const out = new Map<string, string>();
+    for (const row of sidebar.byId.values()) {
+      if (row.summary) out.set(row.worktree.id, row.summary.stateHash);
+    }
+    for (const entry of inboxEntries) {
+      if (!out.has(entry.worktree.id)) out.set(entry.worktree.id, entry.summary.stateHash);
+    }
+    return out;
+  }, [sidebar, inboxEntries]);
+
+  const inboxUnfiltered =
+    view.kind === 'inbox' &&
+    filterText.trim() === '' &&
+    !onlyDirty &&
+    !onlyUnreviewed &&
+    showReviewed &&
+    groups.length === inboxEntries.length;
+
+  const viewPolicy =
+    view.kind === 'worktree' ? (sidebar.byId.get(view.worktreeId)?.review ?? null) : null;
 
   const globalEntries = useMemo(() => {
     if (scope.kind === 'commit') return entries;
@@ -148,7 +216,9 @@ function useBuildAppModel(): AppModel {
       ? inboxData !== undefined &&
         !inbox.isPlaceholderData &&
         inboxScopeFor(scope).kind === inboxData.scope.kind
-      : filesData !== undefined && sidebar.byId.has(view.worktreeId);
+      : view.kind === 'worktree'
+        ? filesData !== undefined && sidebar.byId.has(view.worktreeId)
+        : projectList !== undefined;
 
   const selectedKey = selected ? fileRefKey(selected) : null;
   const selectedEntry = useMemo(
@@ -160,13 +230,25 @@ function useBuildAppModel(): AppModel {
     [selectedKey, entries, globalEntries],
   );
 
+  const unreviewedTotal = useMemo(() => {
+    let n = 0;
+    for (const row of sidebar.byId.values()) n += row.unreviewed;
+    return n;
+  }, [sidebar]);
+
   return {
     view,
     scope,
     projects,
+    scanRoots,
     inbox,
     files,
     sidebar,
+    unreviewedTotal,
+    disabledWorktrees,
+    stateHashes,
+    inboxUnfiltered,
+    viewPolicy,
     inboxEntries,
     groups,
     entries,

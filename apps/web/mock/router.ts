@@ -7,12 +7,17 @@ import {
   AddProjectRequestSchema,
   AddScanRootRequestSchema,
   type ApiErrorBody,
+  AppSettingsPatchSchema,
+  BulkReviewRequestSchema,
   CommitsQuerySchema,
   DiffQuerySchema,
   FilesQuerySchema,
   FocusRequestSchema,
   InboxQuerySchema,
   ReviewRequestSchema,
+  SetReviewPolicyRequestSchema,
+  UndoReviewRequestSchema,
+  UpdateProjectRequestSchema,
 } from '@octopus-diff/contracts';
 import { MockApiError, type MockBackend } from './backend.js';
 
@@ -98,6 +103,10 @@ export function createMockRouter(backend: MockBackend, options: MockRouterOption
       if (projectMatch && method === 'DELETE') {
         return json(200, backend.removeProject(decodeURIComponent(projectMatch[1] ?? '')));
       }
+      if (projectMatch && method === 'PATCH') {
+        const req = parse(UpdateProjectRequestSchema, await body());
+        return json(200, backend.updateProject(decodeURIComponent(projectMatch[1] ?? ''), req));
+      }
       if (path === '/api/scan-roots' && method === 'GET') return json(200, backend.listScanRoots());
       if (path === '/api/scan-roots' && method === 'POST') {
         const req = parse(AddScanRootRequestSchema, await body());
@@ -106,6 +115,10 @@ export function createMockRouter(backend: MockBackend, options: MockRouterOption
       const scanMatch = path.match(/^\/api\/scan-roots\/([^/]+)$/);
       if (scanMatch && method === 'DELETE') {
         return json(200, backend.removeScanRoot(decodeURIComponent(scanMatch[1] ?? '')));
+      }
+      const rescanMatch = path.match(/^\/api\/scan-roots\/([^/]+)\/rescan$/);
+      if (rescanMatch && method === 'POST') {
+        return json(200, backend.rescanScanRoot(decodeURIComponent(rescanMatch[1] ?? '')));
       }
       if (path === '/api/inbox' && method === 'GET') {
         const q = parse(InboxQuerySchema, queryObject(url));
@@ -137,6 +150,24 @@ export function createMockRouter(backend: MockBackend, options: MockRouterOption
       if (path === '/api/focus' && method === 'PUT') {
         const req = parse(FocusRequestSchema, await body());
         return json(200, backend.setFocus(req.worktreeId));
+      }
+      // --- UX round 1 ---
+      if (path === '/api/settings' && method === 'GET') return json(200, backend.getSettings());
+      if (path === '/api/settings' && method === 'PATCH') {
+        const req = parse(AppSettingsPatchSchema, await body());
+        return json(200, backend.updateSettings(req));
+      }
+      if (path === '/api/review-policy' && method === 'PUT') {
+        const req = parse(SetReviewPolicyRequestSchema, await body());
+        return json(200, backend.setReviewPolicy(req));
+      }
+      if (path === '/api/review/bulk' && method === 'POST') {
+        const req = parse(BulkReviewRequestSchema, await body());
+        return json(200, backend.bulkReview(req));
+      }
+      if (path === '/api/review/undo' && method === 'POST') {
+        const req = parse(UndoReviewRequestSchema, await body());
+        return json(200, backend.undoReview(req.undoToken));
       }
       // Mock-only control endpoint: simulate an agent edit right now.
       if (path === '/api/__mock/mutate' && method === 'POST') {

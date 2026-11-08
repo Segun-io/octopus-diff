@@ -17,7 +17,8 @@ export type MockFileKind =
   | 'empty' // empty file added
   | 'conflict'
   | 'huge' // too large (soft limit) and truncated even with full=true
-  | 'big'; // large but under the soft limit (virtualization)
+  | 'big' // large but under the soft limit (virtualization)
+  | 'trojan'; // bidi / invisible characters in the content (SEC-05)
 
 export interface MockFile {
   path: string;
@@ -205,6 +206,11 @@ export function fileSides(file: MockFile): FileSides {
         oldMode: regular,
         newMode: regular,
       };
+    }
+    case 'trojan': {
+      const base = baseContent(file.path, file.seed, file.lines);
+      const next = `${base}\nfunction isAdmin(accessLevel: string) {\n  if (accessLevel != "user\u202E \u2066// Check if admin\u2069 \u2066") {\n    return true;\n  }\n  return false;\n}\n`;
+      return { oldContent: base, newContent: next, oldMode: regular, newMode: regular };
     }
     case 'crlf': {
       const base = baseContent(file.path, file.seed, file.lines).replace(/\n/g, '\r\n');

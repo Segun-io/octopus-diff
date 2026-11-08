@@ -129,6 +129,8 @@ export interface EventEffects {
    */
   inboxFull: boolean;
   scanRoots: boolean;
+  /** `settings.changed`: refetch settings (effective policies may have moved). */
+  settings: boolean;
   everything: boolean;
 }
 
@@ -139,6 +141,7 @@ export function emptyEffects(): EventEffects {
     inbox: false,
     inboxFull: false,
     scanRoots: false,
+    settings: false,
     everything: false,
   };
 }
@@ -190,6 +193,22 @@ export function collectEventEffects(
     case 'review.changed':
       applyReviewToCaches(queryClient, event);
       break;
+    case 'review.bulk':
+      // Many marks at once: refetch the inbox and the files/diffs of the affected projects.
+      effects.inbox = true;
+      for (const id of worktreeIdsOfProjects(queryClient, event.projectIds)) {
+        effects.worktrees.add(id);
+      }
+      break;
+    case 'settings.changed': {
+      // Skip the refetch when this revision is the one a response already applied.
+      const cached = queryClient.getQueryData<{ revision: number } | null>(['settings']);
+      if (cached && cached.revision >= event.revision) break;
+      effects.settings = true;
+      effects.projects = true;
+      effects.inbox = true;
+      break;
+    }
   }
   return effects;
 }
@@ -279,6 +298,17 @@ async function patchInbox(
   }
 }
 
+/** Worktree ids of the given projects according to the cached projects list. */
+function worktreeIdsOfProjects(queryClient: QueryClient, projectIds: readonly string[]): string[] {
+  const projects = queryClient.getQueryData<ProjectsResponse>(queryKeys.projects());
+  const out: string[] = [];
+  for (const item of projects?.projects ?? []) {
+    if (!projectIds.includes(item.project.id)) continue;
+    for (const w of item.worktrees) out.push(w.worktree.id);
+  }
+  return out;
+}
+
 export async function flushEffects(
   queryClient: QueryClient,
   effects: EventEffects,
@@ -289,6 +319,7 @@ export async function flushEffects(
     return;
   }
   const tasks: Promise<void>[] = [];
+  if (effects.settings) tasks.push(queryClient.invalidateQueries({ queryKey: ['settings'] }));
   const projectsRefetch = effects.projects
     ? queryClient.invalidateQueries({ queryKey: queryKeys.projects() })
     : Promise.resolve();

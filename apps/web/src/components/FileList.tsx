@@ -8,10 +8,17 @@ import {
   type VisiblePredicate,
   worktreeLabel,
 } from '../lib/model.ts';
+import { escapeSuspicious, hasSuspicious } from '../lib/unicode.ts';
+import { useUi } from '../state/ui.tsx';
 import { CheckIcon, LineCounts, StatusIcon, statusLabel } from './bits.tsx';
 
-export const ROW_HEIGHT = 26;
-export const HEADER_HEIGHT = 30;
+/** Row heights per density (mirrors `--od-row` / `--od-row-header` in styles.css). */
+export const ROW_HEIGHTS = {
+  compact: { row: 26, header: 30 },
+  comfortable: { row: 30, header: 32 },
+} as const;
+export const ROW_HEIGHT = ROW_HEIGHTS.compact.row;
+export const HEADER_HEIGHT = ROW_HEIGHTS.compact.header;
 const OVERSCAN_PX = 400;
 
 interface LayoutGroup {
@@ -24,6 +31,9 @@ interface LayoutGroup {
 
 export interface FileListProps {
   groups: readonly FileGroup[];
+  /** Worktrees out of the review loop (no unreviewed counts; dimmed when `dimDisabled`). */
+  disabled?: ReadonlySet<string>;
+  dimDisabled?: boolean;
   entries: readonly NavEntry[];
   visible: VisiblePredicate;
   selectedKey: string | null;
@@ -45,6 +55,8 @@ function rowId(key: string): string {
  */
 export function FileList({
   groups,
+  disabled,
+  dimDisabled = true,
   entries,
   visible,
   selectedKey,
@@ -54,6 +66,9 @@ export function FileList({
 }: FileListProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [viewport, setViewport] = useState({ top: 0, height: 800 });
+  const density = useUi((s) => s.density);
+  const ROW_HEIGHT = ROW_HEIGHTS[density].row;
+  const HEADER_HEIGHT = ROW_HEIGHTS[density].header;
 
   const layout = useMemo(() => {
     const byWorktree = new Map<string, NavEntry[]>();
@@ -73,7 +88,7 @@ export function FileList({
       top += height;
     }
     return { groups: out, total: top };
-  }, [groups, entries, visible, grouped]);
+  }, [groups, entries, visible, grouped, ROW_HEIGHT, HEADER_HEIGHT]);
 
   // Track viewport (scroll + size), throttled to animation frames.
   useLayoutEffect(() => {
@@ -120,7 +135,7 @@ export function FileList({
       }
       return;
     }
-  }, [selectedKey, layout]);
+  }, [selectedKey, layout, ROW_HEIGHT]);
 
   const windowTop = viewport.top - OVERSCAN_PX;
   const windowBottom = viewport.top + viewport.height + OVERSCAN_PX;
@@ -180,13 +195,22 @@ export function FileList({
                   }
                 : {})}
               style={{ position: 'absolute', top: g.top, left: 0, right: 0, height: g.height }}
+              className={disabled?.has(g.group.worktree.id) && dimDisabled ? 'opacity-60' : ''}
             >
-              {grouped && <GroupHeader group={g.group} shown={g.rows.length} />}
+              {grouped && (
+                <GroupHeader
+                  group={g.group}
+                  shown={g.rows.length}
+                  height={HEADER_HEIGHT}
+                  reviewOff={disabled?.has(g.group.worktree.id) ?? false}
+                />
+              )}
               {rendered.map((entry, i) => (
                 <FileRow
                   key={entry.key}
                   entry={entry}
                   top={g.headerHeight + (first + i) * ROW_HEIGHT}
+                  height={ROW_HEIGHT}
                   selected={entry.key === selectedKey}
                   onSelect={onSelect}
                 />
@@ -202,22 +226,26 @@ export function FileList({
 const GroupHeader = memo(function GroupHeader({
   group,
   shown,
+  height,
+  reviewOff,
 }: {
   group: FileGroup;
   shown: number;
+  height: number;
+  reviewOff: boolean;
 }) {
   const total = group.files.length;
-  const unreviewed = group.files.reduce((n, f) => n + (f.reviewed ? 0 : 1), 0);
+  const unreviewed = reviewOff ? 0 : group.files.reduce((n, f) => n + (f.reviewed ? 0 : 1), 0);
   return (
     <div
       className="flex items-center gap-2 border-b border-line bg-raised px-2 text-xs"
-      style={{ height: HEADER_HEIGHT }}
+      style={{ height }}
       title={group.worktree.path}
     >
       <span className="truncate font-semibold">{group.project.name}</span>
       <span className="truncate text-muted">{worktreeLabel(group.worktree)}</span>
       <span className="ml-auto shrink-0 text-[11px] text-muted">
-        {unreviewed > 0 ? `${unreviewed} unreviewed · ` : ''}
+        {reviewOff ? 'review off · ' : unreviewed > 0 ? `${unreviewed} unreviewed · ` : ''}
         {shown < total ? `${shown}/${total}` : total} files
       </span>
     </div>
@@ -232,16 +260,20 @@ function renameLabel(file: ChangedFile): string | null {
 const FileRow = memo(function FileRow({
   entry,
   top,
+  height,
   selected,
   onSelect,
 }: {
   entry: NavEntry;
   top: number;
+  height: number;
   selected: boolean;
   onSelect: (entry: NavEntry) => void;
 }) {
   const { file } = entry;
-  const { dir, base } = splitPath(file.path);
+  const suspicious =
+    hasSuspicious(file.path) || (file.oldPath ? hasSuspicious(file.oldPath) : false);
+  const { dir, base } = splitPath(suspicious ? escapeSuspicious(file.path) : file.path);
   const rename = renameLabel(file);
   const key = fileRefKey(toFileRef(entry.worktreeId, file));
   return (
@@ -257,6 +289,7 @@ const FileRow = memo(function FileRow({
       {...(file.oldPath ? { 'data-old-path': file.oldPath } : {})}
       data-status={file.status}
       data-reviewed={String(file.reviewed)}
+      data-suspicious={suspicious ? 'true' : undefined}
       data-worktree-id={entry.worktreeId}
       data-additions={file.additions === null ? '' : String(file.additions)}
       data-deletions={file.deletions === null ? '' : String(file.deletions)}
@@ -265,15 +298,25 @@ const FileRow = memo(function FileRow({
       className={`absolute right-0 left-0 flex cursor-pointer items-center gap-1.5 px-2 text-xs ${
         selected ? 'bg-selected' : 'hover:bg-hover'
       } ${file.reviewed ? 'opacity-60' : ''}`}
-      style={{ top, height: ROW_HEIGHT }}
+      style={{ top, height }}
     >
       <StatusIcon status={file.status} />
+      {suspicious && (
+        <span
+          className="shrink-0 text-warn"
+          role="img"
+          aria-label="File name contains invisible or bidirectional characters"
+          title="File name contains invisible or bidirectional characters (shown as ⟨U+…⟩)"
+        >
+          ⚠
+        </span>
+      )}
       <span className="flex min-w-0 flex-1 items-baseline gap-1 overflow-hidden whitespace-nowrap">
         {rename ? (
           <span className="truncate" dir="auto">
-            <span className="text-muted">{file.oldPath}</span>
+            <span className="text-muted">{escapeSuspicious(file.oldPath ?? '')}</span>
             <span className="text-faint"> → </span>
-            <span className="font-medium">{file.path}</span>
+            <span className="font-medium">{escapeSuspicious(file.path)}</span>
           </span>
         ) : (
           <>

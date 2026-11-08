@@ -2,64 +2,77 @@
 
 @custom-variant dark (&:where(.dark, .dark *));
 
+/*
+ * Colour tokens come from the theme registry (src/theme/themes/*.ts) through the generated
+ * `virtual:octopus-themes.css` (imported in main.tsx), which declares every `--od-*` custom
+ * property per theme. This file only maps them to Tailwind utilities and defines the shared
+ * non-colour tokens (docs/design/IDENTITY.md §6).
+ */
 @theme inline {
   --color-canvas: var(--od-canvas);
   --color-surface: var(--od-surface);
   --color-raised: var(--od-raised);
+  --color-overlay: var(--od-overlay);
   --color-line: var(--od-line);
+  --color-line-strong: var(--od-line-strong);
   --color-fg: var(--od-fg);
   --color-muted: var(--od-muted);
   --color-faint: var(--od-faint);
   --color-accent: var(--od-accent);
   --color-accent-fg: var(--od-accent-fg);
+  --color-accent-soft: var(--od-accent-soft);
+  --color-selected: var(--od-selected);
+  --color-hover: var(--od-hover);
+  --color-focus: var(--od-focus);
   --color-add: var(--od-add);
+  --color-add-soft: var(--od-add-soft);
   --color-del: var(--od-del);
+  --color-del-soft: var(--od-del-soft);
   --color-mod: var(--od-mod);
   --color-warn: var(--od-warn);
   --color-danger: var(--od-danger);
-  --color-selected: var(--od-selected);
-  --color-hover: var(--od-hover);
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  --radius-sm: var(--od-radius-sm);
+  --radius-md: var(--od-radius-md);
+  --radius-lg: var(--od-radius-lg);
+  --shadow-overlay: var(--od-shadow-2);
 }
 
 :root {
-  color-scheme: light;
-  --od-canvas: #f6f7f9;
-  --od-surface: #ffffff;
-  --od-raised: #eef0f3;
-  --od-line: #dadde3;
-  --od-fg: #1d2129;
-  --od-muted: #5b6270;
-  --od-faint: #8a909c;
-  --od-accent: #3d63dd;
-  --od-accent-fg: #ffffff;
-  --od-add: #1a7f37;
-  --od-del: #c62a2f;
-  --od-mod: #9a6700;
-  --od-warn: #9a6700;
-  --od-danger: #c62a2f;
-  --od-selected: #dfe7ff;
-  --od-hover: #eceff4;
+  /* spacing: a 4 px scale */
+  --od-space-1: 4px;
+  --od-space-2: 8px;
+  --od-space-3: 12px;
+  --od-space-4: 16px;
+  --od-space-5: 20px;
+  --od-space-6: 24px;
+  /* radius */
+  --od-radius-sm: 4px;
+  --od-radius-md: 6px;
+  --od-radius-lg: 10px;
+  /* elevation 2 (dialogs, menus, palette); levels 0 and 1 are flat surfaces with a hairline */
+  --od-shadow-2: 0 8px 24px rgb(20 23 38 / 0.14);
+  /* motion */
+  --od-motion-fast: 120ms;
+  --od-motion: 180ms;
+  --od-ease: cubic-bezier(0.2, 0, 0, 1);
+  /* density: compact (default) */
+  --od-row: 26px;
+  --od-row-header: 30px;
+  --od-pad-x: 8px;
+  --od-font: 13px;
 }
 
 :root.dark {
-  color-scheme: dark;
-  --od-canvas: #0e1014;
-  --od-surface: #15181d;
-  --od-raised: #1c2027;
-  --od-line: #2a2f38;
-  --od-fg: #e3e6eb;
-  --od-muted: #a0a6b1;
-  --od-faint: #6c7380;
-  --od-accent: #6e8cff;
-  --od-accent-fg: #0e1014;
-  --od-add: #4ac26b;
-  --od-del: #ff7b72;
-  --od-mod: #d6a243;
-  --od-warn: #d6a243;
-  --od-danger: #ff7b72;
-  --od-selected: #23304f;
-  --od-hover: #1d222a;
+  --od-shadow-2: 0 8px 24px rgb(0 0 0 / 0.45);
+}
+
+:root[data-density="comfortable"] {
+  --od-row: 30px;
+  --od-row-header: 32px;
+  --od-pad-x: 10px;
+  --od-font: 13.5px;
 }
 
 html,
@@ -72,34 +85,93 @@ body {
   margin: 0;
   background: var(--od-canvas);
   color: var(--od-fg);
-  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-  font-size: 13px;
+  font-family: var(--font-sans);
+  font-size: var(--od-font);
+  line-height: 1.45;
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
 /* Visible focus rings for keyboard users everywhere. */
 :focus-visible {
-  outline: 2px solid var(--od-accent);
+  outline: 2px solid var(--od-focus);
   outline-offset: 1px;
 }
 
 .od-scroll {
   scrollbar-width: thin;
-  scrollbar-color: var(--od-line) transparent;
+  scrollbar-color: var(--od-line-strong) transparent;
 }
 
 kbd {
   font-family: var(--font-mono);
   font-size: 11px;
-  padding: 1px 5px;
-  border-radius: 4px;
-  border: 1px solid var(--od-line);
+  line-height: 1;
+  padding: 2px 5px;
+  border-radius: var(--od-radius-sm);
+  border: 1px solid var(--od-line-strong);
   background: var(--od-raised);
+  color: var(--od-fg);
+}
+
+/* Elevation 2 surfaces: dialogs, menus, the palette, toasts. */
+.od-overlay {
+  background: var(--od-overlay);
+  border: 1px solid var(--od-line-strong);
+  box-shadow: var(--od-shadow-2);
+}
+
+/* Section heading: 11 px, semibold, upper case, tracked. */
+.od-heading {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--od-muted);
+}
+
+/* Middle-ellipsis paths: show the start and the end, elide the middle. */
+.od-path {
+  display: inline-flex;
+  min-width: 0;
+  max-width: 100%;
+  white-space: nowrap;
+}
+.od-path > .od-path-head {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.od-path > .od-path-tail {
+  flex: 0 0 auto;
+}
+
+/* Activity pulse: a worktree changed in the last ~10 s. */
+.od-pulse {
+  position: relative;
+}
+.od-pulse::after {
+  content: "";
+  position: absolute;
+  inset: -3px;
+  border-radius: 50%;
+  border: 1.5px solid var(--od-accent);
+  opacity: 0;
 }
 
 @media (prefers-reduced-motion: no-preference) {
   .od-fade-in {
-    animation: od-fade-in 160ms ease-out;
+    animation: od-fade-in var(--od-motion) var(--od-ease);
+  }
+  .od-slide-up {
+    animation: od-slide-up var(--od-motion) var(--od-ease);
+  }
+  .od-pulse::after {
+    animation: od-pulse 1.6s ease-out infinite;
+  }
+  .od-settle {
+    animation: od-settle 600ms var(--od-ease);
   }
 }
 
@@ -107,6 +179,39 @@ kbd {
   from {
     opacity: 0;
     transform: translateY(-2px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes od-slide-up {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes od-pulse {
+  0% {
+    opacity: 0.9;
+    transform: scale(0.6);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.8);
+  }
+}
+
+@keyframes od-settle {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.98);
   }
   to {
     opacity: 1;

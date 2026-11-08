@@ -169,7 +169,7 @@ export function useFocusReporting(worktreeId: string | null) {
 
 /** Resolved theme: follows prefers-color-scheme unless overridden. */
 export function useResolvedTheme(): 'light' | 'dark' {
-  const pref = useUi((s) => s.theme);
+  const pref = useUi((s) => s.theme.mode);
   const systemDark = useSystemDark();
   return pref === 'system' ? (systemDark ? 'dark' : 'light') : pref;
 }

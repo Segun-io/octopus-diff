@@ -3,10 +3,12 @@ import { useIsFetching, useQueryClient } from '@tanstack/react-query';
 import { useEffect } from 'react';
 import { useResolvedTheme } from '../api/hooks.ts';
 import { queryKeys, useApi, useCommitsQuery } from '../api/queries.ts';
+import { useScanRootsQuery, useSettingsSupport } from '../api/settings.ts';
 import { useCommandsContext } from '../state/commandsContext.tsx';
 import { useAppModel } from '../state/model.tsx';
 import { useUi, useUiStore } from '../state/ui.tsx';
 import { ToggleButton } from './bits.tsx';
+import { ReviewPolicyChip } from './ReviewPolicyChip.tsx';
 
 const SCOPE_LABELS: Record<ScopeKind, string> = {
   working: 'Working tree',
@@ -32,6 +34,12 @@ export function Toolbar() {
   const worktreeId = model.view.kind === 'worktree' ? model.view.worktreeId : null;
   const commits = useCommitsQuery(worktreeId, worktreeId !== null);
   const fetching = useIsFetching();
+  const support = useSettingsSupport();
+  const scanRoots = useScanRootsQuery(support === 'ready');
+  const row = worktreeId ? model.sidebar.byId.get(worktreeId) : undefined;
+  const folderPath = row?.project.scanRootId
+    ? scanRoots.data?.scanRoots.find((r) => r.id === row.project.scanRootId)?.path
+    : undefined;
 
   const commitList = commits.data?.commits;
   // A commit scope always needs a sha: when entering commit scope, default to HEAD.
@@ -148,6 +156,9 @@ export function Toolbar() {
       >
         Show reviewed
       </ToggleButton>
+      {row && model.viewPolicy && (
+        <ReviewPolicyChip row={row} policy={model.viewPolicy} folderPath={folderPath} />
+      )}
       {model.view.kind === 'worktree' && (
         <button
           type="button"

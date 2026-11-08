@@ -1,6 +1,5 @@
-import { type FileDiff, TEST_IDS } from '@octopus-diff/contracts';
+import { type FileDiff, scopeKey, TEST_IDS } from '@octopus-diff/contracts';
 import { lazy, type ReactNode, Suspense, useEffect, useMemo, useRef, useState } from 'react';
-import { useResolvedTheme } from '../../api/hooks.ts';
 import { describeError, useDiffQuery } from '../../api/queries.ts';
 import {
   classifyDiff,
@@ -9,10 +8,17 @@ import {
   repairTruncatedPatch,
 } from '../../lib/diffKind.ts';
 import { fileRefKey } from '../../lib/fileRef.ts';
+import {
+  describeSuspicious,
+  escapeSuspicious,
+  findSuspicious,
+  hasSuspicious,
+} from '../../lib/unicode.ts';
 import { CONTEXT_STEP, DEFAULT_CONTEXT } from '../../state/commands.ts';
 import { useCommandsContext } from '../../state/commandsContext.tsx';
 import { useAppModel } from '../../state/model.tsx';
 import { actions, useUi, useUiStore } from '../../state/ui.tsx';
+import { useTheme } from '../../theme/useTheme.ts';
 import { CheckIcon, LineCounts, StatusIcon, statusLabel } from '../bits.tsx';
 
 const DiffRenderer = lazy(() =>
@@ -67,7 +73,8 @@ export function DiffPane() {
   const diffMode = useUi((s) => s.diffMode);
   const ignoreWhitespace = useUi((s) => s.ignoreWhitespace);
   const fileOptions = useUi((s) => s.fileOptions);
-  const theme = useResolvedTheme();
+  const appTheme = useTheme();
+  const theme = appTheme.kind;
   const key = selected ? fileRefKey(selected) : null;
   const opts = (key && fileOptions[key]) || {};
   const query = useDiffQuery(selected, model.scope, {
@@ -82,16 +89,26 @@ export function DiffPane() {
   const reviewed = diff?.reviewed ?? entry?.file.reviewed ?? false;
   const row = selected ? model.sidebar.byId.get(selected.worktreeId) : undefined;
 
-  // "Updated" banner: the open file's patchHash changed underneath the reader.
+  // "Updated" banner: the open file's patchHash changed underneath the reader. Keyed by file
+  // AND scope (F9): the same file has a different hash per scope, which is not a change.
+  const seenKey = key === null ? null : `${key}|${scopeKey(model.scope)}`;
   const seen = useRef<{ key: string; hash: string } | null>(null);
   const [updatedKey, setUpdatedKey] = useState<string | null>(null);
+  const placeholder = query.isPlaceholderData;
   useEffect(() => {
-    if (!diff || !key) return;
+    // Placeholder data is the previous scope's diff for the same file: not a change on disk.
+    if (!diff || !seenKey || placeholder) return;
     const prev = seen.current;
-    if (prev && prev.key === key && prev.hash !== diff.patchHash) setUpdatedKey(key);
-    if (prev?.key !== key) setUpdatedKey(null);
-    seen.current = { key, hash: diff.patchHash };
-  }, [diff, key]);
+    if (prev && prev.key === seenKey && prev.hash !== diff.patchHash) setUpdatedKey(seenKey);
+    if (prev?.key !== seenKey) setUpdatedKey(null);
+    seen.current = { key: seenKey, hash: diff.patchHash };
+  }, [diff, seenKey, placeholder]);
+
+  // SEC-05: invisible / bidirectional characters in the path or the patch are made visible.
+  const suspicious = useMemo(() => {
+    const text = `${selected?.path ?? ''}\n${diff?.patch ?? ''}`;
+    return hasSuspicious(text) ? findSuspicious(text) : [];
+  }, [selected?.path, diff?.patch]);
 
   const display = useMemo<DiffDisplay | null>(
     () => (diff ? classifyDiff(diff, ignoreWhitespace) : null),
@@ -123,12 +140,12 @@ export function DiffPane() {
           <h2 className="min-w-0 truncate font-mono text-xs" title={selected.path}>
             {file?.oldPath && file.oldPath !== selected.path ? (
               <>
-                <span className="text-muted">{file.oldPath}</span>
+                <span className="text-muted">{escapeSuspicious(file.oldPath)}</span>
                 <span className="text-faint"> → </span>
-                <span>{selected.path}</span>
+                <span>{escapeSuspicious(selected.path)}</span>
               </>
             ) : (
-              selected.path
+              escapeSuspicious(selected.path)
             )}
           </h2>
           {status && <span className="text-[11px] text-muted">{statusLabel(status)}</span>}
@@ -166,25 +183,46 @@ export function DiffPane() {
                 </button>
               </>
             )}
-            <button
-              type="button"
-              data-testid={TEST_IDS.reviewToggle}
-              aria-pressed={reviewed}
-              onClick={commands.toggleReviewed}
-              disabled={!entry && !diff}
-              title="Mark reviewed (r)"
-              className={`flex items-center gap-1 rounded border px-2 py-0.5 text-xs font-medium ${
-                reviewed ? 'border-add bg-add text-canvas' : 'border-line text-fg hover:bg-hover'
-              }`}
-            >
-              <CheckIcon />
-              {reviewed ? 'Reviewed' : 'Mark reviewed'}
-            </button>
+            {selected && model.disabledWorktrees.has(selected.worktreeId) ? (
+              <span className="text-[11px] text-faint" title="Review is off for this worktree">
+                review off
+              </span>
+            ) : (
+              <button
+                type="button"
+                data-testid={TEST_IDS.reviewToggle}
+                aria-pressed={reviewed}
+                onClick={commands.toggleReviewed}
+                disabled={!entry && !diff}
+                title="Mark reviewed (r)"
+                className={`flex items-center gap-1 rounded border px-2 py-0.5 text-xs font-medium ${
+                  reviewed ? 'border-add bg-add text-canvas' : 'border-line text-fg hover:bg-hover'
+                }`}
+              >
+                <CheckIcon />
+                {reviewed ? 'Reviewed' : 'Mark reviewed'}
+              </button>
+            )}
           </span>
         </header>
       )}
 
-      {updatedKey !== null && updatedKey === key && (
+      {suspicious.length > 0 && (
+        <div
+          data-testid="diff-unicode-warning"
+          role="alert"
+          className="flex items-center gap-2 border-b border-warn/40 bg-raised px-3 py-1 text-xs"
+        >
+          <span className="text-warn" aria-hidden="true">
+            ⚠
+          </span>
+          <span>
+            This file contains {describeSuspicious(suspicious)}. They are shown as ⟨U+…⟩ below; the
+            code may not read the way it runs.
+          </span>
+        </div>
+      )}
+      {updatedKey !== null && updatedKey === seenKey && (
         <div
           data-testid={TEST_IDS.diffUpdatedBanner}
           role="status"
@@ -229,6 +267,7 @@ export function DiffPane() {
             display={display}
             mode={diffMode}
             theme={theme}
+            diffTheme={appTheme.diff.theme}
             ignoreWhitespace={ignoreWhitespace}
             context={opts.context}
             onLoadAnyway={() => key && actions.setFileOptions(store, key, { ...opts, full: true })}
@@ -244,6 +283,7 @@ function DiffBody({
   display,
   mode,
   theme,
+  diffTheme,
   ignoreWhitespace,
   context,
   onLoadAnyway,
@@ -252,6 +292,7 @@ function DiffBody({
   display: DiffDisplay;
   mode: 'split' | 'unified';
   theme: 'light' | 'dark';
+  diffTheme: string;
   ignoreWhitespace: boolean;
   context: number | undefined;
   onLoadAnyway: () => void;
@@ -330,10 +371,13 @@ function DiffBody({
           <div className="min-h-0 flex-1">
             <Suspense fallback={<p className="p-4 text-xs text-muted">Loading diff renderer…</p>}>
               <DiffRenderer
-                patch={display.truncated ? repairTruncatedPatch(diff.patch) : diff.patch}
+                patch={escapeSuspicious(
+                  display.truncated ? repairTruncatedPatch(diff.patch) : diff.patch,
+                )}
                 cacheKey={`${diff.patchHash}:${ignoreWhitespace ? 'w' : ''}:${context ?? ''}`}
                 mode={mode}
                 theme={theme}
+                diffTheme={diffTheme}
               />
             </Suspense>
           </div>
