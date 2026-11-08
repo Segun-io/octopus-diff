@@ -20,26 +20,23 @@ function expectedProof(token: string, challenge: string): string {
   return createHmac('sha256', token).update(healthProofMessage(challenge)).digest('hex');
 }
 
-/** Every authenticated API route, with a request that reaches its handler. */
+/**
+ * Every API route except health, derived from `ROUTES` (so routes added later are covered too),
+ * plus unknown API paths. Path params get a well-formed id; bodies are `{}` (a 400 is fine:
+ * the point is that auth runs first).
+ */
 function apiRequests(): Array<{ method: string; path: string; body?: string }> {
   const id = '0'.repeat(16);
+  const requests: Array<{ method: string; path: string; body?: string }> = Object.entries(ROUTES)
+    .filter(([name]) => name !== 'health')
+    .map(([, route]) => ({
+      method: route.method,
+      path: route.path.replace(/:[A-Za-z]+/g, id),
+      ...(['POST', 'PUT', 'PATCH'].includes(route.method) ? { body: '{}' } : {}),
+    }));
+  expect(requests.length).toBeGreaterThanOrEqual(16);
   return [
-    { method: 'GET', path: ROUTES.listProjects.path },
-    { method: 'POST', path: ROUTES.addProject.path, body: '{"path":"/tmp"}' },
-    { method: 'PATCH', path: `/api/projects/${id}`, body: '{}' },
-    { method: 'DELETE', path: `/api/projects/${id}` },
-    { method: 'GET', path: ROUTES.listScanRoots.path },
-    { method: 'POST', path: ROUTES.addScanRoot.path, body: '{"path":"/tmp"}' },
-    { method: 'DELETE', path: `/api/scan-roots/${id}` },
-    { method: 'POST', path: `/api/scan-roots/${id}/rescan` },
-    { method: 'GET', path: ROUTES.inbox.path },
-    { method: 'GET', path: `/api/worktrees/${id}/files` },
-    { method: 'GET', path: `/api/worktrees/${id}/diff?path=a` },
-    { method: 'GET', path: `/api/worktrees/${id}/commits` },
-    { method: 'POST', path: `/api/worktrees/${id}/refresh` },
-    { method: 'PUT', path: ROUTES.setReview.path, body: '{}' },
-    { method: 'PUT', path: ROUTES.setFocus.path, body: '{"worktreeId":null}' },
-    { method: 'GET', path: ROUTES.events.path },
+    ...requests,
     { method: 'GET', path: '/api/no-such-route' },
     { method: 'GET', path: '/api' },
   ];

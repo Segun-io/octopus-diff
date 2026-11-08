@@ -36,38 +36,23 @@ function proof(token: string, challenge: string): string {
   return createHmac('sha256', token).update(healthProofMessage(challenge)).digest('hex');
 }
 
-/** Every API route except health, with a method and body that reach the handler. */
+/**
+ * Every API route except health, derived from `ROUTES` (routes added later are covered too),
+ * plus an unknown API path. Path params get a fixture id; bodies are minimal valid-looking JSON.
+ */
 function apiRoutes(projectId: string): Array<{ method: string; path: string; body?: string }> {
-  const id = '0'.repeat(16);
-  return [
-    { method: 'GET', path: ROUTES.listProjects.path },
-    { method: 'POST', path: ROUTES.addProject.path, body: '{"path":"/tmp"}' },
-    { method: 'PATCH', path: `/api/projects/${projectId}`, body: '{}' },
-    { method: 'DELETE', path: `/api/projects/${id}` },
-    { method: 'GET', path: ROUTES.listScanRoots.path },
-    { method: 'POST', path: ROUTES.addScanRoot.path, body: '{"path":"/tmp"}' },
-    { method: 'DELETE', path: `/api/scan-roots/${id}` },
-    { method: 'POST', path: `/api/scan-roots/${id}/rescan` },
-    { method: 'GET', path: ROUTES.inbox.path },
-    { method: 'GET', path: `/api/worktrees/${id}/files` },
-    { method: 'GET', path: `/api/worktrees/${id}/diff?path=README.md` },
-    { method: 'GET', path: `/api/worktrees/${id}/commits` },
-    { method: 'POST', path: `/api/worktrees/${id}/refresh` },
-    {
-      method: 'PUT',
-      path: ROUTES.setReview.path,
-      body: JSON.stringify({
-        projectId,
-        scopeKind: 'working',
-        path: 'README.md',
-        patchHash: 'x',
-        reviewed: true,
-      }),
-    },
-    { method: 'PUT', path: ROUTES.setFocus.path, body: '{"worktreeId":null}' },
-    { method: 'GET', path: ROUTES.events.path },
-    { method: 'GET', path: '/api/no-such-route' },
-  ];
+  const routes: Array<{ method: string; path: string; body?: string }> = Object.entries(ROUTES)
+    .filter(([name]) => name !== 'health')
+    .map(([, route]) => ({
+      method: route.method,
+      path: route.path.replace(
+        /:[A-Za-z]+/g,
+        route.path.includes(':projectId') ? projectId : '0'.repeat(16),
+      ),
+      ...(['POST', 'PUT', 'PATCH'].includes(route.method) ? { body: '{}' } : {}),
+    }));
+  expect(routes.length).toBeGreaterThanOrEqual(16);
+  return [...routes, { method: 'GET', path: '/api/no-such-route' }];
 }
 
 /** `/`, plus the scripts and styles index.html references (the real web build). */
