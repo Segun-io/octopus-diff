@@ -110,7 +110,8 @@ export function unverifiedMessage(baseUrl: string, stateDir: string): string {
   return (
     `${baseUrl} answered like an ${APP_NAME} daemon but could not prove that it holds the token ` +
     `in ${tokenFilePath(stateDir)}, so the token was not sent. It may use another --state-dir, ` +
-    `run an older ${APP_NAME} (restart it), or be another program listening on that port.`
+    `still hold a token replaced by \`${APP_NAME} token --rotate\` or run an older ${APP_NAME} ` +
+    '(restart it in both cases), or be another program listening on that port.'
   );
 }
 

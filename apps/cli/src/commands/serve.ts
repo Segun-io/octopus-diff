@@ -12,7 +12,7 @@ import {
 import { createLogger } from '../logger.js';
 import { tildify } from '../paths.js';
 import { detectWsl, isWindowsMountPath } from '../platform.js';
-import { removeRuntimeInfo, writeRuntimeInfo } from '../runtime.js';
+import { removeRuntimeInfo, runtimeFilePath, writeRuntimeInfo } from '../runtime.js';
 import { baseUrlFor, buildServeSettings, loadContext } from '../settings.js';
 import { oneLine } from '../terminal.js';
 import { lanAuthUrls } from '../urls.js';
@@ -103,9 +103,13 @@ export async function runServe(
     return EXIT_OK;
   }
   if (running) {
-    err(
-      `warning: ${running.url} (pid ${running.pid}, recorded in the state directory) did not prove ` +
-        "that it holds this state directory's token; ignoring it and starting a new daemon.",
+    // Most likely our daemon with a token rotated since it started (or an older version): don't
+    // start a second daemon on the same state dir, and don't print or open its URL either.
+    throw new CliError(
+      `a daemon is recorded for this state directory (pid ${running.pid}, ${running.url}) and ` +
+        "answers, but it did not prove that it holds this state directory's token (was the token " +
+        'rotated while it ran?). The token was not sent. Stop that daemon and run serve again; if ' +
+        `it is not yours, remove ${runtimeFilePath(paths.stateDir)}.`,
     );
   }
 

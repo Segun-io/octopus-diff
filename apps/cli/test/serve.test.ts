@@ -264,7 +264,7 @@ describe('serve', () => {
     expect(api.requests.every((r) => r.authorization === null)).toBe(true);
   });
 
-  it('SEC-02: never prints or opens the URL for a recorded daemon that cannot prove the token', async () => {
+  it('SEC-02: no URL and no second daemon for a recorded daemon that cannot prove the token', async () => {
     await writeRuntimeInfo(dirs.stateDir, {
       pid: 777,
       url: 'http://127.0.0.1:5555',
@@ -285,13 +285,15 @@ describe('serve', () => {
       isProcessAlive: (pid) => pid === 777,
     });
     expect(await run(['serve', '--open'], deps, { serve: { webRootCandidates: [webDir] } })).toBe(
-      0,
+      1,
     );
     expect(deps.err.text).toContain('did not prove that it holds');
-    expect(deps.out.text).not.toContain('5555/#token');
-    expect(deps.out.text).not.toContain('existing-token');
-    expect(deps.opened).toEqual(['http://127.0.0.1:7428/#token=tok123']);
-    expect(daemon.calls).toHaveLength(1);
+    expect(deps.err.text).toContain('The token was not sent');
+    expect(deps.out.text).toBe('');
+    expect(deps.err.text).not.toContain('existing-token');
+    expect(deps.opened).toEqual([]);
+    // One daemon per state dir: no second daemon either.
+    expect(daemon.calls).toHaveLength(0);
     for (const r of api.requests) {
       expect(r.authorization).toBeNull();
       expect(r.url).not.toContain('existing-token');
