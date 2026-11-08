@@ -1,4 +1,5 @@
 import { type ReactNode, useEffect, useRef } from 'react';
+import { useEscapeToClose } from '../lib/useEscape.ts';
 
 /** Accessible modal: focuses itself on open, traps Tab, closes on Escape, restores focus. */
 export function Dialog({
@@ -13,6 +14,8 @@ export function Dialog({
   testId?: string;
 }) {
   const ref = useRef<HTMLDivElement>(null);
+  // Escape must work even when the focused control was disabled or removed (see useEscape.ts).
+  useEscapeToClose(true, onClose);
   useEffect(() => {
     const previous = document.activeElement as HTMLElement | null;
     const first = ref.current?.querySelector<HTMLElement>('input, button, select, [tabindex]');
