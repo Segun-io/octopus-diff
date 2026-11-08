@@ -56,6 +56,8 @@ const { values: args } = parseArgs({
     'log-level': { type: 'string', default: 'debug' },
     'select-worktree': { type: 'boolean', default: false },
     'git-concurrency': { type: 'string' },
+    'refresh-target': { type: 'string' },
+    'large-diff-lines': { type: 'string', default: '0' },
     seed: { type: 'string', default: '1' },
   },
 });
@@ -368,6 +370,18 @@ async function main() {
     bigRepo = await buildBigRepo(fixtures, Math.max(1, bigFiles), nodeModulesFiles);
     projects.push(bigRepo);
   }
+  const largeDiffLines = Number(args['large-diff-lines']);
+  let largeDiff: { root: string; rel: string } | null = null;
+  if (largeDiffLines > 0) {
+    const root = projects[0] as string;
+    const rel = 'src/module-000.ts';
+    const lines = Array.from(
+      { length: largeDiffLines },
+      (_, i) => `export const generated${i} = { id: ${i}, name: 'item-${i}', tags: ['a', 'b'] };`,
+    );
+    await writeFile(join(root, rel), `${lines.join('\n')}\n`);
+    largeDiff = { root, rel };
+  }
   const generationMs = performance.now() - genStarted;
   log(`generated in ${Math.round(generationMs)} ms at ${fixtures.root}`);
 
@@ -425,6 +439,14 @@ async function main() {
       applyChromiumLibraryPath();
       browser = await chromium.launch();
       page = await (await browser.newContext({ viewport: { width: 1440, height: 900 } })).newPage();
+      await page.addInitScript(() => {
+        const w = window as unknown as { __longTasks: Array<{ start: number; duration: number }> };
+        w.__longTasks = [];
+        new PerformanceObserver((list) => {
+          for (const e of list.getEntries())
+            w.__longTasks.push({ start: e.startTime, duration: e.duration });
+        }).observe({ type: 'longtask', buffered: true });
+      });
       cdp = await page.context().newCDPSession(page);
       await cdp.send('Performance.enable');
       const started = Date.now();
@@ -503,7 +525,12 @@ async function main() {
 
     // --- refresh ---------------------------------------------------------------------------
     const { projects: list } = await client.listProjects();
-    const targets = list.flatMap((p) => p.worktrees.map((w) => w.worktree)).filter((w) => !w.bare);
+    const allTargets = list
+      .flatMap((p) => p.worktrees.map((w) => w.worktree))
+      .filter((w) => !w.bare);
+    const wanted = args['refresh-target'];
+    const filtered = wanted ? allTargets.filter((w) => w.path.includes(wanted)) : allTargets;
+    const targets = filtered.length ? filtered : allTargets;
     const samples: Array<Record<string, unknown>> = [];
     for (let i = 0; i < iterations; i++) {
       const target = targets[(i * 7) % targets.length];
@@ -611,6 +638,80 @@ async function main() {
     }
     result.direct = direct;
     log(`direct: ${JSON.stringify(direct)}`);
+
+    // --- large diff in the UI ----------------------------------------------------------------
+    if (page && cdp && largeDiff) {
+      const ld = largeDiff;
+      const wt = allTargets.find((w) => w.path === ld.root);
+      if (wt) {
+        await page
+          .locator(`[data-testid="${TEST_IDS.worktreeItem}"][data-worktree-id="${wt.id}"]`)
+          .click();
+        await sleep(1500);
+        const ltBefore = await page.evaluate(
+          () => (window as unknown as { __longTasks: unknown[] }).__longTasks.length,
+        );
+        const m0 = await pageMetrics(cdp);
+        const tClick = Date.now();
+        await page
+          .locator(`[data-testid="${TEST_IDS.fileItem}"][data-path="${ld.rel}"]`)
+          .first()
+          .click();
+        await page
+          .locator(
+            `[data-testid="${TEST_IDS.diffViewer}"][data-path="${ld.rel}"][data-state="ready"]`,
+          )
+          .waitFor({ timeout: 60_000 });
+        const tReady = Date.now();
+        await sleep(2000);
+        const m1 = await pageMetrics(cdp);
+        const res = await apiResources(page, tClick);
+        // Scroll the diff to the bottom in steps and record frame times.
+        const frames = await page.evaluate(async () => {
+          const viewer = document.querySelector('[data-testid="diff-viewer"]');
+          const scrollers = [viewer, ...(viewer ? viewer.querySelectorAll('*') : [])].filter(
+            (el): el is HTMLElement =>
+              el instanceof HTMLElement && el.scrollHeight > el.clientHeight + 10,
+          );
+          const el = scrollers[0];
+          if (!el) return { frames: [] as number[], scrollHeight: 0 };
+          const out: number[] = [];
+          let last = performance.now();
+          for (let i = 0; i < 240 && el.scrollTop + el.clientHeight < el.scrollHeight; i++) {
+            el.scrollTop += el.clientHeight * 0.8;
+            await new Promise((r) => requestAnimationFrame(() => r(null)));
+            const now = performance.now();
+            out.push(now - last);
+            last = now;
+          }
+          return { frames: out, scrollHeight: el.scrollHeight };
+        });
+        const longTasks = await page.evaluate(
+          (from) =>
+            (window as unknown as { __longTasks: Array<{ duration: number }> }).__longTasks.slice(
+              from,
+            ),
+          ltBefore,
+        );
+        const fst = summarize(frames.frames);
+        result.largeDiff = {
+          lines: largeDiffLines,
+          clickToReadyMs: tReady - tClick,
+          requests: res.map((r) => ({ name: r.name, ms: round(r.end - r.start), bytes: r.bytes })),
+          browser: diffCost(m0, m1),
+          longTasks: longTasks.map((t) => round(t.duration)),
+          scroll: {
+            frames: fst.count,
+            p50: round(fst.p50),
+            p95: round(fst.p95),
+            max: round(fst.max),
+            scrollHeight: frames.scrollHeight,
+          },
+          domNodes: await page.evaluate(() => document.querySelectorAll('*').length),
+        };
+        log(`large diff: ${JSON.stringify(result.largeDiff)}`);
+      }
+    }
 
     // --- burst -----------------------------------------------------------------------------
     if (burstMs > 0) {
