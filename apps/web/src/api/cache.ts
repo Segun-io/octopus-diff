@@ -189,11 +189,15 @@ export function collectEventEffects(
         effects.worktrees.add(id);
       }
       break;
-    case 'settings.changed':
+    case 'settings.changed': {
+      // Skip the refetch when this revision is the one a response already applied.
+      const cached = queryClient.getQueryData<{ revision: number } | null>(['settings']);
+      if (cached && cached.revision >= event.revision) break;
       effects.settings = true;
       effects.projects = true;
       effects.inbox = true;
       break;
+    }
   }
   return effects;
 }
