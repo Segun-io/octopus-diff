@@ -80,8 +80,22 @@ export const HealthResponseSchema = z.object({
   watcher: z.object({ mode: WatcherModeSchema, warnings: z.array(z.string()) }),
   startedAt: TimestampSchema,
   uptimeMs: z.number().int().min(0),
+  /** Present when the request had `?challenge=`: see `healthProofMessage` in common.ts. */
+  proof: z
+    .string()
+    .regex(/^[0-9a-f]{64}$/)
+    .optional(),
 });
 export type HealthResponse = z.infer<typeof HealthResponseSchema>;
+
+/** `challenge`: 32–128 lowercase hex chars (a random nonce chosen by the client). */
+export const HealthQuerySchema = z.object({
+  challenge: z
+    .string()
+    .regex(/^[0-9a-f]{32,128}$/)
+    .optional(),
+});
+export type HealthQuery = z.infer<typeof HealthQuerySchema>;
 
 // --- projects --------------------------------------------------------------------------------
 

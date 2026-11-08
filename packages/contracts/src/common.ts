@@ -7,10 +7,36 @@ export const APP_NAME = 'octopus-diff';
 export const DEFAULT_HOST = '127.0.0.1';
 export const DEFAULT_PORT = 7428;
 
-/** Auth: the token may arrive as `Authorization: Bearer <token>`, as this cookie, or once as `?token=`. */
-export const AUTH_COOKIE_NAME = 'octopus_diff_token';
-export const AUTH_QUERY_PARAM = 'token';
+/**
+ * Auth (v2, after security review SEC-01): every API request carries
+ * `Authorization: Bearer <token>`. There are no ambient browser credentials.
+ * - The CLI prints `<url>/#token=<token>`: a URL fragment never reaches a server, a log or a
+ *   `Referer` header.
+ * - The web app moves the fragment's token into `localStorage[TOKEN_STORAGE_KEY]`, which is
+ *   scoped to the origin *including the port* (unlike cookies, which every port on the host
+ *   receives), then strips the fragment from the address bar.
+ * - Static UI assets need no auth (they contain no secrets); `Host` checks still apply.
+ * - A page load with `?token=` (old URLs) is redirected to `/#token=`.
+ * - The daemon no longer sets or accepts the auth cookie; if a browser still sends
+ *   `AUTH_COOKIE_NAME` from an older version, the daemon expires it.
+ */
 export const AUTH_HEADER = 'authorization';
+export const AUTH_FRAGMENT_PARAM = 'token';
+export const AUTH_QUERY_PARAM = 'token';
+export const TOKEN_STORAGE_KEY = 'octopus-diff.token';
+/** @deprecated Legacy (v1) cookie name; only used to expire stale cookies. */
+export const AUTH_COOKIE_NAME = 'octopus_diff_token';
+
+/**
+ * Daemon identity proof (security review SEC-02/SEC-12). Before sending the token anywhere, a
+ * client calls `GET /api/health?challenge=<hex nonce>`; the daemon answers with
+ * `proof = hex(HMAC-SHA256(key = token, message = healthProofMessage(challenge)))`. The client
+ * computes the same value and only trusts (and sends the token to) a daemon whose proof matches.
+ */
+export const HEALTH_CHALLENGE_PARAM = 'challenge';
+export function healthProofMessage(challenge: string): string {
+  return `octopus-diff-health:v1:${challenge}`;
+}
 
 /**
  * Stable identifier: the first 16 lowercase hex chars of SHA-256 over a UTF-8 realpath.

@@ -37,6 +37,7 @@ import {
 import {
   ApiErrorBodySchema,
   type ApiErrorCode,
+  HEALTH_CHALLENGE_PARAM,
   type OkResponse,
   OkResponseSchema,
 } from './common.js';
@@ -64,7 +65,7 @@ type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
 export interface ApiClientOptions {
   /** Origin of the daemon, e.g. `http://127.0.0.1:7428`. Empty string = same origin (browser). */
   baseUrl?: string;
-  /** Sent as `Authorization: Bearer <token>`. Browsers normally rely on the auth cookie instead. */
+  /** Sent as `Authorization: Bearer <token>` on every request, including the event stream. */
   token?: string;
   /** Custom fetch (tests, Node). Defaults to `globalThis.fetch`. */
   fetch?: FetchLike;
@@ -110,7 +111,8 @@ export interface EventSubscription {
 }
 
 export interface ApiClient {
-  health(): Promise<HealthResponse>;
+  /** Pass `challenge` to receive a `proof` of token possession (see `healthProofMessage`). */
+  health(params?: { challenge?: string }): Promise<HealthResponse>;
   listProjects(): Promise<ProjectsResponse>;
   addProject(body: AddProjectRequest): Promise<AddProjectResponse>;
   updateProject(projectId: string, body: UpdateProjectRequest): Promise<UpdateProjectResponse>;
@@ -126,9 +128,9 @@ export interface ApiClient {
   refreshWorktree(worktreeId: string): Promise<RefreshResponse>;
   setReview(body: ReviewRequest): Promise<ReviewResponse>;
   setFocus(body: FocusRequest): Promise<OkResponse>;
-  /** Absolute or same-origin URL of the SSE stream (for `EventSource` with cookie auth). */
+  /** Absolute or same-origin URL of the SSE stream. */
   eventsUrl(): string;
-  /** Subscribes via fetch streaming (works with bearer tokens and in Node). */
+  /** Subscribes via fetch streaming with the bearer token (browsers and Node). */
   subscribe(options: SubscribeOptions): EventSubscription;
 }
 
@@ -287,7 +289,11 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
   }
 
   return {
-    health: () => request(HealthResponseSchema, 'GET', ROUTES.health.path),
+    health: (params = {}) => {
+      const query = new URLSearchParams();
+      if (params.challenge) query.set(HEALTH_CHALLENGE_PARAM, params.challenge);
+      return request(HealthResponseSchema, 'GET', ROUTES.health.path, { query });
+    },
     listProjects: () => request(ProjectsResponseSchema, 'GET', ROUTES.listProjects.path),
     addProject: (body) =>
       request(AddProjectResponseSchema, 'POST', ROUTES.addProject.path, { body }),

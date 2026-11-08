@@ -58,7 +58,7 @@ export interface StartDaemonOptions {
 export interface DaemonHandle {
   /** Base URL without credentials, e.g. `http://127.0.0.1:7428`. */
   readonly url: string;
-  /** URL that logs the browser in: `<url>/?token=<token>`. Print this one. */
+  /** URL that logs the browser in: `<url>/#token=<token>` (fragment, see common.ts). Print this one. */
   readonly authUrl: string;
   readonly token: string;
   readonly host: string;

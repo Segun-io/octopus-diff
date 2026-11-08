@@ -595,3 +595,21 @@ All 2026-11-08 · WS5.
    `localhost` resolves to `::1`, which mirrored mode does not forward into WSL, so `127.0.0.1` is the
    reliable local URL. The instance now binds `::` (dual-stack). Follow-ups for the CLI: print the
    loopback **and** LAN URLs for wildcard binds, and consider binding `::` for `--host 0.0.0.0`.
+5. **2026-11-08 · [contracts] Auth v2: no ambient browser credentials** (security review SEC-01,
+   SEC-02, SEC-11, SEC-12). Cookies are scoped to the host, not the port, so the 400-day cookie that
+   held the permanent token was sent to every server on `127.0.0.1` (confirmed in Chromium).
+   New model, pinned in `packages/contracts/src/common.ts`:
+   - Every API request (including SSE, via the contract client's fetch-based `subscribe`) carries
+     `Authorization: Bearer <token>`. The web app keeps the token in `localStorage['octopus-diff.token']`
+     (origin-scoped, port included). `localStorage` rather than `sessionStorage` so new tabs work;
+     the CSP and the XSS review make script access acceptable.
+   - The printed URL is `<url>/#token=<token>`; the fragment never reaches servers, logs or `Referer`.
+     A page load with `?token=` (old URLs) redirects to `/#token=`.
+   - Static UI assets are served without auth (`Host` checks still apply); this reverses WS2's
+     "static files need the token" decision, which existed only because of the cookie.
+   - The daemon stops setting and accepting the cookie and expires a stale one if a browser sends it.
+   - `GET /api/health?challenge=<hex>` returns `proof = HMAC-SHA256(token, "octopus-diff-health:v1:" +
+     challenge)`; the CLI verifies the proof before sending the token or printing/opening the URL.
+   Contract changes are additive (`AUTH_FRAGMENT_PARAM`, `TOKEN_STORAGE_KEY`, `HEALTH_CHALLENGE_PARAM`,
+   `healthProofMessage`, `HealthQuerySchema`, optional `HealthResponse.proof`, `client.health({challenge})`);
+   `AUTH_COOKIE_NAME` stays exported (deprecated).

@@ -5,6 +5,8 @@ import {
   createApiClient,
   formatSseComment,
   formatSseEvent,
+  HealthQuerySchema,
+  healthProofMessage,
   ROUTES,
   type ServerEvent,
 } from '../src/index.js';
@@ -145,5 +147,30 @@ describe('createApiClient', () => {
     expect(events).toEqual([event(1), event(2)]);
     expect(opened).toBe(2);
     expect(seenLastEventIds).toEqual([undefined, '1']);
+  });
+});
+
+describe('health challenge', () => {
+  it('sends the challenge and accepts a proof', async () => {
+    const proof = 'a'.repeat(64);
+    const { calls, fetch } = fakeFetch(() =>
+      json({
+        ok: true,
+        name: 'octopus-diff',
+        version: '0.0.0',
+        apiVersion: 1,
+        git: { version: '2.53.0', supported: true },
+        watcher: { mode: 'native', warnings: [] },
+        startedAt: new Date(0).toISOString(),
+        uptimeMs: 1,
+        proof,
+      }),
+    );
+    const client = createApiClient({ fetch });
+    const res = await client.health({ challenge: 'ab'.repeat(16) });
+    expect(res.proof).toBe(proof);
+    expect(calls[0]?.url).toBe(`/api/health?challenge=${'ab'.repeat(16)}`);
+    expect(healthProofMessage('x')).toBe('octopus-diff-health:v1:x');
+    expect(HealthQuerySchema.safeParse({ challenge: 'nothex' }).success).toBe(false);
   });
 });
