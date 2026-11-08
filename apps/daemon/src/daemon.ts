@@ -221,7 +221,8 @@ export const startDaemon = (async (options: DaemonOptions = {}): Promise<Daemon>
       hello: (): ServerEvent => ({ type: 'hello', version, startedAt: startedAt.toISOString() }),
     });
 
-    server = createServer(getRequestListener(app.fetch));
+    // Do not replace the global Request/Response: the daemon runs inside the CLI process.
+    server = createServer(getRequestListener(app.fetch, { overrideGlobalObjects: false }));
     let address: AddressInfo;
     try {
       address = await listen(server, port, host);

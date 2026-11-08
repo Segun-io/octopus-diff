@@ -26,7 +26,6 @@ import {
   type UpdateProjectResponse,
 } from '@octopus-diff/contracts';
 import { type Context, Hono } from 'hono';
-import { bodyLimit } from 'hono/body-limit';
 import { getCookie, setCookie } from 'hono/cookie';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { DaemonCore } from './core.js';
@@ -72,13 +71,36 @@ function parseWith<T>(schema: SafeParser<T>, data: unknown, what: string): T {
   throw new ApiError('bad_request', `invalid ${what}: ${summary}`, { details: { issues } });
 }
 
+/** Reads at most `MAX_BODY_BYTES` of the request body (413 beyond that). */
+async function readBody(c: Context): Promise<string> {
+  const declared = Number(c.req.header('content-length') ?? '0');
+  if (declared > MAX_BODY_BYTES) throw new ApiError('too_large', 'request body too large');
+  const body = c.req.raw.body;
+  if (!body) return '';
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > MAX_BODY_BYTES) {
+      await reader.cancel().catch(() => {});
+      throw new ApiError('too_large', 'request body too large');
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks).toString('utf8');
+}
+
 async function readJson(c: Context): Promise<unknown> {
   const contentType = c.req.header('content-type') ?? '';
   if (!/^application\/json\s*(;|$)/i.test(contentType)) {
     throw new ApiError('bad_request', 'expected Content-Type: application/json', { status: 415 });
   }
+  const text = await readBody(c);
   try {
-    return await c.req.json();
+    return JSON.parse(text);
   } catch {
     throw new ApiError('bad_request', 'request body is not valid JSON');
   }
@@ -206,14 +228,6 @@ export function createApp(deps: AppDeps): Hono {
       new ApiError('unauthorized', authorization || cookie ? 'invalid token' : 'missing token'),
     );
   });
-
-  app.use(
-    '/api/*',
-    bodyLimit({
-      maxSize: MAX_BODY_BYTES,
-      onError: (c) => errorResponse(c, new ApiError('too_large', 'request body too large')),
-    }),
-  );
 
   const route = (name: RouteName, handler: (c: Context) => Promise<Response> | Response) => {
     const { method, path } = ROUTES[name];
