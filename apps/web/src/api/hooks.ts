@@ -53,7 +53,7 @@ export function useServerEvents(factory: EventSourceFactory | null = defaultFact
       lastFlush = Date.now();
       const batch = effects;
       effects = emptyEffects();
-      void flushEffects(queryClient, batch);
+      void flushEffects(queryClient, batch, api);
     };
     const handle = (event: ServerEvent) => {
       if (event.type === 'hello') helloCount++;
