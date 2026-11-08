@@ -23,6 +23,7 @@ import { Mark } from './components/Mark.tsx';
 import { MarkAllButton } from './components/MarkAllButton.tsx';
 import { Sidebar } from './components/Sidebar.tsx';
 import { Toolbar } from './components/Toolbar.tsx';
+import { useFaviconDot } from './lib/favicon.ts';
 import { toFileRef } from './lib/fileRef.ts';
 import { type NavEntry, repairSelection } from './lib/model.ts';
 import { useDocumentTitle } from './lib/title.ts';
@@ -278,6 +279,7 @@ function AppShell({ eventSourceFactory }: { eventSourceFactory?: EventSourceFact
 
   useApplyTheme();
   useDocumentTitle(model.unreviewedTotal, titleCount);
+  useFaviconDot(titleCount && model.unreviewedTotal > 0);
   useServerEvents(eventSourceFactory);
   const focusWorktree =
     model.view.kind === 'worktree' ? model.view.worktreeId : (selected?.worktreeId ?? null);
