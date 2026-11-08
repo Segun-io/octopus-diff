@@ -349,9 +349,15 @@ export class WatcherService {
   async setProject(
     projectId: string,
     commonDir: string,
-    worktrees: WatchedWorktree[],
+    declared: WatchedWorktree[],
   ): Promise<void> {
     if (this.#closed) return;
+    // git reports the git dir itself as the main worktree of a submodule registered on its own
+    // (`<super>/.git/modules/<name>`): there is no working tree to watch there, and the git-dir
+    // subscription covers it, so it is watched like a bare entry.
+    const worktrees = declared.map((w) =>
+      !w.bare && path.resolve(w.root) === path.resolve(commonDir) ? { ...w, bare: true } : w,
+    );
     let project = this.#projects.get(projectId);
     const pending: Promise<void>[] = [];
     if (!project) {
