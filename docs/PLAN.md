@@ -244,9 +244,16 @@ All git access goes through **one runner** in `packages/git-core`:
 
 ### 5.6 Watching and refresh
 
-- Per worktree: watch the working tree (ignore `.git`, `node_modules`, and common build dirs by default, and
-  honor a configurable ignore list), plus that worktree's git dir files that matter (`HEAD`, `index`,
-  refs, `worktrees/*`). Linked worktrees keep their git dir under `<common>/worktrees/<name>/`.
+- Per worktree: watch the working tree (ignore `.git`, `node_modules` and cache/tool dirs by default;
+  build-output dirs `dist`, `build`, `out`, `target`, `coverage` only where `.gitignore` / `info/exclude`
+  ignore them, so tracked build output stays live; honor a configurable ignore list), plus that worktree's
+  git dir files that matter (`HEAD`, `index`, refs, `worktrees/*`, `info/`, and submodule git dirs).
+  Linked worktrees keep their git dir under `<common>/worktrees/<name>/`.
+- Watch limits (security review SEC-07): never watch `/`, `$HOME` or its parents, top-level system dirs,
+  the temp dir, or a folder containing the repo's git dir; at most 64 watched worktrees per project (the
+  rest are polled); prunable records are not watched. Health warnings give counts and reasons, not paths.
+- Leading-edge refresh (DECISIONS `review/perf` P3): a quiet worktree refreshes on its first event; later
+  events in the window use the trailing debounce below.
 - Debounce 150–300 ms per worktree, coalesce bursts, then recompute the summary; emit `worktree.changed`
   only if `stateHash` changed. Fallback poll (30 s focused / 5 min others) in case watchers miss events.
 - Must degrade gracefully on inotify limits (WSL, big trees): log a clear warning and fall back to polling.

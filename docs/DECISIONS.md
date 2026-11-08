@@ -658,6 +658,20 @@ All 2026-11-08 · WS5.
    proof). Bind the proof to the port, e.g. message `octopus-diff-health:v2:<port>:<challenge>` as a new
    optional `proofV2` field, the CLI checking it when `apiVersion` allows. Needs a contract change;
    deferred to Phase 3.
+10. **2026-11-08 · Daemon watcher fix choices** (`fix/daemon-watch`, details in
+    `docs/reports/fix-daemon-watch.md`): only the build-output names `dist`, `build`, `out`, `target`,
+    `coverage` follow git's ignore rules (approximated daemon-side from rules naming them, erring towards
+    watching; nested `.gitignore` rules filter events; a tracked file seen in any file list un-ignores its
+    build dir) (F5); worktree root identity is `dev:ino` and the git dir is re-read from the `.git` entry
+    when a path may have been recycled, stale targets falling back to "route every git-dir event" (F1);
+    nested repositories of another project refresh their enclosing worktree, and a worktree root equal to
+    its common dir is watched like a bare entry (F3); `info/` is watched and refreshes every worktree
+    (F6); the SEC-07 limits above. Cost: startup +~27 ms to listening at 30×3 (measured A/B). The SEC-07
+    health test raced the main worktree's subscription under load and was fixed at merge (product
+    behavior correct).
+11. **2026-11-08 · Review findings status.** Fixed: F1, F3, F4, F5, F6, F7, F8, F11, SEC-01, SEC-02,
+    SEC-03, SEC-04, SEC-06, SEC-07, SEC-08, SEC-09, SEC-10, SEC-11, SEC-12. Handed to the UX round (web UI
+    it is rewriting): F2, F9, F10, SEC-05. Residual: the SEC-02 relay (proposal #9).
 
 ## Phase 2 — performance review (`review/perf`, proposals for the lead)
 

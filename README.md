@@ -145,7 +145,9 @@ was read and the effective values.
   "watch": {
     "enabled": true,               // false = poll + manual refresh only
     "forcePolling": false,         // true = never use native watchers (WSL /mnt/*, NFS)
-    "ignore": ["vendor", ".venv"], // added to the built-in ignores (.git, node_modules, build dirs)
+    "ignore": ["vendor", ".venv"], // added to the built-in ignores (.git, node_modules, caches);
+                                   // dist/build/out/target/coverage are skipped only where git ignores
+                                   // them; add e.g. "build" here to skip a huge untracked build tree
     "debounceMs": 200,             // 150–300
     "pollFocusedMs": 30000,
     "pollIdleMs": 300000
