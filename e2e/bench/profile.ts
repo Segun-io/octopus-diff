@@ -57,6 +57,7 @@ const { values: args } = parseArgs({
     'select-worktree': { type: 'boolean', default: false },
     'git-concurrency': { type: 'string' },
     'refresh-target': { type: 'string' },
+    'relist-ms': { type: 'string' },
     'large-diff-lines': { type: 'string', default: '0' },
     seed: { type: 'string', default: '1' },
   },
@@ -201,6 +202,7 @@ async function spawnDaemon(fixtures: FixtureSet, projects: string[]): Promise<Da
     },
     logLevel: args['log-level'],
     version: 'profile',
+    ...(args['relist-ms'] ? { internal: { relistMs: Number(args['relist-ms']) } } : {}),
   };
   const execArgv = ['--import', join(E2E_DIR, 'bench', 'spawn-trace.mjs')];
   if (args['cpu-prof']) execArgv.push('--cpu-prof', `--cpu-prof-dir=${OUT}`);
