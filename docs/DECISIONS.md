@@ -613,6 +613,52 @@ All 2026-11-08 · WS5.
    Contract changes are additive (`AUTH_FRAGMENT_PARAM`, `TOKEN_STORAGE_KEY`, `HEALTH_CHALLENGE_PARAM`,
    `healthProofMessage`, `HealthQuerySchema`, optional `HealthResponse.proof`, `client.health({challenge})`);
    `AUTH_COOKIE_NAME` stays exported (deprecated).
+6. **2026-11-08 · Coordination with the UX round 1 orchestrator** (a second lead thread the user
+   started; see `docs/COORDINATION.md` on `lead/ux-foundation`). That thread now owns the root checkout
+   (`/home/santosa/angelsantosa/octopus-diff`, branch `lead/ux-foundation`); the Phase 2 lead works in
+   its own worktree (`~/.t3/worktrees/octopus-diff/lead-phase2`, branch `lead/phase2`) and moves `main`
+   only by fast-forward (`git fetch . lead/phase2:main`, which git refuses while `main` is checked out
+   elsewhere). Done for that plan: **step 1, `review/perf` is merged to `main` (`945c4ec`)**, all
+   prototypes P1–P8 accepted (P3 leading-edge refresh and P8 UI CSP on worker scripts reviewed and
+   accepted; their proposals are below). Ownership of the review findings, matching COORDINATION.md:
+   - Phase 2 lead, on branches from `945c4ec`: `fix/git-core` (F3 stateHash, F4, F7, F8, SEC-06,
+     SEC-07 worktree validation, SEC-08), `fix/daemon-watch` (F1, F3 watching, F5, F6, SEC-07 watch
+     cap), `fix/auth-v2` (SEC-01/02/10/11/12 end to end: daemon auth, web token bootstrap and SSE,
+     CLI incl. SEC-03/04/09, e2e auth specs, README security model).
+   - UX round (web UI it is rewriting): F2 (claimed by ux-web), F9 (false "updated" banner on scope
+     switch: key `seen` by file + scope), F10 (tree view order), SEC-05 (warn on bidi control chars in
+     diffs and file names). The auth-v2 web change is limited to token bootstrap, the API client's
+     token and the SSE subscription (`main.tsx`, `api/hooks.ts`).
+
+## Phase 2 — performance review (`review/perf`, proposals for the lead)
+
+Prototype commits on `review/perf`; nothing here is merged until the lead decides. Evidence and
+numbers: `docs/reports/review-perf.md`.
+
+1. **2026-11-08 · Leading-edge refresh (deviates from PLAN §5.6 "debounce 150–300 ms").** The
+   200 ms trailing debounce was 93 % of write → `worktree.changed` latency. Proposal: a worktree
+   with no pending refresh and none fired in the last `debounceMs` refreshes on its first event;
+   later events in that window use the existing trailing debounce and 1 s max wait, so bursts still
+   coalesce (at most one extra summary per burst). `DaemonCore` turns it on by default
+   (`internal.leadingEdge: false` restores the old behavior); `WatcherService` defaults to off.
+   Trade-off: a refresh can observe the first half of a multi-step write (e.g. a commit) and the UI
+   shows that intermediate state for ~200 ms until the trailing refresh. Measured: SSE p50
+   216 → 13 ms.
+2. **2026-11-08 · Timer jitter.** Relist (60 s) and fallback-poll (30 s / 5 min) timers get ±25 %
+   jitter; `pollIntervalFor()` still reports the nominal value. All timers were armed at startup and
+   fired in the same second (worst idle second 108 % CPU at t = 300 s with 30 × 3).
+3. **2026-11-08 · The web client patches the inbox per worktree.** For batches of
+   `worktree.changed` events touching ≤ 8 worktrees, the UI rebuilds those inbox entries from
+   `GET /worktrees/:id/files` + the projects list instead of refetching `/api/inbox`; anything else
+   (added/removed/updated projects or worktrees, scans, reconnects, failures, stateHash mismatch)
+   still refetches the whole inbox. This duplicates `DaemonCore.inbox()`'s entry rules on the
+   client; a contract-level delta (summary in `worktree.changed`, or `/inbox?worktreeIds=`) would
+   be more robust and is recommended instead if the lead prefers.
+4. **2026-11-08 · Scripts are served with the UI CSP** (seam bug, WS2/WS3). The daemon sent the API
+   policy (`default-src 'none'`) on every non-HTML response; a dedicated worker runs under its own
+   script's CSP, so the highlight workers could not import their Shiki chunk, the pool failed, and
+   all highlighting ran on the main thread (1.8 s long task for a 10 000-line diff). JS assets now
+   get `UI_CSP`. Flagged for the security review.
 
 ## UX round 1 — identity, theming-ready, review controls (lead)
 
@@ -648,3 +694,4 @@ All 2026-11-08 · lead. Brief, ownership and merge plan: `docs/COORDINATION.md`.
    implementation, F1/F3–F8 and the SEC items stay unassigned and reserved; F2 (review toggle keyed on the displayed diff) is
    claimed by `ux-web` because it rewrites that path. Decisions of the streams go into their reports and are folded into this
    file at integration, to avoid append conflicts between branches.
+||||||| 35e2ad7

@@ -6,6 +6,7 @@ import parcelWatcher from '@parcel/watcher';
 import { describe, expect, it } from 'vitest';
 import {
   buildWorktreeIgnores,
+  compactIgnores,
   type DirtyReason,
   type SubscribeFn,
   WatcherService,
@@ -108,6 +109,27 @@ describe('WatcherService', () => {
     await sleep(400);
     expect(rec.dirty.filter((d) => d.id === 'main').length).toBeLessThanOrEqual(2);
     expect(rec.dirty.every((d) => d.id === 'main' && d.reason === 'fs')).toBe(true);
+  });
+
+  it('with leadingEdge, refreshes a quiet worktree at once and still coalesces the burst', async () => {
+    const layout = await makeLayout();
+    const { watcher, rec } = makeWatcher({ leadingEdge: true });
+    await watcher.setProject('p1', layout.common, layout.worktrees);
+
+    const started = Date.now();
+    await writeFile(path.join(layout.main, 'src', 'a.ts'), 'x');
+    await eventually(() => rec.dirty.some((d) => d.id === 'main'), 2000);
+    expect((rec.dirty.find((d) => d.id === 'main')?.at ?? 0) - started).toBeLessThan(120);
+
+    await sleep(400);
+    const mark = rec.dirty.length;
+    for (let i = 0; i < 20; i++)
+      await writeFile(path.join(layout.main, 'src', `f${i % 3}.ts`), `x${i}`);
+    await sleep(600);
+    const fires = rec.dirty.slice(mark).filter((d) => d.id === 'main');
+    // One leading refresh plus one trailing refresh for the rest of the burst.
+    expect(fires.length).toBeGreaterThanOrEqual(1);
+    expect(fires.length).toBeLessThanOrEqual(3);
   });
 
   it('ignores node_modules, .git internals and extra ignore entries', async () => {
@@ -272,5 +294,17 @@ describe('WatcherService', () => {
     expect(ignores).toContain('**/gen');
     expect(ignores).toContain('docs/**/*.tmp');
     expect(ignores).not.toContain('**/docs/**/*.tmp');
+  });
+
+  it('compacts any-depth name globs into one brace glob for the native matcher', () => {
+    const compact = compactIgnores(buildWorktreeIgnores(['gen', 'docs/**/*.tmp', 'a,b']));
+    const brace = compact.filter((e) => e.startsWith('**/{'));
+    expect(brace).toHaveLength(1);
+    expect(brace[0]).toContain('node_modules');
+    expect(brace[0]).toContain('gen');
+    expect(compact).toContain('node_modules');
+    expect(compact).toContain('docs/**/*.tmp');
+    expect(compact).toContain('**/a,b');
+    expect(compact.filter((e) => /^\*\*\/[^{]/.test(e))).toEqual(['**/a,b']);
   });
 });

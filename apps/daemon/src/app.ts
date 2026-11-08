@@ -357,7 +357,12 @@ export function createApp(deps: AppDeps): Hono {
       'Content-Type': file.contentType,
       'Cache-Control': file.cacheControl,
     };
-    if (file.isHtml) headers['Content-Security-Policy'] = UI_CSP;
+    // Scripts get the UI policy too: a dedicated worker runs under the CSP of its own script
+    // response, and the API policy (`default-src 'none'`) blocked the highlight workers'
+    // chunk imports, so every diff was highlighted on the main thread.
+    if (file.isHtml || file.contentType.startsWith('text/javascript')) {
+      headers['Content-Security-Policy'] = UI_CSP;
+    }
     return file.body === null ? c.body(null, 200, headers) : c.body(file.body, 200, headers);
   });
 

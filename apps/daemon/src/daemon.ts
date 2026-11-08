@@ -29,6 +29,8 @@ import type { SubscribeFn } from './watcher.js';
 export const DEFAULT_VERSION = '0.0.0-dev';
 /** How long `close()` lets in-flight responses finish before cutting connections. */
 const CLOSE_GRACE_MS = 200;
+/** Startup `projects` resolved concurrently (git spawns are still bounded by git-core). */
+const STARTUP_REGISTRATION_CONCURRENCY = 8;
 
 /** Internal knobs for tests and benchmarks; not part of the CLI contract. */
 export interface DaemonInternals {
@@ -40,6 +42,8 @@ export interface DaemonInternals {
   relistMs?: number;
   /** Max delay of a debounced refresh during a continuous burst (default 1000 ms). */
   maxWaitMs?: number;
+  /** Refresh a quiet worktree on its first watcher event, then debounce (default true). */
+  leadingEdge?: boolean;
   /** Poll interval of the focused worktree when native watching is unavailable (default 5 s). */
   pollDegradedFocusedMs?: number;
   /** Replaces `@parcel/watcher`'s subscribe (simulate inotify failures). */
@@ -152,6 +156,7 @@ export const startDaemon = (async (options: DaemonOptions = {}): Promise<Daemon>
     watch,
     ...(internal.relistMs !== undefined ? { relistMs: internal.relistMs } : {}),
     ...(internal.maxWaitMs !== undefined ? { maxWaitMs: internal.maxWaitMs } : {}),
+    ...(internal.leadingEdge !== undefined ? { leadingEdge: internal.leadingEdge } : {}),
     ...(internal.pollDegradedFocusedMs !== undefined
       ? { pollDegradedFocusedMs: internal.pollDegradedFocusedMs }
       : {}),
@@ -174,16 +179,29 @@ export const startDaemon = (async (options: DaemonOptions = {}): Promise<Daemon>
   try {
     core.load();
 
-    // Startup registrations (idempotent); failures are logged, not fatal.
+    // Startup registrations (idempotent); failures are logged, not fatal. Resolved in parallel:
+    // each is a few git spawns, which the git runner's concurrency limit already bounds, and
+    // registration itself is synchronous, so duplicates (two paths of one repo) stay safe.
     const justProjects = new Set<string>();
-    for (const path of options.projects ?? []) {
-      try {
-        const { item } = await core.addProject(path, { waitForSummaries: false });
-        justProjects.add(item.project.id);
-      } catch (error) {
-        logger.warn('could not register project from options', { path, error });
+    const startupPaths = options.projects ?? [];
+    let nextPath = 0;
+    const registerNext = async (): Promise<void> => {
+      while (nextPath < startupPaths.length) {
+        const path = startupPaths[nextPath++] as string;
+        try {
+          const { item } = await core.addProject(path, { waitForSummaries: false });
+          justProjects.add(item.project.id);
+        } catch (error) {
+          logger.warn('could not register project from options', { path, error });
+        }
       }
-    }
+    };
+    await Promise.all(
+      Array.from(
+        { length: Math.min(STARTUP_REGISTRATION_CONCURRENCY, startupPaths.length) },
+        registerNext,
+      ),
+    );
     const justScanRoots = new Set<string>();
     for (const root of options.scanRoots ?? []) {
       try {

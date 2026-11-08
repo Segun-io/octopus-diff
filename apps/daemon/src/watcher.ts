@@ -77,6 +77,11 @@ export interface WatchedWorktree {
 
 export interface WatcherServiceOptions {
   enabled?: boolean;
+  /**
+   * Refresh a quiet worktree on its first event instead of after the debounce; later events
+   * within the debounce window still coalesce into one trailing refresh (default false).
+   */
+  leadingEdge?: boolean;
   forcePolling?: boolean;
   ignore?: readonly string[];
   debounceMs?: number;
@@ -105,6 +110,8 @@ interface WorktreeState {
   burstStart: number;
   pendingReason: DirtyReason;
   poll: NodeJS.Timeout | undefined;
+  /** When this worktree last fired a refresh (any reason); 0 = never. */
+  lastFireAt: number;
 }
 
 interface ProjectState {
@@ -164,6 +171,33 @@ export function buildWorktreeIgnores(extra: readonly string[] = []): string[] {
   return [...out];
 }
 
+/** Timer jitter (±25 %): every worktree and project is armed at startup, so fixed intervals
+ * would make all relists (60 s) and fallback polls (5 min) fire in the same second. */
+export const TIMER_JITTER = 0.25;
+
+function jittered(ms: number): number {
+  return Math.max(1, Math.round(ms * (1 + TIMER_JITTER * (2 * Math.random() - 1))));
+}
+
+// Merges "**/<name>" globs into a single "**/{a,b,...}" glob for @parcel/watcher. Its native
+// matcher tests every crawled path against each glob's regex in turn, so the 24 default names
+// (each also passed as a path) made the initial crawl of a 50k-file worktree take ~1.8 s
+// instead of ~0.3 s. Paths and other globs pass through unchanged; names containing a comma
+// stay separate globs.
+export function compactIgnores(entries: readonly string[]): string[] {
+  const names: string[] = [];
+  const out: string[] = [];
+  for (const entry of entries) {
+    const match = /^\*\*\/([^*?[\]{}!/\\,]+)$/.exec(entry);
+    if (match?.[1]) names.push(match[1]);
+    else out.push(entry);
+  }
+  const unique = [...new Set(names)];
+  if (unique.length === 1) out.push(`**/${unique[0]}`);
+  else if (unique.length > 1) out.push(`**/{${unique.join(',')}}`);
+  return out;
+}
+
 function isLockFile(p: string): boolean {
   return p.endsWith('.lock');
 }
@@ -196,6 +230,7 @@ export class WatcherService {
     const debounceMs = options.debounceMs ?? WATCH_DEFAULTS.debounceMs;
     this.#opts = {
       enabled: options.enabled ?? true,
+      leadingEdge: options.leadingEdge ?? false,
       forcePolling: options.forcePolling ?? false,
       debounceMs: Math.max(0, debounceMs),
       maxWaitMs: Math.max(debounceMs, options.maxWaitMs ?? WATCH_DEFAULTS.maxWaitMs),
@@ -213,7 +248,7 @@ export class WatcherService {
     };
     this.#log = options.logger;
     this.#subscribe = options.subscribe ?? parcelWatcher.subscribe;
-    this.#worktreeIgnores = buildWorktreeIgnores(options.ignore);
+    this.#worktreeIgnores = compactIgnores(buildWorktreeIgnores(options.ignore));
     this.#onDirty = options.onWorktreeDirty;
     this.#onListDirty = options.onWorktreeListDirty;
   }
@@ -298,6 +333,16 @@ export class WatcherService {
     const st = this.#worktrees.get(worktreeId);
     if (!st || this.#closed) return;
     const now = Date.now();
+    if (
+      this.#opts.leadingEdge &&
+      st.debounce === undefined &&
+      now - st.lastFireAt >= this.#opts.debounceMs
+    ) {
+      // Quiet worktree: refresh now. Events in the next debounce window (the rest of the same
+      // save or commit) start the normal trailing debounce below.
+      this.#fire(st, reason);
+      return;
+    }
     if (st.debounce === undefined) {
       st.burstStart = now;
       st.pendingReason = reason;
@@ -393,6 +438,7 @@ export class WatcherService {
       burstStart: 0,
       pendingReason: 'fs',
       poll: undefined,
+      lastFireAt: 0,
     };
     this.#worktrees.set(info.worktreeId, st);
     this.#schedulePoll(info.worktreeId);
@@ -607,7 +653,7 @@ export class WatcherService {
       if (this.#closed || this.#projects.get(project.projectId) !== project) return;
       this.#onListDirty(project.projectId, 'timer');
       this.#scheduleRelist(project);
-    }, this.#opts.relistMs);
+    }, jittered(this.#opts.relistMs));
     project.relist.unref();
   }
 
@@ -624,15 +670,19 @@ export class WatcherService {
     const st = this.#worktrees.get(worktreeId);
     if (!st || this.#closed) return;
     clearTimeout(st.poll);
-    st.poll = setTimeout(() => {
-      st.poll = undefined;
-      this.#fire(st, 'poll');
-    }, this.pollIntervalFor(worktreeId));
+    st.poll = setTimeout(
+      () => {
+        st.poll = undefined;
+        this.#fire(st, 'poll');
+      },
+      jittered(this.pollIntervalFor(worktreeId)),
+    );
     st.poll.unref();
   }
 
   #fire(st: WorktreeState, reason: DirtyReason): void {
     if (this.#closed || this.#worktrees.get(st.info.worktreeId) !== st) return;
+    st.lastFireAt = Date.now();
     this.#schedulePoll(st.info.worktreeId);
     try {
       this.#onDirty(st.info.worktreeId, reason);
