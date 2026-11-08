@@ -1,6 +1,7 @@
 import { DEFAULT_SCOPE, type DiffScope } from '@octopus-diff/contracts';
 import { createContext, type ReactNode, useContext, useState } from 'react';
 import { type FileRef, fileRefKey } from '../lib/fileRef.ts';
+import type { SettingsSectionId } from '../settings/registry.ts';
 import type { ThemePrefs } from '../theme/registry.ts';
 import {
   DEFAULT_PREFS,
@@ -28,6 +29,16 @@ export interface FileViewOptions {
   full?: boolean;
 }
 
+export interface BulkToast {
+  id: number;
+  text: string;
+  undoToken: string | null;
+  reviewed: boolean;
+  changed: number;
+  /** Set while an undo is in flight or after it completed. */
+  state: 'done' | 'undoing' | 'undone' | 'failed';
+}
+
 export interface ScanStatus {
   scanRootId: string;
   state: 'scanning' | 'done' | 'error';
@@ -46,6 +57,13 @@ export interface UiState extends Prefs {
   onlyUnreviewed: boolean;
   helpOpen: boolean;
   addProjectOpen: boolean;
+  settingsOpen: boolean;
+  settingsSection: SettingsSectionId;
+  paletteOpen: boolean;
+  /** Result of the last bulk mark, shown as a toast with undo until dismissed or expired. */
+  bulkToast: BulkToast | null;
+  /** Pending bulk mark awaiting confirmation (pref `confirmBulk`, more than one worktree). */
+  bulkConfirm: { reviewed: boolean; count: number; worktrees: number } | null;
   fileOptions: Record<string, FileViewOptions>;
   connection: ConnectionState;
   scan: ScanStatus | null;
@@ -63,6 +81,11 @@ export const DEFAULT_UI_STATE: UiState = {
   onlyUnreviewed: false,
   helpOpen: false,
   addProjectOpen: false,
+  settingsOpen: false,
+  settingsSection: 'general',
+  paletteOpen: false,
+  bulkToast: null,
+  bulkConfirm: null,
   fileOptions: {},
   connection: 'connecting',
   scan: null,
@@ -136,5 +159,28 @@ export const actions = {
   },
   setFileOptions(store: UiStore, key: string, options: FileViewOptions) {
     store.setState((s) => ({ fileOptions: { ...s.fileOptions, [key]: options } }));
+  },
+  openSettings(store: UiStore, section?: SettingsSectionId) {
+    store.setState((s) => ({
+      settingsOpen: true,
+      settingsSection: section ?? s.settingsSection,
+      paletteOpen: false,
+      helpOpen: false,
+    }));
+  },
+  closeOverlays(store: UiStore) {
+    store.setState({
+      settingsOpen: false,
+      paletteOpen: false,
+      helpOpen: false,
+      addProjectOpen: false,
+    });
+  },
+  toggleCollapsed(store: UiStore, id: string) {
+    store.setState((s) => ({
+      collapsed: s.collapsed.includes(id)
+        ? s.collapsed.filter((x) => x !== id)
+        : [...s.collapsed, id],
+    }));
   },
 };

@@ -1,5 +1,5 @@
 import { TEST_IDS } from '@octopus-diff/contracts';
-import { SHORTCUTS } from '../state/commands.ts';
+import { SHORTCUTS } from '../state/commandRegistry.ts';
 import { useUiStore } from '../state/ui.tsx';
 import { Dialog } from './Dialog.tsx';
 
@@ -18,11 +18,7 @@ export function HelpDialog() {
               <td className="py-1.5 pr-4 whitespace-nowrap">
                 {s.keys.map((k, i) => (
                   <span key={k}>
-                    {i > 0 && (
-                      <span className="px-1 text-faint">
-                        {s.keys.length === 2 && k === 'i' ? 'then' : '/'}
-                      </span>
-                    )}
+                    {i > 0 && <span className="px-1 text-faint">{s.chord ? 'then' : '/'}</span>}
                     <kbd>{k}</kbd>
                   </span>
                 ))}
