@@ -1,12 +1,14 @@
-import type {
-  DiffResponse,
-  FilesResponse,
-  InboxResponse,
-  ServerEvent,
+import {
+  createApiClient,
+  type DiffResponse,
+  type FilesResponse,
+  type InboxResponse,
+  type ServerEvent,
 } from '@octopus-diff/contracts';
-import { QueryClient } from '@tanstack/react-query';
+import { QueryClient, QueryObserver } from '@tanstack/react-query';
 import { describe, expect, it } from 'vitest';
 import { MockBackend } from '../mock/backend.ts';
+import { createMockFetch } from '../mock/router.ts';
 import {
   applyReviewToCaches,
   collectEventEffects,
@@ -138,6 +140,45 @@ describe('SSE → cache invalidation', () => {
     expect(invalid(queryKeys.files(a.worktree.id, { kind: 'working' }))).toBe(true);
     expect(invalid(diffKey)).toBe(true);
     expect(invalid(queryKeys.files(b.worktree.id, { kind: 'working' }))).toBe(false);
+  });
+
+  it('patches the changed worktree into the inbox instead of refetching the whole inbox', async () => {
+    const { backend, qc, a } = seeded();
+    const requests: string[] = [];
+    const mockFetch = createMockFetch(backend);
+    const api = createApiClient({
+      baseUrl: 'http://mock.local',
+      fetch: (input, init) => {
+        requests.push(String(input));
+        return mockFetch(input, init);
+      },
+    });
+    // Active observers, as in the app (the patch only touches inbox queries on screen).
+    const unsubscribe = [
+      new QueryObserver(qc, { queryKey: queryKeys.projects(), queryFn: () => api.listProjects() }),
+      new QueryObserver(qc, {
+        queryKey: queryKeys.inbox({ kind: 'working' }),
+        queryFn: () => api.inbox({ scope: { kind: 'working' } }),
+      }),
+    ].map((observer) => observer.subscribe(() => {}));
+    requests.length = 0;
+    backend.mutate(a.worktree.id, 'edit');
+    const stateHash = backend.listFiles(a.worktree.id, { kind: 'working' }).stateHash;
+    const effects = collectEventEffects(
+      qc,
+      { type: 'worktree.changed', projectId: a.project.id, worktreeId: a.worktree.id, stateHash },
+      emptyEffects(),
+      { reconnect: false },
+    );
+    await flushEffects(qc, effects, api);
+    const patched = qc.getQueryData<InboxResponse>(queryKeys.inbox({ kind: 'working' }));
+    const expected = backend.inbox({ kind: 'working' }, false);
+    const byId = (r: InboxResponse | undefined) =>
+      Object.fromEntries((r?.entries ?? []).map((e) => [e.worktree.id, e]));
+    expect(byId(patched)).toEqual(byId(expected));
+    expect(requests.some((r) => r.includes('/api/inbox'))).toBe(false);
+    expect(requests.some((r) => r.includes(`/api/worktrees/${a.worktree.id}/files`))).toBe(true);
+    for (const fn of unsubscribe) fn();
   });
 
   it('skips worktree.changed when the cached stateHash already matches', () => {

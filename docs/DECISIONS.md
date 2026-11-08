@@ -613,3 +613,33 @@ All 2026-11-08 · WS5.
    Contract changes are additive (`AUTH_FRAGMENT_PARAM`, `TOKEN_STORAGE_KEY`, `HEALTH_CHALLENGE_PARAM`,
    `healthProofMessage`, `HealthQuerySchema`, optional `HealthResponse.proof`, `client.health({challenge})`);
    `AUTH_COOKIE_NAME` stays exported (deprecated).
+
+## Phase 2 — performance review (`review/perf`, proposals for the lead)
+
+Prototype commits on `review/perf`; nothing here is merged until the lead decides. Evidence and
+numbers: `docs/reports/review-perf.md`.
+
+1. **2026-11-08 · Leading-edge refresh (deviates from PLAN §5.6 "debounce 150–300 ms").** The
+   200 ms trailing debounce was 93 % of write → `worktree.changed` latency. Proposal: a worktree
+   with no pending refresh and none fired in the last `debounceMs` refreshes on its first event;
+   later events in that window use the existing trailing debounce and 1 s max wait, so bursts still
+   coalesce (at most one extra summary per burst). `DaemonCore` turns it on by default
+   (`internal.leadingEdge: false` restores the old behavior); `WatcherService` defaults to off.
+   Trade-off: a refresh can observe the first half of a multi-step write (e.g. a commit) and the UI
+   shows that intermediate state for ~200 ms until the trailing refresh. Measured: SSE p50
+   216 → 13 ms.
+2. **2026-11-08 · Timer jitter.** Relist (60 s) and fallback-poll (30 s / 5 min) timers get ±25 %
+   jitter; `pollIntervalFor()` still reports the nominal value. All timers were armed at startup and
+   fired in the same second (worst idle second 108 % CPU at t = 300 s with 30 × 3).
+3. **2026-11-08 · The web client patches the inbox per worktree.** For batches of
+   `worktree.changed` events touching ≤ 8 worktrees, the UI rebuilds those inbox entries from
+   `GET /worktrees/:id/files` + the projects list instead of refetching `/api/inbox`; anything else
+   (added/removed/updated projects or worktrees, scans, reconnects, failures, stateHash mismatch)
+   still refetches the whole inbox. This duplicates `DaemonCore.inbox()`'s entry rules on the
+   client; a contract-level delta (summary in `worktree.changed`, or `/inbox?worktreeIds=`) would
+   be more robust and is recommended instead if the lead prefers.
+4. **2026-11-08 · Scripts are served with the UI CSP** (seam bug, WS2/WS3). The daemon sent the API
+   policy (`default-src 'none'`) on every non-HTML response; a dedicated worker runs under its own
+   script's CSP, so the highlight workers could not import their Shiki chunk, the pool failed, and
+   all highlighting ran on the main thread (1.8 s long task for a 10 000-line diff). JS assets now
+   get `UI_CSP`. Flagged for the security review.
