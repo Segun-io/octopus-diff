@@ -115,4 +115,7 @@ Newest last. Format: date · who · decision · reason. Contract changes are mar
 
 ## Phase 2 — integration (lead)
 
-(none yet)
+1. **2026-11-08 · `esbuild` build script denied** (`allowBuilds: esbuild: false`). `tsx` (root dev dep)
+   pulls `esbuild`, whose postinstall only validates/optimizes the binary; the prebuilt
+   `@esbuild/linux-x64` package is used. Without the entry, pnpm 12 exits 1 on `pnpm install` even though
+   the install completes (reported by WS5). Verified: `pnpm install` exits 0 and `tsx` runs.

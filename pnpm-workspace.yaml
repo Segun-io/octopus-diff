@@ -5,3 +5,4 @@ packages:
   - e2e
 allowBuilds:
   '@parcel/watcher': false
+  esbuild: false
