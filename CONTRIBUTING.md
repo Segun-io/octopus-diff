@@ -27,7 +27,8 @@ is truly required, approve it there and say why in `docs/DECISIONS.md`.
 |---|---|
 | `pnpm lint` | Biome lint + format check (`pnpm lint:fix` applies fixes) |
 | `pnpm typecheck` | `tsc` in every package, against workspace **sources** (no build needed) |
-| `pnpm test` | vitest unit tests in every package (no build needed) |
+| `pnpm test` | vitest unit tests in every package (no build needed), then `scripts/` (`pnpm test:scripts`) |
+| `pnpm dev` | hot-reload development: Vite + a daemon from sources that restarts on edits (below) |
 | `pnpm build` | topological build: contracts → git-core → daemon → web → cli |
 | `pnpm test:e2e` | Playwright end-to-end tests (`e2e/`; needs `pnpm build` first) |
 | `pnpm check` | lint + typecheck + test + build |
@@ -37,12 +38,83 @@ Per package: `pnpm --filter <name> <script>`, with names `@octopus-diff/contract
 `@octopus-diff/git-core`, `@octopus-diff/daemon`, `@octopus-diff/web`, `octopus-diff` (the CLI),
 `@octopus-diff/fixtures`, `@octopus-diff/e2e`. Every package has `build`, `typecheck`, `test`, `lint`.
 
-Run TypeScript sources directly while developing:
+## Develop with hot reload: `pnpm dev`
+
+```sh
+pnpm dev                       # this checkout as the project; LAN-reachable
+pnpm dev ~/code/a ~/code/b     # other repositories instead
+pnpm dev --loopback            # 127.0.0.1 only
+pnpm dev --help                # all options
+```
+
+`pnpm dev` (`scripts/dev.mjs`) runs two processes and labels their output `[daemon]` / `[web]`:
+
+- **web**: Vite on **:5173** serves `apps/web` with hot module reload and proxies `/api` (the SSE
+  stream included) to the daemon. UI edits apply in place.
+- **daemon**: `octopus-diff serve` from sources under `tsx watch` on **:7429**. Any edit to a file it
+  imports (`apps/cli`, `apps/daemon`, `packages/*` sources) restarts it in well under a second. Open
+  pages reconnect on their own: the event stream retries after 1 s, and the reconnect refreshes
+  everything.
+
+When the daemon is up, the `[dev]` banner prints the URLs to open, with the access token, on the Vite
+port: `http://localhost:5173/#token=…`, plus `http://odino:5173/…`, `http://odino.local:5173/…`
+and one per LAN IPv4 address. Treat them like passwords. By default both processes listen on all
+interfaces (Vite on `::`, the daemon with `--host :: --allow-non-loopback`). The Host names allowed
+are `localhost`, `127.0.0.1`, `odino`, `odino.local` and this machine's LAN IPv4 addresses, through
+Vite's `server.allowedHosts` and the daemon's `--allowed-host`. Add names with
+`--allowed-host <name>` (or `OCTOPUS_DIFF_DEV_ALLOWED_HOSTS=a,b`). `--loopback` binds 127.0.0.1 and
+drops the LAN names.
+
+Other options: `--daemon-port`, `--web-port` (env `OCTOPUS_DIFF_DEV_DAEMON_PORT`,
+`OCTOPUS_DIFF_DEV_WEB_PORT`; the web port is strict, so a taken port fails instead of drifting),
+repository paths as arguments (or `OCTOPUS_DIFF_DEV_REPOS`, `:`-separated; the default is this
+checkout), and `serve` flags after `--` (`pnpm dev -- --log-level debug --poll`). Port **7428**, the
+production/LAN server's, is rejected.
+
+The dev daemon keeps **its own state** in `~/.local/state/octopus-diff-dev`
+(`$XDG_STATE_HOME/octopus-diff-dev`; `--state-dir` or `OCTOPUS_DIFF_DEV_STATE_DIR` to change it):
+its own token, review store and settings. `serve` allows one daemon per state dir, and with a shared
+one the dev daemon would only print the production daemon's URL and exit. The config file
+(`~/.config/octopus-diff/config.json`) is shared.
+
+Ctrl+C (or SIGTERM, e.g. from systemd) stops both processes. If either one exits on its own, the
+other is stopped and `pnpm dev` exits non-zero. A daemon that crashes on a syntax error is not an
+exit: `tsx watch` waits for the next edit.
+
+**Reaching it from other devices.** The LAN needs the same allowance for 5173 that the production
+server has for 7428. Under WSL with mirrored networking and the Hyper-V firewall on (the dev machine's
+setup), the firewall rule that admits 7428 must also cover 5173 (and 7429 if you want the raw API
+from other devices). Without it, `odino:5173` works on the machine itself but times out elsewhere.
+
+To keep it running in the background like the LAN server, use a user unit (run this from the checkout):
+
+```sh
+systemd-run --user --unit=octopus-diff-dev --working-directory="$PWD" \
+  --property=StandardOutput=append:$HOME/.cache/octopus-diff-dev/dev.out \
+  --property=StandardError=append:$HOME/.cache/octopus-diff-dev/dev.err \
+  "$(command -v node)" scripts/dev.mjs
+# logs and the token URLs: dev.out (as lan-serve.out holds the LAN server's); stop:
+systemctl --user stop octopus-diff-dev
+```
+
+A process started with `nohup … &` from an agent's or an editor's shell can be killed when that shell
+ends; a transient user unit survives it.
+
+**The production/LAN server is unchanged.** `node apps/cli/dist/index.js serve … --port 7428` (the
+`octopus-diff-lan` unit) serves the built UI from `dist/`. `pnpm dev` does not touch it, and it does
+not pick up edits: run `pnpm build` and restart it.
+
+### Run the pieces by hand
 
 ```sh
 pnpm exec tsx --conditions=@octopus-diff/source apps/cli/src/index.ts serve --port 0
 pnpm --filter @octopus-diff/web dev     # Vite dev server; proxies /api to OCTOPUS_DIFF_API (default :7428)
 ```
+
+`apps/web/vite.config.ts` also reads `OCTOPUS_DIFF_WEB_HOST`, `OCTOPUS_DIFF_WEB_PORT` (strict when
+set) and `OCTOPUS_DIFF_ALLOWED_HOSTS` (comma-separated); unset, Vite keeps its defaults (`localhost`,
+5173 or the next free port). Proxying to a daemon on another port only works for Host names the daemon
+allows on any port (`--allowed-host`), because its Host check otherwise requires its own port.
 
 ## Layout
 
