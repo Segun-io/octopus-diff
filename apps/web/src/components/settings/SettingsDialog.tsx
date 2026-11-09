@@ -1,5 +1,5 @@
 import { TEST_IDS } from '@octopus-diff/contracts';
-import { useCallback, useEffect, useId, useRef } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useId, useRef } from 'react';
 import { useHealthQuery, useSettingsSupport } from '../../api/settings.ts';
 import { useEscapeToClose } from '../../lib/useEscape.ts';
 import {
@@ -19,6 +19,9 @@ import { Mark, Wordmark } from '../Mark.tsx';
 import { Select, SettingRow, Switch, Where } from './controls.tsx';
 import { FoldersSection } from './FoldersSection.tsx';
 import { ReviewSection } from './ReviewSection.tsx';
+
+// Lazy: the credits carry every license text (~200 KB of JSON), only needed when About is open.
+const Credits = lazy(() => import('./Credits.tsx').then((m) => ({ default: m.Credits })));
 
 /** Settings screen: section nav on the left, one panel on the right. Opened with `,`. */
 export function SettingsDialog() {
@@ -380,6 +383,9 @@ function AboutPanel() {
         Everything octopus-diff does to a repository is a read. Marks and settings live in the
         daemon’s own state directory. Design notes: docs/design/.
       </p>
+      <Suspense fallback={<p className="mt-6 text-[11px] text-muted">Loading credits…</p>}>
+        <Credits />
+      </Suspense>
     </div>
   );
 }

@@ -18,7 +18,8 @@
       "!**/pnpm-lock.yaml",
       "!**/*.md",
       "!pnpm-workspace.yaml",
-      "!docs/bench"
+      "!docs/bench",
+      "!apps/web/src/generated"
     ]
   },
   "formatter": {

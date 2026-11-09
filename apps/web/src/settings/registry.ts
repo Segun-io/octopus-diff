@@ -29,7 +29,7 @@ export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   { id: 'appearance', label: 'Appearance', description: 'Theme, density and diff defaults.' },
   { id: 'folders', label: 'Folders', description: 'Watched folders and repositories.' },
   { id: 'keyboard', label: 'Keyboard', description: 'Every shortcut, from the command registry.' },
-  { id: 'about', label: 'About', description: 'Versions and the daemon.' },
+  { id: 'about', label: 'About', description: 'Versions, the daemon and open-source credits.' },
 ];
 
 export type BooleanPrefKey = {

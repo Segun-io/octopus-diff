@@ -1138,20 +1138,48 @@ look off, worktrees cannot be settled and the settled ones still show; follow th
 ## Credits for open-source software (lead, 2026-11-08)
 
 Branch `docs/credits`, on top of `main` at `1a07fd9`. Brief from the user: a section that credits all open-source
-software we use, and every agent must know to update it whenever a package is added.
+software we use, and every agent must know to update it whenever a package is added. (Numbered #54–#56: UX round 4's
+row cards took #53 on `main` in parallel. #54–#56 are superseded by #57–#59 below.)
 
-53. **`CREDITS.md` at the repository root, linked from the README's new "Credits" section.** Tables of direct
+54. **`CREDITS.md` at the repository root, linked from the README's new "Credits" section.** Tables of direct
     dependencies (shipped vs development tools: package, users, license, project URL), a prose list of the
     transitive packages the shipped ones pull in (shiki, the unified utilities, preact, the `@parcel/watcher`
     binaries…), git as an external program (GPL-2.0, run, not bundled), the code adapted from T3 Code (MIT,
     Copyright (c) 2026 T3 Tools Inc.: `DiffWorkerPool.tsx`, `folderPath.ts`, the ported `folderPath.test.ts` cases)
     and the projects from PLAN §3 that inspired ideas only. It is a shared file, like `docs/`: every stream may edit it.
-54. **Enforced, not just documented.** `scripts/check-credits.mjs` (run by `pnpm lint`, so by `pnpm check`; also
+55. **Enforced, not just documented.** `scripts/check-credits.mjs` (run by `pnpm lint`, so by `pnpm check`; also
     `pnpm credits`) reads every workspace `package.json` and fails on a direct dependency without a table row, a row
     for a package that is no longer a dependency, or a row whose license differs from the installed package's
     `license` field. Transitive packages are not checked (the list would churn with every lockfile update); the
     rule asks for a review of that list when a shipped dependency changes. AGENTS.md § Dependencies, rule 2, the
     layout table, the stream report template and CONTRIBUTING.md now say so.
-55. **The CLI tarball ships `CREDITS.md`** next to `LICENSE` (`apps/cli/scripts/pack.mjs`). Not done: a generated
+56. **The CLI tarball ships `CREDITS.md`** next to `LICENSE` (`apps/cli/scripts/pack.mjs`). Not done: a generated
     `THIRD_PARTY_LICENSES` with the full license texts of the code bundled into the web UI, which MIT / Apache-2.0
     ask for when redistributing. Do it before the first npm publish (e.g. from the Vite build's module list).
+
+## Credits in the app (lead, 2026-11-09)
+
+Branch `web/credits`, on top of `main` at `3617d3c`. Brief from the user: the credits belong in the application
+(Settings or About); `CREDITS.md` alone is not the right place, or only alongside the app.
+
+57. **Settings → About → "Open-source software".** About already shows the versions, and About is where apps keep
+    their licenses, so a new Settings section was not needed. Below the versions: code adapted from other projects
+    (T3 Code, with the files and its license), the programs it runs (git), a filter, then "Shipped with
+    octopus-diff" (71 packages, direct and pulled in: version, license, author, link, `used by` or `via`, the license
+    text and any NOTICE in a `<details>`) and "Development tools" (16, direct only, no texts), and the inspiration
+    list. `Credits.tsx` is lazy-loaded inside the (already lazy) Settings chunk, so the ~200 KB of JSON costs nothing
+    until About opens.
+58. **Generated, not hand-written (supersedes #54/#55).** `scripts/credits/generate.mjs` (`pnpm credits`) reads the
+    workspace `package.json` files, follows the shipped workspaces' `dependencies` through `node_modules` (pnpm real
+    paths, Node's lookup), reads each package's license/NOTICE files, and merges the hand-written
+    `scripts/credits/acknowledgements.json` (shipped workspaces, allowed runtime licenses, notes, programs, adapted
+    code, inspiration). It writes `apps/web/src/generated/credits.json` (excluded from Biome) and `CREDITS.md`; both
+    are committed so typecheck, tests and the Vite dev server need no generation step. `pnpm lint` runs
+    `pnpm credits:check`, which regenerates in memory and fails when either file differs. A version bump therefore
+    needs `pnpm credits` too, deliberately: license texts change with versions. Optional dependencies are skipped
+    (`@parcel/watcher`'s per-platform binaries are one note) so the output is identical on Linux, macOS and Windows.
+    Shipped packages with a license outside `allowedRuntimeLicenses` fail generation. The hand-maintained transitive
+    list of #54 and `scripts/check-credits.mjs` are gone.
+59. **License texts ship with the code.** The web bundle now carries every shipped package's license and NOTICE text,
+    which covers the redistribution gap noted in #56 for the web UI; the CLI tarball still ships `CREDITS.md`. One
+    shipped package publishes no license file in its tarball (`lru_map`, MIT); the app says so next to its license.

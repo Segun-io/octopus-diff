@@ -83,9 +83,10 @@ checkout, `octopus-diff serve` prefers `apps/web/dist` (so rebuilding only the w
 - Dependencies: prefer small, well-maintained MIT / Apache-2.0 / BSD / ISC packages, added to the
   package that uses them. Ideas may come from anywhere, but copy code only from MIT / Apache-2.0
   sources, with attribution. Never copy from GitButler (FSL), Zed or Detached (GPL-3).
-- Credits: adding, removing or replacing a dependency, or adapting someone else's code, updates
-  [CREDITS.md](CREDITS.md) in the same commit. `pnpm lint` (and so `pnpm check`) fails while a direct
-  dependency is missing there, listed but gone, or listed with the wrong license.
+- Credits: the app lists every open-source package it uses, with its license, in Settings → About,
+  and [CREDITS.md](CREDITS.md) lists the same. Both are generated: after any dependency change run
+  `pnpm credits` and commit the result (`pnpm lint` fails until you do). Code adapted from another
+  project goes into `scripts/credits/acknowledgements.json`.
 - Commit messages: `<area>: <what>`, e.g. `git-core: parse status porcelain v2`.
 
 ## The read-only guarantee (non-negotiable)

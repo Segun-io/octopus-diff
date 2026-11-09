@@ -47,6 +47,14 @@ const STATES: Record<string, Step> = {
     await page.locator('[data-testid="settings-section"][data-section="appearance"]').click();
     await page.waitForTimeout(300);
   },
+  'settings-about': async (page) => {
+    await page.keyboard.press(',');
+    await page.locator('[data-testid="settings-section"][data-section="about"]').click();
+    await page.getByRole('heading', { name: 'Open-source software' }).scrollIntoViewIfNeeded();
+    await page.locator('li[data-package="@pierre/diffs"] summary').click();
+    await page.locator('li[data-package="@pierre/diffs"]').scrollIntoViewIfNeeded();
+    await page.waitForTimeout(300);
+  },
   palette: async (page) => {
     await page.keyboard.press('Control+k');
     await page.waitForTimeout(300);

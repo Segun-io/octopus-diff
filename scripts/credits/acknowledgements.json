@@ -1,0 +1,68 @@
+{
+  "$comment": "Hand-written input for scripts/credits/generate.mjs (run `pnpm credits` after editing). Packages are read from package.json files and node_modules; this file only holds what cannot be: which workspace packages ship, licenses allowed at runtime, notes, programs we run, code adapted from other projects, and inspiration.",
+  "shippedWorkspaces": [
+    "octopus-diff",
+    "@octopus-diff/daemon",
+    "@octopus-diff/git-core",
+    "@octopus-diff/contracts",
+    "@octopus-diff/web"
+  ],
+  "allowedRuntimeLicenses": [
+    "MIT",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "0BSD",
+    "MIT OR Apache-2.0"
+  ],
+  "alsoShipped": {
+    "tailwindcss": "A build tool, but the CSS it generates (including its preflight reset) is part of the web UI."
+  },
+  "notes": {
+    "@parcel/watcher": "Also installs a prebuilt native binary for your platform (@parcel/watcher-<platform>, MIT)."
+  },
+  "programs": [
+    {
+      "name": "Git",
+      "url": "https://git-scm.com/",
+      "license": "GPL-2.0-only",
+      "description": "The daemon runs your installed git as a separate program for every read. octopus-diff does not bundle or link it."
+    }
+  ],
+  "adapted": [
+    {
+      "name": "T3 Code",
+      "url": "https://github.com/pingdotgg/t3code",
+      "license": "MIT",
+      "copyright": "Copyright (c) 2026 T3 Tools Inc.",
+      "files": [
+        {
+          "path": "apps/web/src/components/diff/DiffWorkerPool.tsx",
+          "what": "Adapted from apps/web/src/components/DiffWorkerPoolProvider.tsx."
+        },
+        {
+          "path": "apps/web/src/lib/folderPath.ts",
+          "what": "The path rules of the command-palette browse mode."
+        },
+        {
+          "path": "apps/web/test/folderPath.test.ts",
+          "what": "Test cases ported from packages/shared/src/path.test.ts."
+        }
+      ],
+      "design": "The sidebar (folders, the Settled shelf, settling by hand), the folder picker and the command palette's browse mode are modelled on T3 Code's UI.",
+      "licenseText": "MIT License\n\nCopyright (c) 2026 T3 Tools Inc.\n\nPermission is hereby granted, free of charge, to any person obtaining a copy\nof this software and associated documentation files (the \"Software\"), to deal\nin the Software without restriction, including without limitation the rights\nto use, copy, modify, merge, publish, distribute, sublicense, and/or sell\ncopies of the Software, and to permit persons to whom the Software is\nfurnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in all\ncopies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\nIMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\nFITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\nAUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\nLIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\nOUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\nSOFTWARE.\n"
+    }
+  ],
+  "inspiration": [
+    "gitpane",
+    "difit",
+    "SproutGit",
+    "overgit",
+    "Archipel",
+    "DiffDino",
+    "Emdash",
+    "Paradev",
+    "Vibe Kanban"
+  ]
+}

@@ -191,6 +191,40 @@ describe('settings screen', () => {
     await screen.findByTestId(TEST_IDS.settingsDialog);
   });
 
+  it('About credits the open-source software, with license texts and a filter', async () => {
+    const { user } = setup();
+    await ready();
+    await press(user, ',');
+    const dialog = await screen.findByTestId(TEST_IDS.settingsDialog);
+    const about = within(dialog)
+      .getAllByTestId(TEST_IDS.settingsSection)
+      .find((s) => s.dataset.section === 'about');
+    fireEvent.click(about as HTMLElement);
+    await within(dialog).findByRole('heading', { name: 'Open-source software' });
+    const shipped = within(dialog).getByRole('list', { name: 'Shipped with octopus-diff' });
+    const dev = within(dialog).getByRole('list', { name: 'Development tools' });
+    const row = (list: HTMLElement, name: string) =>
+      [...list.querySelectorAll<HTMLElement>('li[data-package]')].find(
+        (li) => li.dataset.package === name,
+      );
+    // direct runtime dependencies, what they pull in, and dev tools, each with its license
+    expect(row(shipped, 'react')?.textContent).toContain('MIT');
+    expect(row(shipped, '@pierre/diffs')?.textContent).toContain('Apache-2.0');
+    expect(row(shipped, 'shiki')?.textContent).toContain('via @pierre/diffs');
+    expect(row(dev, 'vitest')).toBeDefined();
+    expect(row(shipped, 'vitest')).toBeUndefined();
+    expect(row(shipped, 'hono')?.querySelector('pre')?.textContent).toMatch(/MIT License/);
+    // adapted code and the programs it runs
+    expect(within(dialog).getByText('T3 Code')).toBeDefined();
+    expect(within(dialog).getByText('apps/web/src/lib/folderPath.ts')).toBeDefined();
+    expect(within(dialog).getByText('Git')).toBeDefined();
+    // the filter narrows both lists
+    await user.type(within(dialog).getByLabelText('Filter packages'), 'zod');
+    expect(shipped.querySelectorAll('li[data-package]').length).toBe(1);
+    expect(within(dialog).getByText('1 of', { exact: false })).toBeDefined();
+    expect(within(dialog).getByText('No package matches.')).toBeDefined();
+  });
+
   it('theme picker switches themes and persists a v2 preference', async () => {
     const { user, store } = setup();
     await ready();
