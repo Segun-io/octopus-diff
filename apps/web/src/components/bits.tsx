@@ -217,18 +217,19 @@ export function RepoIcon(props: IconProps) {
   );
 }
 
-export function ArrowUpIcon(props: IconProps) {
+/** Up one folder (the `..` row). */
+export function CornerLeftUpIcon(props: IconProps) {
   return (
     <Svg {...props}>
-      <path d="M8 13V3M4 7l4-4 4 4" />
+      <path d="M3.5 6.5 6.5 3.5l3 3M13 13H9a2.5 2.5 0 0 1-2.5-2.5v-7" />
     </Svg>
   );
 }
 
-export function ChevronRightIcon(props: IconProps) {
+export function FolderPlusIcon(props: IconProps) {
   return (
     <Svg {...props}>
-      <path d="M6 3.5L10.5 8 6 12.5" />
+      <path d="M2 4.5a1 1 0 0 1 1-1h3.2l1.5 1.5H13a1 1 0 0 1 1 1V12a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1zM8 7.25v3.5M6.25 9h3.5" />
     </Svg>
   );
 }

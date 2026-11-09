@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useId, useState } from 'react';
 import { describeError, useProjectsQuery } from '../../api/queries.ts';
 import {
   useRemoveProject,
@@ -7,10 +7,11 @@ import {
   useScanRootsQuery,
   useUpdateProject,
 } from '../../api/settings.ts';
+import { resolvePastedPath } from '../../lib/folderPath.ts';
 import { shortenHome } from '../../lib/policy.ts';
-import { useUi } from '../../state/ui.tsx';
+import { useUi, useUiStore } from '../../state/ui.tsx';
 import { AddProjectForm } from '../AddProjectForm.tsx';
-import { SmallButton } from './controls.tsx';
+import { SettingRow, SmallButton, Where } from './controls.tsx';
 
 /** Settings → Folders: scan roots and projects, with add / rescan / remove. */
 export function FoldersSection() {
@@ -21,6 +22,7 @@ export function FoldersSection() {
   const removeProject = useRemoveProject();
   const updateProject = useUpdateProject();
   const scan = useUi((s) => s.scan);
+  const folderStart = useUi((s) => s.folderStart);
   const [confirm, setConfirm] = useState<string | null>(null);
   const [editing, setEditing] = useState<{ id: string; value: string } | null>(null);
 
@@ -176,9 +178,51 @@ export function FoldersSection() {
 
       {error && <p className="mt-2 text-danger">{describeError(error).detail}</p>}
 
-      <section className="mt-5 rounded-md border border-line bg-surface p-3">
-        <AddProjectForm />
+      <section className="mt-5">
+        <FolderStartSetting />
+      </section>
+
+      <section className="mt-3 rounded-md border border-line bg-surface p-3">
+        <AddProjectForm key={folderStart} />
       </section>
     </div>
+  );
+}
+
+/** Where the folder picker opens (T3 Code's "Add project starts in"). Saved on this device. */
+function FolderStartSetting() {
+  const store = useUiStore();
+  const saved = useUi((s) => s.folderStart);
+  const [draft, setDraft] = useState(saved);
+  const id = useId();
+  const commit = () => {
+    const next = draft.trim();
+    if (next !== saved) store.setState({ folderStart: next });
+    setDraft(next);
+  };
+  return (
+    <SettingRow
+      label="Start browsing in"
+      htmlFor={id}
+      description="The folder the picker opens in. Leave empty to start in your home folder (~/)."
+    >
+      <span className="flex items-center gap-2">
+        <Where kind="device" />
+        <input
+          id={id}
+          name="folderStart"
+          value={draft}
+          placeholder="~/"
+          spellCheck={false}
+          autoComplete="off"
+          onChange={(e) => setDraft(resolvePastedPath(draft, e.target.value))}
+          onBlur={commit}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && !e.nativeEvent.isComposing) commit();
+          }}
+          className="od-input w-56 font-mono"
+        />
+      </span>
+    </SettingRow>
   );
 }

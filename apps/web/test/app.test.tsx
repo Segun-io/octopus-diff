@@ -224,6 +224,107 @@ describe('app shell', () => {
       expect(screen.getByTestId(TEST_IDS.addProjectSubmit)).toHaveProperty('disabled', true);
       expect(screen.getByTestId(TEST_IDS.addScanRootSubmit)).toHaveProperty('disabled', true);
     });
+
+    it('keeps focus in the text box when a row is clicked', async () => {
+      const { user } = setup('empty');
+      await listed('/home/dev');
+      await user.click(input());
+      await user.click(row('code'));
+      await listed('/home/dev/code');
+      expect(document.activeElement).toBe(input());
+    });
+
+    it('a pasted full path replaces the prefilled folder and is unquoted', async () => {
+      const { user } = setup('empty');
+      await listed('/home/dev');
+      await user.click(input());
+      input().setSelectionRange(2, 2);
+      await user.paste("'/home/dev/code/scratch'");
+      expect(input().value).toBe('/home/dev/code/scratch');
+      input().select(); // a WSL path copied from Windows Explorer, over the whole box
+      await user.paste('\\\\wsl.localhost\\Ubuntu\\home\\dev\\code\\');
+      expect(input().value).toBe('/home/dev/code');
+    });
+
+    it('the dialog opens a repository once added, and opens an added one instead', async () => {
+      const { user, store } = setup();
+      await ready();
+      fireEvent.click(screen.getByTestId(TEST_IDS.addProjectButton));
+      // The start folder was loaded before the dialog opened: no loading flash.
+      await screen.findByTestId(TEST_IDS.folderPickerInput);
+      expect(names()).toContain('code');
+      await user.type(input(), 'code/octopus-api');
+      await waitFor(() => expect(row('octopus-api').dataset.registered).toBe('true'));
+      const button = () => screen.getByRole('button', { name: /^Open/ });
+      expect(button().dataset.action).toBe('open');
+      await user.keyboard('{Enter}');
+      await waitFor(() => expect(screen.queryByTestId(TEST_IDS.folderPicker)).toBeNull());
+      expect(store.getState().view.kind).toBe('worktree');
+
+      fireEvent.click(screen.getByTestId(TEST_IDS.addProjectButton));
+      await screen.findByTestId(TEST_IDS.folderPickerInput);
+      await user.type(input(), 'code/fresh');
+      await waitFor(() =>
+        expect(screen.getByTestId(TEST_IDS.addProjectSubmit)).toHaveProperty('disabled', false),
+      );
+      await user.keyboard('{Enter}');
+      await waitFor(() => expect(screen.queryByTestId(TEST_IDS.folderPicker)).toBeNull());
+      const view = store.getState().view;
+      expect(view.kind).toBe('project');
+      await screen.findByRole('heading', { level: 1, name: 'fresh' });
+    });
+
+    it('opens in the start folder from Settings', async () => {
+      const { store } = setup('empty');
+      store.setState({ folderStart: '~/code' });
+      await waitFor(() => expect(input().value).toBe('~/code/'));
+      await listed('/home/dev/code');
+    });
+
+    it('../ in the palette starts from the repository in view', async () => {
+      const { user, store, backend } = setup();
+      await ready();
+      const api = backend.projects.find((p) => p.project.name === 'octopus-api');
+      const main = api?.worktrees.find((w) => w.worktree.isMain)?.worktree;
+      if (!main) throw new Error('no octopus-api main worktree');
+      act(() => store.setState({ view: { kind: 'worktree', worktreeId: main.id } }));
+      await press(user, '{Control>}k{/Control}');
+      const palette = await screen.findByTestId(TEST_IDS.commandPalette);
+      await user.type(within(palette).getByTestId(TEST_IDS.commandPaletteInput), '../');
+      await waitFor(() => expect(names()).toContain('octopus-api'));
+      expect(names()).toContain('fresh');
+    });
+
+    it('the palette browses when its text is a path, and adds with Enter', async () => {
+      const { user, store } = setup();
+      await ready();
+      await press(user, '{Control>}k{/Control}');
+      const palette = await screen.findByTestId(TEST_IDS.commandPalette);
+      const box = within(palette).getByTestId(TEST_IDS.commandPaletteInput) as HTMLInputElement;
+      await user.type(box, 'add repos');
+      expect(within(palette).getAllByTestId(TEST_IDS.commandPaletteItem)[0]?.dataset.id).toBe(
+        'cmd:addRepositories',
+      );
+      await press(user, '{Enter}');
+      await waitFor(() => expect(box.value).toBe('~/'));
+      await waitFor(() =>
+        expect(within(palette).queryAllByTestId(TEST_IDS.folderPickerEntry).length).toBeGreaterThan(
+          0,
+        ),
+      );
+      await user.type(box, 'code/s');
+      await waitFor(() => expect(names()).toEqual(['scratch', 'side-project']));
+      await user.keyboard('{Tab}');
+      expect(box.value).toBe('~/code/s');
+      await user.type(box, 'i');
+      await user.keyboard('{Tab}');
+      await waitFor(() => expect(box.value).toBe('~/code/side-project/'));
+      expect(document.activeElement).toBe(box);
+      await user.keyboard('{Enter}');
+      await waitFor(() => expect(screen.queryByTestId(TEST_IDS.commandPalette)).toBeNull());
+      expect(store.getState().view.kind).toBe('project');
+      await screen.findByRole('heading', { level: 1, name: 'side-project' });
+    });
   });
 
   it('explains how to authenticate on 401', async () => {

@@ -111,6 +111,12 @@ Folders) opens a folder picker that browses the daemon's machine. Click a folder
 path: the part after the last `/` filters the list, `Tab` completes, and typing `.` shows hidden
 folders. Repositories and linked worktrees are marked, and a repository can be added straight from its
 row; `Enter` (or `Ctrl/Cmd+Enter` while a row is highlighted) adds or watches the folder in the path.
+Adding a repository opens it, and picking one that is already added opens it instead. A path pasted
+from Finder, Explorer or a shell (`'/a b'`, `/a\ b`, `"C:\a b"`) replaces the text and is unquoted, and
+a `\\wsl.localhost\…` path copied from Windows Explorer becomes the Linux path when the daemon runs
+in WSL. `./` and `../` start from the repository you are looking at. The command palette (`Ctrl/Cmd+K`)
+browses the same way as soon as you type a path (`~/`, `/`, `./`), or pick **Add repositories…** in it.
+Settings → Folders → **Start browsing in** sets where the picker opens (default `~/`).
 
 ### Review controls, settings and themes
 

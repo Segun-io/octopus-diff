@@ -417,7 +417,13 @@ function AppShell({ eventSourceFactory }: { eventSourceFactory?: EventSourceFact
             title="Add repositories"
             onClose={() => store.setState({ addProjectOpen: false })}
           >
-            <AddProjectForm autoFocus />
+            <AddProjectForm
+              autoFocus
+              onOpen={(view) => {
+                store.setState({ addProjectOpen: false });
+                actions.setView(store, view);
+              }}
+            />
           </Dialog>
         )}
         <Notice />

@@ -737,7 +737,6 @@ All 2026-11-08 · lead. Brief, ownership and merge plan: `docs/COORDINATION.md`.
    implementation, F1/F3–F8 and the SEC items stay unassigned and reserved; F2 (review toggle keyed on the displayed diff) is
    claimed by `ux-web` because it rewrites that path. Decisions of the streams go into their reports and are folded into this
    file at integration, to avoid append conflicts between branches.
-||||||| 35e2ad7
 
 ### UX round 1 — daemon stream (`ux/daemon`, folded in by the lead)
 
@@ -952,7 +951,6 @@ behavioural, no route, contract or `data-testid` changed. Report: `docs/reports/
 7. **Deferred.** A configurable start folder (T3 has `addProjectBaseDirectory`; ours starts at `~/`); Windows drive
    letters as places; a preview of what a watch at depth N would find before committing to it.
 
-||||||| parent of e3c3c0c (docs: UX round 3 decisions, identity rules, plan and README for the activity-list sidebar; stream report)
 
 ## UX round 3 — the sidebar as an activity list (lead)
 
@@ -1010,3 +1008,61 @@ user: explore a new way of showing the sidebar elements and project grouping, le
     by recency and show `2 h ago`; proposed for the daemon (`WorktreeSummary.changedAt`, additive) in the report, not
     built here. No project-scope filter beyond the text filter. No paging of the tail. "verified" vs "reviewed" wording
     still pinned by the e2e suite (#39).
+
+## Folder picker, round 2: T3 Code parity (lead, 2026-11-08)
+
+Brief from the user: "mimic everything you can from /home/santosa/contrib/t3code in folder selection when applicable".
+Studied the local checkout at `eb97d82` (MIT): `apps/web/src/components/CommandPalette{,.logic,AddProject,Content}.tsx`,
+`packages/client-runtime/src/state/{filesystem,projects}.ts`, `packages/shared/src/path.ts`,
+`apps/server/src/workspace/WorkspaceEntries.ts`, `apps/desktop/src/wsl/wslPathParsing.ts`. Web only; no contract change.
+
+1. **The command palette browses.** As in T3 Code, palette text that is a path (`/`, `~/`, `./`, `../`, a Windows drive or
+   share) turns the palette into the folder browser: same rows, same keys, the action button inside the text box, and
+   Enter adds (or watches, or opens) the path. A new palette entry **Add repositories…** (T3: "Add project") loads the
+   start folder and puts it in the palette text. The browser logic moved out of `AddProjectForm` into
+   `components/FolderBrowser.tsx` (`useFolderBrowser`, `FolderRows`, `FolderSubmitButton`, `FolderKeyHints`), shared by the
+   dialog, Settings → Folders, the empty screen and the palette.
+2. **Load before showing.** The sidebar button and the palette entry prefetch the start folder's listing and only then
+   open (T3's `startAddProjectBrowse`), so the picker never opens on "Loading folders…".
+3. **Text-based navigation.** Entering a folder appends its name to what was typed (`appendBrowsePathSegment`: `~/co` →
+   `~/code/`, `./` stays relative) instead of rewriting the text to the folder's real path; `..` and the places still use
+   the listing's paths. The `..` row is shown whenever the listing has a parent, also while filtering (T3's
+   `canBrowseUp`). In a `/…` path only `/` separates (`\` is a legal file name character on Unix), as in T3's
+   `hasTrailingPathSeparator`. Tab completion gained T3's guard that every visible entry shares the completed prefix.
+4. **Paste like T3.** `resolvePastedPath` (adapted with attribution in `lib/folderPath.ts`, T3's test cases ported): a
+   full path pasted into the box replaces the text even after the prefilled `~/`, and a path copied for a shell from
+   Finder, Explorer or a terminal (`'/a b'`, `/a\'s\ b`, `"C:\a b"`) is unquoted. Also from T3 (its desktop picker's
+   `wslUncPathToLinuxPath`): on a Unix daemon a pasted `\\wsl.localhost\<distro>\…` or `\\wsl$\…` path becomes the Linux
+   path, which is what a Windows browser talking to a WSL daemon (this machine) copies from Explorer. A Windows path
+   typed for a Unix daemon disables the actions with a hint (`/mnt/c/…`), as T3 refuses Windows paths off Windows. The
+   Settings field for the start folder normalizes pastes the same way (T3's `normalizeDraft={resolvePastedPath}`).
+5. **Relative paths start from the repository in view** (T3: the active project): `./` and `../` resolve against the
+   viewed worktree (or the project's main worktree) on the client before listing. With nothing in view the daemon still
+   resolves them against its own folder (the "Daemon folder" place), rather than T3's "Relative paths require an active
+   project" error, since we have a meaningful fallback.
+6. **Open, don't re-add.** T3 opens a project whose folder is added again. In the dialog and the palette the primary
+   action becomes **Open** when the path is an added repository or worktree (it opens that worktree, or the project), and
+   adding a repository closes the picker and opens the new project. Settings → Folders and the empty screen keep their
+   inline messages (you may add several there). Watching keeps the dialog open for the scan progress; from the palette
+   it closes and shows a notice.
+7. **T3's layout details.** The primary action sits inside the text box at its end with its live shortcut (T3's
+   `CommandPaletteSubmitButton`; it carries the add or watch test id of the action it runs, and the other action stays
+   below the list with its own id, so both ids always exist unless the primary is Open); a folder-plus icon starts the
+   text box; the list has a "Folders" label (T3: "Directories"); `..` uses a corner-up icon and rows lose the chevron;
+   "Loading folders…"; the footer reads `↑↓ Navigate`, `Enter Select` (only while a row is highlighted), `Tab Complete`,
+   the modifier shortcut, `Esc Close`. Clicking a row, a place or an inline Add keeps focus in the text box (T3 cancels
+   mousedown), so you can click and keep typing.
+8. **Start folder** (T3: `addProjectBaseDirectory`, deferred in round 1): pref `folderStart`, saved on this device
+   (prefs v2, additive, no version bump; `normalizePrefs` tolerates its absence), set in Settings → Folders → "Start
+   browsing in", empty means `~/`.
+9. **Not adopted.** T3's server returns an empty listing for an unreadable folder; we keep the explicit "permission
+   denied" (more useful). "Create & Add" for a missing folder (octopus-diff never writes), the native folder dialog and
+   "Open in Finder" (no desktop shell), clone and new-project flows, environment choice (one daemon), row virtualization
+   (the listing is capped at 2000).
+10. **Tests.** `folderPath.test.ts`: separators, append, browse queries, relative resolution, start text, Windows on Unix,
+    T3's paste cases, WSL paths. `app.test.tsx`: focus stays in the box on click, paste replaces and unquotes (and a WSL
+    path converts), the dialog opens an added repository and opens a newly added one, the start folder setting, `../`
+    in the palette from the viewed repository, and the palette's "Add repositories…" → browse → Tab → Enter flow. e2e
+    unchanged; `e2e/scripts/screenshots.ts` adds `palette-browse-*`.
+11. **Cleanup.** Removed two stray `|||||||` diff3 marker lines left in this file by earlier merges (no content changed).
+

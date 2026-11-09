@@ -28,6 +28,7 @@ import { useAppModel } from '../state/model.tsx';
 import { actions, useUi, useUiStore, type View } from '../state/ui.tsx';
 import { MoreIcon, ToggleButton } from './bits.tsx';
 import { ContextMenu, type MenuItem, useContextMenu } from './ContextMenu.tsx';
+import { useFolderStart } from './FolderBrowser.tsx';
 import { Wordmark } from './Mark.tsx';
 
 /**
@@ -373,6 +374,7 @@ function SectionHeader({
 
 export function Sidebar() {
   const store = useUiStore();
+  const folderStart = useFolderStart();
   const model = useAppModel();
   const commands = useCommandsContext();
   const filterText = useUi((s) => s.filterText);
@@ -772,7 +774,10 @@ export function Sidebar() {
         <button
           type="button"
           data-testid={TEST_IDS.addProjectButton}
-          onClick={() => store.setState({ addProjectOpen: true })}
+          onClick={() => {
+            // Load the start folder first so the picker opens with its list (T3 Code does this).
+            void folderStart.prefetch().then(() => store.setState({ addProjectOpen: true }));
+          }}
           className="od-btn w-full"
         >
           Watch a folder or add a repository

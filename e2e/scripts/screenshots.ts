@@ -81,6 +81,15 @@ async function main() {
       await shot('folder-picker');
       await page.keyboard.press('Escape');
 
+      // The command palette turns into the same browser when its text is a path.
+      await page.keyboard.press('Control+k');
+      await app.byTestId(TEST_IDS.commandPaletteInput).fill(alphaDir.replace(/[^/]+$/, ''));
+      await app.byTestId(TEST_IDS.folderPickerEntry).first().waitFor();
+      await page.keyboard.press('ArrowDown');
+      await page.keyboard.press('ArrowDown');
+      await shot('palette-browse');
+      await page.keyboard.press('Escape');
+
       await page.keyboard.press('?');
       if (await app.byTestId(TEST_IDS.helpDialog).isVisible()) {
         await shot('help');

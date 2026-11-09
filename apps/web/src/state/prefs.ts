@@ -7,6 +7,7 @@
  * v2 (UX round 1): adds `version: 2`, `theme` becomes `{ mode, light, dark }`, plus density,
  *             defaultScope, autoAdvance, reviewOffDisplay, titleCount, confirmBulk, sidebar
  *             collapse state.
+ *     (folder picker, still v2: adds `folderStart`; older documents get the default.)
  */
 import { type DiffScope, type ScopeKind, scopeFromQueryFields } from '@octopus-diff/contracts';
 import { normalizeThemePrefs, type ThemePrefs } from '../theme/registry.ts';
@@ -39,6 +40,8 @@ export interface Prefs {
   collapsed: string[];
   /** Worktrees pinned to the top of the sidebar's card block (worktree ids). */
   pinned: string[];
+  /** Where the folder picker opens (location text); empty means home (`~/`). */
+  folderStart: string;
 }
 
 export const DEFAULT_PREFS: Prefs = {
@@ -55,6 +58,7 @@ export const DEFAULT_PREFS: Prefs = {
   confirmBulk: true,
   collapsed: [],
   pinned: [],
+  folderStart: '',
 };
 
 function stringList(value: unknown): string[] {
@@ -95,6 +99,10 @@ export function normalizePrefs(raw: unknown): Prefs {
     confirmBulk: bool(v.confirmBulk) ?? DEFAULT_PREFS.confirmBulk,
     collapsed: stringList(v.collapsed),
     pinned: stringList(v.pinned),
+    folderStart:
+      typeof v.folderStart === 'string' && v.folderStart.length <= 4096
+        ? v.folderStart
+        : DEFAULT_PREFS.folderStart,
   };
 }
 
