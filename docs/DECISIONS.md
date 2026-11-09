@@ -1367,3 +1367,85 @@ user). Report: `docs/reports/status-flow.md`. Steps 1 → 4 of the plan's build 
 87. **`pnpm dev:mock` import cycle fixed.** `commands.ts` re-exports `SHORTCUTS` from `commandRegistry.ts`, which
     imported the value `CONTEXT_STEP` back from `commands.ts`; Vite's unbundled ESM evaluated the registry first.
     The two constants moved to a leaf module `state/diffContext.ts` (re-exported from `commands.ts`).
+88. **[contracts] Step 2/3 surface, all additive** (`87e3889`): `DiffScope` gets kind `review` `{ base?: sha }` and
+    `branch.includeWorking`; `WorktreeSummary.review` (`WorktreeReviewSchema`: `bookmark`, `base`, `newCommits`,
+    `unreviewedFiles`, `historyRewritten`); `PUT /api/review/bookmark` (`SetBookmarkRequest/Response`, client
+    `setBookmark`), event `review.bookmark`, `BulkReviewRequest.advanceBookmarks` and `BulkReviewResponse.bookmarks`;
+    optional `GitCore.readReviewRange`, `describeCommits`, `rangePatchId`. Query strings: `scope=review&base=<sha>`,
+    `scope=branch&working=1`. `scopeKey`: `review[:sha]`, `branch[:base]:~w` (`~` cannot occur in a ref name). Written
+    on a side branch so the git-core work could run in parallel, cherry-picked after step 1.
+89. **The plan's choice: kind `review` = the working tree against the bookmark, one patch per file**, not a `range`
+    kind plus the working scope in two sections. `git diff <bookmark>` (plus untracked files) is exactly the working
+    scope with another base, so git-core reuses the status-based code path; and a file's patch in it does not change
+    when the agent commits it (same blobs, same text), so a mark made before the commit still matches after it
+    (§2.4's "commit then already reviewed" falls out of the key). The cost: no "commits" / "uncommitted" section
+    headers in the file list (a file changed in both shows one combined patch). Logged as a deviation from §2.3's
+    sections; the toolbar count and the row's `N commits` carry the split.
+90. **Bookmarks.** Table `bookmarks(project_id, key, sha)` (migration v3), key `branch:<name>`, or `worktree:<id>` when
+    detached or without a branch. First sight: git-core's `initial` (HEAD on the default branch and when detached,
+    else the merge-base with the default branch, else HEAD), stored on first computation. `historyRewritten` = a
+    stored bookmark that is not an ancestor of HEAD; the range then starts at the merge-base with the default branch
+    (the merge-base with the old bookmark on the default branch itself). The bookmark is not moved by a rewrite: only
+    Review all / PUT move it.
+91. **Review state lives in the daemon, cached per (stateHash, review version, default branch).** `#reviewOf` runs
+    after each summary (before `worktree.changed` is announced, so clients refetch a ready state) and on demand;
+    every review write (mark, bulk, undo, bookmark) bumps a per-project version. `readReviewRange` is cached per
+    (HEAD, bookmark) while the bookmark is reachable, so a steady worktree costs no extra git process; a clean
+    worktree whose base is HEAD lists no files at all. `stateHash` stays a hash of git state only (Hide until it
+    changes, #84, depends on that). `listProjects` waits (bounded, like summaries) for review states; on failure the
+    last state is kept.
+92. **To review = unreviewed files only.** The row is To review while `unreviewedFiles > 0`; `newCommits` (unreviewed
+    commits that bring changes) is shown next to it (`2 commits · 3`) but does not hold a row on its own: once every
+    file of the review diff is reviewed (by hand or through reviewed commits) nothing is left, even if the bookmark
+    did not move. Otherwise a branch whose files were all marked one by one would stay To review with nothing to
+    review.
+93. **Review all in To review moves the bookmark.** The web sends the bulk call without `paths` and with
+    `advanceBookmarks` (in To review the only hidden files are reviewed ones, so the worktree is what the user sees);
+    the daemon moves each marked worktree's bookmark to the HEAD of the state that passed the `expectedStateHashes`
+    check, and the undo entry carries the bookmark moves (`BookmarkMove`), restored only if the bookmark did not move
+    again. `PUT /api/review/bookmark` takes a full commit id that is HEAD or an ancestor of it; its undo token goes
+    through `POST /api/review/undo`. Older daemons ignore `advanceBookmarks` (zod strips it).
+94. **Web defaults.** Default scope `review` (pref `defaultScope`, Settings → General "To review"); on a daemon without
+    `summary.review` the option is disabled and the scope falls back to Uncommitted. A stored `defaultScope` keeps
+    its value (no prefs migration). "All on branch" is `branch` + `includeWorking`. The sidebar refetches projects on
+    `review.changed`, `review.bulk` and `review.bookmark` (counts live in summaries). The mock backend has an opt-in
+    `statusFlow` mode for the web tests. The e2e `AppPage.open` seeds `defaultScope: 'working'` (the scope specs
+    compare against the working scope); the status-flow spec opens with To review.
+95. **Step 3: marks no longer depend on the scope kind.** No migration: `listReviewMarks` reads every row of a project
+    (grouped by raw, path, patch hash), unreviewing deletes the mark in every kind, touches ignore the kind;
+    `scope_kind` stays as "where the mark was made" and old rows keep working. The web patches every cached scope on
+    `review.changed`.
+96. **Step 3: reviewed commits** (`reviewed_commits(project_id, sha, patch_id)`). A bookmark move to HEAD records every
+    commit of the review range by id and `git patch-id --stable`, plus a `<base>..<head>` row with the whole range's
+    patch-id (a squash merge of the range has it). A moved-to commit other than HEAD records nothing (rare; PUT
+    only). In a range, a commit is reviewed when its id is recorded, or (non-merge) its patch-id is; a commit with no
+    paths (clean merge: `--cc` lists only paths that differ from every parent; empty commit) brings nothing. The
+    paths of the remaining commits are "uncovered"; a file of the review diff with no uncommitted change and no
+    uncovered path (or rename source) is reviewed. A truncated range (> 500 commits) covers nothing. Undo removes the
+    rows the move added.
+97. **git-core (delegated in this session, branch `status-flow/git-core`, cherry-picked):** `patch-id` allowlisted with
+    `--stable` only; **stdin is explicit**: the runner rejects `input` for anything but `check-attr --stdin` and
+    `patch-id` (before, any command could get stdin); `patchid.stable=true` / `patchid.verbatim=false` pinned so repo
+    config cannot change patch-ids; `describeCommits` caches per (common dir, sha) and batches 200 commits per
+    process; `rangePatchId` resolves both ends with `rev-parse`. The read-only proof covers the new reads. Known
+    gap: in the review scope with an older base, an untracked file at a path that differs from the base is listed
+    once, as the tracked change (the same de-duplication as `working`).
+98. **Step 4: forge stages, web only, from the existing `WorktreeForge` data** (`buildSidebar` takes the forge index).
+    A request is *finished for this HEAD* when it is merged or closed and its `headSha` is HEAD, or the forge says
+    `sync: same`; a newer local commit means the work moved on and the request no longer decides the stage. Order:
+    blocked; finished with nothing uncommitted → **Merged / Closed** (shelf, word `merged` / `closed`, even with
+    unreviewed commits: they show on the target branch); unreviewed files → To review; finished with uncommitted
+    work left → stays under its project, `merged · 2 files`; an open non-draft request → **In PR** (under its
+    project, `#42 · checks ✓` / `checks ✗` / `checks …` / `#42 · changes requested` in the warn colour); a draft →
+    Reviewed. Forges off or no data: those stages never apply. Review-off worktrees still reach Merged/closed (the
+    word is more useful than `review off` there).
+99. **Not done, on purpose.** No e2e for In PR / Merged: the fake `gh` of spec 14 serves recorded open requests only;
+    the stage table is covered by unit tests (`model.test.ts`). No automatic bookmark advance when every commit of a
+    range is already reviewed (ranges stay short in practice; the review state is cached). No "commits" /
+    "uncommitted" section headers in To review (#89). A bookmark moved by PUT to a commit other than HEAD records no
+    reviewed commits (#96).
+100. **PLAN change: status flow v2.** PLAN §4.1 (scopes: To review default, All on branch, Uncommitted; marks keyed
+     without the scope kind; review bookmarks; stages), §4.2 (sidebar and toolbar wording), §4.3 (differentiator 2
+     includes bookmarks), §5.7 (the v3 tables, the review state and the new read-only git commands) and §8 (items
+     12–18 from `docs/STATUS-FLOW.md` §5) now describe what this round built. `docs/STATUS-FLOW.md` stays as the
+     design record.
