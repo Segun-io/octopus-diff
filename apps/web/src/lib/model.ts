@@ -4,12 +4,14 @@
  */
 import type {
   ChangedFile,
+  ChangeRequest,
   EffectiveReviewPolicy,
   InboxEntry,
   Project,
   ProjectListItem,
   ScanRoot,
   Worktree,
+  WorktreeForge,
   WorktreeListItem,
   WorktreeSummary,
 } from '@octopus-diff/contracts';
@@ -101,6 +103,8 @@ export interface WorktreeRow {
   settledBy: 'auto' | 'user';
   /** Pinned on this device: listed at the top under "Pinned", whatever its state. */
   pinned: boolean;
+  /** The worktree's matched pull/merge request (forges on), or null. */
+  request: ChangeRequest | null;
 }
 
 /**
@@ -136,24 +140,50 @@ export interface StageInput {
   newCommits?: number;
   review?: Pick<EffectiveReviewPolicy, 'enabled'>;
   error?: WorktreeListItem['error'];
+  /** The matched pull/merge request (forge data, docs/STATUS-FLOW.md §2.5). */
+  forge?: Pick<WorktreeForge, 'changeRequest' | 'sync'> | null;
 }
 
-/** The review stage of a row (docs/STATUS-FLOW.md §2.2; forge stages arrive with step 4). */
+/**
+ * The request is merged or closed **for this HEAD**: its head commit is HEAD (or the forge says
+ * the local branch is in sync). A newer local commit means the work moved on.
+ */
+function finishedRequest(row: StageInput): 'merged' | 'closed' | null {
+  const cr = row.forge?.changeRequest;
+  if (!cr || cr.state === 'open' || !row.summary) return null;
+  const same =
+    (cr.headSha !== null && cr.headSha === row.summary.headSha) || row.forge?.sync === 'same';
+  return same ? cr.state : null;
+}
+
+/** The review stage of a row (docs/STATUS-FLOW.md §2.2, forge stages §2.5). */
 export function stageOf(row: StageInput): Stage {
   const s = row.summary;
   if (s && !row.worktree.missing && (s.counts.conflicted > 0 || s.inProgress !== null)) {
     return 'blocked';
   }
   if (row.worktree.missing || row.error || !s) return 'off';
+  // Merged / closed with nothing uncommitted: the shelf, whatever it carried (unreviewed commits
+  // it brought are counted on the target branch's bookmark). With uncommitted work left it stays
+  // out of the shelf (see `placeOf`).
+  const finished = finishedRequest(row);
+  if (finished && (s.changedFiles === 0 || !(row.review?.enabled ?? true))) return finished;
   if (row.review && !row.review.enabled) return 'off';
   // A commit counts through its files: once every file of the review diff is reviewed (by hand,
   // or because only reviewed commits touched it) there is nothing left, bookmark moved or not.
   if (row.unreviewed > 0) return 'review';
+  if (finished) return finished;
+  // An open, non-draft request with nothing new: In PR, under its project. A draft is Reviewed.
+  const cr = row.forge?.changeRequest;
+  if (cr && cr.state === 'open' && !cr.draft) return 'inPR';
   return 'reviewed';
 }
 
-/** Where a stage sits when nothing was hidden by hand. */
-export function placeOf(stage: Stage): RowState {
+/**
+ * Where a stage sits when nothing was hidden by hand. A merged/closed worktree with uncommitted
+ * work left (`merged · 2 files`) stays under its project.
+ */
+export function placeOf(stage: Stage, uncommittedLeft = false): RowState {
   switch (stage) {
     case 'blocked':
       return 'blocked';
@@ -161,13 +191,16 @@ export function placeOf(stage: Stage): RowState {
       return 'attention';
     case 'inPR':
       return 'active';
+    case 'merged':
+    case 'closed':
+      return uncommittedLeft ? 'active' : 'settled';
     default:
       return 'settled';
   }
 }
 
 export function autoRowState(row: StageInput): RowState {
-  return placeOf(stageOf(row));
+  return placeOf(stageOf(row), (row.summary?.changedFiles ?? 0) > 0);
 }
 
 /** True while an override still applies to the worktree's current state. */
@@ -375,6 +408,7 @@ export function buildSidebar(
   scanRoots?: readonly ScanRoot[],
   pinned: readonly string[] = [],
   settle: readonly SettleOverride[] = [],
+  forges?: ReadonlyMap<string, Pick<WorktreeForge, 'changeRequest' | 'sync'>>,
 ): SidebarModel {
   // Status never depends on the toolbar scope: `inbox` is the sidebar's own fixed source.
   const inboxStats = new Map<string, { unreviewed: number; files: number }>();
@@ -410,6 +444,7 @@ export function buildSidebar(
         newCommits,
         review,
         error: wt.error,
+        forge: forges?.get(wt.worktree.id) ?? null,
       };
       const stage = stageOf(input);
       const { state, settledBy } = rowState(input, overrides.get(wt.worktree.id));
@@ -426,6 +461,7 @@ export function buildSidebar(
         state,
         settledBy,
         pinned: pinnedSet.has(wt.worktree.id),
+        request: input.forge?.changeRequest ?? null,
       };
       byId.set(wt.worktree.id, row);
       allRows.push(row);

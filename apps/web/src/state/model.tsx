@@ -1,5 +1,11 @@
-import type { DiffScope, EffectiveReviewPolicy, InboxEntry } from '@octopus-diff/contracts';
+import type {
+  DiffScope,
+  EffectiveReviewPolicy,
+  InboxEntry,
+  WorktreeForge,
+} from '@octopus-diff/contracts';
 import { createContext, type ReactNode, useContext, useMemo } from 'react';
+import { useForgeIndex } from '../api/forges.ts';
 import { inboxScopeFor, useFilesQuery, useInboxQuery, useProjectsQuery } from '../api/queries.ts';
 import { useScanRootsQuery } from '../api/settings.ts';
 import { fileRefKey } from '../lib/fileRef.ts';
@@ -94,6 +100,13 @@ function useBuildAppModel(): AppModel {
   const statusData = statusInbox.data;
 
   const scanRootList = scanRoots.data?.scanRoots;
+  // Forge data moves rows only through stages (In PR, Merged/closed); never the toolbar scope.
+  const forgeIndex = useForgeIndex();
+  const forgeByWorktree = useMemo(() => {
+    const out = new Map<string, WorktreeForge>();
+    for (const [id, entry] of forgeIndex) out.set(id, entry.worktree);
+    return out;
+  }, [forgeIndex]);
   const sidebar = useMemo(
     () =>
       buildSidebar(
@@ -103,8 +116,19 @@ function useBuildAppModel(): AppModel {
         scanRootList,
         pinned,
         settle,
+        forgeByWorktree,
       ),
-    [projectList, statusData, filterText, onlyDirty, onlyUnreviewed, scanRootList, pinned, settle],
+    [
+      forgeByWorktree,
+      projectList,
+      statusData,
+      filterText,
+      onlyDirty,
+      onlyUnreviewed,
+      scanRootList,
+      pinned,
+      settle,
+    ],
   );
 
   const inboxEntries = useMemo(() => sortInboxEntries(inboxData?.entries ?? []), [inboxData]);

@@ -1,4 +1,4 @@
-import type { ChangedFile, InboxEntry } from '@octopus-diff/contracts';
+import type { ChangedFile, ChangeRequest, InboxEntry } from '@octopus-diff/contracts';
 import { describe, expect, it } from 'vitest';
 import { MockBackend } from '../mock/backend.ts';
 import {
@@ -127,6 +127,59 @@ describe('stages (docs/STATUS-FLOW.md §2.2)', () => {
     expect(stageOf({ summary: null, worktree, unreviewed: 0 })).toBe('off');
     expect(stageOf({ summary, worktree: { ...worktree, missing: true }, unreviewed: 1 })).toBe(
       'off',
+    );
+  });
+
+  it('forge stages: In PR, merged/closed for this HEAD, never over To review (§2.5)', () => {
+    const cr = (over: Partial<ChangeRequest>): ChangeRequest => ({
+      kind: 'github',
+      number: 42,
+      title: 't',
+      url: 'https://github.com/o/r/pull/42',
+      state: 'open',
+      draft: false,
+      author: null,
+      baseBranch: 'main',
+      headBranch: 'feature',
+      headSha: summary.headSha,
+      crossRepository: false,
+      headRepository: null,
+      updatedAt: null,
+      checks: null,
+      review: null,
+      conflicts: null,
+      comments: null,
+      ...over,
+    });
+    const clean = { ...summary, changedFiles: 0 };
+    const forge = (
+      over: Partial<ChangeRequest>,
+      sync: 'same' | 'differs' | 'unknown' = 'unknown',
+    ) => ({
+      changeRequest: cr(over),
+      sync,
+    });
+    const at = (f: ReturnType<typeof forge>, unreviewed = 0, s = clean) =>
+      stageOf({ summary: s, worktree, unreviewed, review: on, forge: f });
+    expect(at(forge({}))).toBe('inPR');
+    expect(at(forge({}), 3)).toBe('review'); // never overrides To review
+    expect(at(forge({ draft: true }))).toBe('reviewed');
+    expect(at(forge({ state: 'merged' }))).toBe('merged');
+    expect(at(forge({ state: 'closed' }))).toBe('closed');
+    // merged even with unreviewed commits: they are counted on the target branch
+    expect(at(forge({ state: 'merged' }), 2)).toBe('merged');
+    // a newer local HEAD: the request is not this work any more
+    expect(at(forge({ state: 'merged', headSha: 'f'.repeat(40) }))).toBe('reviewed');
+    expect(at(forge({ state: 'merged', headSha: 'f'.repeat(40) }, 'same'))).toBe('merged');
+    // merged with uncommitted work left: not the shelf, To review or quietly under the project
+    const dirty = { ...summary, changedFiles: 2 };
+    expect(at(forge({ state: 'merged' }), 2, dirty)).toBe('review');
+    expect(at(forge({ state: 'merged' }), 0, dirty)).toBe('merged');
+    expect(placeOf('merged', true)).toBe('active');
+    expect(placeOf('merged', false)).toBe('settled');
+    // forges off / no data: those stages never apply
+    expect(stageOf({ summary: clean, worktree, unreviewed: 0, review: on, forge: null })).toBe(
+      'reviewed',
     );
   });
 

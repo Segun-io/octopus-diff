@@ -168,13 +168,37 @@ function RowStatus({ row }: { row: WorktreeRow }) {
           {row.unreviewed}
         </span>
       )}
-      {quiet && word !== 'review off' && (
-        <span className={word === 'missing' || word === 'error' ? 'text-danger' : 'text-faint'}>
-          {word === 'loading' ? '…' : word}
+      {row.stage === 'inPR' && row.request ? (
+        <span
+          className={row.request.review === 'changes_requested' ? 'text-warn' : 'text-faint'}
+          title="Open request, nothing new to review"
+        >
+          {inPrText(row.request)}
         </span>
+      ) : (
+        quiet &&
+        word !== 'review off' && (
+          <span className={word === 'missing' || word === 'error' ? 'text-danger' : 'text-faint'}>
+            {word === 'loading' ? '…' : word}
+            {(word === 'merged' || word === 'closed') && (row.summary?.changedFiles ?? 0) > 0
+              ? ` · ${plural(row.summary?.changedFiles ?? 0, 'file')}`
+              : ''}
+          </span>
+        )
       )}
     </span>
   );
+}
+
+/** `#42 · checks ✓` / `changes requested` (one chip's worth of words for an In PR row). */
+function inPrText(cr: NonNullable<WorktreeRow['request']>): string {
+  const ref = `${cr.kind === 'github' ? '#' : '!'}${cr.number}`;
+  if (cr.review === 'changes_requested') return `${ref} · changes requested`;
+  const checks = cr.checks?.state;
+  if (checks === 'success') return `${ref} · checks ✓`;
+  if (checks === 'failure') return `${ref} · checks ✗`;
+  if (checks === 'pending') return `${ref} · checks …`;
+  return ref;
 }
 
 /** The facts of the meta line (and the hover card): files, lines, ahead/behind. */
