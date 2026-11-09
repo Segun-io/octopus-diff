@@ -17,9 +17,10 @@ export const TREE_VIEW_TEST_ID = 'tree-view-toggle';
 export function FilePaneHeader() {
   const model = useAppModel();
   const commands = useCommandsContext();
-  const showReviewed = useUi((s) => s.showReviewed);
   const layout = useUi((s) => s.fileListLayout);
   const inbox = model.view.kind === 'inbox';
+  // To review lists what is left, never reviewed files: the eye shows "off" and does nothing.
+  const inReview = model.scope.kind === 'review';
   return (
     <div
       role="toolbar"
@@ -31,9 +32,10 @@ export function FilePaneHeader() {
         <button
           type="button"
           data-testid={TEST_IDS.showReviewedToggle}
-          aria-pressed={showReviewed}
+          aria-pressed={model.showsReviewed}
+          aria-disabled={inReview}
           onClick={commands.toggleShowReviewed}
-          title="Show reviewed files (h)"
+          title={inReview ? 'To review lists unreviewed files only' : 'Show reviewed files (h)'}
           aria-label="Show reviewed files"
           className="od-btn od-btn-ghost od-btn-icon"
         >

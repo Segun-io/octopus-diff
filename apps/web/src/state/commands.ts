@@ -206,6 +206,8 @@ export function useCommands(model: AppModel, resolvedTheme: 'light' | 'dark'): C
         store.setState((s) => ({ ignoreWhitespace: !s.ignoreWhitespace }));
       },
       toggleShowReviewed() {
+        // To review never lists reviewed files (`listsReviewed`): the eye has nothing to toggle.
+        if (store.getState().scope.kind === 'review') return;
         store.setState((s) => ({ showReviewed: !s.showReviewed }));
       },
       toggleTheme() {

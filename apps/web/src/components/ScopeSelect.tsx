@@ -13,20 +13,47 @@ import { useUi, useUiStore } from '../state/ui.tsx';
 import { CopyButton } from './CopyButton.tsx';
 import { COPY_TEST_IDS } from './copyMenu.ts';
 
-/** Files per scope for the open worktree: from its summary, else from a loaded file list. */
+/** Files of a scope: all of them and, when a loaded list says so, the unreviewed ones. */
+interface ScopeCount {
+  total: number;
+  unreviewed?: number;
+}
+
+function countFiles(files: readonly { reviewed: boolean }[]): ScopeCount {
+  return { total: files.length, unreviewed: files.filter((f) => !f.reviewed).length };
+}
+
+/**
+ * Files per scope for the open worktree: from its summary, else from a loaded file list. To review
+ * counts only what is left (it never lists reviewed files); a loaded list (All on branch, and the
+ * current scope) also carries its unreviewed count.
+ */
 function scopeCounts(
   summary: WorktreeSummary | null | undefined,
-  branchFiles: number | undefined,
-): Partial<Record<ScopeKind, number>> {
+  branchFiles: readonly { reviewed: boolean }[] | undefined,
+  current: { kind: ScopeKind; files: readonly { reviewed: boolean }[] } | undefined,
+): Partial<Record<ScopeKind, ScopeCount>> {
   if (!summary) return {};
   const c = summary.counts;
-  return {
-    ...(summary.review ? { review: summary.review.unreviewedFiles } : {}),
-    working: summary.changedFiles,
-    staged: c.staged + c.conflicted,
-    unstaged: c.unstaged + c.untracked + c.conflicted,
-    ...(branchFiles !== undefined ? { branch: branchFiles } : {}),
+  const out: Partial<Record<ScopeKind, ScopeCount>> = {
+    ...(summary.review ? { review: { total: summary.review.unreviewedFiles } } : {}),
+    working: { total: summary.changedFiles },
+    staged: { total: c.staged + c.conflicted },
+    unstaged: { total: c.unstaged + c.untracked + c.conflicted },
+    ...(branchFiles !== undefined ? { branch: countFiles(branchFiles) } : {}),
   };
+  if (current && current.kind !== 'review' && current.kind !== 'commit') {
+    out[current.kind] = countFiles(current.files);
+  }
+  return out;
+}
+
+/** ` (12)`, or ` (5 of 12)` while reviewed files are hidden and some of the 12 are reviewed. */
+function countLabel(count: ScopeCount | undefined, showReviewed: boolean): string {
+  if (count === undefined) return '';
+  const { total, unreviewed } = count;
+  if (showReviewed || unreviewed === undefined || unreviewed === total) return ` (${total})`;
+  return ` (${unreviewed} of ${total})`;
 }
 
 /**
@@ -38,13 +65,21 @@ export function ScopeSelect() {
   const store = useUiStore();
   const model = useAppModel();
   const scope = useUi((s) => s.scope);
+  const showReviewed = useUi((s) => s.showReviewed);
   const worktreeId = model.view.kind === 'worktree' ? model.view.worktreeId : null;
   const commits = useCommitsQuery(worktreeId, worktreeId !== null);
   const row = worktreeId ? model.sidebar.byId.get(worktreeId) : undefined;
 
   // "All on branch" has no count in the summary: list it for the open worktree only.
   const branchFiles = useFilesQuery(worktreeId, ALL_ON_BRANCH);
-  const counts = scopeCounts(row?.summary, branchFiles.data?.files.length);
+  const currentFiles = model.files.data?.files;
+  const counts = scopeCounts(
+    row?.summary,
+    branchFiles.data?.files,
+    currentFiles && !model.files.isPlaceholderData
+      ? { kind: scope.kind, files: currentFiles }
+      : undefined,
+  );
   // To review needs a status-flow daemon (summaries carry `review`); older ones fall back.
   const projectItems = model.projects.data?.projects;
   const reviewSupported =
@@ -105,7 +140,7 @@ export function ScopeSelect() {
             }
           >
             {SCOPE_LABELS[kind]}
-            {worktreeId !== null && counts[kind] !== undefined ? ` (${counts[kind]})` : ''}
+            {worktreeId !== null ? countLabel(counts[kind], showReviewed) : ''}
             {kind === 'commit' && worktreeId === null ? ' (select a worktree)' : ''}
           </option>
         ))}

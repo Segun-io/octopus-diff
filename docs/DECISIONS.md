@@ -1821,3 +1821,12 @@ only if it makes the code easier to maintain.
      chip, Branches pages 15 + 3, requests capped at 15 with the forge link, worktree pager on a 20-worktree large
      dataset), `model.test.ts` (helpers). e2e `14-ui-forge-details` opens the Pull requests tab first. New shot
      states `project-branches` and `project-requests` in `apps/web/scripts/shots.ts`.
+151. **To review never lists reviewed files; counts follow the eye; All on branch first (2026-11-09).** With the eye
+     ("Show reviewed") on by default and the bookmark still at the merge-base (marking files one by one never moves
+     it), To review and All on branch listed the same files, and the select's counts disagreed with the list (To
+     review counted unreviewed files while listing all; All on branch counted all while the eye hid some). Now
+     `listsReviewed(showReviewed, scope)` is false in To review whatever the eye says (the eye shows "off",
+     `aria-disabled`, `h` is a no-op there), and a count that includes reviewed files reads `(5 of 12)` while the
+     eye hides them (All on branch, and the current scope's loaded list; summary-only counts stay totals). All on
+     branch, the default scope, is first in the scope select and in Settings → Default scope. Web only, no
+     contract change. User request.

@@ -5,6 +5,7 @@
 import type {
   ChangedFile,
   ChangeRequest,
+  DiffScope,
   EffectiveReviewPolicy,
   InboxEntry,
   Project,
@@ -574,6 +575,14 @@ export function flattenGroups(groups: readonly FileGroup[]): NavEntry[] {
 }
 
 export type VisiblePredicate = (entry: NavEntry) => boolean;
+
+/**
+ * Whether the list shows reviewed files: the eye ("Show reviewed") is on and the scope is not To
+ * review, which lists what is left to review and so never shows reviewed files.
+ */
+export function listsReviewed(showReviewed: boolean, scope: DiffScope): boolean {
+  return showReviewed && scope.kind !== 'review';
+}
 
 export function visibleIf(showReviewed: boolean): VisiblePredicate {
   return showReviewed ? () => true : (e) => !e.file.reviewed;
