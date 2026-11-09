@@ -1,4 +1,4 @@
-import type { ChangeRequest, ChecksState } from '@octopus-diff/contracts';
+import type { ChangeRequest, ChecksState, MergeState } from '@octopus-diff/contracts';
 import type { GraphqlBatchResult } from './github.js';
 import { graphqlErrors } from './github.js';
 import {
@@ -24,11 +24,11 @@ const PER_BRANCH = 5;
 
 export type GitlabQueryVariant = 'full' | 'basic';
 
-const BASIC_FIELDS = `iid title webUrl state draft updatedAt targetBranch sourceBranch diffHeadSha
+const BASIC_FIELDS = `iid title webUrl state draft createdAt updatedAt targetBranch sourceBranch diffHeadSha
   author { username } sourceProject { fullPath } targetProject { fullPath }
   userNotesCount headPipeline { status }`;
 const FULL_FIELDS = `${BASIC_FIELDS} conflicts approved approvedBy(first: 1) { nodes { username } }
-  detailedMergeStatus`;
+  detailedMergeStatus diffStatsSummary { additions deletions fileCount }`;
 
 export function buildGitlabQuery(count: number, variant: GitlabQueryVariant): string {
   if (!Number.isInteger(count) || count < 1 || count > GITLAB_MAX_BRANCHES_PER_QUERY) {
@@ -62,6 +62,40 @@ function pipelineState(status: string | null): ChecksState | null {
     default:
       // CREATED, WAITING_FOR_RESOURCE, PREPARING, PENDING, RUNNING, SCHEDULED, ...
       return 'pending';
+  }
+}
+
+/** GitLab `detailedMergeStatus` -> `MergeState` (null when absent). */
+export function gitlabMergeState(value: unknown): MergeState | null {
+  switch (asString(value)) {
+    case null:
+    case 'NOT_OPEN':
+      return null;
+    case 'MERGEABLE':
+      return 'clean';
+    case 'CONFLICT':
+      return 'conflicts';
+    case 'NEED_REBASE':
+      return 'behind';
+    case 'DRAFT_STATUS':
+      return 'draft';
+    case 'CI_STILL_RUNNING':
+    case 'CI_MUST_PASS':
+    case 'NOT_APPROVED':
+    case 'REQUESTED_CHANGES':
+    case 'DISCUSSIONS_NOT_RESOLVED':
+    case 'BLOCKED_STATUS':
+    case 'EXTERNAL_STATUS_CHECKS':
+    case 'JIRA_ASSOCIATION_MISSING':
+    case 'MERGE_REQUEST_BLOCKED':
+    case 'SECURITY_POLICY_VIOLATIONS':
+    case 'LOCKED_PATHS':
+    case 'LOCKED_LFS_FILES':
+    case 'TITLE_NOT_MATCHING':
+    case 'COMMITS_STATUS':
+      return 'blocked';
+    default:
+      return 'unknown';
   }
 }
 
@@ -116,6 +150,11 @@ export function normaliseGitlabMergeRequest(raw: unknown): ChangeRequest | null 
     review,
     conflicts: asBool(mr.conflicts) ?? (detailed === 'CONFLICT' ? true : null),
     comments: asNumber(mr.userNotesCount),
+    createdAt: normaliseTimestamp(mr.createdAt),
+    additions: asNumber(asRecord(mr.diffStatsSummary)?.additions),
+    deletions: asNumber(asRecord(mr.diffStatsSummary)?.deletions),
+    changedFiles: asNumber(asRecord(mr.diffStatsSummary)?.fileCount),
+    mergeState: state === 'opened' ? gitlabMergeState(detailed) : null,
   };
 }
 

@@ -27,6 +27,13 @@ const CHECKS: ChangeRequest['checks'][] = [
   null,
 ];
 const STAMP = '2026-11-08T09:00:00.000Z';
+const CREATED = '2026-11-05T14:30:00.000Z';
+const MERGE_STATES: NonNullable<ChangeRequest['mergeState']>[] = [
+  'blocked',
+  'clean',
+  'behind',
+  'unstable',
+];
 
 export function mockForges(
   projects: ProjectsResponse,
@@ -71,6 +78,18 @@ export function mockForges(
         review: look.state === 'open' && !look.draft ? 'review_required' : null,
         conflicts: n % 6 === 0 ? true : look.state === 'open' ? false : null,
         comments: n % 3,
+        createdAt: CREATED,
+        additions: 40 + ((n * 37) % 300),
+        deletions: (n * 13) % 90,
+        changedFiles: 2 + (n % 9),
+        mergeState:
+          look.state !== 'open'
+            ? null
+            : look.draft
+              ? 'draft'
+              : n % 6 === 0
+                ? 'conflicts'
+                : (MERGE_STATES[n % MERGE_STATES.length] ?? 'unknown'),
       };
       worktrees.push({
         worktreeId: w.worktree.id,

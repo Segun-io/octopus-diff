@@ -1,11 +1,13 @@
 import { type ReviewPolicyTarget, reviewTargetKey } from '@octopus-diff/contracts';
 import type { ReactNode } from 'react';
+import { useForgeIndex } from '../api/forges.ts';
 import {
   useRescanScanRoot,
   useSetReviewPolicy,
   useSettingsQuery,
   useSettingsSupport,
 } from '../api/settings.ts';
+import { REVIEW_WORD } from '../lib/forge.ts';
 import {
   DIRECT_FOLDER_ID,
   type FolderNode,
@@ -167,6 +169,22 @@ function Figures({ additions, deletions }: { additions: number; deletions: numbe
 }
 
 const CELL = 'py-1.5 pr-3';
+
+/** The Pull request column: chip, truncated title, review word (batch data, no query). */
+function RequestCell({ worktreeId }: { worktreeId: string }) {
+  const entry = useForgeIndex().get(worktreeId);
+  const cr = entry?.worktree.changeRequest;
+  if (!cr) return <span className="text-faint">–</span>;
+  return (
+    <span className="flex min-w-0 items-center gap-1.5 text-[11px]" title={cr.title}>
+      <ChangeRequestChip worktreeId={worktreeId} />
+      <span className="min-w-0 truncate">{cr.title}</span>
+      {cr.review && cr.state === 'open' && (
+        <span className="shrink-0 text-muted">{REVIEW_WORD[cr.review]}</span>
+      )}
+    </span>
+  );
+}
 const NUM = `${CELL} font-mono tabular-nums`;
 
 function FolderOverview({ node }: { node: FolderNode }) {
@@ -313,6 +331,7 @@ function ProjectOverview({ group }: { group: ProjectGroup }) {
             <th className="od-th">Files</th>
             <th className="od-th">Lines</th>
             <th className="od-th">Unreviewed</th>
+            <th className="od-th">Pull request</th>
             <th className="od-th">Review</th>
           </tr>
         </thead>
@@ -342,9 +361,6 @@ function ProjectOverview({ group }: { group: ProjectGroup }) {
                   {s?.inProgress && (
                     <span className="ml-1.5 text-[11px] text-warn">{s.inProgress}</span>
                   )}
-                  <span className="ml-1.5 inline-flex align-middle text-[11px]">
-                    <ChangeRequestChip worktreeId={row.worktree.id} />
-                  </span>
                   {row.worktree.missing && (
                     <span className="ml-1.5 text-[11px] text-danger">missing</span>
                   )}
@@ -373,6 +389,9 @@ function ProjectOverview({ group }: { group: ProjectGroup }) {
                   ) : (
                     '–'
                   )}
+                </td>
+                <td className={`${CELL} max-w-64`}>
+                  <RequestCell worktreeId={row.worktree.id} />
                 </td>
                 <td className="py-1.5 text-[11px] text-muted">
                   {row.review.enabled ? <span className="text-add">on</span> : <span>off</span>}{' '}

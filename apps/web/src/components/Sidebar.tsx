@@ -28,7 +28,7 @@ import { useCommandsContext } from '../state/commandsContext.tsx';
 import { useAppModel } from '../state/model.tsx';
 import { actions, useUi, useUiStore, type View } from '../state/ui.tsx';
 import { CheckIcon, ToggleButton } from './bits.tsx';
-import { ChangeRequestChip } from './ChangeRequest.tsx';
+import { ChangeRequestChip, ChangeRequestHoverBlock } from './ChangeRequest.tsx';
 import { ContextMenu, type MenuItem, useContextMenu } from './ContextMenu.tsx';
 import { useFolderStart } from './FolderBrowser.tsx';
 import { Wordmark } from './Mark.tsx';
@@ -248,7 +248,7 @@ function useHoverCard(delayMs = 450) {
     const rect = e.currentTarget.getBoundingClientRect();
     clear();
     timer.current = setTimeout(() => {
-      setAt({ x: rect.right + 8, y: Math.max(8, Math.min(rect.top, window.innerHeight - 240)) });
+      setAt({ x: rect.right + 8, y: Math.max(8, Math.min(rect.top, window.innerHeight - 380)) });
     }, delayMs);
   };
   return { at, onPointerEnter, onPointerLeave: hide, onPointerDown: hide };
@@ -324,6 +324,7 @@ function RowHoverCard({ row, at }: { row: WorktreeRow; at: { x: number; y: numbe
           )}
         {error && line('Error', <span className="text-danger">{error.message}</span>)}
       </dl>
+      <ChangeRequestHoverBlock worktreeId={worktree.id} />
     </div>
   );
 }

@@ -1,7 +1,9 @@
 import {
   type ChangeRequest,
+  type ChecksState,
   changeRequestNoun,
   type ForgesResponse,
+  type MergeState,
   type ProjectForgeState,
   type WorktreeForge,
 } from '@octopus-diff/contracts';
@@ -56,11 +58,65 @@ export function checksWord(cr: ChangeRequest): string | null {
   }`;
 }
 
-const REVIEW_WORD = {
+export const REVIEW_WORD = {
   approved: 'approved',
   changes_requested: 'changes requested',
   review_required: 'review required',
 } as const;
+
+/** Mergeability words (T3 Code's wording, adapted; no em dashes). */
+export const MERGE_WORD: Record<MergeState, string> = {
+  clean: 'Ready to merge',
+  blocked: 'Blocked: reviews or checks required',
+  behind: 'Behind base',
+  conflicts: 'Conflicts with base',
+  unstable: 'Mergeable, checks not passing',
+  draft: 'Draft',
+  unknown: 'Mergeability not known yet',
+};
+
+export const CHECKS_STATE_WORD: Record<ChecksState, string> = {
+  success: 'passed',
+  failure: 'failing',
+  pending: 'running',
+  neutral: 'neutral',
+};
+
+/** `3/12 checks · 2 failing` (counts when the forge reports them, else the pipeline word). */
+export function checksSummary(cr: Pick<ChangeRequest, 'checks'>): string | null {
+  const c = cr.checks;
+  if (!c) return null;
+  if (c.total !== null && c.passed !== null && c.failed !== null && c.pending !== null) {
+    const parts = [`${c.passed}/${c.total} checks passed`];
+    if (c.failed > 0) parts.push(`${c.failed} failing`);
+    if (c.pending > 0) parts.push(`${c.pending} running`);
+    return parts.join(' · ');
+  }
+  return `pipeline ${CHECKS_STATE_WORD[c.state]}`;
+}
+
+/** `N files +a −d`, when the forge reported the size. */
+export function sizeSummary(
+  cr: Pick<ChangeRequest, 'changedFiles' | 'additions' | 'deletions'>,
+): { files: string | null; additions: number; deletions: number } | null {
+  if (cr.additions == null || cr.deletions == null) return null;
+  const files =
+    cr.changedFiles == null
+      ? null
+      : `${cr.changedFiles} ${cr.changedFiles === 1 ? 'file' : 'files'}`;
+  return { files, additions: cr.additions, deletions: cr.deletions };
+}
+
+/** Does this request need the user's attention (failing CI, changes requested, conflicts)? */
+export function needsAttention(cr: ChangeRequest): boolean {
+  if (cr.state !== 'open') return false;
+  return (
+    cr.checks?.state === 'failure' ||
+    cr.review === 'changes_requested' ||
+    cr.conflicts === true ||
+    cr.mergeState === 'conflicts'
+  );
+}
 
 /** Multi-line tooltip: title, state, base, CI, review, conflicts, sync. */
 export function changeRequestTitle(wf: WorktreeForge, cr: ChangeRequest): string {

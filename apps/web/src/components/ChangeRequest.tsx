@@ -4,11 +4,16 @@ import { useForgeIndex } from '../api/forges.ts';
 import {
   type ChangeRequestLook,
   changeRequestTitle,
+  checksSummary,
   LOOK_TONE,
   LOOK_WORD,
   lookOf,
+  MERGE_WORD,
+  REVIEW_WORD,
   shortRef,
+  sizeSummary,
 } from '../lib/forge.ts';
+import { absoluteTime, relativeTime } from '../lib/time.ts';
 
 /**
  * Pull/merge request glyphs, chip (sidebar rows) and badge (toolbar link). Shapes after T3 Code's
@@ -63,7 +68,7 @@ const CHECK_DOT: Record<string, string> = {
   pending: 'bg-warn',
 };
 
-function ChecksDot({ cr }: { cr: ChangeRequest }) {
+export function ChecksDot({ cr }: { cr: Pick<ChangeRequest, 'checks'> }) {
   const state = cr.checks?.state;
   const tone = state ? CHECK_DOT[state] : undefined;
   if (!tone) return null;
@@ -138,5 +143,77 @@ export function ChangeRequestBadge({ worktreeId }: { worktreeId: string }) {
         ↗
       </span>
     </a>
+  );
+}
+
+/**
+ * The pull/merge request part of a sidebar row's hover card (T3 Code's `ThreadDetailsPrRow`
+ * hover: number and state, title, branches, checks, conflicts, size). Data from the batch query
+ * only: no request is made for it.
+ */
+export function ChangeRequestHoverBlock({ worktreeId }: { worktreeId: string }) {
+  const entry = useForgeIndex().get(worktreeId);
+  const cr = entry?.worktree.changeRequest;
+  if (!entry || !cr) return null;
+  const look = lookOf(cr);
+  const size = sizeSummary(cr);
+  const checks = checksSummary(cr);
+  const status: string[] = [];
+  if (cr.review) status.push(REVIEW_WORD[cr.review]);
+  if (cr.state === 'open' && cr.mergeState && cr.mergeState !== 'unknown') {
+    status.push(MERGE_WORD[cr.mergeState]);
+  } else if (cr.conflicts) status.push('Conflicts with base');
+  if (cr.comments) status.push(`${cr.comments} ${cr.comments === 1 ? 'comment' : 'comments'}`);
+  const noun = cr.kind === 'github' ? 'pull request' : 'merge request';
+  return (
+    <div
+      data-testid={TEST_IDS.changeRequestHoverBlock}
+      data-number={String(cr.number)}
+      data-state={look}
+      className="mt-2 flex flex-col gap-0.5 border-t border-line pt-2"
+    >
+      <div className="flex items-center gap-1.5">
+        <span className={`inline-flex ${LOOK_TONE[look]}`}>
+          <ChangeRequestGlyph look={look} />
+        </span>
+        <span className="font-mono tabular-nums">
+          {cr.kind === 'github' ? '#' : '!'}
+          {cr.number}
+        </span>
+        <span className={LOOK_TONE[look]}>{LOOK_WORD[look]}</span>
+        {cr.updatedAt && (
+          <span className="ml-auto text-[11px] text-faint" title={absoluteTime(cr.updatedAt)}>
+            updated {relativeTime(cr.updatedAt)}
+          </span>
+        )}
+      </div>
+      <p className="line-clamp-2 font-medium">{cr.title}</p>
+      <p className="truncate font-mono text-[11px] text-muted">
+        {cr.headBranch} → {cr.baseBranch}
+      </p>
+      <p className="text-[11px] text-muted">
+        {cr.author && <span>by {cr.author}</span>}
+        {size && (
+          <span className="font-mono">
+            {cr.author ? ' · ' : ''}
+            {size.files ? `${size.files} ` : ''}
+            <span className="text-add">+{size.additions}</span>{' '}
+            <span className="text-del">−{size.deletions}</span>
+          </span>
+        )}
+      </p>
+      {checks && (
+        <p className="flex items-center gap-1.5 text-[11px] text-muted">
+          <ChecksDot cr={cr} />
+          <span>{checks}</span>
+        </p>
+      )}
+      {status.length > 0 && <p className="text-[11px] text-muted">{status.join(' · ')}</p>}
+      {entry.worktree.sync === 'differs' && cr.state === 'open' && (
+        <p className="text-[11px] text-muted">
+          Out of sync: the {noun}’s head is not this worktree’s HEAD (unpushed or unpulled commits).
+        </p>
+      )}
+    </div>
   );
 }

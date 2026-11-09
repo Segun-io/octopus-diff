@@ -9,6 +9,7 @@ import { FORGE_EXECUTABLES, type ForgeCli, ForgeCliError } from './cli.js';
 import {
   buildGithubQuery,
   GITHUB_MAX_BRANCHES_PER_QUERY,
+  type GithubQueryVariant,
   type GraphqlBatchResult,
   parseGithubResponse,
 } from './github.js';
@@ -19,7 +20,7 @@ import {
   isUnknownFieldError,
   parseGitlabResponse,
 } from './gitlab.js';
-import { parseJsonObject } from './json.js';
+import { asNumber, asRecord, parseJsonObject } from './json.js';
 
 const HINTS: Record<ForgeKind, { install: string; login: string }> = {
   github: {
@@ -55,13 +56,31 @@ function shortMessage(text: string): string {
   return line.replace(/^(gh|glab):\s*/, '');
 }
 
+/** GitHub's `rateLimit { cost remaining }` of one query (every GitHub query asks for it). */
+export interface ForgeQueryCost {
+  kind: ForgeKind;
+  host: string;
+  /** Query operation name, e.g. `OctopusDiffPullRequests`. */
+  operation: string;
+  cost: number;
+  remaining: number | null;
+}
+
+export interface ForgeClientOptions {
+  now?: () => Date;
+  /** Called after each query that reported its rate-limit cost (logging, live tests). */
+  onCost?: (cost: ForgeQueryCost) => void;
+}
+
 export class ForgeClient {
   readonly #cli: ForgeCli;
   readonly #now: () => Date;
+  readonly #onCost: ((cost: ForgeQueryCost) => void) | undefined;
 
-  constructor(cli: ForgeCli, options: { now?: () => Date } = {}) {
+  constructor(cli: ForgeCli, options: ForgeClientOptions = {}) {
     this.#cli = cli;
     this.#now = options.now ?? (() => new Date());
+    this.#onCost = options.onCost;
   }
 
   /** `--version` and `auth status` (both always run; neither prints a token). */
@@ -144,7 +163,7 @@ export class ForgeClient {
       const batch = unique.slice(i, i + max);
       const parsed =
         forge.kind === 'github'
-          ? await this.#githubBatch(forge, batch)
+          ? await this.#githubBatch(forge, batch, 'full')
           : await this.#gitlabBatch(forge, batch, 'full');
       for (const [branch, list] of parsed.byBranch) result.set(branch, list);
     }
@@ -167,11 +186,19 @@ export class ForgeClient {
         cause: error,
       });
     }
-    return {
-      json: parseJsonObject(result.stdout),
-      stderr: stripControl(result.stderr),
-      exitCode: result.exitCode,
-    };
+    const json = parseJsonObject(result.stdout);
+    const rate = asRecord(asRecord(json?.data)?.rateLimit);
+    const cost = asNumber(rate?.cost);
+    if (cost !== null && this.#onCost) {
+      this.#onCost({
+        kind,
+        host,
+        operation: /^query (\w+)/.exec(query)?.[1] ?? 'query',
+        cost,
+        remaining: asNumber(rate?.remaining),
+      });
+    }
+    return { json, stderr: stripControl(result.stderr), exitCode: result.exitCode };
   }
 
   #check(
@@ -195,14 +222,19 @@ export class ForgeClient {
   async #githubBatch(
     forge: Pick<ProjectForge, 'host' | 'repository'>,
     branches: readonly string[],
+    variant: GithubQueryVariant,
   ): Promise<GraphqlBatchResult> {
     const [owner = '', name = ''] = forge.repository.split('/');
-    const raw = await this.#query('github', forge.host, buildGithubQuery(branches.length), [
+    const query = buildGithubQuery(branches.length, variant);
+    const raw = await this.#query('github', forge.host, query, [
       ['owner', owner],
       ['name', name],
       ...branches.map((b, i): [string, string] => [`b${i}`, b]),
     ]);
     const parsed = parseGithubResponse(raw.json, branches);
+    if (variant === 'full' && isUnknownFieldError(parsed.errors)) {
+      return this.#githubBatch(forge, branches, 'basic');
+    }
     this.#check(parsed, raw, `GitHub repository ${forge.repository}`);
     return parsed;
   }

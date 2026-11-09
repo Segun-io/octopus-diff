@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ForgeCli, ForgeClient } from '../src/index.js';
+import { ForgeCli, ForgeClient, type ForgeQueryCost } from '../src/index.js';
 
 /**
  * Talks to the real github.com / gitlab.com through the installed CLIs. Opt-in only
@@ -10,7 +10,10 @@ const live = process.env.OCTOPUS_FORGE_LIVE === '1';
 
 describe.runIf(live)('live forges', () => {
   const glab = process.env.OCTOPUS_FORGE_GLAB;
-  const client = new ForgeClient(new ForgeCli(glab ? { binaries: { gitlab: glab } } : {}));
+  const costs: ForgeQueryCost[] = [];
+  const client = new ForgeClient(new ForgeCli(glab ? { binaries: { gitlab: glab } } : {}), {
+    onCost: (cost) => costs.push(cost),
+  });
 
   it('probes gh and reads public pull requests', async () => {
     const status = await client.probe('github');
@@ -22,6 +25,10 @@ describe.runIf(live)('live forges', () => {
     );
     expect(result.get('no-such-branch-octopus-diff')).toEqual([]);
     expect(Array.isArray(result.get('trunk'))).toBe(true);
+    // The batch query (with the hover card's scalars) still costs one rate-limit point.
+    const batch = costs.filter((c) => c.operation === 'OctopusDiffPullRequests');
+    expect(batch.length).toBeGreaterThan(0);
+    for (const c of batch) expect(c.cost).toBeLessThanOrEqual(1);
   }, 30_000);
 
   it.runIf(Boolean(glab))(

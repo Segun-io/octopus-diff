@@ -116,7 +116,7 @@ export function assertAllowedForgeArgs(kind: ForgeKind, args: readonly string[])
     if (count < 1 || count > max) deny(`branch count out of range: ${count}`);
     const allowed =
       kind === 'github'
-        ? [buildGithubQuery(count)]
+        ? [buildGithubQuery(count, 'full'), buildGithubQuery(count, 'basic')]
         : [buildGitlabQuery(count, 'full'), buildGitlabQuery(count, 'basic')];
     if (!allowed.includes(query)) deny('query is not one of the built-in read-only queries');
     return;

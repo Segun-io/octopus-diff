@@ -1258,3 +1258,11 @@ hover card, repository information on the Overviews). Design: `docs/FORGES.md`. 
     already has `checks` (the CI summary object) and the detail extends `ChangeRequest`; renaming would have broken
     the existing field. `readRepositoryInfo` takes the project's effective default branch (it has the override) and
     detects it only when absent.
+72. **Batch query: scalars only, a GitHub `basic` variant, and the cost on every GitHub query.** The per-branch batch
+    gains `createdAt additions deletions changedFiles mergeStateStatus` (GitLab: `createdAt` and, in the full
+    variant, `diffStatsSummary`), never connections (labels, reviewers), so the hover card and the Overview
+    column cost nothing extra. Measured live: still 1 point. `mergeStateStatus` is missing on old GitHub
+    Enterprise, so the GitHub batch now has a `basic` variant with the same "unknown field → retry basic" rule as
+    GitLab. Every GitHub query now asks for `rateLimit { cost remaining }`; `ForgeClient({ onCost })` reports it
+    (the opt-in live test asserts `cost <= 1`). The Overview's chip moved from the worktree cell to a new
+    **Pull request** column (chip, title, review word); the worktree cell otherwise is unchanged.

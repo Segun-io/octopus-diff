@@ -14,16 +14,25 @@ export {
   type ForgeCliResult,
   forgeEnv,
 } from './cli.js';
-export { ForgeClient, ForgeFetchError, loginHint } from './client.js';
+export {
+  ForgeClient,
+  type ForgeClientOptions,
+  ForgeFetchError,
+  type ForgeQueryCost,
+  loginHint,
+} from './client.js';
 export {
   buildGithubQuery,
   GITHUB_MAX_BRANCHES_PER_QUERY,
+  type GithubQueryVariant,
+  githubMergeState,
   normaliseGithubPullRequest,
   parseGithubResponse,
 } from './github.js';
 export {
   buildGitlabQuery,
   GITLAB_MAX_BRANCHES_PER_QUERY,
+  gitlabMergeState,
   isUnknownFieldError,
   normaliseGitlabMergeRequest,
   parseGitlabResponse,
