@@ -17,7 +17,13 @@ import {
 } from '../../lib/unicode.ts';
 import { useCommandsContext } from '../../state/commandsContext.tsx';
 import { type CopyFn, copyAndReport } from '../../state/copy.ts';
-import { CONTEXT_STEP, DEFAULT_CONTEXT } from '../../state/diffContext.ts';
+import {
+  CONTEXT_STEP,
+  DEFAULT_CONTEXT,
+  FULL_CONTEXT,
+  isFullContext,
+  patchShowsWholeFile,
+} from '../../state/diffContext.ts';
 import { useAppModel } from '../../state/model.tsx';
 import { actions, useUi, useUiStore } from '../../state/ui.tsx';
 import { useTheme } from '../../theme/useTheme.ts';
@@ -41,7 +47,11 @@ const DiffRenderer = lazy(() =>
   import('./DiffRenderer.tsx').then((m) => ({ default: m.DiffRenderer })),
 );
 
-export const FULL_CONTEXT = 1_000_000;
+/** Web-only test ids of the diff header's context controls. */
+export const DIFF_CONTEXT_TEST_IDS = {
+  more: 'diff-more-context',
+  expandAll: 'diff-expand-all',
+} as const;
 
 function Placeholder({
   kind,
@@ -160,6 +170,7 @@ export function DiffPane() {
   const data =
     query.data && key && query.data.worktreeId === selected?.worktreeId ? query.data : undefined;
   const diff = data?.diff;
+  const shownIgnoreWhitespace = data?.params.ignoreWhitespace ?? ignoreWhitespace;
   const entry = model.selectedEntry;
   const reviewed = diff?.reviewed ?? entry?.file.reviewed ?? false;
   const row = selected ? model.sidebar.byId.get(selected.worktreeId) : undefined;
@@ -190,8 +201,9 @@ export function DiffPane() {
   }, [selected?.path, diff?.patch]);
 
   const display = useMemo<DiffDisplay | null>(
-    () => (diff ? classifyDiff(diff, ignoreWhitespace) : null),
-    [diff, ignoreWhitespace],
+    // The shown patch's own whitespace option (placeholder data may predate the toggle).
+    () => (diff ? classifyDiff(diff, shownIgnoreWhitespace) : null),
+    [diff, shownIgnoreWhitespace],
   );
 
   let state: 'empty' | 'loading' | 'ready' | 'error' = 'empty';
@@ -199,7 +211,27 @@ export function DiffPane() {
 
   const file = diff ?? entry?.file;
   const status = file?.status;
-  const contextLines = opts.context ?? DEFAULT_CONTEXT;
+  // Context controls. The patch on screen may be the previous view's (placeholder data while
+  // a new context loads), so "is the whole file shown" is judged on the patch's own context and
+  // only once the requested view has arrived.
+  const wholeFile = useMemo(
+    () =>
+      !!diff &&
+      display?.kind === 'patch' &&
+      !display.truncated &&
+      patchShowsWholeFile(diff.patch, data?.params.context ?? DEFAULT_CONTEXT),
+    [diff, display, data?.params.context],
+  );
+  const settledWhole = wholeFile && !placeholder;
+  const fullContext = isFullContext(opts.context);
+  const expanded =
+    fullContext || (settledWhole && (opts.context ?? DEFAULT_CONTEXT) > DEFAULT_CONTEXT);
+  const canMore = !placeholder && !settledWhole && !fullContext;
+  const moreTitle = placeholder
+    ? 'Loading more context…'
+    : settledWhole || fullContext
+      ? 'The whole file is already shown'
+      : `Show ${CONTEXT_STEP} more context lines around each change (e)`;
   const oldPath = file?.oldPath && file.oldPath !== selected?.path ? file.oldPath : null;
   const pathTexts = selected ? fileCopyTexts({ path: selected.path }, '') : null;
   const copy: CopyFn = (text, options) => void copyAndReport(store, text, options);
@@ -289,26 +321,37 @@ export function DiffPane() {
                 <>
                   <button
                     type="button"
+                    data-testid={DIFF_CONTEXT_TEST_IDS.more}
                     onClick={commands.expandContext}
-                    className="od-btn od-btn-ghost"
-                    title={`Show ${CONTEXT_STEP} more context lines around each change (e)`}
+                    disabled={!canMore}
+                    aria-busy={placeholder}
+                    className="od-btn od-btn-ghost disabled:cursor-default disabled:opacity-50"
+                    title={moreTitle}
                   >
                     More context
                   </button>
                   <button
                     type="button"
+                    data-testid={DIFF_CONTEXT_TEST_IDS.expandAll}
                     onClick={() =>
                       key &&
                       actions.setFileOptions(store, key, {
                         ...opts,
-                        context: contextLines >= FULL_CONTEXT ? DEFAULT_CONTEXT : FULL_CONTEXT,
+                        context: expanded ? DEFAULT_CONTEXT : FULL_CONTEXT,
                       })
                     }
-                    aria-pressed={contextLines >= FULL_CONTEXT}
-                    className="od-btn od-btn-ghost"
-                    title="Expand every collapsed unchanged region"
+                    disabled={!expanded && settledWhole}
+                    aria-pressed={expanded}
+                    className="od-btn od-btn-ghost disabled:cursor-default disabled:opacity-50"
+                    title={
+                      expanded
+                        ? `Back to ${DEFAULT_CONTEXT} context lines around each change`
+                        : settledWhole
+                          ? 'The whole file is already shown'
+                          : 'Expand every collapsed unchanged region'
+                    }
                   >
-                    {contextLines >= FULL_CONTEXT ? 'Collapse' : 'Expand all'}
+                    {expanded ? 'Collapse' : 'Expand all'}
                   </button>
                 </>
               )}
@@ -440,8 +483,7 @@ export function DiffPane() {
             mode={diffMode}
             theme={theme}
             diffTheme={appTheme.diff.theme}
-            ignoreWhitespace={ignoreWhitespace}
-            context={opts.context}
+            view={data?.view ?? ''}
             copyMeta={copyMeta}
             suspicious={suspicious.length > 0}
             onLoadAnyway={() => key && actions.setFileOptions(store, key, { ...opts, full: true })}
@@ -458,8 +500,7 @@ function DiffBody({
   mode,
   theme,
   diffTheme,
-  ignoreWhitespace,
-  context,
+  view,
   copyMeta,
   suspicious,
   onLoadAnyway,
@@ -469,8 +510,8 @@ function DiffBody({
   mode: 'split' | 'unified';
   theme: 'light' | 'dark';
   diffTheme: string;
-  ignoreWhitespace: boolean;
-  context: number | undefined;
+  /** The view options the patch was fetched with (`DiffQueryData.view`). */
+  view: string;
   copyMeta: SelectionCopyMeta | undefined;
   suspicious: boolean;
   onLoadAnyway: () => void;
@@ -552,7 +593,11 @@ function DiffBody({
                 patch={escapeSuspicious(
                   display.truncated ? repairTruncatedPatch(diff.patch) : diff.patch,
                 )}
-                cacheKey={`${diff.patchHash}:${ignoreWhitespace ? 'w' : ''}:${context ?? ''}`}
+                // Keyed by the view the patch was fetched with, not the one asked for: while a
+                // new view loads, the previous patch is still shown, and caching its highlight
+                // under the new key made the new patch render the old lines ("deletionLine and
+                // additionLine are null"). The length guards any other mismatch.
+                cacheKey={`${diff.patchHash}:${view}:${diff.patch.length}`}
                 mode={mode}
                 theme={theme}
                 diffTheme={diffTheme}

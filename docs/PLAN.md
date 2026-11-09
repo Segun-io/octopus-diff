@@ -122,7 +122,8 @@ Three-pane layout, dark and light themes:
 2. **File list** (`@pierre/trees`): changed files for the selected worktree (or, in Inbox mode, grouped by
    project → worktree). Status icons, +/− counts, reviewed checkmark.
 3. **Diff viewer** (`@pierre/diffs`): split / unified toggle, hide-whitespace toggle, collapsed unchanged
-   regions, lazy rendering with virtualization for huge diffs, binary / too-large placeholders,
+   regions ("More context" +20 lines up to the whole file, "Expand all" / "Collapse"; never past the API's
+   `context` maximum, DECISIONS #154–#156), lazy rendering with virtualization for huge diffs, binary / too-large placeholders,
    rename display (`old → new`), submodule and symlink diffs shown sanely.
 
 Chrome (`docs/TOOLBAR.md`, DECISIONS #116–#122): three tiers, one row each. A **context bar** above both panes says
@@ -147,6 +148,11 @@ scope, and palette commands. In the diff, a press-and-drag on the line numbers s
 them as plain code or as Markdown with where they live (file, lines, branch, worktree, project, scope, HEAD), and
 `Ctrl/⌘ C` copies them too. Copies keep invisible / bidirectional characters escaped (SEC-05) and fall back to
 `execCommand('copy')` where `navigator.clipboard` is missing (plain-http LAN).
+
+Adding (DECISIONS #157–#159): the first-run screen, the Add dialog and Settings → Folders share one form. Its main
+button ("Continue" on the first run) watches the folder or adds the repository the text points at and is disabled
+until that is valid; a status panel (a toast once the form is gone) shows progress, what was found and the next
+step, and the app replaces the first-run screen as soon as a repository exists, events or not.
 
 Keyboard: `j`/`k` next/prev file · `J`/`K` next/prev worktree · `n` next **unreviewed** file anywhere ·
 `r` toggle reviewed · `s` split/unified · `/` filter · `g i` inbox · `?` help. All actions reachable

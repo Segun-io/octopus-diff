@@ -2,7 +2,7 @@ import type { BulkReviewTarget, DiffResponse } from '@octopus-diff/contracts';
 import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useMemo, useRef } from 'react';
 import { useReviewMutation } from '../api/hooks.ts';
-import { queryKeys, useApi } from '../api/queries.ts';
+import { type DiffQueryData, queryKeys, useApi } from '../api/queries.ts';
 import { type BulkPlan, planBulk, planBulkForTarget } from '../lib/bulk.ts';
 import { branchCopyText, fileCopyTexts } from '../lib/copyFormat.ts';
 import { fileRefKey, toFileRef } from '../lib/fileRef.ts';
@@ -11,7 +11,7 @@ import { escapeSuspicious, hasSuspicious } from '../lib/unicode.ts';
 import type { SettingsSectionId } from '../settings/registry.ts';
 import { type BulkActions, hasUndoableToast, useBulkActions } from './bulk.ts';
 import { copyAndReport } from './copy.ts';
-import { CONTEXT_STEP, DEFAULT_CONTEXT } from './diffContext.ts';
+import { DEFAULT_CONTEXT, isFullContext, nextContext, patchShowsWholeFile } from './diffContext.ts';
 import type { AppModel } from './model.tsx';
 import { actions, useUiStore } from './ui.tsx';
 
@@ -220,10 +220,33 @@ export function useCommands(model: AppModel, resolvedTheme: 'light' | 'dark'): C
       expandContext() {
         const m = latest.current.model;
         if (!m.selectedKey) return;
-        const current = store.getState().fileOptions[m.selectedKey] ?? {};
+        const state = store.getState();
+        const current = state.fileOptions[m.selectedKey] ?? {};
+        const selected = state.selected;
+        if (!selected) return;
+        // Same rules as the More context button: wait for the current view to load (repeated
+        // presses would stack requests for patches nobody sees), and stop once the whole file
+        // is shown or the API's maximum is reached.
+        const shown = queryClient.getQueryData<DiffQueryData>(
+          queryKeys.diff(selected, m.scope, {
+            ignoreWhitespace: state.ignoreWhitespace,
+            context: current.context,
+            full: current.full,
+          }),
+        );
+        if (!shown?.diff.patch) return;
+        if (
+          isFullContext(current.context) ||
+          // A truncated patch can look like the whole file (cut inside its first hunk).
+          (!shown.diff.truncated &&
+            patchShowsWholeFile(shown.diff.patch, current.context ?? DEFAULT_CONTEXT))
+        ) {
+          actions.notice(store, 'The whole file is already shown.');
+          return;
+        }
         actions.setFileOptions(store, m.selectedKey, {
           ...current,
-          context: (current.context ?? DEFAULT_CONTEXT) + CONTEXT_STEP,
+          context: nextContext(current.context),
         });
       },
       focusFilter() {
