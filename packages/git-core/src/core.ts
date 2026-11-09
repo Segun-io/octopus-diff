@@ -17,6 +17,7 @@ import { createAttributeCache, type DiffDeps, getFileDiff, listChangedFiles } fr
 import { detectDefaultBranch, listWorktrees, resolveProject, scan } from './discovery.js';
 import { LOG_FORMAT, parseLog } from './parse/log.js';
 import { readRemoteConfig } from './remotes.js';
+import { readRepositoryInfo } from './repository.js';
 import { defaultBigFileThreshold, GitRunner } from './runner/runner.js';
 import { getSummary } from './summary.js';
 import { createUntrackedCache } from './untracked.js';
@@ -186,6 +187,10 @@ export const createGitCore: CreateGitCore = (options: GitCoreOptions = {}): GitC
     readRemoteConfig: guard(async (project) => {
       await ctx.ensureSupported();
       return readRemoteConfig(ctx, project);
+    }),
+    readRepositoryInfo: guard(async (project, infoOptions) => {
+      await ctx.ensureSupported();
+      return readRepositoryInfo(ctx, project, infoOptions);
     }),
     dispose: async () => {
       disposed = true;
