@@ -56,9 +56,10 @@ export class AppPage {
    */
   async open(authUrl: string, opts: OpenOptions = {}): Promise<void> {
     // The Settled shelf is closed by default (DECISIONS "UX round 4"); the specs read settled
-    // rows directly, so a fresh profile starts with it open. A test that stored prefs itself
-    // keeps them.
-    const prefs = opts.prefs ?? { settledOpen: true };
+    // rows directly, so a fresh profile starts with it open. The default scope is To review
+    // (status flow v2); the scope specs compare against the working scope, so they start there.
+    // A test that stored prefs itself keeps them.
+    const prefs = opts.prefs ?? { settledOpen: true, defaultScope: 'working' };
     await this.page.addInitScript((seed: Record<string, unknown>) => {
       if (Object.keys(seed).length === 0 || localStorage.getItem('octopus-diff:prefs')) return;
       localStorage.setItem('octopus-diff:prefs', JSON.stringify({ version: 2, ...seed }));

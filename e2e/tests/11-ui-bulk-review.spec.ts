@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import { TEST_IDS } from '@octopus-diff/contracts';
 import { findProject, findWorktree, LIVE_FILES } from '@octopus-diff/fixtures';
 import { reviewedPaths, stateHashes, waitForStateHashChange } from '../support/api.js';
-import { expect, test, unreviewedTotal } from '../support/ui.js';
+import { expect, expectTitle, test, unreviewedTotal } from '../support/ui.js';
 
 test.describe('UX-1 bulk review (UI)', () => {
   test('worktree: marks the visible files only; undo from the toast restores them', async ({
@@ -96,7 +96,8 @@ test.describe('UX-1 bulk review (UI)', () => {
     expect(total).toBeGreaterThan(0);
     await ui.open(daemon.authUrl);
     await ui.selectInbox();
-    await expect(page).toHaveTitle(`(${total}) octopus-diff`);
+    // The title counts To review (status flow v2), not the Uncommitted scope marked here.
+    const titled = await expectTitle(page, daemon.client);
 
     await ui.focusApp();
     await ui.press('Shift+R');
@@ -110,12 +111,12 @@ test.describe('UX-1 bulk review (UI)', () => {
     await ui.confirmBulk();
     await expect(ui.toast).toHaveAttribute('data-changed', String(total));
     await expect.poll(() => unreviewedTotal(daemon.client)).toBe(0);
-    await expect(page).toHaveTitle('octopus-diff');
+    expect(await expectTitle(page, daemon.client)).toBeLessThan(titled);
 
     await ui.press('Control+z');
     await expect(ui.toast).toContainText(`Undone: ${total} marks restored`);
     await expect.poll(() => unreviewedTotal(daemon.client)).toBe(total);
-    await expect(page).toHaveTitle(`(${total}) octopus-diff`);
+    expect(await expectTitle(page, daemon.client)).toBe(titled);
   });
 
   test('project via context menu, folder via Overview, mark all unreviewed', async ({

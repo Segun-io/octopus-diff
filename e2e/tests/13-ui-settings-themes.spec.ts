@@ -7,7 +7,7 @@
 import { TEST_IDS } from '@octopus-diff/contracts';
 import { findProject, findWorktree } from '@octopus-diff/fixtures';
 import { reviewedPaths } from '../support/api.js';
-import { expect, FIRST_RENDER_PROBE, test, unreviewedTotal } from '../support/ui.js';
+import { expect, expectTitle, FIRST_RENDER_PROBE, test, titleCount } from '../support/ui.js';
 
 const SECTIONS = ['general', 'review', 'appearance', 'folders', 'forges', 'keyboard', 'about'];
 
@@ -200,9 +200,8 @@ test.describe('UX-4/5/6 settings, themes and assets (UI)', () => {
     expect(await page.locator('meta[name="theme-color"]').count()).toBe(2);
 
     // Title shows the unreviewed count and reacts to marking; the favicon carries a dot meanwhile.
-    const total = await unreviewedTotal(daemon.client);
+    const total = await expectTitle(page, daemon.client);
     expect(total).toBeGreaterThan(0);
-    await expect(page).toHaveTitle(`(${total}) octopus-diff`);
     const svgIcon = page.locator('link[rel="icon"][type="image/svg+xml"]');
     await expect(svgIcon).toHaveAttribute('href', /^data:image\/svg\+xml/);
     const live = findWorktree(manifest, 'live').worktree;
@@ -213,9 +212,10 @@ test.describe('UX-4/5/6 settings, themes and assets (UI)', () => {
     await ui.focusApp();
     await ui.press('r');
     await expect.poll(() => reviewedPaths(daemon.client, live.id)).toEqual([first]);
-    await expect(page).toHaveTitle(`(${total - 1}) octopus-diff`);
+    expect(await expectTitle(page, daemon.client)).toBe(total - 1);
     await ui.press('r');
-    await expect(page).toHaveTitle(`(${total}) octopus-diff`);
+    expect(await expectTitle(page, daemon.client)).toBe(total);
+    expect(await titleCount(daemon.client)).toBe(total);
 
     // Title count is a device pref: off → plain title.
     await ui.openSettings('general');

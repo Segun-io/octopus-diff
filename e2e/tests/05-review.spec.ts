@@ -79,12 +79,16 @@ test.describe('§8.6 review marks', () => {
     edits,
   }) => {
     const agent = findWorktree(manifest, 'live-agent');
-    const { files } = await daemon.client.listFiles(agent.worktree.id);
+    // What the sidebar counts (status flow v2): the To review diff (commits after the
+    // bookmark plus uncommitted files), not only the working tree.
+    const { files } = await daemon.client.listFiles(agent.worktree.id, {
+      scope: { kind: 'review' },
+    });
     expect(files.length).toBeGreaterThan(0);
     for (const file of files) {
       await daemon.client.setReview({
         projectId: agent.project.id,
-        scopeKind: 'working',
+        scopeKind: 'review',
         path: file.path,
         ...(file.rawPath ? { rawPath: file.rawPath } : {}),
         patchHash: file.patchHash,
@@ -106,7 +110,10 @@ test.describe('§8.6 review marks', () => {
     await app.setToggle(TEST_IDS.onlyUnreviewedToggle, false);
   });
 
-  test('review marks are per scope kind', async ({ manifest, daemon }) => {
+  // Status flow v2 (DECISIONS #95): marks are keyed by (path, patchHash), not by scope kind. A
+  // file with staged and unstaged changes has a different patch in each scope, so a mark made in
+  // `staged` still does not cover the `working` patch.
+  test('a review mark belongs to its patch, not to a scope kind', async ({ manifest, daemon }) => {
     const sink = findWorktree(manifest, 'kitchen-sink');
     const staged = (await daemon.client.listFiles(sink.worktree.id, { scope: { kind: 'staged' } }))
       .files;

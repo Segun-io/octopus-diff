@@ -1,4 +1,4 @@
-import type { ApiClient } from '@octopus-diff/contracts';
+import type { ApiClient, DiffScope } from '@octopus-diff/contracts';
 import { TEST_IDS } from '@octopus-diff/contracts';
 import type { FixtureManifest, IsolatedGitEnv } from '@octopus-diff/fixtures';
 import {
@@ -288,8 +288,39 @@ export const test: TestType<
 
 export { expect };
 
-/** Unreviewed files per the daemon (only worktrees whose review is enabled count). */
-export async function unreviewedTotal(client: ApiClient): Promise<number> {
-  const inbox = await client.inbox({ onlyUnreviewed: true });
+/** Unreviewed files per the daemon in `scope` (only worktrees whose review is enabled count). */
+export async function unreviewedTotal(
+  client: ApiClient,
+  scope: DiffScope = { kind: 'working' },
+): Promise<number> {
+  const inbox = await client.inbox({ onlyUnreviewed: true, scope });
   return inbox.entries.reduce((n, e) => n + e.files.length, 0);
+}
+
+/**
+ * What the tab title counts (status flow v2): every review-enabled worktree's To review files
+ * (`summary.review.unreviewedFiles`), whatever the toolbar scope.
+ */
+export async function titleCount(client: ApiClient): Promise<number> {
+  const { projects } = await client.listProjects();
+  let n = 0;
+  for (const p of projects) {
+    for (const w of p.worktrees) {
+      if (w.review && !w.review.enabled) continue;
+      n += w.summary?.review?.unreviewedFiles ?? 0;
+    }
+  }
+  return n;
+}
+
+/** The tab title matches the daemon's To review count. */
+export async function expectTitle(page: Page, client: ApiClient): Promise<number> {
+  let n = 0;
+  await expect
+    .poll(async () => {
+      n = await titleCount(client);
+      return (await page.title()) === (n > 0 ? `(${n}) octopus-diff` : 'octopus-diff');
+    })
+    .toBe(true);
+  return n;
 }

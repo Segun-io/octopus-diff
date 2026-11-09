@@ -28,12 +28,14 @@ test.describe('UX-2/3 review policy (UI)', () => {
       `${live.worktree.id}:${LIVE_FILES.edit}`,
       `${alpha.worktree.id}:README.md`,
     ]);
-    for (const entry of (await daemon.client.inbox()).entries) {
+    // Status flow v2: the counts are To review's (commits after the bookmark + uncommitted).
+    const review = { kind: 'review' } as const;
+    for (const entry of (await daemon.client.inbox({ scope: review })).entries) {
       for (const file of entry.files) {
         if (keep.has(`${entry.worktree.id}:${file.path}`)) continue;
         await daemon.client.setReview({
           projectId: entry.project.id,
-          scopeKind: 'working',
+          scopeKind: 'review',
           path: file.path,
           ...(file.rawPath ? { rawPath: file.rawPath } : {}),
           patchHash: file.patchHash,
@@ -41,9 +43,10 @@ test.describe('UX-2/3 review policy (UI)', () => {
         });
       }
     }
-    expect(await unreviewedTotal(daemon.client)).toBe(2);
+    expect(await unreviewedTotal(daemon.client, review)).toBe(2);
 
-    await ui.open(daemon.authUrl);
+    // `n` walks the toolbar scope: To review, where the marks above were made.
+    await ui.open(daemon.authUrl, { prefs: { settledOpen: true, defaultScope: 'review' } });
     await ui.selectWorktree(live.worktree.id);
     await ui.expectChip(true, 'default');
     await expect(page).toHaveTitle('(2) octopus-diff');
@@ -64,7 +67,7 @@ test.describe('UX-2/3 review policy (UI)', () => {
         enabled: false,
       }),
     ]);
-    const unreviewed = await daemon.client.inbox({ onlyUnreviewed: true });
+    const unreviewed = await daemon.client.inbox({ onlyUnreviewed: true, scope: review });
     expect(unreviewed.entries.map((e) => e.worktree.id)).toEqual([alpha.worktree.id]);
 
     // `n` never lands in the disabled worktree: from a reviewed file in beta it goes to alpha

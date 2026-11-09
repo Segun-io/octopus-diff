@@ -254,10 +254,13 @@ test.describe('§8.4 scopes (UI)', () => {
     }
     const login = findWorktree(manifest, 'alpha-login').worktree;
     await app.selectWorktree(login.id);
+    // "All on branch" (status flow v2) is the working tree against the merge-base.
     await app.setScope('branch');
-    await expect
-      .poll(async () => (await app.filePaths()).sort())
-      .toEqual((login.scopes.branch ?? []).map((f) => f.path).sort());
+    const allOnBranch = (
+      await daemon.client.listFiles(login.id, { scope: { kind: 'branch', includeWorking: true } })
+    ).files.map((f) => f.path);
+    for (const f of login.scopes.branch ?? []) expect(allOnBranch).toContain(f.path);
+    await expect.poll(async () => (await app.filePaths()).sort()).toEqual(allOnBranch.sort());
     await app.setScope('working');
   });
 
