@@ -1327,3 +1327,43 @@ hover card, repository information on the Overviews). Design: `docs/FORGES.md`. 
     for resolved/dismissed items (both shown by default), and collapses resolved threads and dismissed reviews
     to one line. Phases C and D landed in one web commit because the Summary embeds the Conversation; the
     daemon routes for both landed with Phase B's daemon commit.
+
+
+## Status flow v2: review stages and "reviewed up to" bookmarks (lead, 2026-11-09)
+
+Lead session on branch `feat/status-flow` (from `main` at `984f2ad`). Design: `docs/STATUS-FLOW.md` (agreed with the
+user). Report: `docs/reports/status-flow.md`. Steps 1 → 4 of the plan's build order, each committed with a green
+`pnpm check`.
+
+81. **Step 1: the sidebar's status has its own fixed source.** `state/model.tsx` builds the sidebar from
+    `summary.review` (step 2) and, for daemons without it, from a second inbox query pinned to the `working` scope
+    (`SIDEBAR_STATUS_SCOPE`); the toolbar's inbox still feeds the Inbox view and `n`. While the toolbar shows
+    Uncommitted both are one query. The plan said "`branch` + working until step 2 lands": not done, because the
+    branch inbox is not cacheable in the daemon (it recomputes every worktree's branch diff on every request) and
+    step 2 replaces the fallback within the same round; until then commits are invisible to the sidebar, as before.
+82. **Stages and places.** `lib/model.ts` gets `stageOf()` (`blocked | review | reviewed | inPR | merged | closed |
+    off`) and `placeOf()`; `RowState` (`data-state`, read by the e2e suite) keeps its four values and now derives
+    from the stage: blocked and To review under the project, In PR `active` under the project, the rest in the
+    shelf. Rows carry `data-stage`, `data-unreviewed` and `data-commits`. The plan's open question (does
+    Reviewed with no PR stay under its project?) is decided as its default, **shelf**: density stays earned, a row
+    you finish still shows while selected (the closed shelf lists the selected row, #49), and it is the smallest
+    change. The shelf header keeps its name ("Settled") and its test labels.
+83. **One verb, "Reviewed".** "Mark N visible as verified" / "Verify N" became "Review N shown" / "Review all N"
+    (⇧R), the menus "Mark all reviewed" / "Mark all unreviewed", the confirm dialog "Mark N files reviewed?", the
+    toast "N files marked reviewed", a quiet row says `reviewed` (dirty) or `clean`. The command id
+    `markAllVerified` is internal and kept. No UI string contains "verif" (e2e acceptance 6).
+84. **Settle is "Hide until it changes".** Same mechanics as round 4 (#48: per device, held by `stateHash`, blocked
+    rows never hide), new words: the hover action is `Hide` (aria-label "Hide until it changes", an eye glyph), on
+    a hidden row `Show` ("Show again"), on a row the shelf holds by itself "Keep under its project". The hover card
+    says "Hidden: until it changes".
+85. **The pulse is gone** (`.od-pulse`, `@keyframes od-pulse`, `isRecentlyActive`, `ACTIVITY_WINDOW_MS`,
+    `useClock`, `data-active`). Rows outside a project lose the 24 px indent that only made room for it; rows
+    under a project keep theirs, which aligns the branch with the project name.
+86. **The toolbar scope is a filter with counts.** The select keeps its test id, values and `data-scope` (the e2e
+    helper picks options by value) and reads "Show: All on branch (12) · Uncommitted (3) · Staged (1) · Unstaged
+    (2) · Commit…". Counts come from the open worktree's summary; "All on branch" lists the branch scope's files
+    for the open worktree only (one request, cached by react-query). Settings → General's default scope uses the
+    same words.
+87. **`pnpm dev:mock` import cycle fixed.** `commands.ts` re-exports `SHORTCUTS` from `commandRegistry.ts`, which
+    imported the value `CONTEXT_STEP` back from `commands.ts`; Vite's unbundled ESM evaluated the registry first.
+    The two constants moved to a leaf module `state/diffContext.ts` (re-exported from `commands.ts`).
