@@ -3,6 +3,7 @@ import {
   type AppSettings,
   AppSettingsSchema,
   DEFAULT_APP_SETTINGS,
+  DEFAULT_FORGE_SETTINGS,
   type ReviewOverride,
   type ReviewPolicyTarget,
   reviewTargetKey,
@@ -88,6 +89,10 @@ export function parseStoredSettings(json: string | null): AppSettings {
     review: {
       ...DEFAULT_APP_SETTINGS.review,
       ...((parsed as { review?: Record<string, unknown> } | null)?.review ?? {}),
+    },
+    forges: {
+      ...DEFAULT_FORGE_SETTINGS,
+      ...((parsed as { forges?: Record<string, unknown> } | null)?.forges ?? {}),
     },
   };
   const result = AppSettingsSchema.safeParse(merged);

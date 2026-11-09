@@ -12,6 +12,7 @@ import {
   GitCoreError,
   type GitCoreErrorCode,
   type GitFileDiff,
+  type GitRemoteConfig,
   type GitVersion,
   type ProjectLocator,
   type ResolvedProject,
@@ -440,6 +441,15 @@ export class FakeGitCore implements GitCore {
         committerDate: '2026-11-08T00:00:00.000Z',
       };
     });
+  }
+
+  /** Remote config per common dir (forge tests); default: no remotes. */
+  readonly remoteConfigs = new Map<string, GitRemoteConfig>();
+
+  async readRemoteConfig(project: ProjectLocator): Promise<GitRemoteConfig> {
+    return (
+      this.remoteConfigs.get(project.commonDir) ?? { remotes: [], branches: {}, pushDefault: null }
+    );
   }
 
   async getWatchTargets(loc: WorktreeLocator): Promise<WatchTargets> {

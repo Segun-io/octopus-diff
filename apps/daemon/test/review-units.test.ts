@@ -139,16 +139,30 @@ describe('bulk review helpers', () => {
 
 describe('settings store (migration v2)', () => {
   it('parses stored settings leniently', () => {
-    expect(parseStoredSettings(null)).toEqual({ review: { defaultEnabled: true } });
-    expect(parseStoredSettings('{nope')).toEqual({ review: { defaultEnabled: true } });
+    expect(parseStoredSettings(null)).toEqual({
+      review: { defaultEnabled: true },
+      forges: { enabled: true, hosts: {} },
+    });
+    expect(parseStoredSettings('{nope')).toEqual({
+      review: { defaultEnabled: true },
+      forges: { enabled: true, hosts: {} },
+    });
     expect(parseStoredSettings('{"review":{"defaultEnabled":false}}')).toEqual({
       review: { defaultEnabled: false },
+      forges: { enabled: true, hosts: {} },
     });
-    expect(parseStoredSettings('{"review":{}}')).toEqual({ review: { defaultEnabled: true } });
+    expect(parseStoredSettings('{"review":{}}')).toEqual({
+      review: { defaultEnabled: true },
+      forges: { enabled: true, hosts: {} },
+    });
     expect(parseStoredSettings('{"review":{"defaultEnabled":"no"}}')).toEqual({
       review: { defaultEnabled: true },
+      forges: { enabled: true, hosts: {} },
     });
-    expect(parseStoredSettings('{"future":1}')).toEqual({ review: { defaultEnabled: true } });
+    expect(parseStoredSettings('{"future":1}')).toEqual({
+      review: { defaultEnabled: true },
+      forges: { enabled: true, hosts: {} },
+    });
   });
 
   it('migrates a v1 database and persists settings, revision and overrides', async () => {
@@ -179,7 +193,10 @@ describe('settings store (migration v2)', () => {
     expect(store.schemaVersion()).toBe(2);
     expect(store.listReviewMarks('0123456789abcdef', 'working')).toHaveLength(1);
     expect(store.settings.getRevision()).toBe(0);
-    expect(store.settings.getSettings()).toEqual({ review: { defaultEnabled: true } });
+    expect(store.settings.getSettings()).toEqual({
+      review: { defaultEnabled: true },
+      forges: { enabled: true, hosts: {} },
+    });
     expect(store.settings.listOverrides()).toEqual([]);
 
     store.settings.setSettings({ review: { defaultEnabled: false } });
@@ -213,7 +230,10 @@ describe('settings store (migration v2)', () => {
 
     const reopened = await Store.open(dir);
     expect(reopened.settings.getRevision()).toBe(7);
-    expect(reopened.settings.getSettings()).toEqual({ review: { defaultEnabled: false } });
+    expect(reopened.settings.getSettings()).toEqual({
+      review: { defaultEnabled: false },
+      forges: { enabled: true, hosts: {} },
+    });
     const overrides = reopened.settings.listOverrides();
     expect(overrides).toHaveLength(3);
     expect(overrides.find((o) => o.target.kind === 'folder')).toMatchObject({
@@ -276,5 +296,24 @@ describe('SettingsService', () => {
     expect(store.settings.getRevision()).toBe(4);
     hub.close();
     store.close();
+  });
+});
+
+describe('settings store: forges', () => {
+  it('fills forge defaults and keeps stored host overrides', () => {
+    expect(
+      parseStoredSettings('{"review":{"defaultEnabled":true},"forges":{"enabled":false}}'),
+    ).toEqual({
+      review: { defaultEnabled: true },
+      forges: { enabled: false, hosts: {} },
+    });
+    expect(
+      parseStoredSettings(
+        '{"review":{"defaultEnabled":true},"forges":{"hosts":{"git.acme.io":"gitlab"}}}',
+      ),
+    ).toEqual({
+      review: { defaultEnabled: true },
+      forges: { enabled: true, hosts: { 'git.acme.io': 'gitlab' } },
+    });
   });
 });

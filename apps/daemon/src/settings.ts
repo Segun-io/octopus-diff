@@ -1,6 +1,7 @@
 import {
   type AppSettings,
   type AppSettingsPatch,
+  DEFAULT_FORGE_SETTINGS,
   type EffectiveReviewPolicy,
   type Logger,
   type ResolveReviewPolicyInput,
@@ -102,6 +103,7 @@ export class SettingsService implements ReviewPolicyProvider {
     const next: AppSettings = {
       ...this.#settings,
       review: { ...this.#settings.review, ...(patch.review ?? {}) },
+      forges: { ...(this.#settings.forges ?? DEFAULT_FORGE_SETTINGS), ...(patch.forges ?? {}) },
     };
     if (JSON.stringify(next) !== JSON.stringify(this.#settings)) {
       this.#store.transaction(() => {

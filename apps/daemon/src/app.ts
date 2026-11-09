@@ -15,12 +15,14 @@ import {
   type DirsResponse,
   FilesQuerySchema,
   FocusRequestSchema,
+  type ForgesResponse,
   HealthQuerySchema,
   IdSchema,
   InboxQuerySchema,
   type Logger,
   type OkResponse,
   type ProjectsResponse,
+  RefreshForgesRequestSchema,
   type RefreshResponse,
   type RescanResponse,
   ReviewRequestSchema,
@@ -40,6 +42,7 @@ import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { DaemonCore } from './core.js';
 import { ApiError, toApiError } from './errors.js';
 import type { EventHub } from './events.js';
+import type { ForgeService } from './forges.js';
 import { listDirs } from './fs-browse.js';
 import type { ReviewControls } from './review-controls.js';
 import {
@@ -74,6 +77,8 @@ export interface AppDeps {
   /** UX round 1: settings, review policy, bulk review (routes 404 when absent, as older daemons). */
   settings?: SettingsService;
   reviewControls?: ReviewControls;
+  /** Forge integration (routes 404 when absent, as older daemons). */
+  forges?: ForgeService;
 }
 
 interface SafeParser<T> {
@@ -125,6 +130,19 @@ async function readJson(c: Context): Promise<unknown> {
     throw new ApiError('bad_request', 'expected Content-Type: application/json', { status: 415 });
   }
   const text = await readBody(c);
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new ApiError('bad_request', 'request body is not valid JSON');
+  }
+}
+
+/** Parses an already-read body as JSON (same Content-Type rule as `readJson`). */
+function jsonFrom(c: Context, text: string): unknown {
+  const contentType = c.req.header('content-type') ?? '';
+  if (!/^application\/json\s*(;|$)/i.test(contentType)) {
+    throw new ApiError('bad_request', 'expected Content-Type: application/json', { status: 415 });
+  }
   try {
     return JSON.parse(text);
   } catch {
@@ -381,6 +399,27 @@ export function createApp(deps: AppDeps): Hono {
     route('undoReview', async (c) => {
       const request = parseWith(UndoReviewRequestSchema, await readJson(c), 'request body');
       return c.json(reviewControls.undoBulk(request));
+    });
+  }
+
+  // --- forges: pull/merge requests via gh / glab (docs/FORGES.md) --------------------------
+  const { forges } = deps;
+  if (forges) {
+    route('getForges', async (c) => {
+      const body: ForgesResponse = await forges.response();
+      return c.json(body);
+    });
+
+    route('refreshForges', async (c) => {
+      const text = await readBody(c);
+      const request = parseWith(
+        RefreshForgesRequestSchema,
+        text.trim() === '' ? {} : await jsonFrom(c, text),
+        'request body',
+      );
+      await forges.refresh(request.projectIds, { force: true });
+      const body: ForgesResponse = await forges.response();
+      return c.json(body);
     });
   }
 

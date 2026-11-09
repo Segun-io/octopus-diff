@@ -69,7 +69,7 @@ describe('UX round 1: settings, review policy, bulk review (fake git-core)', () 
     await events.opened;
     const initial = SettingsResponseSchema.parse(await api.getSettings());
     expect(initial).toEqual({
-      settings: { review: { defaultEnabled: true } },
+      settings: { review: { defaultEnabled: true }, forges: { enabled: true, hosts: {} } },
       overrides: [],
       revision: 0,
     });

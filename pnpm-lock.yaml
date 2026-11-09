@@ -212,6 +212,9 @@ importers:
       '@octopus-diff/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
+      '@octopus-diff/forge':
+        specifier: workspace:*
+        version: link:../../packages/forge
       '@octopus-diff/git-core':
         specifier: workspace:*
         version: link:../../packages/git-core

@@ -19,6 +19,7 @@ import type { Hono } from 'hono';
 import { createApp } from './app.js';
 import { DaemonCore } from './core.js';
 import { EventHub } from './events.js';
+import { type ForgeClientLike, ForgeService } from './forges.js';
 import { createLogger } from './logger.js';
 import { ensurePrivateDir, resolveDirs } from './paths.js';
 import { ReviewControls } from './review-controls.js';
@@ -57,6 +58,16 @@ export interface DaemonInternals {
   logWrite?: (line: string) => void;
   /** cwd for resolving relative input paths. */
   cwd?: string;
+  /** Forge integration: replace the gh/glab client (tests), or `false` to not start it. */
+  forges?:
+    | false
+    | {
+        client?: ForgeClientLike;
+        pollMs?: number;
+        debounceMs?: number;
+        minRefetchMs?: number;
+        readSshConfig?: () => Promise<string | null>;
+      };
 }
 
 export interface DaemonOptions extends StartDaemonOptions {
@@ -68,6 +79,8 @@ export interface Daemon extends DaemonHandle {
   readonly app: Hono;
   readonly core: DaemonCore;
   readonly hub: EventHub;
+  /** Forge integration; undefined when disabled through `internal.forges: false`. */
+  readonly forges: ForgeService | undefined;
   readonly store: Store;
   readonly logger: Logger;
   /** UX round 1: app settings + review-policy overrides. */
@@ -189,8 +202,23 @@ export const startDaemon = (async (options: DaemonOptions = {}): Promise<Daemon>
     ...(internal.now ? { now: internal.now } : {}),
   });
 
+  const forges =
+    internal.forges === false
+      ? undefined
+      : new ForgeService({
+          core,
+          gitCore,
+          settings,
+          hub,
+          logger,
+          cwd: stateDir,
+          ...(internal.forges ?? {}),
+          ...(internal.now ? { now: internal.now } : {}),
+        });
+
   let server: Server | undefined;
   const cleanup = async () => {
+    await forges?.close().catch(() => {});
     await core.close().catch(() => {});
     hub.close();
     if (ownsGitCore) await gitCore.dispose().catch(() => {});
@@ -234,6 +262,7 @@ export const startDaemon = (async (options: DaemonOptions = {}): Promise<Daemon>
       }
     }
     core.start({ projects: justProjects, scanRoots: justScanRoots });
+    forges?.start();
 
     let staticFiles: StaticFiles | null = null;
     if (options.webRoot) {
@@ -260,6 +289,7 @@ export const startDaemon = (async (options: DaemonOptions = {}): Promise<Daemon>
       hello: (): ServerEvent => ({ type: 'hello', version, startedAt: startedAt.toISOString() }),
       settings,
       reviewControls,
+      ...(forges ? { forges } : {}),
     });
 
     // Do not replace the global Request/Response: the daemon runs inside the CLI process.
@@ -295,6 +325,7 @@ export const startDaemon = (async (options: DaemonOptions = {}): Promise<Daemon>
     let closing: Promise<void> | undefined;
     const close = (): Promise<void> => {
       closing ??= (async () => {
+        await forges?.close().catch(() => {});
         await core
           .close()
           .catch((error) => logger.warn('error while stopping the core', { error }));
@@ -327,6 +358,7 @@ export const startDaemon = (async (options: DaemonOptions = {}): Promise<Daemon>
       logger,
       settings,
       reviewControls,
+      forges,
       close,
     };
     return daemon;

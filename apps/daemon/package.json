@@ -24,6 +24,7 @@
   "dependencies": {
     "@hono/node-server": "^2.1.6",
     "@octopus-diff/contracts": "workspace:*",
+    "@octopus-diff/forge": "workspace:*",
     "@octopus-diff/git-core": "workspace:*",
     "@parcel/watcher": "^2.6.0",
     "hono": "^4.13.17"
