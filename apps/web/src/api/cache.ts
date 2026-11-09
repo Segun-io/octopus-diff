@@ -195,13 +195,22 @@ export function collectEventEffects(
       break;
     case 'review.changed':
       applyReviewToCaches(queryClient, event);
+      // Summaries carry review counts (status flow v2): the sidebar follows marks.
+      effects.projects = true;
       break;
     case 'review.bulk':
       // Many marks at once: refetch the inbox and the files/diffs of the affected projects.
       effects.inbox = true;
+      effects.projects = true;
       for (const id of worktreeIdsOfProjects(queryClient, event.projectIds)) {
         effects.worktrees.add(id);
       }
+      break;
+    case 'review.bookmark':
+      // The To review range moved: counts, the review scope's files and diffs.
+      effects.projects = true;
+      effects.inbox = true;
+      effects.worktrees.add(event.worktreeId);
       break;
     case 'settings.changed': {
       // Skip the refetch when this revision is the one a response already applied.

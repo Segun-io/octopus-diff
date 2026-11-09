@@ -313,6 +313,16 @@ function RowHoverCard({ row, at }: { row: WorktreeRow; at: { x: number; y: numbe
             </span>,
           )}
         {line('Review', review.enabled ? 'on' : `off (from ${review.source})`)}
+        {summary?.review &&
+          line(
+            'Reviewed',
+            <span className="font-mono text-[11px]">
+              {summary.review.bookmark
+                ? `up to ${summary.review.bookmark.slice(0, 7)}`
+                : 'no commits yet'}
+              {summary.review.historyRewritten ? ' · history rewritten' : ''}
+            </span>,
+          )}
         {row.settledBy === 'user' &&
           line('Hidden', row.state === 'settled' ? 'until it changes' : 'no, shown by hand')}
         {error && line('Error', <span className="text-danger">{error.message}</span>)}

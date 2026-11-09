@@ -50,9 +50,10 @@ function setup(
   opts: {
     wrap?: (fetch: Fetch) => Fetch;
     store?: Partial<Parameters<typeof createUiStore>[0]>;
+    statusFlow?: boolean;
   } = {},
 ): Harness {
-  const backend = new MockBackend({ dataset });
+  const backend = new MockBackend({ dataset, statusFlow: opts.statusFlow ?? false });
   const base = createMockFetch(backend);
   const mockFetch = opts.wrap ? opts.wrap(base) : base;
   const requests: Harness['requests'] = [];
@@ -578,6 +579,34 @@ describe('folder tier, overview and palette', () => {
     expect(project('octopus-api').textContent).toContain('4');
   });
 
+  it('status flow: To review is the default; rows say N commits; Review all moves the bookmark', async () => {
+    const { user, requests } = setup('demo', {
+      statusFlow: true,
+      store: { scope: { kind: 'review' } },
+    });
+    await waitFor(() => expect(app().getAttribute('data-ready')).toBe('true'));
+    const select = screen.getByTestId(TEST_IDS.scopeSelect) as HTMLSelectElement;
+    expect(select.dataset.scope).toBe('review');
+    const row = worktreeItem('fix/cache');
+    await waitFor(() => expect(Number(row.dataset.commits)).toBeGreaterThan(0));
+    expect(row.dataset.stage).toBe('review');
+    expect(row.textContent).toMatch(/\d+ commits? ·/);
+    fireEvent.click(row);
+    await waitFor(() => expect(screen.getAllByTestId(TEST_IDS.fileItem).length).toBeGreaterThan(0));
+    expect(select.textContent).toMatch(/To review \(\d+\)/);
+    await press(user, 'R');
+    await screen.findByTestId(TEST_IDS.bulkReviewToast);
+    const bulk = requests.find((r) => r.url.endsWith('/api/review/bulk'));
+    expect(bulk?.body).toMatchObject({
+      target: { kind: 'worktree' },
+      scope: { kind: 'review' },
+      advanceBookmarks: true,
+    });
+    expect(bodyOf<{ paths?: unknown }>(bulk).paths).toBeUndefined();
+    await waitFor(() => expect(worktreeItem('fix/cache').dataset.commits).toBe('0'));
+    await waitFor(() => expect(worktreeItem('fix/cache').dataset.stage).toBe('reviewed'));
+  });
+
   it('switching the toolbar scope never moves a sidebar row (status flow v2)', async () => {
     setup('demo');
     await ready();
@@ -593,7 +622,7 @@ describe('folder tier, overview and palette', () => {
     const select = screen.getByTestId(TEST_IDS.scopeSelect) as HTMLSelectElement;
     for (const kind of ['branch', 'staged', 'unstaged', 'working'] as const) {
       fireEvent.change(select, { target: { value: kind } });
-      await waitFor(() => expect(select.dataset.scope).toBe(kind));
+      await waitFor(() => expect(select.dataset.scope?.startsWith(kind)).toBe(true));
       // let the inbox for the new scope land
       await waitFor(() => expect(app().getAttribute('data-ready')).toBe('true'));
       await act(async () => {

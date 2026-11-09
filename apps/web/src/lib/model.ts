@@ -146,7 +146,9 @@ export function stageOf(row: StageInput): Stage {
   }
   if (row.worktree.missing || row.error || !s) return 'off';
   if (row.review && !row.review.enabled) return 'off';
-  if (row.unreviewed > 0 || (row.newCommits ?? 0) > 0) return 'review';
+  // A commit counts through its files: once every file of the review diff is reviewed (by hand,
+  // or because only reviewed commits touched it) there is nothing left, bookmark moved or not.
+  if (row.unreviewed > 0) return 'review';
   return 'reviewed';
 }
 
@@ -393,8 +395,14 @@ export function buildSidebar(
     for (const wt of worktrees) {
       const stats = inboxStats.get(wt.worktree.id);
       const review = effectivePolicy(wt.review);
-      const unreviewed = review.enabled ? (stats?.unreviewed ?? 0) : 0;
-      const newCommits = 0;
+      // Status flow v2 daemons send `summary.review`; older ones: the fixed inbox's count.
+      const fromDaemon = wt.summary?.review;
+      const unreviewed = !review.enabled
+        ? 0
+        : fromDaemon
+          ? fromDaemon.unreviewedFiles
+          : (stats?.unreviewed ?? 0);
+      const newCommits = review.enabled && fromDaemon ? fromDaemon.newCommits : 0;
       const input: StageInput = {
         summary: wt.summary,
         worktree: wt.worktree,

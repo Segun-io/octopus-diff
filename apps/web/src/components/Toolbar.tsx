@@ -26,6 +26,7 @@ import { ReviewPolicyChip } from './ReviewPolicyChip.tsx';
  * sidebar row (docs/STATUS-FLOW.md §2.3). Order: the main views first, the index views after.
  */
 const SCOPE_LABELS: Record<ScopeKind, string> = {
+  review: 'To review',
   branch: 'All on branch',
   working: 'Uncommitted',
   staged: 'Staged',
@@ -41,6 +42,7 @@ function scopeCounts(
   if (!summary) return {};
   const c = summary.counts;
   return {
+    ...(summary.review ? { review: summary.review.unreviewedFiles } : {}),
     working: summary.changedFiles,
     staged: c.staged + c.conflicted,
     unstaged: c.unstaged + c.untracked + c.conflicted,
@@ -48,7 +50,9 @@ function scopeCounts(
   };
 }
 
-const BRANCH_SCOPE: DiffScope = { kind: 'branch' };
+/** "All on branch": the working tree against the merge-base (committed + uncommitted). */
+export const ALL_ON_BRANCH: DiffScope = { kind: 'branch', includeWorking: true };
+const BRANCH_SCOPE = ALL_ON_BRANCH;
 
 export function Toolbar() {
   const store = useUiStore();
@@ -76,6 +80,14 @@ export function Toolbar() {
   // "All on branch" has no count in the summary: list it for the open worktree only.
   const branchFiles = useFilesQuery(worktreeId, BRANCH_SCOPE);
   const counts = scopeCounts(row?.summary, branchFiles.data?.files.length);
+  // To review needs a status-flow daemon (summaries carry `review`); older ones fall back.
+  const projectItems = model.projects.data?.projects;
+  const reviewSupported =
+    projectItems === undefined ||
+    projectItems.some((p) => p.worktrees.some((w) => w.summary?.review !== undefined));
+  useEffect(() => {
+    if (scope.kind === 'review' && !reviewSupported) store.setState({ scope: { kind: 'working' } });
+  }, [scope.kind, reviewSupported, store]);
 
   const forgeEntry = useForgeIndex().get(worktreeId ?? '');
   const request = forgeEntry?.worktree.changeRequest ?? null;
@@ -101,6 +113,8 @@ export function Toolbar() {
       const head = commitList?.[0];
       if (!head) return;
       next = { kind: 'commit', sha: head.sha };
+    } else if (kind === 'branch') {
+      next = ALL_ON_BRANCH;
     } else {
       next = { kind };
     }
@@ -185,7 +199,10 @@ export function Toolbar() {
                 <option
                   key={kind}
                   value={kind}
-                  disabled={kind === 'commit' && (worktreeId === null || !commitList?.length)}
+                  disabled={
+                    (kind === 'commit' && (worktreeId === null || !commitList?.length)) ||
+                    (kind === 'review' && !reviewSupported)
+                  }
                 >
                   {SCOPE_LABELS[kind]}
                   {worktreeId !== null && counts[kind] !== undefined ? ` (${counts[kind]})` : ''}

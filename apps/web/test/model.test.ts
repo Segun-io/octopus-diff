@@ -116,7 +116,10 @@ describe('stages (docs/STATUS-FLOW.md §2.2)', () => {
       }),
     ).toBe('blocked');
     expect(stageOf({ summary, worktree, unreviewed: 2, review: on })).toBe('review');
-    expect(stageOf({ summary, worktree, unreviewed: 0, newCommits: 2, review: on })).toBe('review');
+    // commits count through their files: nothing unreviewed left = reviewed
+    expect(stageOf({ summary, worktree, unreviewed: 0, newCommits: 2, review: on })).toBe(
+      'reviewed',
+    );
     expect(stageOf({ summary, worktree, unreviewed: 0, newCommits: 0, review: on })).toBe(
       'reviewed',
     );

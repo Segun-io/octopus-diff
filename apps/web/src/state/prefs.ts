@@ -56,7 +56,7 @@ export const DEFAULT_PREFS: Prefs = {
   theme: normalizeThemePrefs(undefined),
   fileListLayout: 'list',
   density: 'compact',
-  defaultScope: 'working',
+  defaultScope: 'review',
   autoAdvance: false,
   reviewOffDisplay: 'dim',
   titleCount: true,
@@ -113,7 +113,7 @@ export function normalizePrefs(raw: unknown): Prefs {
     fileListLayout: oneOf(v.fileListLayout, ['list', 'tree']) ?? DEFAULT_PREFS.fileListLayout,
     density: oneOf(v.density, ['compact', 'comfortable']) ?? DEFAULT_PREFS.density,
     defaultScope:
-      oneOf(v.defaultScope, ['working', 'staged', 'unstaged', 'branch']) ??
+      oneOf(v.defaultScope, ['review', 'working', 'staged', 'unstaged', 'branch']) ??
       DEFAULT_PREFS.defaultScope,
     autoAdvance: bool(v.autoAdvance) ?? DEFAULT_PREFS.autoAdvance,
     reviewOffDisplay:
@@ -179,5 +179,6 @@ export function savePrefs(prefs: Prefs, storage: Storage | null = safeStorage())
 }
 
 export function scopeForPref(kind: Prefs['defaultScope']): DiffScope {
-  return scopeFromQueryFields({ scope: kind });
+  // "All on branch" includes the working tree (docs/STATUS-FLOW.md §2.3).
+  return scopeFromQueryFields(kind === 'branch' ? { scope: kind, working: '1' } : { scope: kind });
 }

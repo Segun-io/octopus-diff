@@ -57,6 +57,9 @@ export function planBulk(input: BulkPlanInput): BulkPlan {
   let count = 0;
   for (const list of byWorktree.values()) count += list.length;
   const base = { scope: scopeField, reviewed, includeDisabled: input.includeDisabled ?? false };
+  // "Review all" in To review (docs/STATUS-FLOW.md §2.3) also moves the bookmark to HEAD. Hidden
+  // files there are reviewed ones only, so the whole worktree is what the user sees: no `paths`.
+  const advance = scope.kind === 'review' && reviewed;
 
   if (input.view === 'inbox' && input.inboxUnfiltered) {
     const ids = groups.map((g) => g.worktree.id);
@@ -65,7 +68,12 @@ export function planBulk(input: BulkPlanInput): BulkPlan {
       count,
       worktrees: byWorktree.size,
       requests: [
-        { ...base, target: { kind: 'all' }, expectedStateHashes: hashesFor(ids, stateHashes) },
+        {
+          ...base,
+          target: { kind: 'all' },
+          expectedStateHashes: hashesFor(ids, stateHashes),
+          ...(advance ? { advanceBookmarks: true } : {}),
+        },
       ],
     };
   }
@@ -74,9 +82,15 @@ export function planBulk(input: BulkPlanInput): BulkPlan {
     requests.push({
       ...base,
       target: { kind: 'worktree', worktreeId },
-      paths: list.map((e) =>
-        e.file.rawPath ? { path: e.file.path, rawPath: e.file.rawPath } : { path: e.file.path },
-      ),
+      ...(advance
+        ? { advanceBookmarks: true }
+        : {
+            paths: list.map((e) =>
+              e.file.rawPath
+                ? { path: e.file.path, rawPath: e.file.rawPath }
+                : { path: e.file.path },
+            ),
+          }),
       expectedStateHashes: hashesFor([worktreeId], stateHashes),
     });
   }
@@ -102,6 +116,7 @@ export function planBulkForTarget(
         scope: scopeField,
         reviewed,
         expectedStateHashes: hashesFor(worktreeIds, stateHashes),
+        ...(scope.kind === 'review' && reviewed ? { advanceBookmarks: true } : {}),
       },
     ],
   };
