@@ -134,7 +134,11 @@ right, the refresh indicator, theme and help. The **file pane header** holds the
 tree-view toggles and **Review N** (`⇧R`; undo restores the bookmark too). The **diff header** holds the file's
 identity and, at the right, unified / split and whitespace, `More context` / `Expand all`, the `⋯` menu and the one
 verb **Reviewed** (`r`). A control sits over what it changes. Folder and project Overviews show repository
-information (local git facts; the project Overview also the forge's facts and open requests).
+information (local git facts; the project Overview also the forge's facts). The project Overview's lists sit behind
+`Worktrees | Branches | Pull requests` tabs with counts, 15 rows a page: worktrees (the default-branch one first),
+local branches no worktree has checked out, and the newest 15 open requests with a link to the rest on the forge
+(`docs/OVERVIEW-LISTS.md`). The worktree with the default branch checked out carries a `default` chip wherever
+worktrees are listed.
 
 Copy (`docs/COPY-TOOLS.md`, web only): a "Copy" group in the worktree menus (sidebar, Overview, Inbox group
 headers: branch name, worktree path, commit id), a file menu on list and tree rows (path, old path, name, absolute

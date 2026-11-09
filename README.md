@@ -183,11 +183,16 @@ Settings → Folders → **Start browsing in** sets where the picker opens (defa
   ![The Request tab: summary, reviewers, description and checks](docs/screenshots/request-dark.png)
 - **Repository information on the Overviews.** A project's Overview shows its remotes, default branch
   (with ahead/behind as of the last fetch), last commit, branch and tag counts, and, from the forge, the
-  description, visibility, open PR and issue counts, default-branch CI and the newest open requests,
-  each linked to its worktree when you have it checked out. A folder's Overview adds the default branch,
-  last commit, forge and open requests per repository without asking any forge.
+  description, visibility, open PR and issue counts and default-branch CI. Below, three tabs with
+  counts, 15 rows a page: **Worktrees** (the one on the default branch first, marked `default`, as in
+  the sidebar), **Branches** (local branches no worktree has checked out, with upstream state, whether
+  they are merged and their open PR) and **Pull requests** (the newest 15, each linked to its worktree
+  when you have it checked out, then a link to the rest on the forge). A folder's Overview adds the
+  default branch, last commit, forge and open requests per repository without asking any forge.
 
-  ![The project Overview with local and forge facts and open pull requests](docs/screenshots/overview-project-dark.png)
+  ![The project Overview with local and forge facts and its worktrees](docs/screenshots/overview-project-dark.png)
+
+  ![The Branches tab: local branches without a worktree](docs/screenshots/overview-branches-dark.png)
 - **Themes.** Octopus Dark, Octopus Light and a high-contrast theme; "System" follows the OS. Themes
   are plain data files, so adding one is a one-file change: see [`docs/design/THEMING.md`](docs/design/THEMING.md).
   The identity and palette are described in [`docs/design/IDENTITY.md`](docs/design/IDENTITY.md).

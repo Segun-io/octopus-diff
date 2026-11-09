@@ -1646,3 +1646,50 @@ The user asked for worktree/branch rows in recency order. This reverses "rows st
      3–10-day stagger from its id, not from the seeded PRNG, so the rest of the dataset is unchanged; a simulated edit
      makes a worktree the newest. Unit tests: git-core `summary.test.ts` (reflog time, newest file, clamp, commit-date
      fallback, unborn, `stateHash` unchanged), web `model.test.ts` (order per project, nulls last, tie-break).
+
+## Project Overview lists and the default-branch marker (lead, 2026-11-09)
+
+Design record: `docs/OVERVIEW-LISTS.md`. Brief from the user: highlight the default branch where worktrees are
+listed; in the project Overview limit worktrees to 15 with pagination, limit open pull requests to 15 (keep the link
+to the forge), list local branches without a worktree, judge whether tabs would be better, and use TanStack Table
+only if it makes the code easier to maintain.
+
+127. **`default` chip.** The worktree that has the project's default branch checked out carries an outlined ink chip
+     (`.od-chip-default`) after its branch name in the sidebar row (inline, no extra line), the context bar and the
+     Overview worktree table. Not a hue (the frame is achromatic) and not an icon (it would need a legend); outlined
+     so it reads as a label, unlike the filled grey fact chips. The Overview's faint `main` word moves to the Source
+     column as `main checkout`, so the default row no longer reads `main main`.
+128. **Tabs on the project Overview.** Facts and figures stay on top; the lists move behind a segmented tab list
+     `Worktrees N | Branches N | Pull requests N` (Merge requests on GitLab; the requests tab only with forge
+     repository data, Branches hidden only when the daemon sends no branch list). Reason: three lists of up to 15
+     rows (two lines each for requests) put the last one three screens down, and they answer separate questions; the
+     counts keep the at-a-glance summary. Worktrees is the default tab; the chosen tab is component state that
+     survives switching projects, and each list's page starts over per project. The folder Overview is unchanged.
+129. **`SegmentedTabs` (`components/Tabs.tsx`) with the WAI-ARIA keyboard model**: one Tab stop (roving
+     `tabIndex`), `←`/`→` select, `Home`/`End`, `aria-controls` → `tabpanel`. The Request view's
+     `Summary | Timeline | Files` switches to it (it had `role="tab"` without the keys; ids and test ids unchanged).
+130. **Pagination, 15 rows (`components/Pager.tsx`).** Client-side `usePage` over the loaded list; `16–30 of 42`
+     with previous / next ghost icons, hidden for one page; the page clamps rather than resets when a live list
+     shrinks. Worktrees list the default-branch worktree first, then recency (#125), so the baseline stays on page 1;
+     the sidebar keeps pure recency. Open requests show the newest 15 with no pager and keep `N more on <host> ↗`
+     (the forge holds the rest; the daemon still asks for 20); none open says so with a link.
+131. **Local branches without a worktree.** `GitRepositoryInfo.branches` (contracts, additive, optional;
+     `GitBranchInfoSchema`, `MAX_LISTED_BRANCHES` = 500, newest commit first, `localBranches` stays the full count).
+     git-core reads it from the `for-each-ref` it already ran (adds `upstream:track,nobracket` and
+     `contents:subject`; git ≥ 2.31 folds a multi-line subject into one line) plus one
+     `for-each-ref --merged=<default oid> refs/heads/`. The web drops branches some worktree has checked out and
+     shows branch (copy on hover), last commit, when it moved, upstream (`origin ↑a ↓b`, `gone`, `local only`) and
+     a state column (`merged`, `default`, the open request on that head branch from the already-loaded forge data).
+     Rows do not navigate (no worktree to open; octopus-diff never creates one). Daemon unchanged: it passes
+     `info` through.
+132. **No TanStack Table.** Four small fixed-column, fixed-order tables; the only shared need is paging, which is a
+     ten-line hook. TanStack Table is headless, so it would keep every cell renderer, wrap them in column
+     definitions and `flexRender`, and add a dependency and a credits entry to replace a `slice`. Revisit when a
+     table needs user sorting, column choice or filtering.
+133. **Mock and tests.** Mock repository info lists branches for every demo project (18 without a worktree on
+     octopus-api so the Branches tab pages; merged, gone and local-only kinds) and octopus-api has 16 more open
+     requests (27 in all, so the cap and `12 more` show). Tests: git-core `repository.test.ts` (subject folding,
+     upstream ahead/gone, merged); web `repository-info.test.tsx` (tabs and arrow keys, default row first with its
+     chip, Branches pages 15 + 3, requests capped at 15 with the forge link, worktree pager on a 20-worktree large
+     dataset), `model.test.ts` (helpers). e2e `14-ui-forge-details` opens the Pull requests tab first. New shot
+     states `project-branches` and `project-requests` in `apps/web/scripts/shots.ts`.
