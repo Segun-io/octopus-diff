@@ -52,6 +52,9 @@ export interface AppModel {
   viewPolicy: EffectiveReviewPolicy | null;
 }
 
+/** The sidebar's fixed status scope (fallback for daemons without `summary.review`). */
+export const SIDEBAR_STATUS_SCOPE: DiffScope = { kind: 'working' };
+
 const AppModelContext = createContext<AppModel | null>(null);
 
 export function useAppModel(): AppModel {
@@ -79,36 +82,29 @@ function useBuildAppModel(): AppModel {
   const projects = useProjectsQuery();
   const scanRoots = useScanRootsQuery();
   const inbox = useInboxQuery(scope);
+  // The sidebar's status never depends on the toolbar scope (docs/STATUS-FLOW.md §1.1): its
+  // fallback source for daemons without `summary.review` is a fixed inbox (uncommitted files).
+  // While the toolbar shows Uncommitted both are the same query.
+  const statusInbox = useInboxQuery(SIDEBAR_STATUS_SCOPE);
   const worktreeId = view.kind === 'worktree' ? view.worktreeId : null;
   const files = useFilesQuery(worktreeId, scope);
 
   const projectList = projects.data?.projects;
   const inboxData = inbox.data;
-  // While the inbox for a new scope loads, the previous scope's data is only a placeholder.
-  const inboxMatchesScope = inboxData !== undefined && !inbox.isPlaceholderData;
+  const statusData = statusInbox.data;
 
   const scanRootList = scanRoots.data?.scanRoots;
   const sidebar = useMemo(
     () =>
       buildSidebar(
         projectList ?? [],
-        inboxMatchesScope ? inboxData?.entries : undefined,
+        statusData?.entries,
         { text: filterText, onlyDirty, onlyUnreviewed },
         scanRootList,
         pinned,
         settle,
       ),
-    [
-      projectList,
-      inboxData,
-      inboxMatchesScope,
-      filterText,
-      onlyDirty,
-      onlyUnreviewed,
-      scanRootList,
-      pinned,
-      settle,
-    ],
+    [projectList, statusData, filterText, onlyDirty, onlyUnreviewed, scanRootList, pinned, settle],
   );
 
   const inboxEntries = useMemo(() => sortInboxEntries(inboxData?.entries ?? []), [inboxData]);

@@ -70,10 +70,10 @@ export const GENERAL_ITEMS: readonly PrefItem[] = [
     label: 'Default scope',
     description: 'The diff scope selected when octopus-diff opens.',
     options: [
-      { value: 'working', label: 'Working tree' },
+      { value: 'working', label: 'Uncommitted' },
+      { value: 'branch', label: 'All on branch' },
       { value: 'staged', label: 'Staged' },
       { value: 'unstaged', label: 'Unstaged' },
-      { value: 'branch', label: 'Branch (vs default)' },
     ],
   },
   {

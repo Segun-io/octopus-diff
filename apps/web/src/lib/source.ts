@@ -38,19 +38,6 @@ export function worktreeSource(path: string): SourceMeta | null {
   return null;
 }
 
-/** A worktree changed in the last `windowMs` (activity pulse). */
-export const ACTIVITY_WINDOW_MS = 10_000;
-
-export function isRecentlyActive(
-  updatedAt: string | undefined,
-  now: number,
-  windowMs = ACTIVITY_WINDOW_MS,
-): boolean {
-  if (!updatedAt) return false;
-  const t = Date.parse(updatedAt);
-  return Number.isFinite(t) && now - t >= 0 && now - t < windowMs;
-}
-
 /** Middle ellipsis: keep the start and the end of a path. */
 export function middleEllipsis(text: string, max: number): string {
   if (text.length <= max || max < 5) return text;

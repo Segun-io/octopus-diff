@@ -14,8 +14,8 @@ import {
   findSuspicious,
   hasSuspicious,
 } from '../../lib/unicode.ts';
-import { CONTEXT_STEP, DEFAULT_CONTEXT } from '../../state/commands.ts';
 import { useCommandsContext } from '../../state/commandsContext.tsx';
+import { CONTEXT_STEP, DEFAULT_CONTEXT } from '../../state/diffContext.ts';
 import { useAppModel } from '../../state/model.tsx';
 import { actions, useUi, useUiStore } from '../../state/ui.tsx';
 import { useTheme } from '../../theme/useTheme.ts';

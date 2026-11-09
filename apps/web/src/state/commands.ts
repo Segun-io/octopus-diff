@@ -8,6 +8,7 @@ import { fileRefKey, toFileRef } from '../lib/fileRef.ts';
 import { type NavEntry, nextUnreviewed, stepFile, stepWorktree } from '../lib/model.ts';
 import type { SettingsSectionId } from '../settings/registry.ts';
 import { type BulkActions, hasUndoableToast, useBulkActions } from './bulk.ts';
+import { CONTEXT_STEP, DEFAULT_CONTEXT } from './diffContext.ts';
 import type { AppModel } from './model.tsx';
 import { actions, useUiStore } from './ui.tsx';
 
@@ -49,8 +50,7 @@ export function diffScroller(): HTMLElement | null {
   return document.querySelector<HTMLElement>('[data-diff-scroller]');
 }
 
-export const CONTEXT_STEP = 20;
-export const DEFAULT_CONTEXT = 3;
+export { CONTEXT_STEP, DEFAULT_CONTEXT } from './diffContext.ts';
 
 /** Imperative UI commands shared by the keyboard handler and buttons. Stable identity. */
 export function useCommands(model: AppModel, resolvedTheme: 'light' | 'dark'): Commands {

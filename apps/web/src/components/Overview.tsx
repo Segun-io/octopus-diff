@@ -125,10 +125,10 @@ function PolicyControl({ target, label }: { target: ReviewPolicyTarget | null; l
 }
 
 function BulkButtons({
-  onVerified,
+  onReviewed,
   onUnreviewed,
 }: {
-  onVerified: () => void;
+  onReviewed: () => void;
   onUnreviewed: () => void;
 }) {
   const support = useSettingsSupport();
@@ -137,13 +137,13 @@ function BulkButtons({
     <div className="flex items-center gap-2">
       <button
         type="button"
-        onClick={onVerified}
+        onClick={onReviewed}
         className="od-btn hover:border-add hover:bg-add-soft"
       >
-        Mark all as verified
+        Mark all reviewed
       </button>
       <button type="button" onClick={onUnreviewed} className="od-btn">
-        Mark all as unreviewed
+        Mark all unreviewed
       </button>
     </div>
   );
@@ -349,7 +349,7 @@ function FolderOverview({ node }: { node: FolderNode }) {
         </div>
         <div className="flex flex-col items-end gap-2">
           <BulkButtons
-            onVerified={() => commands.markAllFor(target, true, ids)}
+            onReviewed={() => commands.markAllFor(target, true, ids)}
             onUnreviewed={() => commands.markAllFor(target, false, ids)}
           />
           <div className="flex items-center gap-2">
@@ -459,7 +459,7 @@ function ProjectOverview({ group }: { group: ProjectGroup }) {
         </div>
         <div className="flex flex-col items-end gap-2">
           <BulkButtons
-            onVerified={() =>
+            onReviewed={() =>
               commands.markAllFor({ kind: 'project', projectId: project.id }, true, ids)
             }
             onUnreviewed={() =>

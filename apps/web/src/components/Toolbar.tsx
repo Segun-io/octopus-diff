@@ -4,12 +4,13 @@ import {
   type ScopeKind,
   scopeKey,
   TEST_IDS,
+  type WorktreeSummary,
 } from '@octopus-diff/contracts';
 import { useIsFetching, useQueryClient } from '@tanstack/react-query';
 import { useEffect } from 'react';
 import { useForgeIndex } from '../api/forges.ts';
 import { useResolvedTheme } from '../api/hooks.ts';
-import { queryKeys, useApi, useCommitsQuery } from '../api/queries.ts';
+import { queryKeys, useApi, useCommitsQuery, useFilesQuery } from '../api/queries.ts';
 import { useScanRootsQuery, useSettingsSupport } from '../api/settings.ts';
 import { LOOK_TONE, lookOf } from '../lib/forge.ts';
 import { useCommandsContext } from '../state/commandsContext.tsx';
@@ -20,13 +21,34 @@ import { MoonIcon, SunIcon, ToggleButton } from './bits.tsx';
 import { ChangeRequestBadge, ChangeRequestGlyph } from './ChangeRequest.tsx';
 import { ReviewPolicyChip } from './ReviewPolicyChip.tsx';
 
+/**
+ * The scope select is a filter over what the diff pane shows, with live counts; it never moves a
+ * sidebar row (docs/STATUS-FLOW.md §2.3). Order: the main views first, the index views after.
+ */
 const SCOPE_LABELS: Record<ScopeKind, string> = {
-  working: 'Working tree',
+  branch: 'All on branch',
+  working: 'Uncommitted',
   staged: 'Staged',
   unstaged: 'Unstaged',
-  branch: 'Branch (vs default)',
   commit: 'Commit…',
 };
+
+/** Files per scope for the open worktree: from its summary, else from a loaded file list. */
+function scopeCounts(
+  summary: WorktreeSummary | null | undefined,
+  branchFiles: number | undefined,
+): Partial<Record<ScopeKind, number>> {
+  if (!summary) return {};
+  const c = summary.counts;
+  return {
+    working: summary.changedFiles,
+    staged: c.staged + c.conflicted,
+    unstaged: c.unstaged + c.untracked + c.conflicted,
+    ...(branchFiles !== undefined ? { branch: branchFiles } : {}),
+  };
+}
+
+const BRANCH_SCOPE: DiffScope = { kind: 'branch' };
 
 export function Toolbar() {
   const store = useUiStore();
@@ -50,6 +72,10 @@ export function Toolbar() {
   const folderPath = row?.project.scanRootId
     ? scanRoots.data?.scanRoots.find((r) => r.id === row.project.scanRootId)?.path
     : undefined;
+
+  // "All on branch" has no count in the summary: list it for the open worktree only.
+  const branchFiles = useFilesQuery(worktreeId, BRANCH_SCOPE);
+  const counts = scopeCounts(row?.summary, branchFiles.data?.files.length);
 
   const forgeEntry = useForgeIndex().get(worktreeId ?? '');
   const request = forgeEntry?.worktree.changeRequest ?? null;
@@ -147,7 +173,7 @@ export function Toolbar() {
       {!onRequest && (
         <>
           <label className="flex items-center gap-1 text-xs text-muted">
-            <span>Scope</span>
+            <span>Show</span>
             <select
               data-testid={TEST_IDS.scopeSelect}
               data-scope={scopeKey(scope)}
@@ -162,6 +188,7 @@ export function Toolbar() {
                   disabled={kind === 'commit' && (worktreeId === null || !commitList?.length)}
                 >
                   {SCOPE_LABELS[kind]}
+                  {worktreeId !== null && counts[kind] !== undefined ? ` (${counts[kind]})` : ''}
                   {kind === 'commit' && worktreeId === null ? ' (select a worktree)' : ''}
                 </option>
               ))}

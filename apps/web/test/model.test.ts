@@ -6,9 +6,13 @@ import {
   type FileGroup,
   flattenGroups,
   nextUnreviewed,
+  placeOf,
   repairSelection,
+  rowState,
+  settledWord,
   sortFiles,
   sortInboxEntries,
+  stageOf,
   stepFile,
   stepWorktree,
   visibleIf,
@@ -87,6 +91,86 @@ describe('sidebar model', () => {
       onlyUnreviewed: true,
     });
     expect(unreviewed.order).toHaveLength(inbox.entries.length - 1);
+  });
+});
+
+describe('stages (docs/STATUS-FLOW.md §2.2)', () => {
+  const { projects } = demo();
+  const all = projects.flatMap((p) => p.worktrees);
+  const base = all.find((w) => w.summary && !w.worktree.missing && !w.summary.inProgress);
+  if (!base?.summary) throw new Error('fixture');
+  const summary = { ...base.summary, counts: { ...base.summary.counts, conflicted: 0 } };
+  const worktree = base.worktree;
+  const on = { enabled: true };
+
+  it('derives each stage', () => {
+    expect(
+      stageOf({ summary: { ...summary, inProgress: 'rebase' }, worktree, unreviewed: 3 }),
+    ).toBe('blocked');
+    expect(
+      stageOf({
+        summary: { ...summary, counts: { ...summary.counts, conflicted: 1 } },
+        worktree,
+        unreviewed: 0,
+        review: { enabled: false },
+      }),
+    ).toBe('blocked');
+    expect(stageOf({ summary, worktree, unreviewed: 2, review: on })).toBe('review');
+    expect(stageOf({ summary, worktree, unreviewed: 0, newCommits: 2, review: on })).toBe('review');
+    expect(stageOf({ summary, worktree, unreviewed: 0, newCommits: 0, review: on })).toBe(
+      'reviewed',
+    );
+    expect(stageOf({ summary, worktree, unreviewed: 4, review: { enabled: false } })).toBe('off');
+    expect(stageOf({ summary: null, worktree, unreviewed: 0 })).toBe('off');
+    expect(stageOf({ summary, worktree: { ...worktree, missing: true }, unreviewed: 1 })).toBe(
+      'off',
+    );
+  });
+
+  it('places stages: blocked and To review under the project, the rest in the shelf', () => {
+    expect(placeOf('blocked')).toBe('blocked');
+    expect(placeOf('review')).toBe('attention');
+    expect(placeOf('inPR')).toBe('active');
+    for (const stage of ['reviewed', 'merged', 'closed', 'off'] as const) {
+      expect(placeOf(stage)).toBe('settled');
+    }
+  });
+
+  it('"Hide until it changes" holds only for the same state hash; blocked is never hidden', () => {
+    const hide = {
+      worktreeId: worktree.id,
+      state: 'settled' as const,
+      stateHash: summary.stateHash,
+    };
+    expect(rowState({ summary, worktree, unreviewed: 2 }, hide)).toEqual({
+      state: 'settled',
+      settledBy: 'user',
+    });
+    const changed = { ...summary, stateHash: 'other' };
+    expect(rowState({ summary: changed, worktree, unreviewed: 2 }, hide).state).toBe('attention');
+    const blocked = { ...summary, inProgress: 'merge' as const };
+    expect(
+      rowState({ summary: blocked, worktree, unreviewed: 2 }, { ...hide, stateHash: 'x' }).state,
+    ).toBe('blocked');
+  });
+
+  it('says "reviewed", never "verified"', () => {
+    const review = { enabled: true, source: 'default' as const };
+    const dirty = { ...summary, changedFiles: 2 };
+    expect(settledWord({ summary: dirty, worktree, error: null, review })).toBe('reviewed');
+    expect(
+      settledWord({ summary: { ...summary, changedFiles: 0 }, worktree, error: null, review }),
+    ).toBe('clean');
+  });
+
+  it('the sidebar takes no scope: the same inputs give the same rows', () => {
+    const { projects: list, inbox } = demo();
+    const filters = { text: '', onlyDirty: false, onlyUnreviewed: false };
+    const a = buildSidebar(list, inbox.entries, filters);
+    const b = buildSidebar(list, inbox.entries, filters);
+    expect([...a.byId.values()].map((r) => [r.worktree.id, r.state, r.stage])).toEqual(
+      [...b.byId.values()].map((r) => [r.worktree.id, r.state, r.stage]),
+    );
   });
 });
 

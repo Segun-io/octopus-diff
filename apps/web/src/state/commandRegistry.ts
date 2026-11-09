@@ -3,7 +3,8 @@
  * Settings → Keyboard and the command palette. Keys are display strings; the actual key
  * matching lives in `useKeyboardShortcuts` (chords and modifier handling need code).
  */
-import { CONTEXT_STEP, type Commands } from './commands.ts';
+import type { Commands } from './commands.ts';
+import { CONTEXT_STEP } from './diffContext.ts';
 
 export type CommandGroup = 'navigate' | 'review' | 'view' | 'diff' | 'app';
 
@@ -96,14 +97,14 @@ export const COMMANDS: readonly CommandDef[] = [
   },
   {
     id: 'markAllVerified',
-    label: 'Mark all as verified',
+    label: 'Review all (mark everything shown reviewed)',
     group: 'review',
     keys: ['⇧ R'],
     run: (c) => c.markAll(true),
   },
   {
     id: 'markAllUnreviewed',
-    label: 'Mark all as unreviewed',
+    label: 'Mark all unreviewed',
     group: 'review',
     keys: [],
     run: (c) => c.markAll(false),

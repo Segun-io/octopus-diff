@@ -23,24 +23,24 @@ import {
   type WorktreeRow,
   worktreeLabel,
 } from '../lib/model.ts';
-import { isRecentlyActive, worktreeSource } from '../lib/source.ts';
+import { worktreeSource } from '../lib/source.ts';
 import { useCommandsContext } from '../state/commandsContext.tsx';
 import { useAppModel } from '../state/model.tsx';
 import { actions, useUi, useUiStore, type View } from '../state/ui.tsx';
-import { CheckIcon, ToggleButton } from './bits.tsx';
+import { ToggleButton } from './bits.tsx';
 import { ChangeRequestChip, ChangeRequestHoverBlock } from './ChangeRequest.tsx';
 import { ContextMenu, type MenuItem, useContextMenu } from './ContextMenu.tsx';
 import { useFolderStart } from './FolderBrowser.tsx';
 import { Wordmark } from './Mark.tsx';
 
 /**
- * The sidebar (DECISIONS "UX round 4", after T3 Code's folders sidebar): the Inbox; **Pinned**
- * worktrees; then every folder (scan root) with its projects, and under each project the
- * worktrees that are still open: blocked, with unreviewed files, or un-settled by hand. Settled
- * worktrees (clean, all verified, review off, missing, failed, or settled by hand) leave their
- * project for the **Settled** shelf at the bottom, closed by default: density is earned by
- * settling. Marking files verified settles; a new patch un-settles; the check on a row settles
- * by hand until the worktree changes again. Rows never reorder on activity.
+ * The sidebar (DECISIONS "UX round 4", status flow v2 in docs/STATUS-FLOW.md): the Inbox;
+ * **Pinned** worktrees; then every folder (scan root) with its projects, and under each project
+ * the worktrees with something to do: blocked, To review (new commits or unreviewed files), in a
+ * PR, or brought back by hand. The rest (reviewed, merged/closed, review off, missing, failed, or
+ * hidden until they change) sit in the shelf at the bottom, closed by default. Status comes from
+ * a fixed source, never from the toolbar scope, so switching the scope never moves a row. A
+ * commit moves work into the bookmark range; it never settles it. Rows never reorder on activity.
  */
 
 function attr(value: number | null | undefined): string {
@@ -49,17 +49,6 @@ function attr(value: number | null | undefined): string {
 
 function plural(n: number, one: string, many = `${one}s`): string {
   return `${n} ${n === 1 ? one : many}`;
-}
-
-/** Re-renders every 2 s so the activity pulse can expire (only while something is recent). */
-function useClock(active: boolean): number {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    if (!active) return;
-    const timer = setInterval(() => setNow(Date.now()), 2000);
-    return () => clearInterval(timer);
-  }, [active]);
-  return active ? now : Date.now();
 }
 
 type MenuTarget =
@@ -76,14 +65,13 @@ interface RowProps {
   row: WorktreeRow;
   variant: RowVariant;
   selected: boolean;
-  now: number;
   onSelect: (id: string) => void;
   onMenu: (event: RowEvent, row: WorktreeRow) => void;
   onSettle: (row: WorktreeRow) => void;
 }
 
 /** The data attributes the e2e suite reads (TEST_IDS.worktreeItem); the same in every variant. */
-function rowAttributes(row: WorktreeRow, selected: boolean, active: boolean) {
+function rowAttributes(row: WorktreeRow, selected: boolean) {
   const { worktree, summary } = row;
   const counts = summary?.counts;
   const source = worktree.isMain ? null : worktreeSource(worktree.path);
@@ -103,8 +91,10 @@ function rowAttributes(row: WorktreeRow, selected: boolean, active: boolean) {
     'data-deletions': attr(summary?.deletions ?? 0),
     'data-main': String(worktree.isMain),
     'data-source': source?.id ?? '',
-    'data-active': String(active),
     'data-state': row.state,
+    'data-stage': row.stage,
+    'data-unreviewed': String(row.unreviewed),
+    'data-commits': String(row.newCommits),
     'data-pinned': String(row.pinned),
     'aria-current': selected ? ('true' as const) : undefined,
   };
@@ -153,9 +143,9 @@ function ReviewOffBadge({ row }: { row: WorktreeRow }) {
 }
 
 /**
- * The status slot at the top right of a card: the unreviewed pill (the one filled shape), `N
- * conflicts` for blocked work, or one word for a settled or un-settled row. Hover swaps it for
- * the actions, as T3 Code swaps the time for "Settle".
+ * The status slot at the top right of a card: `N commits ·` and the unreviewed-files pill (the one
+ * filled shape) for To review, `N conflicts` for blocked work, or one word for a quiet row. Hover
+ * swaps it for the actions, as T3 Code swaps the time for "Settle".
  */
 function RowStatus({ row }: { row: WorktreeRow }) {
   const counts = row.summary?.counts;
@@ -166,6 +156,12 @@ function RowStatus({ row }: { row: WorktreeRow }) {
       {!row.review.enabled && <ReviewOffBadge row={row} />}
       {counts && counts.conflicted > 0 && (
         <span className="text-danger">{plural(counts.conflicted, 'conflict')}</span>
+      )}
+      {row.stage === 'review' && row.newCommits > 0 && (
+        <span className="text-muted" title="Commits after the review bookmark">
+          {plural(row.newCommits, 'commit')}
+          {row.unreviewed > 0 ? ' ·' : ''}
+        </span>
       )}
       {row.unreviewed > 0 && (
         <span className="od-pill" title={`${row.unreviewed} unreviewed`}>
@@ -281,7 +277,7 @@ function RowHoverCard({ row, at }: { row: WorktreeRow; at: { x: number; y: numbe
           {row.state === 'blocked'
             ? 'blocked'
             : row.state === 'attention'
-              ? `${row.unreviewed} unreviewed`
+              ? toReviewText(row)
               : word}
         </span>
       </div>
@@ -318,10 +314,7 @@ function RowHoverCard({ row, at }: { row: WorktreeRow; at: { x: number; y: numbe
           )}
         {line('Review', review.enabled ? 'on' : `off (from ${review.source})`)}
         {row.settledBy === 'user' &&
-          line(
-            'Settled',
-            row.state === 'settled' ? 'by hand, until it changes' : 'un-settled by hand',
-          )}
+          line('Hidden', row.state === 'settled' ? 'until it changes' : 'no, shown by hand')}
         {error && line('Error', <span className="text-danger">{error.message}</span>)}
       </dl>
       <ChangeRequestHoverBlock worktreeId={worktree.id} />
@@ -329,35 +322,47 @@ function RowHoverCard({ row, at }: { row: WorktreeRow; at: { x: number; y: numbe
   );
 }
 
-// Room at the left for the activity pulse (14 px before the branch) in every variant.
+// Rows under a project line up with the project's name; rows outside a project need no indent.
 const ROW_INDENT: Record<RowVariant, string> = {
-  pinned: 'pl-6',
+  pinned: 'pl-2',
   folder: 'pl-9',
-  settled: 'pl-6',
+  settled: 'pl-2',
 };
+
+/** `2 commits · 3 files` (the To review text of the hover card). */
+function toReviewText(row: WorktreeRow): string {
+  const parts: string[] = [];
+  if (row.newCommits > 0) parts.push(plural(row.newCommits, 'commit'));
+  if (row.unreviewed > 0) parts.push(plural(row.unreviewed, 'file'));
+  return parts.length > 0 ? `to review: ${parts.join(' · ')}` : 'to review';
+}
+
+/** The label of the hover action and of its menu item. */
+function hideLabel(row: WorktreeRow): string {
+  if (row.state !== 'settled') return 'Hide until it changes';
+  return row.settledBy === 'user' ? 'Show again' : 'Keep under its project';
+}
 
 /**
  * One worktree as a card (T3 Code's row anatomy). Under a project: the branch with the status
  * slot, then the meta line. Pinned and settled rows sit outside their project, so they start
  * with a project line (repo glyph and name). Hover or focus swaps the status slot for the
- * settle action and, after a moment, shows the hover card. Right-click (or the keyboard's menu
+ * hide / show action and, after a moment, shows the hover card. Right-click (or the keyboard's menu
  * key) opens the actions, as on folder and project headers; there is no `⋯`.
  */
 const WorktreeItem = memo(function WorktreeItem({
   row,
   variant,
   selected,
-  now,
   onSelect,
   onMenu,
   onSettle,
 }: RowProps) {
   const { worktree, summary } = row;
-  const active = isRecentlyActive(summary?.updatedAt, now);
   const settled = row.state === 'settled';
   const blocked = row.state === 'blocked';
   const canSettle = summary !== null && !blocked;
-  const settleLabel = settled ? 'Un-settle worktree' : 'Settle worktree';
+  const settleLabel = hideLabel(row);
   const inFolder = variant === 'folder';
   const hover = useHoverCard();
   return (
@@ -370,7 +375,7 @@ const WorktreeItem = memo(function WorktreeItem({
     >
       <button
         type="button"
-        {...rowAttributes(row, selected, active)}
+        {...rowAttributes(row, selected)}
         onClick={() => onSelect(worktree.id)}
         onContextMenu={(e) => onMenu(e, row)}
         className={`flex w-full flex-col gap-0.5 rounded-md py-1.5 pr-2 text-left ${
@@ -387,7 +392,6 @@ const WorktreeItem = memo(function WorktreeItem({
           </span>
         )}
         <span className="relative flex w-full items-center gap-1.5">
-          {active && <span className="od-pulse" aria-hidden="true" />}
           <span
             className={`min-w-0 truncate ${inFolder ? 'font-medium' : ''} ${
               worktree.branch ? '' : 'italic'
@@ -407,8 +411,8 @@ const WorktreeItem = memo(function WorktreeItem({
             onClick={() => onSettle(row)}
             className="flex h-5 items-center gap-1 rounded-sm px-1 text-[11px] text-muted hover:bg-raised hover:text-fg"
           >
-            {settled ? <UndoIcon /> : <CheckIcon />}
-            {settled ? 'Un-settle' : 'Settle'}
+            {settled ? <UndoIcon /> : <HideIcon />}
+            {settled ? 'Show' : 'Hide'}
           </button>
         )}
       </span>
@@ -533,10 +537,6 @@ export function Sidebar() {
   const inboxCount = model.inboxEntries.length;
   const onSelect = (id: string) => actions.setView(store, { kind: 'worktree', worktreeId: id });
   const totalWorktrees = model.sidebar.byId.size;
-  const anyRecent = [...model.sidebar.byId.values()].some((r) =>
-    isRecentlyActive(r.summary?.updatedAt, Date.now()),
-  );
-  const now = useClock(anyRecent);
   const filtering = filterText.trim() !== '' || onlyDirty || onlyUnreviewed;
   // Filters open everything: a hit must never hide behind a closed folder or shelf.
   const isCollapsed = (id: string) => !filtering && collapsed.includes(id);
@@ -546,7 +546,7 @@ export function Sidebar() {
   );
   const { sidebar } = model;
 
-  // A manual settle holds only while the worktree's state hash is the one it was made on.
+  // "Hide until it changes" holds only while the worktree's state hash is the one it was made on.
   useEffect(() => {
     actions.pruneSettle(store, (o) => {
       const row = sidebar.byId.get(o.worktreeId);
@@ -588,13 +588,13 @@ export function Sidebar() {
       ? []
       : [
           {
-            id: 'mark-verified',
-            label: 'Mark all as verified',
+            id: 'mark-reviewed',
+            label: 'Mark all reviewed',
             onSelect: () => commands.markAllFor(target, true, ids),
           },
           {
             id: 'mark-unreviewed',
-            label: 'Mark all as unreviewed',
+            label: 'Mark all unreviewed',
             onSelect: () => commands.markAllFor(target, false, ids),
           },
         ];
@@ -651,12 +651,11 @@ export function Sidebar() {
         const { row } = t;
         const id = row.worktree.id;
         const branch = row.worktree.branch;
-        const settled = row.state === 'settled';
         return [
           goto({ kind: 'worktree', worktreeId: id }, 'Open changes'),
           {
             id: 'settle',
-            label: settled ? 'Un-settle' : row.state === 'blocked' ? 'Settle (blocked)' : 'Settle',
+            label: row.state === 'blocked' ? 'Hide (blocked)' : hideLabel(row),
             disabled: row.summary === null || row.state === 'blocked',
             onSelect: () => onSettle(row),
           },
@@ -681,7 +680,6 @@ export function Sidebar() {
   const rowProps = (row: WorktreeRow, variant: RowVariant) => ({
     row,
     variant,
-    now,
     selected: selectedWorktree === row.worktree.id,
     onSelect,
     onMenu: (e: RowEvent, r: WorktreeRow) => menu.open(e, { kind: 'worktree', row: r }),
@@ -773,7 +771,7 @@ export function Sidebar() {
             variant="chip"
             pressed={onlyUnreviewed}
             onClick={() => store.setState({ onlyUnreviewed: !onlyUnreviewed })}
-            title="Only worktrees with unreviewed files in the current scope"
+            title="Only worktrees with something to review"
             testId={TEST_IDS.onlyUnreviewedToggle}
           >
             Only unreviewed
@@ -975,7 +973,7 @@ function ProjectFolder({
           ) : active.length === 0 ? (
             <span
               className="ml-auto shrink-0 text-[11px] text-faint"
-              title={`${plural(settledCount, 'worktree')}, all settled`}
+              title={`${plural(settledCount, 'worktree')}, nothing to do (in the shelf below)`}
             >
               settled
             </span>
@@ -1038,6 +1036,23 @@ function RepoIcon() {
         strokeWidth="1.2"
         strokeLinecap="round"
       />
+    </svg>
+  );
+}
+
+/** An eye with a stroke: hide until it changes. */
+function HideIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+      <path
+        d="M1.5 8s2.4-4.5 6.5-4.5S14.5 8 14.5 8s-2.4 4.5-6.5 4.5S1.5 8 1.5 8zM2.5 13.5l11-11"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <circle cx="8" cy="8" r="2" fill="none" stroke="currentColor" strokeWidth="1.3" />
     </svg>
   );
 }

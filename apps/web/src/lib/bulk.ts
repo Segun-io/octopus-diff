@@ -1,5 +1,5 @@
 /**
- * Plans "Mark all as verified" (COORDINATION §3.1.5): which requests to send so the result
+ * Plans "Review all" (COORDINATION §3.1.5): which requests to send so the result
  * matches what the user is looking at, including the sidebar filters and "show reviewed".
  * Pure, so it is unit-tested; `state/bulk.ts` executes the plan.
  */

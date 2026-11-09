@@ -312,35 +312,12 @@ kbd {
   }
 }
 
-/* Activity pulse: a worktree changed in the last ~10 s. The one dot in the frame, a live state. */
-.od-pulse {
-  position: absolute;
-  left: -14px;
-  top: 50%;
-  width: 6px;
-  height: 6px;
-  transform: translateY(-50%);
-  border-radius: 50%;
-  background: var(--od-accent);
-}
-.od-pulse::after {
-  content: "";
-  position: absolute;
-  inset: -3px;
-  border-radius: 50%;
-  border: 1.5px solid var(--od-accent);
-  opacity: 0;
-}
-
 @media (prefers-reduced-motion: no-preference) {
   .od-fade-in {
     animation: od-fade-in var(--od-motion) var(--od-ease);
   }
   .od-slide-up {
     animation: od-slide-up var(--od-motion) var(--od-ease);
-  }
-  .od-pulse::after {
-    animation: od-pulse 1.6s ease-out infinite;
   }
   .od-settle {
     animation: od-settle 600ms var(--od-ease);
@@ -379,17 +356,6 @@ kbd {
   to {
     opacity: 1;
     transform: none;
-  }
-}
-
-@keyframes od-pulse {
-  0% {
-    opacity: 0.9;
-    transform: scale(0.6);
-  }
-  100% {
-    opacity: 0;
-    transform: scale(1.8);
   }
 }
 
