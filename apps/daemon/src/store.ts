@@ -83,6 +83,12 @@ export interface ReviewMark {
   lastSeenAt: string;
 }
 
+/** A commit (or a `<from>..<to>` range) recorded as reviewed. */
+export interface ReviewedCommit {
+  sha: string;
+  patchId: string | null;
+}
+
 /** In-memory lookup key for a review mark (path kind, path, patch hash). */
 export function reviewLookupKey(raw: boolean, pathOrRaw: string, patchHash: string): string {
   return `${raw ? 'r' : 'p'}:${pathOrRaw}\u0000${patchHash}`;
@@ -130,6 +136,27 @@ const MIGRATIONS: readonly string[] = [
   `,
   // v2: app settings + review-policy overrides (UX round 1), see settings-store.ts
   SETTINGS_MIGRATION_V2,
+  // v3: status flow v2 (docs/STATUS-FLOW.md): "reviewed up to" bookmarks per (project, branch)
+  // (`key` = `branch:<name>`, or `worktree:<id>` when detached), and the commits the user
+  // reviewed (by id and `git patch-id --stable`; `<from>..<to>` rows hold a whole reviewed
+  // range's patch-id, so a squash merge of it is recognised).
+  `
+  CREATE TABLE bookmarks (
+    project_id TEXT NOT NULL,
+    key TEXT NOT NULL,
+    sha TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (project_id, key)
+  );
+  CREATE TABLE reviewed_commits (
+    project_id TEXT NOT NULL,
+    sha TEXT NOT NULL,
+    patch_id TEXT,
+    reviewed_at TEXT NOT NULL,
+    PRIMARY KEY (project_id, sha)
+  );
+  CREATE INDEX reviewed_commits_patch ON reviewed_commits (project_id, patch_id);
+  `,
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS.length;
@@ -323,6 +350,8 @@ export class Store {
     this.transaction(() => {
       this.#stmt('DELETE FROM projects WHERE id = ?').run(id);
       this.#stmt('DELETE FROM reviewed WHERE project_id = ?').run(id);
+      this.#stmt('DELETE FROM bookmarks WHERE project_id = ?').run(id);
+      this.#stmt('DELETE FROM reviewed_commits WHERE project_id = ?').run(id);
     });
   }
 
@@ -421,6 +450,53 @@ export class Store {
     });
   }
 
+  // --- bookmarks and reviewed commits (status flow v2) -------------------------------------------
+
+  getBookmark(projectId: string, key: string): string | null {
+    const row = this.#stmt('SELECT sha FROM bookmarks WHERE project_id = ? AND key = ?').get(
+      projectId,
+      key,
+    ) as Row | undefined;
+    return row ? str(row.sha) : null;
+  }
+
+  /** Sets (or with `sha === null` removes) a bookmark. */
+  setBookmark(projectId: string, key: string, sha: string | null, at: string): void {
+    if (sha === null) {
+      this.#stmt('DELETE FROM bookmarks WHERE project_id = ? AND key = ?').run(projectId, key);
+      return;
+    }
+    this.#stmt(
+      `INSERT INTO bookmarks (project_id, key, sha, updated_at) VALUES (?, ?, ?, ?)
+       ON CONFLICT (project_id, key) DO UPDATE SET sha = excluded.sha, updated_at = excluded.updated_at`,
+    ).run(projectId, key, sha, at);
+  }
+
+  listReviewedCommits(projectId: string): ReviewedCommit[] {
+    return (
+      this.#stmt('SELECT sha, patch_id FROM reviewed_commits WHERE project_id = ?').all(
+        projectId,
+      ) as Row[]
+    ).map((r) => ({ sha: str(r.sha), patchId: strOrNull(r.patch_id) }));
+  }
+
+  /** Records commits as reviewed; returns the ones that were new (for undo). */
+  addReviewedCommits(projectId: string, commits: readonly ReviewedCommit[], at: string): string[] {
+    const stmt = this.#stmt(
+      'INSERT OR IGNORE INTO reviewed_commits (project_id, sha, patch_id, reviewed_at) VALUES (?, ?, ?, ?)',
+    );
+    const added: string[] = [];
+    for (const c of commits) {
+      if (stmt.run(projectId, c.sha, c.patchId, at).changes > 0) added.push(c.sha);
+    }
+    return added;
+  }
+
+  removeReviewedCommits(projectId: string, shas: readonly string[]): void {
+    const stmt = this.#stmt('DELETE FROM reviewed_commits WHERE project_id = ? AND sha = ?');
+    for (const sha of shas) stmt.run(projectId, sha);
+  }
+
   countReviewMarks(): number {
     const row = this.#stmt('SELECT COUNT(*) AS n FROM reviewed').get() as Row | undefined;
     return Number(row?.n ?? 0);
@@ -440,6 +516,10 @@ export class Store {
       ).changes;
       this.#stmt(
         'DELETE FROM scan_exclusions WHERE scan_root_id NOT IN (SELECT id FROM scan_roots)',
+      ).run();
+      this.#stmt('DELETE FROM bookmarks WHERE project_id NOT IN (SELECT id FROM projects)').run();
+      this.#stmt(
+        'DELETE FROM reviewed_commits WHERE project_id NOT IN (SELECT id FROM projects)',
       ).run();
       return { orphaned: Number(orphaned), stale: Number(stale) };
     });

@@ -3,6 +3,8 @@ import type {
   BulkReviewResponse,
   GitChangedFile,
   Logger,
+  SetBookmarkRequest,
+  SetBookmarkResponse,
   SetReviewPolicyRequest,
   SettingsResponse,
   UndoReviewRequest,
@@ -16,6 +18,7 @@ import {
   type ReviewSource,
   UndoStore,
 } from './bulk-review.js';
+import type { BookmarkMove } from './core.js';
 import { ApiError, isShutdownError, notFound } from './errors.js';
 import type { EventHub } from './events.js';
 import { policyInputFor, validateReviewPolicyTarget } from './review-policy.js';
@@ -82,6 +85,12 @@ export class ReviewControls {
   /** `POST /api/review/bulk`. */
   async bulk(request: BulkReviewRequestParsed): Promise<BulkReviewResponse> {
     const { target, scope, reviewed, paths, expectedStateHashes, includeDisabled } = request;
+    const advance =
+      request.advanceBookmarks === true &&
+      scope.kind === 'review' &&
+      reviewed &&
+      paths === undefined &&
+      this.#source.moveBookmark !== undefined;
     if (paths !== undefined && target.kind !== 'worktree') {
       throw new ApiError('bad_request', 'paths is only valid with a worktree target');
     }
@@ -96,7 +105,8 @@ export class ReviewControls {
         stale.push(wt.worktreeId);
         continue;
       }
-      // Clean worktrees have nothing to mark and are not worth reporting as skipped.
+      // Clean worktrees have nothing to mark and are not worth reporting as skipped (the review
+      // scope may hold commits even when the worktree is clean).
       if (!mayHaveFiles(wt.summary, scope)) continue;
       if (!includeDisabled) {
         const policy = this.#settings.resolve(
@@ -134,6 +144,8 @@ export class ReviewControls {
 
     // Marks are per project: identical patches in two worktrees of one project count once.
     const wanted = new Map<string, Map<string, MarkChange>>();
+    /** Worktrees whose bookmark moves to the HEAD of the state that was marked. */
+    const advanceTo: Array<{ worktreeId: string; head: string }> = [];
     let worktrees = 0;
     for (const item of fetched) {
       if (!item) continue;
@@ -146,6 +158,8 @@ export class ReviewControls {
         continue;
       }
       const files = paths === undefined ? item.files : filterByPaths(item.files, paths);
+      const head = item.wt.summary?.headSha ?? null;
+      if (advance && head !== null) advanceTo.push({ worktreeId: item.wt.worktreeId, head });
       if (files.length === 0) continue;
       worktrees++;
       let perProject = wanted.get(item.wt.projectId);
@@ -185,9 +199,29 @@ export class ReviewControls {
       });
     }
     const projectIds = [...new Set(changes.map((c) => c.projectId))];
+    if (projectIds.length > 0) this.#source.reviewChanged?.(projectIds);
+    const bookmarks: BookmarkMove[] = [];
+    for (const { worktreeId, head } of advanceTo) {
+      try {
+        const move = await this.#source.moveBookmark?.(worktreeId, head);
+        if (move && move.previous !== move.bookmark) bookmarks.push(move);
+      } catch (error) {
+        if (!isShutdownError(error)) {
+          this.#log.debug('bulk review: bookmark not moved', { worktreeId, error });
+        }
+      }
+    }
     let undoToken: string | null = null;
+    if (changes.length > 0 || bookmarks.length > 0) {
+      undoToken = this.undo.put({
+        at,
+        scopeKind: scope.kind,
+        reviewed,
+        changes,
+        ...(bookmarks.length > 0 ? { bookmarks } : {}),
+      });
+    }
     if (changes.length > 0) {
-      undoToken = this.undo.put({ at, scopeKind: scope.kind, reviewed, changes });
       this.#hub.emit({ type: 'review.bulk', projectIds, reviewed, changed: changes.length });
     }
     this.#log.info('bulk review', {
@@ -208,6 +242,35 @@ export class ReviewControls {
       worktrees,
       skippedDisabled,
       stale,
+      undoToken,
+      ...(advance ? { bookmarks: bookmarks.length } : {}),
+    };
+  }
+
+  /** `PUT /api/review/bookmark`: moves one bookmark; the undo token restores it. */
+  async setBookmark(request: SetBookmarkRequest): Promise<SetBookmarkResponse> {
+    const moveBookmark = this.#source.moveBookmark;
+    if (!moveBookmark) throw new ApiError('bad_request', 'review bookmarks are not supported');
+    const move = await moveBookmark(request.worktreeId, request.to);
+    const changed = move.previous !== move.bookmark || move.recorded.length > 0;
+    const undoToken = changed
+      ? this.undo.put({
+          at: this.#now().toISOString(),
+          scopeKind: 'review',
+          reviewed: true,
+          changes: [],
+          bookmarks: [move],
+        })
+      : null;
+    this.#log.info('bookmark moved', {
+      worktreeId: request.worktreeId,
+      recorded: move.recorded.length,
+    });
+    return {
+      ok: true,
+      bookmark: move.bookmark,
+      previous: move.previous,
+      recorded: move.recorded.length,
       undoToken,
     };
   }
@@ -253,8 +316,17 @@ export class ReviewControls {
         changed: toApply.length,
       });
     }
-    this.#log.info('bulk review undone', { restored: toApply.length, of: entry.changes.length });
-    return { ok: true, restored: toApply.length };
+    if (toApply.length > 0) this.#source.reviewChanged?.(new Set(toApply.map((c) => c.projectId)));
+    let restoredBookmarks = 0;
+    for (const move of entry.bookmarks ?? []) {
+      if (this.#source.restoreBookmark?.(move)) restoredBookmarks++;
+    }
+    this.#log.info('bulk review undone', {
+      restored: toApply.length,
+      of: entry.changes.length,
+      bookmarks: restoredBookmarks,
+    });
+    return { ok: true, restored: toApply.length + restoredBookmarks };
   }
 
   #reviewKey(change: MarkChange, scopeKind: ReviewKey['scopeKind']): ReviewKey {

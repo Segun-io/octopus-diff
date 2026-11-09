@@ -35,6 +35,7 @@ import {
   type RouteName,
   type ScanRootsResponse,
   type ServerEvent,
+  SetBookmarkRequestSchema,
   SetReviewPolicyRequestSchema,
   type SettingsResponse,
   UndoReviewRequestSchema,
@@ -413,6 +414,10 @@ export function createApp(deps: AppDeps): Hono {
     route('undoReview', async (c) => {
       const request = parseWith(UndoReviewRequestSchema, await readJson(c), 'request body');
       return c.json(reviewControls.undoBulk(request));
+    });
+    route('setBookmark', async (c) => {
+      const request = parseWith(SetBookmarkRequestSchema, await readJson(c), 'request body');
+      return c.json(await reviewControls.setBookmark(request));
     });
   }
 
