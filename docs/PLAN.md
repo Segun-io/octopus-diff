@@ -1,7 +1,8 @@
 # octopus-diff — Project Plan
 
-> Status: MVP complete (Phases 0–2, 2026-11-08): see `docs/reports/mvp.md`. Phase 3 needs the user. UX rounds 1–3
-> (identity, themes, settings, bulk review; two unslop passes; the activity-list sidebar) are done: `docs/reports/ux-*.md`.
+> Status: MVP complete (Phases 0–2, 2026-11-08): see `docs/reports/mvp.md`. Phase 3 needs the user. UX rounds 1–4
+> (identity, themes, settings, bulk review; two unslop passes; the sidebar: folders, settle, a closed shelf) are done:
+> `docs/reports/ux-*.md`.
 > This file is the source of truth for every session working on the project. If reality disagrees
 > with it, fix the code or update this file and log why in `docs/DECISIONS.md`. Never leave them out of sync.
 
@@ -91,14 +92,15 @@ References to read (do not fork):
 
 Three-pane layout, dark and light themes:
 
-1. **Sidebar**: an activity list (DECISIONS "UX round 3"). Top entry **Inbox** = every dirty worktree of every
-   project. Then **To review**: a card per worktree that wants attention (pinned, blocked by a conflict or an
-   in-progress operation, or with unreviewed files in the current scope), showing project, branch, the unreviewed
-   count, files, +adds −dels, ahead/behind (local refs only) and conflicts. Then **Settled**: one-line rows for
-   everything else (clean, verified, review off, missing, failed), collapsible. Then **Projects**: an index of
-   folders (scan roots) and projects, each opening its Overview. Rows keep a static project and worktree order;
-   only review marks move a worktree between the cards and the tail. Filters: text filter, "only dirty",
-   "only unreviewed".
+1. **Sidebar** (DECISIONS "UX round 4"). Top entry **Inbox** = every dirty worktree of every project. Then
+   **Pinned** worktrees. Then every folder (scan root) with its projects, and under each project the worktrees that
+   are open: blocked by a conflict or an in-progress operation, with unreviewed files in the current scope, or
+   un-settled by hand; one line each (branch, chips, the unreviewed count or `1 conflict`). Everything else (clean,
+   verified, review off, missing, failed, or settled by hand) sits in the **Settled** shelf at the bottom, closed by
+   default. Folder and project headers collapse, open their Overview on click, and show what they hide while closed.
+   Settle / un-settle on hover and in the row menu; a manual settle holds until the worktree's state hash changes.
+   Rows keep a static folder, project and worktree order; only review marks and the settle action move a worktree
+   between its project and the shelf. Filters: text filter, "only dirty", "only unreviewed" (chips).
 2. **File list** (`@pierre/trees`): changed files for the selected worktree (or, in Inbox mode, grouped by
    project → worktree). Status icons, +/− counts, reviewed checkmark.
 3. **Diff viewer** (`@pierre/diffs`): split / unified toggle, hide-whitespace toggle, collapsed unchanged
@@ -345,12 +347,15 @@ streams, `ux-web` and `ux-daemon`; brief, ownership, behaviour spec, merge plan 
 `docs/COORDINATION.md`; decisions in `docs/DECISIONS.md` ("UX round 1"). New contract surface: `packages/contracts/src/settings.ts`,
 routes `/api/settings`, `/api/review-policy`, `/api/review/bulk`, `/api/review/undo`, events `review.bulk` and `settings.changed`.
 
-### Phase 2c — UX rounds 2 and 3 (2026-11-08, user-requested) — done
+### Phase 2c — UX rounds 2 to 4 (2026-11-08, user-requested) — done
 
 Round 2: two unslop passes on identity and chrome (`docs/reports/ux-unslop.md`, `ux-unslop-2.md`; DECISIONS #23–#39).
 Round 3: the sidebar became an activity list (cards to review, a settled tail, a projects index, pinning) and review
 status was simplified, after T3 Code's Sidebar V2 and T3 Chat's thread list (`docs/reports/ux-sidebar.md`; DECISIONS
-#40–#46). A folder picker for adding repositories landed in parallel (DECISIONS "Folder picker").
+#40–#46). A folder picker for adding repositories landed in parallel (DECISIONS "Folder picker"). Round 4 brought the
+folder → project → worktree hierarchy back under a Pinned block, added an explicit settle / un-settle held by the state
+hash, closed the Settled shelf by default and moved the add action into the header, after T3 Code's current folders
+sidebar (DECISIONS #47–#52; the report is appended to `docs/reports/ux-sidebar.md`).
 
 ### Phase 3 — After the MVP (needs user input; do not start autonomously)
 

@@ -50,7 +50,8 @@ async function main() {
       });
       const page = await context.newPage();
       const app = new AppPage(page);
-      await app.open(daemon.authUrl);
+      // Real defaults (the Settled shelf closed), not the specs' seeded prefs.
+      await app.open(daemon.authUrl, { prefs: {} });
       const shot = async (name: string) => {
         await page.waitForTimeout(300); // let highlighting / fonts settle
         const file = join(args.out, `${name}-${theme}.png`);

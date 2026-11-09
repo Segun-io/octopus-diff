@@ -74,6 +74,7 @@ function useBuildAppModel(): AppModel {
   const showReviewed = useUi((s) => s.showReviewed);
   const selected = useUi((s) => s.selected);
   const pinned = useUi((s) => s.pinned);
+  const settle = useUi((s) => s.settle);
 
   const projects = useProjectsQuery();
   const scanRoots = useScanRootsQuery();
@@ -95,6 +96,7 @@ function useBuildAppModel(): AppModel {
         { text: filterText, onlyDirty, onlyUnreviewed },
         scanRootList,
         pinned,
+        settle,
       ),
     [
       projectList,
@@ -105,6 +107,7 @@ function useBuildAppModel(): AppModel {
       onlyUnreviewed,
       scanRootList,
       pinned,
+      settle,
     ],
   );
 

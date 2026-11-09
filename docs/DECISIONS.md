@@ -1065,4 +1065,58 @@ Studied the local checkout at `eb97d82` (MIT): `apps/web/src/components/CommandP
     in the palette from the viewed repository, and the palette's "Add repositories…" → browse → Tab → Enter flow. e2e
     unchanged; `e2e/scripts/screenshots.ts` adds `palette-browse-*`.
 11. **Cleanup.** Removed two stray `|||||||` diff3 marker lines left in this file by earlier merges (no content changed).
+## UX round 4 — folders back, an explicit settle, a closed shelf (lead)
+
+All 2026-11-08 · lead, branch `ux/sidebar-folders`, on top of `main` at `1325cc3`. Scope: `apps/web`, `e2e/support`
+(one helper), `docs/`. Brief from the user after round 3: the hierarchy is off, the add-repository and filter controls
+look off, worktrees cannot be settled and the settled ones still show; follow the proven UI in T3 Code
+(`~/contrib/t3code`, its current sidebar with project folders and a Settled shelf) where it applies.
+
+47. **The hierarchy is back: folder → project → open worktrees, and one Settled shelf.** T3 Code's current sidebar
+    ("boring" mode, `SidebarProjectFolderHeader`, `groupSidebarThreadsByProject`) keeps project folders and lists each
+    project's *active* threads under it; settled threads go to one shelf at the bottom. Round 3's flat card list lost
+    the project grouping the user wanted and repeated the project name on every card. Now: Inbox; **Pinned**; every
+    folder (scan root) as a collapsible header with its projects; every project as a collapsible header (chevron, repo
+    glyph, name) with its open worktrees as one-line rows that say only the branch; **Settled** at the bottom. The
+    **Projects** index of round 3 is gone: the folders *are* the index again (a click on a folder or project header
+    still opens its Overview; `⋯` and right-click keep the same menus). A closed folder or project shows what it hides
+    (a faint worktree count and the unreviewed pill); an open project whose worktrees all settled says `settled`
+    instead of listing nothing. Two-line cards are gone with the facts line: files, `+a −d`, ahead/behind moved to the
+    row's tooltip and stay in the Overview. The e2e selectors are unchanged (`li[data-folder-id] button[title]`,
+    `projectItem` with `data-project-*` containing a titled button, `worktreeItem` with every `data-*` attribute).
+48. **Settle is an explicit action, held by the state hash.** Round 3 had no settle verb: a worktree settled only when
+    its files were all verified, so an agent's half-done branch could not be put away. T3 Code has Settle / Un-settle
+    on hover and in the thread menu, and a settled thread un-settles on new activity. Ours: a check at the right of a
+    row on hover or focus (`Settle worktree`), an undo arrow on settled rows (`Un-settle worktree`), the same two items
+    in the row menu. A manual settle or un-settle is stored per device as `{ worktreeId, state, stateHash }` in the
+    new `settle` pref and holds only while `WorktreeSummary.stateHash` is unchanged (the daemon's hash of HEAD, branch,
+    ahead/behind and every patch): the next change to the worktree drops it and the automatic rule applies again, which
+    is exactly "new activity un-settles" without a daemon change or a timestamp. `rowState()` now returns `blocked |
+    attention | active | settled` plus `settledBy: auto | user`; `active` is a row the user un-settled that would
+    otherwise be settled (it stays under its project with its word, e.g. `clean`). Blocked work still never settles,
+    not even by hand: no check on a blocked row, a disabled `Settle (blocked)` in its menu. The automatic rule is
+    unchanged (#41): verified, clean, review off, missing and failed worktrees settle on their own.
+49. **The Settled shelf is closed by default and shows the selected row while closed.** T3 Code's shelves default to
+    closed; a shelf open by default is what "settled ones still show" meant. The `settledOpen` pref (default `false`)
+    replaces the `settled` id in `collapsed`; filters open the shelf and every folder, so a hit never hides. While
+    closed, the shelf lists only the selected worktree (T3 Code's `routeThreadOnly`), so `J`/`K`, `n` and palette jumps
+    into a settled worktree always have a row and the shelf no longer pops open on its own (#44 is superseded).
+    `J`/`K` order is DOM order: pinned, then folders (project by project, open rows), then the shelf in folder order.
+50. **Chrome follows T3 Code.** The add action is an icon button in the header next to Settings (`+`, titled "Watch a
+    folder or add a repository", same `addProjectButton` test id; the full-width footer button is gone). The two
+    filter toggles are chips under the filter field (`ToggleButton variant="chip"`, `.od-chip` filled softly while
+    pressed) instead of two 24 px buttons that read as actions. The empty screen and Settings → Folders still add.
+51. **Tests.** `ux.test.tsx`: the round-3 partition test is replaced by one that asserts the folder rows, the closed
+    shelf and its count, opening the shelf (folder order, one word each, the review-off badge), the selected row in a
+    closed shelf, settling by hand and expiry through `backend.mutate` (a new file changes the hash), un-settling a
+    clean worktree, the blocked rule (no check, disabled menu item), settling by marks, pinning, collapsing a project.
+    Test harnesses start with `settledOpen: true` because many tests read settled rows. `app.test.tsx`: `J`/`K` follow
+    the folder order (docs-site, then octopus-api's main checkout). e2e: no spec changed; `AppPage.open` seeds
+    `{ settledOpen: true }` into a fresh profile (tests that store prefs themselves keep theirs), and the README
+    screenshot script opens with real defaults. This is the one edit outside `apps/web` and `docs/`, in a WS4 helper,
+    because the specs' row-visibility assertions are right and only the default changed.
+52. **Not done, on purpose.** No per-project Settled shelf (T3 Code has one global shelf). No drag to settle or
+    reorder. No auto-settle after N days (needs the daemon's change timestamp, #46). No project favicons (T3 Code
+    reads a favicon per project; we draw one repo glyph). No "Working" shelf: the activity pulse already marks a
+    worktree an agent is writing to, and rows do not reorder.
 

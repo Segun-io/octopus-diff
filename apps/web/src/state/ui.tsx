@@ -201,4 +201,28 @@ export const actions = {
         : [...s.pinned, worktreeId],
     }));
   },
+  toggleSettledOpen(store: UiStore) {
+    store.setState((s) => ({ settledOpen: !s.settledOpen }));
+  },
+  /**
+   * Settles or un-settles a worktree by hand, pinned to its current `stateHash`; `null` removes
+   * the override (and `stateHash` may then be anything).
+   */
+  setSettle(
+    store: UiStore,
+    worktreeId: string,
+    state: 'settled' | 'active' | null,
+    stateHash: string,
+  ) {
+    store.setState((s) => {
+      const rest = s.settle.filter((o) => o.worktreeId !== worktreeId);
+      return { settle: state === null ? rest : [...rest, { worktreeId, state, stateHash }] };
+    });
+  },
+  /** Drops overrides whose worktree moved on (hash changed) or is gone; a no-op when none did. */
+  pruneSettle(store: UiStore, holds: (o: { worktreeId: string; stateHash: string }) => boolean) {
+    const current = store.getState().settle;
+    const kept = current.filter(holds);
+    if (kept.length !== current.length) store.setState({ settle: kept });
+  },
 };

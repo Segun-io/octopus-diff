@@ -14,6 +14,7 @@ import {
   useSettingsSupport,
 } from '../api/settings.ts';
 import {
+  autoRowState,
   DIRECT_FOLDER_ID,
   type FolderNode,
   isDirtySummary,
@@ -26,22 +27,20 @@ import { isRecentlyActive, worktreeSource } from '../lib/source.ts';
 import { useCommandsContext } from '../state/commandsContext.tsx';
 import { useAppModel } from '../state/model.tsx';
 import { actions, useUi, useUiStore, type View } from '../state/ui.tsx';
-import { MoreIcon, ToggleButton } from './bits.tsx';
+import { CheckIcon, MoreIcon, ToggleButton } from './bits.tsx';
 import { ContextMenu, type MenuItem, useContextMenu } from './ContextMenu.tsx';
 import { useFolderStart } from './FolderBrowser.tsx';
 import { Wordmark } from './Mark.tsx';
 
 /**
- * The sidebar is an activity list, not a tree (DECISIONS "UX round 3", after T3 Code's
- * Sidebar V2): the Inbox, then a block of cards for worktrees that want attention (pinned,
- * blocked, unreviewed), then a settled tail of one-line rows (clean, verified, review off), then
- * a compact index of folders and projects. Review marks are the settle action: marking a
- * worktree's files verified moves it into the tail; a new patch brings it back as a card.
- * Rows never reorder on activity.
+ * The sidebar (DECISIONS "UX round 4", after T3 Code's folders sidebar): the Inbox; **Pinned**
+ * worktrees; then every folder (scan root) with its projects, and under each project the
+ * worktrees that are still open: blocked, with unreviewed files, or un-settled by hand. Settled
+ * worktrees (clean, all verified, review off, missing, failed, or settled by hand) leave their
+ * project for the **Settled** shelf at the bottom, closed by default: density is earned by
+ * settling. Marking files verified settles; a new patch un-settles; the check on a row settles
+ * by hand until the worktree changes again. Rows never reorder on activity.
  */
-
-/** Collapsed-state id of the settled tail (stored next to folder ids in the `collapsed` pref). */
-export const SETTLED_SECTION_ID = 'settled';
 
 function attr(value: number | null | undefined): string {
   return value === null || value === undefined ? '' : String(value);
@@ -67,17 +66,22 @@ type MenuTarget =
   | { kind: 'project'; group: ProjectGroup }
   | { kind: 'worktree'; row: WorktreeRow };
 
-type RowMenu = (event: React.MouseEvent | React.KeyboardEvent, row: WorktreeRow) => void;
+type RowEvent = React.MouseEvent | React.KeyboardEvent;
+
+/** Where a worktree row is listed; `folder` rows sit under their project and omit its name. */
+type RowVariant = 'pinned' | 'folder' | 'settled';
 
 interface RowProps {
   row: WorktreeRow;
+  variant: RowVariant;
   selected: boolean;
   now: number;
   onSelect: (id: string) => void;
-  onMenu: RowMenu;
+  onMenu: (event: RowEvent, row: WorktreeRow) => void;
+  onSettle: (row: WorktreeRow) => void;
 }
 
-/** The data attributes the e2e suite reads (TEST_IDS.worktreeItem); same on cards and rows. */
+/** The data attributes the e2e suite reads (TEST_IDS.worktreeItem); the same in every variant. */
 function rowAttributes(row: WorktreeRow, selected: boolean, active: boolean) {
   const { worktree, summary } = row;
   const counts = summary?.counts;
@@ -105,31 +109,30 @@ function rowAttributes(row: WorktreeRow, selected: boolean, active: boolean) {
   };
 }
 
+/** The tooltip carries the facts the row no longer shows: path, files, lines, ahead/behind. */
 function rowTitle(row: WorktreeRow): string {
-  const ref = row.summary?.aheadBehindRef;
-  return `${row.worktree.path}${ref ? `\nahead/behind ${ref}` : ''}`;
+  const { summary, error } = row;
+  const lines = [row.worktree.path];
+  if (summary) {
+    const facts: string[] = [];
+    if (isDirtySummary(summary)) facts.push(plural(summary.changedFiles, 'file'));
+    if (summary.additions > 0 || summary.deletions > 0) {
+      facts.push(`+${summary.additions} −${summary.deletions}`);
+    }
+    if (summary.ahead !== null && summary.behind !== null && summary.aheadBehindRef) {
+      facts.push(`↑${summary.ahead} ↓${summary.behind} vs ${summary.aheadBehindRef}`);
+    }
+    if (facts.length > 0) lines.push(facts.join(' · '));
+  }
+  if (error) lines.push(error.message);
+  if (row.settledBy === 'user') {
+    lines.push(row.state === 'settled' ? 'Settled by hand' : 'Un-settled by hand');
+  }
+  return lines.join('\n');
 }
 
-/**
- * A worktree's name: the project, then the branch, set apart by weight (IDENTITY.md §5). The
- * branch takes at most half the row, so a long branch name never hides the project.
- */
-function RowName({ row }: { row: WorktreeRow }) {
-  const { worktree } = row;
-  return (
-    <span className="flex min-w-0 items-baseline gap-1.5">
-      <span className="min-w-0 flex-1 truncate font-medium text-fg">{row.project.name}</span>
-      <span
-        className={`max-w-[55%] shrink-0 truncate ${worktree.branch ? 'text-muted' : 'italic text-muted'}`}
-      >
-        {worktreeLabel(worktree)}
-      </span>
-    </span>
-  );
-}
-
-/** `main`, the worktree source, an in-progress operation, `pinned`: the chips on a card's facts line. */
-function NameChips({ row }: { row: WorktreeRow }) {
+/** `main`, the worktree source, an in-progress operation: the chips after the name. */
+function RowChips({ row }: { row: WorktreeRow }) {
   const { worktree, summary } = row;
   const source = worktree.isMain ? null : worktreeSource(worktree.path);
   return (
@@ -149,21 +152,16 @@ function NameChips({ row }: { row: WorktreeRow }) {
           {summary.inProgress}
         </span>
       )}
-      {row.pinned && (
-        <span className="od-chip" title="Pinned to the top on this device">
-          pinned
-        </span>
-      )}
     </>
   );
 }
 
-function ReviewOffBadge({ row, className = '' }: { row: WorktreeRow; className?: string }) {
+function ReviewOffBadge({ row }: { row: WorktreeRow }) {
   return (
     <span
       data-testid={TEST_IDS.reviewOffBadge}
       data-source={row.review.source}
-      className={`od-chip shrink-0 ${className}`}
+      className="od-chip shrink-0"
       title={`Review off (from ${row.review.source})`}
     >
       review off
@@ -171,48 +169,47 @@ function ReviewOffBadge({ row, className = '' }: { row: WorktreeRow; className?:
   );
 }
 
-/** The facts line of a card: chips, conflicts, files, lines, ahead/behind, or the settled word. */
-function CardFacts({ row }: { row: WorktreeRow }) {
-  const { summary, error } = row;
-  const counts = summary?.counts;
+/**
+ * The status slot at the right of a row: the unreviewed pill (the one filled shape), `N
+ * conflicts` for blocked work, or one word for a settled or un-settled row.
+ */
+function RowStatus({ row }: { row: WorktreeRow }) {
+  const counts = row.summary?.counts;
   const word = settledWord(row);
+  const quiet = row.state === 'settled' || row.state === 'active';
   return (
-    <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5 font-mono text-[11px] text-muted">
-      <NameChips row={row} />
+    <span className="flex shrink-0 items-center gap-1.5 text-[11px]">
+      {!row.review.enabled && <ReviewOffBadge row={row} />}
       {counts && counts.conflicted > 0 && (
         <span className="text-danger">{plural(counts.conflicted, 'conflict')}</span>
       )}
-      {summary && isDirtySummary(summary) && <span>{plural(summary.changedFiles, 'file')}</span>}
-      {summary && (summary.additions > 0 || summary.deletions > 0) && (
-        <span>
-          <span className="text-add">+{summary.additions}</span>{' '}
-          <span className="text-del">−{summary.deletions}</span>
+      {row.unreviewed > 0 && (
+        <span className="od-pill" title={`${row.unreviewed} unreviewed`}>
+          {row.unreviewed}
         </span>
       )}
-      {summary &&
-        summary.ahead !== null &&
-        summary.behind !== null &&
-        summary.ahead + summary.behind > 0 && (
-          <span title={`ahead/behind ${summary.aheadBehindRef ?? ''}`}>
-            ↑{summary.ahead} ↓{summary.behind}
-          </span>
-        )}
-      {row.state === 'settled' && word !== 'review off' && word !== 'loading' && (
-        <span className={word === 'missing' || word === 'error' ? 'text-danger' : 'text-faint'}>
-          {word === 'error' && error ? `error: ${error.message}` : word}
+      {quiet && word !== 'review off' && (
+        <span
+          className={word === 'missing' || word === 'error' ? 'text-danger' : 'text-faint'}
+          title={word === 'error' && row.error ? row.error.message : undefined}
+        >
+          {word === 'loading' ? '…' : word}
         </span>
       )}
-      {word === 'loading' && <span className="text-faint">…</span>}
     </span>
   );
 }
 
+const ROW_INDENT: Record<RowVariant, string> = {
+  pinned: 'pl-2',
+  folder: 'pl-9',
+  settled: 'pl-2',
+};
+
 /**
- * One worktree in the activity list. As a **card** (pinned, blocked or unreviewed): two lines,
- * the name with the unreviewed count, then the facts. As a **settled row**: one dimmed line, the
- * name and one word; density is earned by settling. Both variants share the same `<li><button>`
- * skeleton and live in one keyed list, so a worktree that settles or wakes up keeps its DOM node
- * (the e2e suite clicks rows while the inbox for a new scope arrives).
+ * One worktree. Under a project it says only its branch; pinned and settled rows, which sit
+ * outside their project, say project then branch. Hover (or focus) reveals the settle check and
+ * the `⋯` menu at the right; the status slot stays where it is.
  */
 const WorktreeItem = memo(function WorktreeItem({
   row,
@@ -221,99 +218,90 @@ const WorktreeItem = memo(function WorktreeItem({
   now,
   onSelect,
   onMenu,
-}: RowProps & { variant: 'card' | 'settled' }) {
-  const { worktree, summary, error } = row;
+  onSettle,
+}: RowProps) {
+  const { worktree, summary } = row;
   const active = isRecentlyActive(summary?.updatedAt, now);
-  const word = settledWord(row);
-  const card = variant === 'card';
+  const settled = row.state === 'settled';
+  const blocked = row.state === 'blocked';
+  const canSettle = summary !== null && !blocked;
+  const settleLabel = settled ? 'Un-settle worktree' : 'Settle worktree';
   return (
-    <li className={`group/wt relative ${card ? 'mb-1' : ''}`} data-section={variant}>
+    <li className="group/wt relative" data-section={variant}>
       <button
         type="button"
         {...rowAttributes(row, selected, active)}
         title={rowTitle(row)}
         onClick={() => onSelect(worktree.id)}
         onContextMenu={(e) => onMenu(e, row)}
-        className={
-          card
-            ? `flex w-full flex-col gap-0.5 rounded-md border py-1.5 pr-7 pl-[22px] text-left ${
-                selected ? 'border-line-strong bg-selected' : 'border-line bg-canvas hover:bg-hover'
-              }`
-            : `flex w-full items-center gap-1.5 rounded-sm py-1 pr-7 pl-[22px] text-left text-muted hover:text-fg ${
-                selected ? 'bg-selected text-fg' : 'hover:bg-hover'
-              }`
-        }
+        className={`flex h-[var(--od-row)] w-full items-center gap-1.5 rounded-sm pr-[52px] text-left ${
+          ROW_INDENT[variant]
+        } ${selected ? 'bg-selected text-fg' : 'hover:bg-hover'} ${
+          settled && !selected ? 'text-muted hover:text-fg' : ''
+        }`}
       >
-        <span className={`relative flex min-w-0 items-center gap-1.5 ${card ? '' : 'flex-1'}`}>
+        <span className="relative flex min-w-0 flex-1 items-baseline gap-1.5">
           {active && <span className="od-pulse" aria-hidden="true" />}
-          <RowName row={row} />
-          {card && (
-            <>
-              <span className="ml-auto" />
-              {!row.review.enabled && <ReviewOffBadge row={row} />}
-              {row.unreviewed > 0 && (
-                <span className="od-pill shrink-0" title={`${row.unreviewed} unreviewed`}>
-                  {row.unreviewed}
-                </span>
-              )}
-            </>
+          {variant !== 'folder' && (
+            <span className="min-w-0 shrink truncate font-medium">{row.project.name}</span>
           )}
+          <span
+            className={`min-w-0 truncate ${
+              variant === 'folder' ? 'shrink text-fg' : 'shrink-[2] text-muted'
+            } ${worktree.branch ? '' : 'italic'}`}
+          >
+            {worktreeLabel(worktree)}
+          </span>
+          <RowChips row={row} />
         </span>
-        {card ? (
-          <CardFacts row={row} />
-        ) : (
-          <>
-            {row.pinned && <span className="od-chip">pinned</span>}
-            {!row.review.enabled && <ReviewOffBadge row={row} />}
-            {word !== 'review off' && (
-              <span
-                className={`shrink-0 text-[11px] ${
-                  word === 'missing' || word === 'error' ? 'text-danger' : 'text-faint'
-                }`}
-                title={word === 'error' && error ? error.message : undefined}
-              >
-                {word === 'loading' ? '…' : word}
-              </span>
-            )}
-          </>
-        )}
+        <RowStatus row={row} />
       </button>
-      <MoreButton
-        label={`Actions for ${row.project.name} ${worktreeLabel(worktree)}`}
-        group="wt"
-        onOpen={(e) => onMenu(e, row)}
-      />
+      <span className="absolute top-1/2 right-1 flex -translate-y-1/2 items-center gap-0.5 opacity-0 focus-within:opacity-100 group-hover/wt:opacity-100">
+        {canSettle && (
+          <button
+            type="button"
+            aria-label={settleLabel}
+            title={settleLabel}
+            onClick={() => onSettle(row)}
+            className="flex h-5 w-5 items-center justify-center rounded-sm text-faint hover:bg-raised hover:text-fg"
+          >
+            {settled ? <UndoIcon /> : <CheckIcon />}
+          </button>
+        )}
+        <MoreButton
+          label={`Actions for ${row.project.name} ${worktreeLabel(worktree)}`}
+          onOpen={(e) => onMenu(e, row)}
+        />
+      </span>
     </li>
   );
 });
 
-/** Only the nearest hovered row reveals its button (named groups, one per tier). */
-const MORE_VISIBILITY = {
-  wt: 'group-hover/wt:opacity-100',
-  proj: 'group-hover/proj:opacity-100',
-  folder: 'group-hover/folder:opacity-100',
-} as const;
-
 /** Keyboard-reachable "⋯" that opens the same menu as right-click. */
-function MoreButton({
-  label,
-  group,
-  onOpen,
-}: {
-  label: string;
-  group: keyof typeof MORE_VISIBILITY;
-  onOpen: (event: React.MouseEvent | React.KeyboardEvent) => void;
-}) {
+function MoreButton({ label, onOpen }: { label: string; onOpen: (event: RowEvent) => void }) {
   return (
     <button
       type="button"
       aria-label={label}
       aria-haspopup="menu"
       onClick={onOpen}
-      className={`absolute top-1 right-1 flex items-center rounded-sm p-0.5 text-faint opacity-0 hover:bg-raised hover:text-fg focus:opacity-100 ${MORE_VISIBILITY[group]}`}
+      className="flex h-5 w-5 items-center justify-center rounded-sm text-faint hover:bg-raised hover:text-fg"
     >
       <MoreIcon size={12} />
     </button>
+  );
+}
+
+/** The hover slot of folder and project headers: only the `⋯` menu. */
+function HeaderActions({ group, children }: { group: 'folder' | 'proj'; children: ReactNode }) {
+  const reveal =
+    group === 'folder' ? 'group-hover/folder:opacity-100' : 'group-hover/proj:opacity-100';
+  return (
+    <span
+      className={`absolute top-0 right-1 flex h-[var(--od-row)] items-center opacity-0 focus-within:opacity-100 ${reveal}`}
+    >
+      {children}
+    </span>
   );
 }
 
@@ -331,19 +319,39 @@ function Chevron({ open }: { open: boolean }) {
   );
 }
 
-/** Section label with a count; optionally collapsible. */
-function SectionHeader({
+function ChevronButton({
+  open,
+  what,
+  onToggle,
+}: {
+  open: boolean;
+  what: string;
+  onToggle: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={`${open ? 'Collapse' : 'Expand'} ${what}`}
+      aria-expanded={open}
+      onClick={onToggle}
+      className="flex h-5 w-5 shrink-0 items-center justify-center rounded-sm hover:bg-raised"
+    >
+      <Chevron open={open} />
+    </button>
+  );
+}
+
+/** A shelf header (Pinned, Settled): a label, a muted count, optionally a chevron. */
+function ShelfHeader({
   label,
   count,
   open,
   onToggle,
-  children,
 }: {
   label: string;
   count?: number | undefined;
   open?: boolean;
   onToggle?: () => void;
-  children?: ReactNode;
 }) {
   const inner = (
     <>
@@ -352,7 +360,7 @@ function SectionHeader({
     </>
   );
   return (
-    <div className="mt-3 mb-1 flex h-6 items-center gap-1.5 px-1">
+    <div className="mt-3 mb-0.5 flex h-6 items-center gap-1.5 px-1">
       {onToggle ? (
         <button
           type="button"
@@ -367,8 +375,23 @@ function SectionHeader({
       ) : (
         inner
       )}
-      {children}
     </div>
+  );
+}
+
+/** A closed folder or project still says how much it hides: a faint count and the pill. */
+function HiddenStats({ worktrees, unreviewed }: { worktrees: number; unreviewed: number }) {
+  return (
+    <span className="ml-auto flex shrink-0 items-center gap-1.5 text-[11px] font-normal tabular-nums">
+      <span className="text-faint" title={plural(worktrees, 'worktree')}>
+        {worktrees}
+      </span>
+      {unreviewed > 0 && (
+        <span className="od-pill" title={`${unreviewed} unreviewed`}>
+          {unreviewed}
+        </span>
+      )}
+    </span>
   );
 }
 
@@ -381,6 +404,7 @@ export function Sidebar() {
   const onlyDirty = useUi((s) => s.onlyDirty);
   const onlyUnreviewed = useUi((s) => s.onlyUnreviewed);
   const collapsed = useUi((s) => s.collapsed);
+  const settledOpen = useUi((s) => s.settledOpen);
   const support = useSettingsSupport();
   const settings = useSettingsQuery();
   const setPolicy = useSetReviewPolicy();
@@ -398,19 +422,33 @@ export function Sidebar() {
   );
   const now = useClock(anyRecent);
   const filtering = filterText.trim() !== '' || onlyDirty || onlyUnreviewed;
+  // Filters open everything: a hit must never hide behind a closed folder or shelf.
   const isCollapsed = (id: string) => !filtering && collapsed.includes(id);
-  const settledOpen = !isCollapsed(SETTLED_SECTION_ID);
+  const shelfOpen = filtering || settledOpen;
   const overrides = new Map(
     (settings.data?.overrides ?? []).map((o) => [reviewTargetKey(o.target), o.enabled]),
   );
+  const { sidebar } = model;
 
-  // J/K or a palette jump can land on a settled worktree: the tail opens to show it.
-  const selectedIsSettled =
-    selectedWorktree !== null &&
-    model.sidebar.settled.some((r) => r.worktree.id === selectedWorktree);
+  // A manual settle holds only while the worktree's state hash is the one it was made on.
   useEffect(() => {
-    if (selectedIsSettled && !settledOpen) actions.toggleCollapsed(store, SETTLED_SECTION_ID);
-  }, [selectedIsSettled, settledOpen, store]);
+    actions.pruneSettle(store, (o) => {
+      const row = sidebar.byId.get(o.worktreeId);
+      return !row || row.summary === null || row.summary.stateHash === o.stateHash;
+    });
+  }, [sidebar.byId, store]);
+
+  const onSettle = (row: WorktreeRow) => {
+    const hash = row.summary?.stateHash;
+    if (!hash || row.state === 'blocked') return;
+    const auto = autoRowState(row);
+    const id = row.worktree.id;
+    if (row.state === 'settled') {
+      actions.setSettle(store, id, auto === 'settled' ? 'active' : null, hash);
+    } else {
+      actions.setSettle(store, id, auto === 'settled' ? null : 'settled', hash);
+    }
+  };
 
   const policyItems = (target: ReviewPolicyTarget | null, label: string): MenuItem[] => {
     if (support !== 'ready' || !target) return [];
@@ -494,42 +532,50 @@ export function Sidebar() {
         ];
       }
       case 'worktree': {
-        const id = t.row.worktree.id;
-        const branch = t.row.worktree.branch;
+        const { row } = t;
+        const id = row.worktree.id;
+        const branch = row.worktree.branch;
+        const settled = row.state === 'settled';
         return [
           goto({ kind: 'worktree', worktreeId: id }, 'Open changes'),
           {
+            id: 'settle',
+            label: settled ? 'Un-settle' : row.state === 'blocked' ? 'Settle (blocked)' : 'Settle',
+            disabled: row.summary === null || row.state === 'blocked',
+            onSelect: () => onSettle(row),
+          },
+          {
             id: 'pin',
-            label: t.row.pinned ? 'Unpin' : 'Pin to the top',
+            label: row.pinned ? 'Unpin' : 'Pin to the top',
             onSelect: () => actions.togglePinned(store, id),
           },
-          goto(
-            { kind: 'project', projectId: t.row.project.id },
-            `Overview of ${t.row.project.name}`,
-          ),
+          goto({ kind: 'project', projectId: row.project.id }, `Overview of ${row.project.name}`),
           ...bulkItems({ kind: 'worktree', worktreeId: id }, [id]).map((item, i) =>
             i === 0 ? { ...item, separator: true } : item,
           ),
           ...policyItems({ kind: 'worktree', worktreeId: id }, 'this worktree'),
           ...(branch
-            ? policyItems(
-                { kind: 'branch', projectId: t.row.project.id, branch },
-                `branch ${branch}`,
-              )
+            ? policyItems({ kind: 'branch', projectId: row.project.id, branch }, `branch ${branch}`)
             : []),
         ];
       }
     }
   };
 
-  const rowProps = (row: WorktreeRow) => ({
+  const rowProps = (row: WorktreeRow, variant: RowVariant) => ({
     row,
+    variant,
     now,
     selected: selectedWorktree === row.worktree.id,
     onSelect,
-    onMenu: (e: React.MouseEvent | React.KeyboardEvent, r: WorktreeRow) =>
-      menu.open(e, { kind: 'worktree', row: r }),
+    onMenu: (e: RowEvent, r: WorktreeRow) => menu.open(e, { kind: 'worktree', row: r }),
+    onSettle,
   });
+
+  // A closed shelf still shows the selected worktree, so J/K and palette jumps have a row.
+  const shelfRows = shelfOpen
+    ? sidebar.settled
+    : sidebar.settled.filter((r) => r.worktree.id === selectedWorktree);
 
   return (
     <nav
@@ -537,9 +583,22 @@ export function Sidebar() {
       aria-label="Worktrees, projects and folders"
       className="flex h-full min-h-0 flex-col border-r border-line bg-surface"
     >
-      <div className="flex items-center gap-1 border-b border-line px-2 py-1.5">
+      <div className="flex items-center gap-0.5 border-b border-line px-2 py-1.5">
         <Wordmark size={16} />
         <span className="ml-auto" />
+        <button
+          type="button"
+          data-testid={TEST_IDS.addProjectButton}
+          onClick={() => {
+            // Load the start folder first so the picker opens with its list (T3 Code does this).
+            void folderStart.prefetch().then(() => store.setState({ addProjectOpen: true }));
+          }}
+          title="Watch a folder or add a repository"
+          aria-label="Watch a folder or add a repository"
+          className="od-btn od-btn-ghost"
+        >
+          <PlusIcon />
+        </button>
         <button
           type="button"
           data-testid={TEST_IDS.settingsOpenButton}
@@ -584,8 +643,9 @@ export function Sidebar() {
             </span>
           )}
         </div>
-        <div className="flex gap-1">
+        <div className="flex items-center gap-1 px-0.5">
           <ToggleButton
+            variant="chip"
             pressed={onlyDirty}
             onClick={() => store.setState({ onlyDirty: !onlyDirty })}
             title="Only worktrees with changes"
@@ -594,6 +654,7 @@ export function Sidebar() {
             Only dirty
           </ToggleButton>
           <ToggleButton
+            variant="chip"
             pressed={onlyUnreviewed}
             onClick={() => store.setState({ onlyUnreviewed: !onlyUnreviewed })}
             title="Only worktrees with unreviewed files in the current scope"
@@ -631,157 +692,107 @@ export function Sidebar() {
           </span>
         </button>
 
-        {model.sidebar.groups.length === 0 && totalWorktrees > 0 && (
+        {sidebar.groups.length === 0 && totalWorktrees > 0 && (
           <p className="px-2 py-3 text-xs text-muted">No worktrees match the filters.</p>
         )}
 
-        {totalWorktrees > 0 && model.sidebar.groups.length > 0 && (
-          // One list for cards and settled rows (headers are list items), keyed by worktree id:
-          // a row that settles or wakes up moves inside the list instead of remounting.
+        {sidebar.groups.length > 0 && (
           <ul aria-label="Worktrees" className="flex flex-col">
-            <li role="presentation">
-              <SectionHeader label="To review" count={model.sidebar.cards.length} />
-            </li>
-            {model.sidebar.cards.length === 0 && (
-              <li role="presentation" className="px-2 pb-1 text-[11px] text-faint">
-                Nothing to review in this scope.
+            {sidebar.pinned.length > 0 && (
+              <li role="presentation">
+                <ShelfHeader label="Pinned" />
               </li>
             )}
-            {model.sidebar.cards.map((row) => (
-              <WorktreeItem key={row.worktree.id} variant="card" {...rowProps(row)} />
+            {sidebar.pinned.map((row) => (
+              <WorktreeItem key={row.worktree.id} {...rowProps(row, 'pinned')} />
             ))}
-            {model.sidebar.settled.length > 0 && (
+
+            {sidebar.folders.map((node) => {
+              const open = !isCollapsed(node.id);
+              const current = view.kind === 'folder' && view.scanRootId === node.id;
+              const visibleRows = node.groups.flatMap((g) => g.rows);
+              return (
+                <li key={node.id} data-folder-id={node.id} className="group/folder relative mt-2">
+                  <div
+                    className={`flex h-[var(--od-row)] items-center gap-0.5 rounded-sm pr-7 ${
+                      current ? 'bg-selected' : 'hover:bg-hover'
+                    }`}
+                  >
+                    <ChevronButton
+                      open={open}
+                      what="folder"
+                      onToggle={() => actions.toggleCollapsed(store, node.id)}
+                    />
+                    <button
+                      type="button"
+                      aria-current={current ? 'true' : undefined}
+                      onClick={() =>
+                        actions.setView(store, { kind: 'folder', scanRootId: node.id })
+                      }
+                      onContextMenu={(e) => menu.open(e, { kind: 'folder', node })}
+                      title={
+                        node.root
+                          ? `${node.root.path} (depth ${node.root.depth})`
+                          : 'Projects added without a folder'
+                      }
+                      className="flex h-full min-w-0 flex-1 items-center gap-1.5 text-left"
+                    >
+                      <FolderIcon direct={node.id === DIRECT_FOLDER_ID} />
+                      <span className="od-label truncate font-mono">{node.label}</span>
+                      {!open && (
+                        <HiddenStats
+                          worktrees={visibleRows.length}
+                          unreviewed={visibleRows.reduce((n, r) => n + r.unreviewed, 0)}
+                        />
+                      )}
+                    </button>
+                  </div>
+                  <HeaderActions group="folder">
+                    <MoreButton
+                      label={`Actions for ${node.label}`}
+                      onOpen={(e) => menu.open(e, { kind: 'folder', node })}
+                    />
+                  </HeaderActions>
+                  {open && (
+                    <ul className="flex flex-col">
+                      {node.groups.map((group) => (
+                        <ProjectFolder
+                          key={group.project.id}
+                          group={group}
+                          open={!isCollapsed(group.project.id)}
+                          current={view.kind === 'project' && view.projectId === group.project.id}
+                          onToggle={() => actions.toggleCollapsed(store, group.project.id)}
+                          onOpen={() =>
+                            actions.setView(store, { kind: 'project', projectId: group.project.id })
+                          }
+                          onMenu={(e) => menu.open(e, { kind: 'project', group })}
+                        >
+                          {group.active.map((row) => (
+                            <WorktreeItem key={row.worktree.id} {...rowProps(row, 'folder')} />
+                          ))}
+                        </ProjectFolder>
+                      ))}
+                    </ul>
+                  )}
+                </li>
+              );
+            })}
+
+            {sidebar.settled.length > 0 && (
               <li role="presentation">
-                <SectionHeader
+                <ShelfHeader
                   label="Settled"
-                  count={model.sidebar.settled.length}
-                  open={settledOpen}
-                  onToggle={() => actions.toggleCollapsed(store, SETTLED_SECTION_ID)}
+                  count={sidebar.settled.length}
+                  open={shelfOpen}
+                  onToggle={() => actions.toggleSettledOpen(store)}
                 />
               </li>
             )}
-            {settledOpen &&
-              model.sidebar.settled.map((row) => (
-                <WorktreeItem key={row.worktree.id} variant="settled" {...rowProps(row)} />
-              ))}
+            {shelfRows.map((row) => (
+              <WorktreeItem key={row.worktree.id} {...rowProps(row, 'settled')} />
+            ))}
           </ul>
         )}
-
-        {model.sidebar.folders.length > 0 && (
-          <>
-            <SectionHeader label="Projects" count={model.sidebar.groups.length} />
-            <ul data-section="projects" className="flex flex-col gap-0.5">
-              {model.sidebar.folders.map((node) => {
-                const open = !isCollapsed(node.id);
-                const current = view.kind === 'folder' && view.scanRootId === node.id;
-                return (
-                  <li key={node.id} data-folder-id={node.id}>
-                    <div
-                      className={`group/folder relative flex items-center gap-1 rounded-sm pr-6 ${
-                        current ? 'bg-selected' : 'hover:bg-hover'
-                      }`}
-                    >
-                      <button
-                        type="button"
-                        aria-label={open ? 'Collapse folder' : 'Expand folder'}
-                        aria-expanded={open}
-                        onClick={() => actions.toggleCollapsed(store, node.id)}
-                        className="rounded-sm p-1"
-                      >
-                        <Chevron open={open} />
-                      </button>
-                      <button
-                        type="button"
-                        aria-current={current ? 'true' : undefined}
-                        onClick={() =>
-                          actions.setView(store, { kind: 'folder', scanRootId: node.id })
-                        }
-                        onContextMenu={(e) => menu.open(e, { kind: 'folder', node })}
-                        title={
-                          node.root
-                            ? `${node.root.path} (depth ${node.root.depth})`
-                            : 'Projects added without a folder'
-                        }
-                        className="flex min-w-0 flex-1 items-center gap-1.5 py-1 text-left"
-                      >
-                        <FolderIcon direct={node.id === DIRECT_FOLDER_ID} />
-                        <span className="truncate font-mono text-[11px] text-fg">{node.label}</span>
-                        <IndexStats
-                          worktrees={node.stats.worktrees}
-                          unreviewed={node.stats.unreviewed}
-                        />
-                      </button>
-                      <MoreButton
-                        label={`Actions for ${node.label}`}
-                        group="folder"
-                        onOpen={(e) => menu.open(e, { kind: 'folder', node })}
-                      />
-                    </div>
-                    {open && (
-                      <ul className="ml-2 flex flex-col border-l border-line pl-1">
-                        {node.groups.map((group) => {
-                          const pCurrent =
-                            view.kind === 'project' && view.projectId === group.project.id;
-                          const unreviewed = group.allRows.reduce((n, r) => n + r.unreviewed, 0);
-                          return (
-                            <li
-                              key={group.project.id}
-                              data-testid={TEST_IDS.projectItem}
-                              data-project-id={group.project.id}
-                              data-project-name={group.project.name}
-                              className={`group/proj relative flex items-center rounded-sm pr-6 ${
-                                pCurrent ? 'bg-selected' : 'hover:bg-hover'
-                              }`}
-                            >
-                              <button
-                                type="button"
-                                aria-current={pCurrent ? 'true' : undefined}
-                                onClick={() =>
-                                  actions.setView(store, {
-                                    kind: 'project',
-                                    projectId: group.project.id,
-                                  })
-                                }
-                                onContextMenu={(e) => menu.open(e, { kind: 'project', group })}
-                                title={group.project.mainWorktreePath ?? group.project.commonDir}
-                                className="flex min-w-0 flex-1 items-center gap-1.5 py-1 pl-2 text-left"
-                              >
-                                <span className="truncate font-medium">{group.project.name}</span>
-                                <IndexStats
-                                  worktrees={group.allRows.length}
-                                  unreviewed={unreviewed}
-                                />
-                              </button>
-                              <MoreButton
-                                label={`Actions for ${group.project.name}`}
-                                group="proj"
-                                onOpen={(e) => menu.open(e, { kind: 'project', group })}
-                              />
-                            </li>
-                          );
-                        })}
-                      </ul>
-                    )}
-                  </li>
-                );
-              })}
-            </ul>
-          </>
-        )}
-      </div>
-
-      <div className="border-t border-line p-2">
-        <button
-          type="button"
-          data-testid={TEST_IDS.addProjectButton}
-          onClick={() => {
-            // Load the start folder first so the picker opens with its list (T3 Code does this).
-            void folderStart.prefetch().then(() => store.setState({ addProjectOpen: true }));
-          }}
-          className="od-btn w-full"
-        >
-          Watch a folder or add a repository
-        </button>
       </div>
 
       {menu.state && (
@@ -801,19 +812,70 @@ export function Sidebar() {
   );
 }
 
-/** Folder and project index rows: how many worktrees, and the unreviewed count if any. */
-function IndexStats({ worktrees, unreviewed }: { worktrees: number; unreviewed: number }) {
+/**
+ * A project under its folder (T3 Code's project folder header): chevron, name, and, while
+ * closed or when every worktree has settled, what it hides. Its open worktrees follow as rows.
+ */
+function ProjectFolder({
+  group,
+  open,
+  current,
+  onToggle,
+  onOpen,
+  onMenu,
+  children,
+}: {
+  group: ProjectGroup;
+  open: boolean;
+  current: boolean;
+  onToggle: () => void;
+  onOpen: () => void;
+  onMenu: (event: RowEvent) => void;
+  children: ReactNode;
+}) {
+  const { project, rows, active } = group;
+  const unreviewed = rows.reduce((n, r) => n + r.unreviewed, 0);
+  const settledCount = rows.length - active.length;
   return (
-    <span className="ml-auto flex shrink-0 items-center gap-2 text-[11px] font-normal tabular-nums">
-      <span className="text-faint" title={plural(worktrees, 'worktree')}>
-        {worktrees}
-      </span>
-      {unreviewed > 0 && (
-        <span className="od-pill" title={`${unreviewed} unreviewed`}>
-          {unreviewed}
-        </span>
-      )}
-    </span>
+    <li
+      data-testid={TEST_IDS.projectItem}
+      data-project-id={project.id}
+      data-project-name={project.name}
+      className="group/proj relative"
+    >
+      <div
+        className={`flex h-[var(--od-row)] items-center gap-0.5 rounded-sm pr-7 pl-4 ${
+          current ? 'bg-selected' : 'hover:bg-hover'
+        }`}
+      >
+        <ChevronButton open={open} what="project" onToggle={onToggle} />
+        <button
+          type="button"
+          aria-current={current ? 'true' : undefined}
+          onClick={onOpen}
+          onContextMenu={onMenu}
+          title={project.mainWorktreePath ?? project.commonDir}
+          className="flex h-full min-w-0 flex-1 items-center gap-1.5 text-left"
+        >
+          <RepoIcon />
+          <span className="truncate font-medium">{project.name}</span>
+          {!open ? (
+            <HiddenStats worktrees={rows.length} unreviewed={unreviewed} />
+          ) : active.length === 0 ? (
+            <span
+              className="ml-auto shrink-0 text-[11px] text-faint"
+              title={`${plural(settledCount, 'worktree')}, all settled`}
+            >
+              settled
+            </span>
+          ) : null}
+        </button>
+      </div>
+      <HeaderActions group="proj">
+        <MoreButton label={`Actions for ${project.name}`} onOpen={onMenu} />
+      </HeaderActions>
+      {open && active.length > 0 && <ul className="flex flex-col">{children}</ul>}
+    </li>
   );
 }
 
@@ -844,6 +906,59 @@ function FolderIcon({ direct }: { direct: boolean }) {
           strokeLinejoin="round"
         />
       )}
+    </svg>
+  );
+}
+
+/** A repository: the branch glyph, one weight, `currentColor`. */
+function RepoIcon() {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      width="13"
+      height="13"
+      aria-hidden="true"
+      className="shrink-0 text-muted"
+    >
+      <circle cx="4.5" cy="3.5" r="1.6" fill="none" stroke="currentColor" strokeWidth="1.2" />
+      <circle cx="4.5" cy="12.5" r="1.6" fill="none" stroke="currentColor" strokeWidth="1.2" />
+      <circle cx="11.5" cy="5.5" r="1.6" fill="none" stroke="currentColor" strokeWidth="1.2" />
+      <path
+        d="M4.5 5.1v5.8M11.5 7.1c0 2.2-2.5 2.6-4.5 2.9-1 .2-2 .5-2.5 1"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.2"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+function UndoIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+      <path
+        d="M5.5 3.5 2.5 6.5l3 3M2.5 6.5H10a3.5 3.5 0 0 1 0 7H7"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function PlusIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+      <path
+        d="M8 3v10M3 8h10"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+      />
     </svg>
   );
 }

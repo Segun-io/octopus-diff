@@ -68,7 +68,8 @@ function setup(
       return mockFetch(input, init);
     },
   });
-  const store = createUiStore({ confirmBulk: false, ...opts.store }, false);
+  // The Settled shelf is closed by default; most tests read settled rows, so open it.
+  const store = createUiStore({ confirmBulk: false, settledOpen: true, ...opts.store }, false);
   const factory = () => {
     const es = new FakeEventSource();
     backend.subscribe((e) => es.dispatch(e));
@@ -431,8 +432,8 @@ describe('folder tier, overview and palette', () => {
     expect(within(code).queryAllByTestId(TEST_IDS.projectItem)).toHaveLength(3);
   });
 
-  it('partitions worktrees into cards and a settled tail; marks settle, pins lift', async () => {
-    const { store, backend } = setup();
+  it('lists open worktrees under their project; settled ones move to a closed shelf', async () => {
+    const { store, backend } = setup('demo', { store: { settledOpen: false } });
     await ready();
     const sidebar = screen.getByTestId(TEST_IDS.sidebar);
     const section = (name: string) =>
@@ -441,29 +442,83 @@ describe('folder tier, overview and palette', () => {
           `li[data-section="${name}"] [data-testid="worktree-item"]`,
         ),
       ].map((el) => el.dataset.branch);
-    // blocked first (docs-site is mid-rebase with a conflict), then the unreviewed ones in project order
-    expect(section('card')).toEqual(['', 'feat/auth', 'main', 'fix/cache', 'main']);
-    // settled: clean, verified, review off, missing, error: one word each, no counts
+    const project = (name: string) =>
+      screen
+        .getAllByTestId(TEST_IDS.projectItem)
+        .find((p) => p.dataset.projectName === name) as HTMLElement;
+    const rowActions = (branch: string) =>
+      within(worktreeItem(branch).parentElement as HTMLElement);
+
+    // under the projects, in folder order: docs-site (mid-rebase), octopus-api (main, the
+    // conflicted feat/auth, fix/cache), web-dashboard (main); the clean, review-off, failed and
+    // missing worktrees are settled and the shelf is closed
+    expect(section('folder')).toEqual(['', 'main', 'feat/auth', 'fix/cache', 'main']);
+    expect(section('settled')).toEqual([]);
+    expect(within(sidebar).getByLabelText('Expand settled').textContent).toContain('5');
+    // a project whose worktrees all settled says so instead of listing them
+    expect(project('infra').textContent).toContain('settled');
+    expect(project('octopus-api').textContent).not.toContain('settled');
+
+    // opening the shelf lists them, one word each, folder order; the pref persists
+    fireEvent.click(within(sidebar).getByLabelText('Expand settled'));
     expect(section('settled')).toEqual([
+      '',
+      'agent/codex-123',
       'trunk',
       'master',
       'old-experiment',
-      '',
-      'agent/codex-123',
     ]);
+    expect(store.getState().settledOpen).toBe(true);
     expect(worktreeItem('trunk').textContent).toContain('clean');
     expect(worktreeItem('agent/codex-123').dataset.state).toBe('settled');
     expect(
       within(worktreeItem('agent/codex-123')).getByTestId(TEST_IDS.reviewOffBadge).dataset.source,
     ).toBe('branch');
 
-    // mark every file of fix/cache reviewed: it settles and says "verified"
-    const cache = worktreeItem('fix/cache');
-    const cacheId = cache.dataset.worktreeId as string;
+    // a closed shelf still shows the selected worktree
+    const trunkId = worktreeItem('trunk').dataset.worktreeId as string;
+    fireEvent.click(within(sidebar).getByLabelText('Collapse settled'));
+    expect(section('settled')).toEqual([]);
+    store.setState({ view: { kind: 'worktree', worktreeId: trunkId } });
+    await waitFor(() => expect(section('settled')).toEqual(['trunk']));
+    expect(store.getState().settledOpen).toBe(false);
+    fireEvent.click(within(sidebar).getByLabelText('Expand settled'));
+
+    // settle by hand: the row leaves its project for the shelf, pinned to the state hash
+    fireEvent.click(rowActions('fix/cache').getByLabelText('Settle worktree'));
+    await waitFor(() => expect(worktreeItem('fix/cache').dataset.state).toBe('settled'));
+    expect(section('folder')).not.toContain('fix/cache');
+    expect(section('settled')).toContain('fix/cache');
+    const cacheId = worktreeItem('fix/cache').dataset.worktreeId as string;
+    expect(store.getState().settle).toMatchObject([{ worktreeId: cacheId, state: 'settled' }]);
+    // the next change to the worktree un-settles it (the override expires with the hash)
+    backend.mutate(cacheId, 'add');
+    await waitFor(() => expect(worktreeItem('fix/cache').dataset.state).toBe('attention'));
+    await waitFor(() => expect(store.getState().settle).toEqual([]));
+    expect(section('folder')).toContain('fix/cache');
+
+    // un-settle a clean worktree by hand: it comes back under its project with its word
+    fireEvent.click(rowActions('trunk').getByLabelText('Un-settle worktree'));
+    await waitFor(() => expect(worktreeItem('trunk').dataset.state).toBe('active'));
+    expect(section('folder')).toContain('trunk');
+    expect(worktreeItem('trunk').textContent).toContain('clean');
+    expect(project('infra').textContent).not.toContain('settled');
+    fireEvent.click(rowActions('trunk').getByLabelText('Settle worktree'));
+    await waitFor(() => expect(worktreeItem('trunk').dataset.state).toBe('settled'));
+    expect(store.getState().settle).toEqual([]);
+
+    // blocked work never settles: no check on the row, the menu item is disabled
+    expect(rowActions('').queryByLabelText('Settle worktree')).toBeNull();
+    fireEvent.click(rowActions('').getByLabelText(/^Actions for docs-site/));
+    const blockedItem = await screen.findByRole('menuitem', { name: 'Settle (blocked)' });
+    expect(blockedItem.getAttribute('aria-disabled')).toBe('true');
+    fireEvent.keyDown(blockedItem, { key: 'Escape' });
+
+    // marking every file of fix/cache reviewed settles it too, and it says "verified"
     const files = backend.listFiles(cacheId, { kind: 'working' }).files;
     for (const f of files) {
       backend.setReview({
-        projectId: cache.dataset.projectId as string,
+        projectId: worktreeItem('fix/cache').dataset.projectId as string,
         scopeKind: 'working',
         path: f.path,
         patchHash: f.patchHash,
@@ -471,26 +526,20 @@ describe('folder tier, overview and palette', () => {
       });
     }
     await waitFor(() => expect(worktreeItem('fix/cache').dataset.state).toBe('settled'));
-    expect(section('settled')).toContain('fix/cache');
     expect(worktreeItem('fix/cache').textContent).toContain('verified');
 
-    // pin it: back to the top of the cards, whatever its state
-    fireEvent.click(
-      within(worktreeItem('fix/cache').parentElement as HTMLElement).getByLabelText(/^Actions for/),
-    );
+    // pin it: listed first under "Pinned", whatever its state
+    fireEvent.click(rowActions('fix/cache').getByLabelText(/^Actions for/));
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Pin to the top' }));
-    await waitFor(() => expect(section('card')[0]).toBe('fix/cache'));
+    await waitFor(() => expect(section('pinned')).toEqual(['fix/cache']));
     expect(store.getState().pinned).toEqual([cacheId]);
-    expect(worktreeItem('fix/cache').textContent).toContain('pinned');
+    expect(section('settled')).not.toContain('fix/cache');
 
-    // collapsing the settled tail hides its rows; selecting one of them reopens it
-    const trunkId = worktreeItem('trunk').dataset.worktreeId as string;
-    fireEvent.click(within(sidebar).getByLabelText('Collapse settled'));
-    expect(section('settled')).toEqual([]);
-    expect(store.getState().collapsed).toContain('settled');
-    store.setState({ view: { kind: 'worktree', worktreeId: trunkId } });
-    await waitFor(() => expect(section('settled')).toContain('trunk'));
-    expect(store.getState().collapsed).not.toContain('settled');
+    // a project collapses on its own; the pref persists next to the folder ids
+    fireEvent.click(within(project('octopus-api')).getByLabelText('Collapse project'));
+    expect(section('folder')).toEqual(['', 'main']);
+    expect(store.getState().collapsed).toEqual([project('octopus-api').dataset.projectId]);
+    expect(project('octopus-api').textContent).toContain('4');
   });
 
   it('selecting a folder or project shows the Overview; the view registry routes it', async () => {

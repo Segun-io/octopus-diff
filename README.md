@@ -106,7 +106,7 @@ Code's `.claude/worktrees`, Conductor, Codex and hand-made worktrees alike). A *
 directory that is searched for repositories down to a depth (default 3, max 8), skipping
 `node_modules` and similar.
 
-In the UI, **Watch a folder or add a repository** (the sidebar button, the empty screen, or Settings →
+In the UI, **Watch a folder or add a repository** (the `+` in the sidebar header, the empty screen, or Settings →
 Folders) opens a folder picker that browses the daemon's machine. Click a folder to open it, or type a
 path: the part after the last `/` filters the list, `Tab` completes, and typing `.` shows hidden
 folders. Repositories and linked worktrees are marked, and a repository can be added straight from its
@@ -120,13 +120,14 @@ Settings → Folders → **Start browsing in** sets where the picker opens (defa
 
 ### Review controls, settings and themes
 
-- **The sidebar is an activity list.** Under the Inbox, **To review** shows a card for every worktree that
-  wants attention: it has unreviewed files, a conflict or an operation in progress, or you pinned it. Below,
-  **Settled** lists everything else as one dimmed line each (`clean`, `verified`, `review off`, `missing`).
-  Marking a worktree's files verified moves it into the tail; the next change an agent makes brings it back as
-  a card. Rows never reorder on activity. **Projects** at the bottom is an index of your folders and
-  repositories; a click opens the Overview, right-click (or `⋯`) the actions. Pin a worktree from its menu to
-  keep it at the top.
+- **The sidebar is your folders and projects, with the open work under them.** Under the Inbox (and anything
+  you pinned), each watched folder lists its repositories, and each repository lists the worktrees that are
+  still open: unreviewed files, a conflict or an operation in progress. Everything else (`clean`, `verified`,
+  `review off`, `missing`) sits in the **Settled** shelf at the bottom, closed by default with a count; a
+  project whose worktrees all settled just says `settled`. Hover a row for the check that settles it by hand
+  (or the arrow that brings it back); the next change to that worktree un-settles it automatically, as does a
+  new patch after you verified everything. Blocked work never settles. Click a folder or repository for its
+  Overview, right-click (or `⋯`) for the actions, and pin a worktree to keep it at the top.
 - **Mark all as verified.** The button above the file list marks every file you can see (respecting the
   sidebar filters); in the Inbox it marks everything. `Shift+R` does the same from the keyboard, and the
   context menu of a worktree, project or folder (and the folder Overview) can mark that whole level, or

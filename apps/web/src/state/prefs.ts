@@ -6,10 +6,11 @@
  *             fileListLayout }`
  * v2 (UX round 1): adds `version: 2`, `theme` becomes `{ mode, light, dark }`, plus density,
  *             defaultScope, autoAdvance, reviewOffDisplay, titleCount, confirmBulk, sidebar
- *             collapse state.
- *     (folder picker, still v2: adds `folderStart`; older documents get the default.)
+ *             collapse state. Later additive fields (`pinned`, `folderStart`, `settle`,
+ *             `settledOpen`) need no version bump: `normalizePrefs` fills their defaults.
  */
 import { type DiffScope, type ScopeKind, scopeFromQueryFields } from '@octopus-diff/contracts';
+import type { SettleOverride } from '../lib/model.ts';
 import { normalizeThemePrefs, type ThemePrefs } from '../theme/registry.ts';
 
 export const PREFS_STORAGE_KEY = 'octopus-diff:prefs';
@@ -36,12 +37,16 @@ export interface Prefs {
   titleCount: boolean;
   /** Ask before a bulk "mark all" that touches more than one worktree. */
   confirmBulk: boolean;
-  /** Collapsed sidebar nodes (folder ids, `settled`). */
+  /** Collapsed sidebar nodes (folder and project ids). */
   collapsed: string[];
-  /** Worktrees pinned to the top of the sidebar's card block (worktree ids). */
+  /** Worktrees pinned to the top of the sidebar (worktree ids). */
   pinned: string[];
   /** Where the folder picker opens (location text); empty means home (`~/`). */
   folderStart: string;
+  /** Manual settle / un-settle overrides; each holds while the worktree's `stateHash` matches. */
+  settle: SettleOverride[];
+  /** The Settled shelf is open (closed by default: density is earned by settling). */
+  settledOpen: boolean;
 }
 
 export const DEFAULT_PREFS: Prefs = {
@@ -59,12 +64,30 @@ export const DEFAULT_PREFS: Prefs = {
   collapsed: [],
   pinned: [],
   folderStart: '',
+  settle: [],
+  settledOpen: false,
 };
 
 function stringList(value: unknown): string[] {
   return Array.isArray(value)
     ? value.filter((x): x is string => typeof x === 'string').slice(0, 1000)
     : [];
+}
+
+function settleList(value: unknown): SettleOverride[] {
+  if (!Array.isArray(value)) return [];
+  const out: SettleOverride[] = [];
+  for (const item of value.slice(0, 1000)) {
+    const o = (typeof item === 'object' && item !== null ? item : {}) as Record<string, unknown>;
+    if (
+      typeof o.worktreeId === 'string' &&
+      typeof o.stateHash === 'string' &&
+      (o.state === 'settled' || o.state === 'active')
+    ) {
+      out.push({ worktreeId: o.worktreeId, state: o.state, stateHash: o.stateHash });
+    }
+  }
+  return out;
 }
 
 export const PREF_KEYS = Object.keys(DEFAULT_PREFS) as (keyof Prefs)[];
@@ -103,6 +126,8 @@ export function normalizePrefs(raw: unknown): Prefs {
       typeof v.folderStart === 'string' && v.folderStart.length <= 4096
         ? v.folderStart
         : DEFAULT_PREFS.folderStart,
+    settle: settleList(v.settle),
+    settledOpen: bool(v.settledOpen) ?? DEFAULT_PREFS.settledOpen,
   };
 }
 

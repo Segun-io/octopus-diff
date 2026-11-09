@@ -147,6 +147,7 @@ export function ToggleButton({
   title,
   testId,
   extra,
+  variant = 'button',
 }: {
   pressed: boolean;
   onClick: () => void;
@@ -154,6 +155,8 @@ export function ToggleButton({
   title: string;
   testId: string;
   extra?: Record<string, string>;
+  /** `chip`: the small filter chip of the sidebar (`.od-chip`, filled softly while pressed). */
+  variant?: 'button' | 'chip';
 }) {
   return (
     <button
@@ -162,7 +165,7 @@ export function ToggleButton({
       title={title}
       data-testid={testId}
       onClick={onClick}
-      className="od-btn"
+      className={variant === 'chip' ? 'od-chip' : 'od-btn'}
       {...extra}
     >
       {children}

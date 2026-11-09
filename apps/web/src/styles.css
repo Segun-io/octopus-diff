@@ -268,6 +268,21 @@ kbd {
     white-space: nowrap;
   }
 
+  /* A chip that is also a toggle (the sidebar filters): filled softly while pressed. */
+  button.od-chip {
+    height: 18px;
+    cursor: pointer;
+  }
+  button.od-chip:hover {
+    background: var(--od-hover);
+    color: var(--od-fg);
+  }
+  button.od-chip[aria-pressed="true"],
+  button.od-chip[aria-pressed="true"]:hover {
+    background: var(--od-accent-soft);
+    color: var(--od-fg);
+  }
+
   /* The unreviewed count: the only filled shape and the only pill in the frame. */
   .od-pill {
     display: inline-flex;

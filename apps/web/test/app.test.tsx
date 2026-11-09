@@ -55,7 +55,8 @@ function setup(dataset: MockDataset = 'demo', opts: { token?: string } = {}): Ha
       return mockFetch(input, init);
     },
   });
-  const store = createUiStore({}, false);
+  // The Settled shelf is closed by default; these tests read settled rows, so open it.
+  const store = createUiStore({ settledOpen: true }, false);
   const factory = () => {
     const es = new FakeEventSource();
     backend.subscribe((e) => es.dispatch(e));
@@ -347,12 +348,12 @@ describe('keyboard', () => {
     await press(user, 'k');
     expect(viewerPath()).toBe('README.md');
 
-    await press(user, 'J'); // first card: docs-site (detached, mid-rebase: blocked)
+    await press(user, 'J'); // first row of the first folder: docs-site (detached, mid-rebase)
     const current = () =>
       document.querySelector(`[data-testid="${TEST_IDS.worktreeItem}"][aria-current="true"]`);
     await waitFor(() => expect(current()?.getAttribute('data-branch')).toBe(''));
-    await press(user, 'J'); // next card: octopus-api feat/auth (a conflict: blocked too)
-    await waitFor(() => expect(current()?.getAttribute('data-branch')).toBe('feat/auth'));
+    await press(user, 'J'); // next project in the folder: octopus-api, its main checkout first
+    await waitFor(() => expect(current()?.getAttribute('data-branch')).toBe('main'));
     await press(user, 'K');
     await press(user, 'K');
     await waitFor(() =>

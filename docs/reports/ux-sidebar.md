@@ -76,3 +76,58 @@ None.
   first-paint behaviour as the old pills).
 - Not covered by UI tests: the Pin command from the palette (there is none; pinning is menu-only), the tail's
   auto-reopen from `n`.
+
+---
+
+# UX round 4 — folders back, an explicit settle, a closed shelf (lead)
+
+2026-11-08. Branch `ux/sidebar-folders` on top of `main` at `1325cc3`. The user's verdict on round 3: the hierarchy is
+off, the add-repository and filter controls look off, worktrees cannot be settled, and the settled ones still show;
+follow the proven UI in T3 Code (`~/contrib/t3code`) where it applies. Decisions #47–#52 ("UX round 4").
+
+## What was learned
+
+T3 Code's current sidebar (`apps/web/src/components/Sidebar.tsx`, `sidebar/SidebarProjectFolderHeader.tsx`,
+`Sidebar.logic.ts`; MIT, ideas only) is no longer the flat V2 list round 3 copied. In its default "folders" mode the
+list is: a **Pinned** block; then one collapsible **folder per project** whose header carries a favicon, the name, a
+status dot and a count only while closed, and a hover-only "new thread" button; under it the project's *active*
+threads as one-line rows; then the **Working**, **Snoozed** and **Settled** shelves, each a collapsible header with a
+count, **closed by default** (`useLocalStorage(SETTLED_SHELF_EXPANDED_KEY, false)`); a closed Settled shelf still
+renders the thread on the current route (`routeThreadOnly`). Settle / Un-settle is a hover-revealed check or undo
+icon in the row's status slot with a focus-visible fallback, plus `Settle thread` / `Un-settle thread` in the thread
+menu; a settled thread un-settles when the user sends a new message. Blocked work never settles.
+
+What maps onto octopus-diff: scan roots and projects are the folders; worktrees are the threads; the daemon's
+`WorktreeSummary.stateHash` (HEAD, branch, ahead/behind, every patch) is the "new activity" signal, so a manual settle
+can be stored per device as `{ worktreeId, state, stateHash }` and expire by itself. What does not map: the Working
+shelf (our activity pulse already marks a worktree an agent is writing to, and rows never reorder), snooze, favicons,
+drag to settle.
+
+## Shipped
+
+| Round 3 | Round 4 |
+|---|---|
+| Inbox → **To review** cards (project + branch repeated on every card, a facts line) → **Settled** tail (open by default) → **Projects** index | Inbox → **Pinned** → folders (collapsible headers) → projects (collapsible headers, repo glyph) → one-line rows with only the branch → **Settled** shelf, closed by default, showing the selected row while closed |
+| Settling only through review marks | A check on hover / focus settles a row by hand; an undo arrow un-settles; `Settle` / `Un-settle` in the row menu; blocked rows have neither (disabled `Settle (blocked)`). Held by `stateHash`; the next change to the worktree drops it |
+| Footer button "Watch a folder or add a repository"; two `od-btn` toggles under the filter | `+` icon in the header next to Settings (same test id); the two filters as chips (`ToggleButton variant="chip"`) |
+| Project rows in an index with a count and the pill | Project headers show the hidden count and pill while closed, the word `settled` when every worktree settled; files, `+a −d` and ahead/behind moved to the row tooltip |
+
+Model: `RowState = blocked | attention | active | settled`, `rowState()` takes a `SettleOverride`, `WorktreeRow.settledBy`,
+`ProjectGroup.active`, `SidebarModel.pinned`/`settled`/`order` (folder order). Prefs: `settle: SettleOverride[]`,
+`settledOpen: boolean` (both additive, no version bump). Actions: `setSettle`, `pruneSettle`, `toggleSettledOpen`.
+
+## Verification
+
+See the table at the end of this section (filled after the runs).
+
+## Contract changes
+
+None.
+
+## Known gaps
+
+- A manual settle is per device (localStorage), like pins. Sharing it through the daemon would need a small
+  additive route; not asked for.
+- The `settled` word on a quiet project header repeats once per project; with many quiet projects a user may prefer
+  to collapse the folder (its header then shows one count). A "hide quiet projects" pref is a possible follow-up.
+- Auto-settle after N days still needs a daemon change-timestamp (#46).

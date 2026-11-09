@@ -90,22 +90,39 @@ export interface WorktreeRow {
   scopeFiles: number;
   /** Effective review policy (absent from older daemons = enabled by default). */
   review: EffectiveReviewPolicy;
-  /** Where the row sits in the activity list (see `rowState`). */
+  /** Where the row sits in the sidebar (see `rowState`). */
   state: RowState;
-  /** Pinned on this device: always a card, at the top, whatever its state. */
+  /** The user settled or un-settled this worktree by hand and the override still holds. */
+  settledBy: 'auto' | 'user';
+  /** Pinned on this device: listed at the top under "Pinned", whatever its state. */
   pinned: boolean;
 }
 
 /**
- * A worktree's place in the sidebar's activity list (DECISIONS "UX round 3"). `blocked`: a
- * conflict or an in-progress operation (merge, rebase, …); blocked work never settles.
- * `attention`: unreviewed files in the current scope. `settled`: everything else, which is clean,
- * all verified, out of the review loop, missing or failed. Only review marks move a row between
- * the card block and the settled tail; activity never reorders rows.
+ * A worktree's place in the sidebar (DECISIONS "UX round 4"). `blocked`: a conflict or an
+ * in-progress operation (merge, rebase, …); blocked work never settles. `attention`: unreviewed
+ * files in the current scope. `settled`: clean, all verified, out of the review loop, missing or
+ * failed, or settled by hand; settled rows leave their project and sit in the Settled shelf.
+ * `active`: a row the user un-settled by hand that would otherwise be settled; it stays under its
+ * project with its word. Only review marks and the settle action move a row; activity never
+ * reorders rows.
  */
-export type RowState = 'blocked' | 'attention' | 'settled';
+export type RowState = 'blocked' | 'attention' | 'active' | 'settled';
 
-export function rowState(row: Pick<WorktreeRow, 'summary' | 'unreviewed' | 'worktree'>): RowState {
+/**
+ * A manual settle or un-settle, per device. It holds only while the worktree's `stateHash` is the
+ * one it was made on: the next change to the worktree (a new patch, a commit, a branch switch)
+ * drops it and the automatic rule applies again, which is T3 Code's "new activity un-settles".
+ */
+export interface SettleOverride {
+  worktreeId: string;
+  state: 'settled' | 'active';
+  stateHash: string;
+}
+
+export function autoRowState(
+  row: Pick<WorktreeRow, 'summary' | 'unreviewed' | 'worktree'>,
+): RowState {
   const s = row.summary;
   if (s && !row.worktree.missing && (s.counts.conflicted > 0 || s.inProgress !== null)) {
     return 'blocked';
@@ -114,7 +131,32 @@ export function rowState(row: Pick<WorktreeRow, 'summary' | 'unreviewed' | 'work
   return 'settled';
 }
 
-/** The one word a settled row says instead of its counts. */
+/** True while an override still applies to the worktree's current state. */
+export function overrideHolds(
+  override: SettleOverride | undefined,
+  summary: WorktreeSummary | null,
+): override is SettleOverride {
+  return override !== undefined && summary !== null && override.stateHash === summary.stateHash;
+}
+
+export function rowState(
+  row: Pick<WorktreeRow, 'summary' | 'unreviewed' | 'worktree'>,
+  override?: SettleOverride,
+): { state: RowState; settledBy: 'auto' | 'user' } {
+  const auto = autoRowState(row);
+  if (!overrideHolds(override, row.summary)) return { state: auto, settledBy: 'auto' };
+  if (override.state === 'settled') {
+    // Blocked work never settles, not even by hand.
+    return auto === 'blocked'
+      ? { state: auto, settledBy: 'auto' }
+      : { state: 'settled', settledBy: 'user' };
+  }
+  return auto === 'settled'
+    ? { state: 'active', settledBy: 'user' }
+    : { state: auto, settledBy: 'auto' };
+}
+
+/** The one word a settled (or un-settled) row says instead of its counts. */
 export type SettledWord = 'verified' | 'clean' | 'review off' | 'missing' | 'error' | 'loading';
 
 export function settledWord(
@@ -129,7 +171,10 @@ export function settledWord(
 
 export interface ProjectGroup {
   project: Project;
+  /** Rows that pass the filters, in worktree order. */
   rows: WorktreeRow[];
+  /** Visible rows listed under the project: not pinned, not settled. */
+  active: WorktreeRow[];
   /** All rows of the project, filters ignored (for aggregates and bulk targets). */
   allRows: WorktreeRow[];
 }
@@ -156,14 +201,11 @@ export interface SidebarModel {
   groups: ProjectGroup[];
   /** Folder tier: scan roots (sorted by path) then "Added directly", only non-empty ones. */
   folders: FolderNode[];
-  /**
-   * The card block: pinned rows, then blocked, then rows with unreviewed files, each in project
-   * and worktree order (static: activity never reorders). Filters applied.
-   */
-  cards: WorktreeRow[];
-  /** The settled tail in project and worktree order. Filters applied. */
+  /** Pinned rows (filters applied), listed first, in project and worktree order. */
+  pinned: WorktreeRow[];
+  /** The Settled shelf, in project and worktree order. Filters applied. */
   settled: WorktreeRow[];
-  /** Visible worktree ids in display order, cards then settled (for J/K). */
+  /** Visible worktree ids in display order: pinned, then folders, then settled (for J/K). */
   order: string[];
   /** Every worktree row by id, regardless of filters. */
   byId: Map<string, WorktreeRow>;
@@ -283,6 +325,7 @@ export function buildSidebar(
   filters: SidebarFilters,
   scanRoots?: readonly ScanRoot[],
   pinned: readonly string[] = [],
+  settle: readonly SettleOverride[] = [],
 ): SidebarModel {
   const inboxStats = new Map<string, { unreviewed: number; files: number }>();
   for (const entry of inbox ?? []) {
@@ -291,6 +334,7 @@ export function buildSidebar(
     inboxStats.set(entry.worktree.id, { unreviewed, files: entry.files.length });
   }
   const pinnedSet = new Set(pinned);
+  const overrides = new Map(settle.map((o) => [o.worktreeId, o]));
   const groups: ProjectGroup[] = [];
   const byId = new Map<string, WorktreeRow>();
   const sorted = [...projects].sort((a, b) => compareProjects(a.project, b.project));
@@ -302,6 +346,10 @@ export function buildSidebar(
       const stats = inboxStats.get(wt.worktree.id);
       const review = effectivePolicy(wt.review);
       const unreviewed = review.enabled ? (stats?.unreviewed ?? 0) : 0;
+      const { state, settledBy } = rowState(
+        { summary: wt.summary, unreviewed, worktree: wt.worktree },
+        overrides.get(wt.worktree.id),
+      );
       const row: WorktreeRow = {
         project: item.project,
         worktree: wt.worktree,
@@ -310,7 +358,8 @@ export function buildSidebar(
         unreviewed,
         scopeFiles: stats?.files ?? 0,
         review,
-        state: rowState({ summary: wt.summary, unreviewed, worktree: wt.worktree }),
+        state,
+        settledBy,
         pinned: pinnedSet.has(wt.worktree.id),
       };
       byId.set(wt.worktree.id, row);
@@ -318,17 +367,26 @@ export function buildSidebar(
       if (rowVisible(row, filters)) rows.push(row);
     }
     // A project is shown only when at least one of its worktrees is visible.
-    if (rows.length > 0) groups.push({ project: item.project, rows, allRows });
+    if (rows.length > 0) {
+      groups.push({
+        project: item.project,
+        rows,
+        active: rows.filter((r) => !r.pinned && r.state !== 'settled'),
+        allRows,
+      });
+    }
   }
-  const visible = groups.flatMap((g) => g.rows);
-  const cards = [
-    ...visible.filter((r) => r.pinned),
-    ...visible.filter((r) => !r.pinned && r.state === 'blocked'),
-    ...visible.filter((r) => !r.pinned && r.state === 'attention'),
-  ];
-  const settled = visible.filter((r) => !r.pinned && r.state === 'settled');
-  const order = [...cards, ...settled].map((r) => r.worktree.id);
-  return { groups, folders: buildFolders(groups, scanRoots), cards, settled, order, byId };
+  const folders = buildFolders(groups, scanRoots);
+  // Folder order (not the global project sort), so the shelf reads like the tree above it.
+  const inFolderOrder = folders.flatMap((f) => f.groups.flatMap((g) => g.rows));
+  const pinnedRows = inFolderOrder.filter((r) => r.pinned);
+  const settled = inFolderOrder.filter((r) => !r.pinned && r.state === 'settled');
+  const order = [
+    ...pinnedRows,
+    ...folders.flatMap((f) => f.groups.flatMap((g) => g.active)),
+    ...settled,
+  ].map((r) => r.worktree.id);
+  return { groups, folders, pinned: pinnedRows, settled, order, byId };
 }
 
 /** Inbox entries sorted like the sidebar (project name, then worktree order). */
