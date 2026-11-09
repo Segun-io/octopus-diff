@@ -16,6 +16,7 @@ import {
   repairSelection,
   rowState,
   settledWord,
+  settleToggle,
   sortFiles,
   sortInboxEntries,
   stageOf,
@@ -260,6 +261,74 @@ describe('stages (docs/STATUS-FLOW.md §2.2)', () => {
     expect(stageOf({ summary: clean, worktree, unreviewed: 0, review: on, forge: null })).toBe(
       'reviewed',
     );
+  });
+
+  it('Show brings back a merged worktree with unreviewed files (forge data on the row)', () => {
+    const { projects: list } = demo();
+    const target = list.flatMap((p) => p.worktrees).find((w) => w.worktree.id === worktree.id);
+    if (!target?.summary) throw new Error('fixture');
+    const merged = {
+      ...target.summary,
+      counts: { ...target.summary.counts, conflicted: 0 },
+      inProgress: null,
+      changedFiles: 0,
+      review: {
+        bookmark: 'a'.repeat(40),
+        base: 'a'.repeat(40),
+        newCommits: 3,
+        unreviewedFiles: 1,
+        historyRewritten: false,
+      },
+    };
+    const projects = list.map((p) => ({
+      ...p,
+      worktrees: p.worktrees.map((w) =>
+        w.worktree.id === worktree.id ? { ...w, summary: merged } : w,
+      ),
+    }));
+    const forges = new Map([
+      [
+        worktree.id,
+        {
+          changeRequest: {
+            kind: 'github' as const,
+            number: 3,
+            title: 't',
+            url: 'https://github.com/o/r/pull/3',
+            state: 'merged' as const,
+            draft: false,
+            author: null,
+            baseBranch: 'main',
+            headBranch: 'feature',
+            headSha: merged.headSha,
+            crossRepository: false,
+            headRepository: null,
+            updatedAt: null,
+            checks: null,
+            review: null,
+            conflicts: null,
+            comments: null,
+          },
+          sync: 'unknown' as const,
+        },
+      ],
+    ]);
+    const build = (settle: Parameters<typeof buildSidebar>[5] = []) =>
+      buildSidebar(projects, undefined, NO_SIDEBAR_FILTERS, undefined, [], settle, forges).byId.get(
+        worktree.id,
+      );
+    const hidden = build();
+    expect(hidden?.state).toBe('settled');
+    if (!hidden) throw new Error('row');
+    const next = settleToggle(hidden);
+    expect(next).toBe('active');
+    const shown = build([
+      { worktreeId: worktree.id, state: 'active', stateHash: merged.stateHash },
+    ]);
+    expect(shown?.state).toBe('active');
+    // and Hide sends it back to the shelf by dropping the override
+    if (!shown) throw new Error('row');
+    expect(settleToggle(shown)).toBeNull();
   });
 
   it('places stages: blocked and To review under the project, the rest in the shelf', () => {

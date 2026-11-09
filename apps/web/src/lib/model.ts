@@ -252,6 +252,21 @@ export function autoRowState(row: StageInput): RowState {
   return placeOf(stageOf(row), (row.summary?.changedFiles ?? 0) > 0);
 }
 
+/**
+ * The override the row's Hide / Show action sets (`null` removes it), or `undefined` when the
+ * row cannot be hidden (blocked, or no summary yet). Works from the row's own `stage`, which
+ * already includes the forge data: a `WorktreeRow` carries that as `request`, not `forge`, so
+ * `autoRowState(row)` would miss a merged/closed PR and get the automatic place wrong.
+ */
+export function settleToggle(
+  row: Pick<WorktreeRow, 'stage' | 'state' | 'summary'>,
+): 'settled' | 'active' | null | undefined {
+  if (!row.summary || row.state === 'blocked') return undefined;
+  const auto = placeOf(row.stage, row.summary.changedFiles > 0);
+  if (row.state === 'settled') return auto === 'settled' ? 'active' : null;
+  return auto === 'settled' ? null : 'settled';
+}
+
 /** True while an override still applies to the worktree's current state. */
 export function overrideHolds(
   override: SettleOverride | undefined,
