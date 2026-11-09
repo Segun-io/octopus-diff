@@ -2,7 +2,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { FakeGitCore } from './fake-git-core.js';
-import { client, recordEvents, startTestDaemon, tempDir } from './helpers.js';
+import { client, eventually, recordEvents, startTestDaemon, tempDir } from './helpers.js';
 
 /**
  * PLAN §6 WS2 "done when", with the fake git-core (fs-backed: every file in a worktree is an
@@ -30,6 +30,9 @@ describe('live updates end to end (fake git-core, real watcher, real SSE)', () =
 
     const before = await api.listFiles(agentWt.id);
     expect(before.files.map((f) => f.path)).toEqual(['app.ts']);
+    // Registration does not wait for watching to start (the watch host may still be booting
+    // under load, DECISIONS #130): the latency below is measured once it is active.
+    await eventually(async () => (await api.health()).watcher.mode === 'native', 10_000);
 
     // An "agent" edits a file in the linked worktree.
     const t0 = Date.now();
@@ -81,6 +84,7 @@ describe('live updates end to end (fake git-core, real watcher, real SSE)', () =
     // Editing the reviewed file again makes it unreviewed (new patch hash) and is live too.
     const events2 = recordEvents(restarted);
     await events2.opened;
+    await eventually(async () => (await api2.health()).watcher.mode === 'native', 10_000);
     await writeFile(path.join(agentWt.path, 'app.ts'), 'export const a = 3;\n');
     await events2.waitFor(
       (e) => e.type === 'worktree.changed' && e.worktreeId === agentWt.id,
