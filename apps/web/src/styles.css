@@ -237,6 +237,26 @@ kbd {
     background: var(--od-del-soft);
     color: var(--od-danger);
   }
+  /* A pressed ghost toggle keeps the soft fill (the ghost recipe clears the background). */
+  .od-btn.od-btn-ghost[aria-pressed="true"],
+  .od-btn.od-btn-ghost[aria-pressed="true"]:hover {
+    background: var(--od-accent-soft);
+    color: var(--od-fg);
+  }
+  /* An icon-only control: a square the size of a control. */
+  .od-btn.od-btn-icon {
+    width: var(--od-control);
+    padding: 0;
+  }
+
+  /* Hairline between groups of controls in a header row (docs/TOOLBAR.md). */
+  .od-sep {
+    flex: none;
+    width: 1px;
+    height: 16px;
+    margin: 0 var(--od-space-1);
+    background: var(--od-line);
+  }
 
   .od-input {
     height: var(--od-control);

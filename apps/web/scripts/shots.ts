@@ -59,6 +59,11 @@ const STATES: Record<string, Step> = {
     await page.keyboard.press('Control+k');
     await page.waitForTimeout(300);
   },
+  'commit-scope': async (page) => {
+    await page.locator('[data-testid="worktree-item"][data-branch="feat/auth"]').click();
+    await page.locator('[data-testid="scope-select"]').selectOption('commit');
+    await page.waitForTimeout(400);
+  },
   'policy-menu': async (page) => {
     await page.locator('[data-testid="worktree-item"][data-branch="feat/auth"]').click();
     await page.locator('[data-testid="review-policy-chip"]').click();

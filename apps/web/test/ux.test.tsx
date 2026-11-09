@@ -877,3 +877,58 @@ describe('Escape closes overlays even when focus left them (ux-e2e seam fix)', (
     expect(document.activeElement).toBe(screen.getByTestId(TEST_IDS.reviewPolicyChip));
   });
 });
+
+describe('chrome hierarchy (docs/TOOLBAR.md)', () => {
+  it('the context bar says where you are; list and diff controls sit over their own panes', async () => {
+    setup();
+    await ready();
+    const bar = () => screen.getByTestId('context-bar');
+    const listOptions = () => screen.getByRole('toolbar', { name: 'File list options' });
+    expect(bar().textContent).toMatch(/^Inbox\d+ worktrees\d+ files/);
+    // In the Inbox the list mixes worktrees, so the diff header names the file's.
+    expect(within(viewer()).getByTestId('diff-header-worktree')).toBeTruthy();
+    // List controls over the list, diff controls over the diff.
+    expect(within(listOptions()).getByTestId(TEST_IDS.scopeSelect)).toBeTruthy();
+    expect(within(listOptions()).getByTestId(TEST_IDS.showReviewedToggle)).toBeTruthy();
+    expect(within(listOptions()).queryByTestId('tree-view-toggle')).toBeNull();
+    expect(within(viewer()).getByTestId(TEST_IDS.diffModeToggle)).toBeTruthy();
+    expect(within(viewer()).getByTestId(TEST_IDS.whitespaceToggle)).toBeTruthy();
+
+    const row = worktreeItem('feat/auth');
+    fireEvent.click(row);
+    await waitFor(() =>
+      expect(viewer().getAttribute('data-worktree-id')).toBe(row.dataset.worktreeId),
+    );
+    expect(within(bar()).getByTestId('context-bar-worktree').textContent).toBe(
+      'octopus-apifeat/auth',
+    );
+    expect(within(viewer()).queryByTestId('diff-header-worktree')).toBeNull();
+    expect(within(bar()).getByTestId(TEST_IDS.worktreeTabs)).toBeTruthy();
+    // The forge link says the state; the tab beside it has the number.
+    const badge = await within(bar()).findByTestId(TEST_IDS.changeRequestBadge);
+    expect(badge.textContent).not.toMatch(/#/);
+    expect(badge.textContent).toMatch(/open/);
+    await within(bar()).findByTestId(TEST_IDS.reviewPolicyChip);
+    expect(within(listOptions()).getByTestId('tree-view-toggle')).toBeTruthy();
+
+    // The layout control is a segmented pair: the group carries the mode, a button per mode.
+    const modes = () => within(viewer()).getByTestId(TEST_IDS.diffModeToggle);
+    expect(modes().getAttribute('data-mode')).toBe('split');
+    fireEvent.click(within(modes()).getByRole('button', { name: 'Unified' }));
+    expect(modes().getAttribute('data-mode')).toBe('unified');
+    expect(viewer().getAttribute('data-mode')).toBe('unified');
+    fireEvent.click(within(modes()).getByRole('button', { name: 'Unified' }));
+    expect(modes().getAttribute('data-mode')).toBe('unified');
+
+    // The Request tab keeps the bar (identity, tabs) and drops the pane headers below it.
+    fireEvent.click(within(bar()).getAllByTestId(TEST_IDS.worktreeTab)[1] as HTMLElement);
+    await screen.findByTestId(TEST_IDS.requestView);
+    expect(within(bar()).getByTestId('context-bar-worktree').textContent).toBe(
+      'octopus-apifeat/auth',
+    );
+    expect(within(bar()).getByTestId(TEST_IDS.worktreeTabs)).toBeTruthy();
+    expect(within(bar()).queryByTestId(TEST_IDS.changeRequestBadge)).toBeNull();
+    expect(screen.queryByTestId(TEST_IDS.scopeSelect)).toBeNull();
+    expect(screen.queryByTestId(TEST_IDS.diffModeToggle)).toBeNull();
+  });
+});

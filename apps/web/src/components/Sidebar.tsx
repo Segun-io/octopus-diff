@@ -28,11 +28,12 @@ import { useCommandsContext } from '../state/commandsContext.tsx';
 import { type CopyFn, copyAndReport } from '../state/copy.ts';
 import { useAppModel } from '../state/model.tsx';
 import { actions, useUi, useUiStore, type View } from '../state/ui.tsx';
-import { ChangeRequestChip, ChangeRequestHoverBlock } from './ChangeRequest.tsx';
+import { ChangeRequestHoverBlock } from './ChangeRequest.tsx';
 import { ContextMenu, type MenuItem, useContextMenu } from './ContextMenu.tsx';
 import { separated, worktreeCopyItems } from './copyMenu.ts';
 import { useFolderStart } from './FolderBrowser.tsx';
 import { Wordmark } from './Mark.tsx';
+import { RowChips } from './WorktreeChips.tsx';
 import { SidebarFilter } from './SidebarFilter.tsx';
 
 /**
@@ -100,35 +101,6 @@ function rowAttributes(row: WorktreeRow, selected: boolean) {
     'data-pinned': String(row.pinned),
     'aria-current': selected ? ('true' as const) : undefined,
   };
-}
-
-/** `main` (off the default branch), the worktree source, an in-progress operation, its PR/MR. */
-function RowChips({ row }: { row: WorktreeRow }) {
-  const { worktree, summary, project } = row;
-  const source = worktree.isMain ? null : worktreeSource(worktree.path);
-  // The main checkout on the default branch is the expected case; the chip speaks only when the
-  // main checkout sits elsewhere, or when the project has no default branch to compare with.
-  const mainChip = worktree.isMain && worktree.branch !== project.defaultBranch;
-  return (
-    <>
-      {mainChip && (
-        <span className="od-chip" title="Main checkout">
-          main
-        </span>
-      )}
-      {source && (
-        <span className="od-chip font-mono" title={source.title}>
-          {source.label}
-        </span>
-      )}
-      {summary?.inProgress && (
-        <span className="od-chip text-warn" title={`${summary.inProgress} in progress`}>
-          {summary.inProgress}
-        </span>
-      )}
-      <ChangeRequestChip worktreeId={worktree.id} />
-    </>
-  );
 }
 
 function ReviewOffBadge({ row }: { row: WorktreeRow }) {

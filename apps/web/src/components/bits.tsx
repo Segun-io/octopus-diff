@@ -205,6 +205,57 @@ export function WorktreeName({
   );
 }
 
+/** Unified diff layout: one column of rows. */
+export function RowsIcon(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <rect x="2.5" y="3" width="11" height="10" rx="1.5" />
+      <path d="M2.5 6.5h11M2.5 9.5h11" />
+    </Svg>
+  );
+}
+
+/** Split diff layout: two columns. */
+export function ColumnsIcon(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <rect x="2.5" y="3" width="11" height="10" rx="1.5" />
+      <path d="M8 3v10" />
+    </Svg>
+  );
+}
+
+/** Whitespace: a pilcrow. */
+export function PilcrowIcon(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M13 2.5H7a3 3 0 0 0 0 6h2.5M9.5 2.5v11M12.5 2.5v11" />
+    </Svg>
+  );
+}
+
+/** Visibility (the "show reviewed files" toggle). */
+export function EyeIcon(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M1.5 8c1.8-3 4-4.5 6.5-4.5S12.7 5 14.5 8c-1.8 3-4 4.5-6.5 4.5S3.3 11 1.5 8z" />
+      <circle cx="8" cy="8" r="2" />
+    </Svg>
+  );
+}
+
+/** The files as a directory tree. */
+export function TreeIcon(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <rect x="2" y="2.5" width="4.5" height="3" rx="0.75" />
+      <rect x="9.5" y="6.5" width="4.5" height="3" rx="0.75" />
+      <rect x="9.5" y="11" width="4.5" height="3" rx="0.75" />
+      <path d="M4.25 5.5v7h5.25M4.25 8h5.25" />
+    </Svg>
+  );
+}
+
 export function Kbd({ children }: { children: ReactNode }) {
   return <kbd>{children}</kbd>;
 }

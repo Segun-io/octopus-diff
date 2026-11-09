@@ -149,7 +149,16 @@ test.describe('§8.5 live updates', () => {
     await expect(item).toHaveAttribute('data-untracked', String(untracked + 1), {
       timeout: liveBudgetMs(),
     });
-    await expect(app.fileItem('src/agent-note.ts', agent.id)).toBeVisible();
+    // The inbox list is virtualized and this group sits below the fold: scan the whole list.
+    await expect
+      .poll(
+        async () =>
+          (await app.allFileItems()).some(
+            (f) => f.path === 'src/agent-note.ts' && f.worktreeId === agent.id,
+          ),
+        { timeout: 10_000 },
+      )
+      .toBe(true);
   });
 
   test('UI converges to the daemon state after an agent-simulator burst', async ({
