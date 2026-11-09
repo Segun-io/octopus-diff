@@ -1109,6 +1109,18 @@
       "url": "https://git-scm.com/",
       "license": "GPL-2.0-only",
       "description": "The daemon runs your installed git as a separate program for every read. octopus-diff does not bundle or link it."
+    },
+    {
+      "name": "GitHub CLI (gh)",
+      "url": "https://cli.github.com/",
+      "license": "MIT",
+      "description": "Optional. When installed and signed in, the daemon runs it for read-only pull request queries (docs/FORGES.md). octopus-diff does not bundle it and never reads its token."
+    },
+    {
+      "name": "GitLab CLI (glab)",
+      "url": "https://gitlab.com/gitlab-org/cli",
+      "license": "MIT",
+      "description": "Optional. When installed and signed in, the daemon runs it for read-only merge request queries (docs/FORGES.md). octopus-diff does not bundle it and never reads its token."
     }
   ],
   "adapted": [
@@ -1129,9 +1141,13 @@
         {
           "path": "apps/web/test/folderPath.test.ts",
           "what": "Test cases ported from packages/shared/src/path.test.ts."
+        },
+        {
+          "path": "packages/forge/src/auth.ts",
+          "what": "The auth-status host parser, adapted from packages/source-control-gitlab/src/server/gitLabAuthStatus.ts."
         }
       ],
-      "design": "The sidebar (folders, the Settled shelf, settling by hand), the folder picker and the command palette's browse mode are modelled on T3 Code's UI.",
+      "design": "The sidebar (folders, the Settled shelf, settling by hand), the folder picker and the command palette's browse mode are modelled on T3 Code's UI. The forge integration (remote recognition, CLI-login refinement for self-hosted hosts, the GitHub base-repository order, the merge request fields and PR glyphs) follows T3 Code's source-control packages.",
       "licenseText": "MIT License\n\nCopyright (c) 2026 T3 Tools Inc.\n\nPermission is hereby granted, free of charge, to any person obtaining a copy\nof this software and associated documentation files (the \"Software\"), to deal\nin the Software without restriction, including without limitation the rights\nto use, copy, modify, merge, publish, distribute, sublicense, and/or sell\ncopies of the Software, and to permit persons to whom the Software is\nfurnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in all\ncopies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\nIMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\nFITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\nAUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\nLIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\nOUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\nSOFTWARE.\n"
     }
   ],

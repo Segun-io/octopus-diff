@@ -121,6 +121,8 @@ Used to build, lint and test octopus-diff; not shipped.
 ## Programs octopus-diff runs
 
 - **[Git](https://git-scm.com/)** (GPL-2.0-only). The daemon runs your installed git as a separate program for every read. octopus-diff does not bundle or link it.
+- **[GitHub CLI (gh)](https://cli.github.com/)** (MIT). Optional. When installed and signed in, the daemon runs it for read-only pull request queries (docs/FORGES.md). octopus-diff does not bundle it and never reads its token.
+- **[GitLab CLI (glab)](https://gitlab.com/gitlab-org/cli)** (MIT). Optional. When installed and signed in, the daemon runs it for read-only merge request queries (docs/FORGES.md). octopus-diff does not bundle it and never reads its token.
 
 ## Code adapted from other projects
 
@@ -130,7 +132,8 @@ Each adapted file also carries an attribution comment.
   - `apps/web/src/components/diff/DiffWorkerPool.tsx`: Adapted from apps/web/src/components/DiffWorkerPoolProvider.tsx.
   - `apps/web/src/lib/folderPath.ts`: The path rules of the command-palette browse mode.
   - `apps/web/test/folderPath.test.ts`: Test cases ported from packages/shared/src/path.test.ts.
-  - The sidebar (folders, the Settled shelf, settling by hand), the folder picker and the command palette's browse mode are modelled on T3 Code's UI.
+  - `packages/forge/src/auth.ts`: The auth-status host parser, adapted from packages/source-control-gitlab/src/server/gitLabAuthStatus.ts.
+  - The sidebar (folders, the Settled shelf, settling by hand), the folder picker and the command palette's browse mode are modelled on T3 Code's UI. The forge integration (remote recognition, CLI-login refinement for self-hosted hosts, the GitHub base-repository order, the merge request fields and PR glyphs) follows T3 Code's source-control packages.
 
 ## Inspiration (ideas only, no code)
 
