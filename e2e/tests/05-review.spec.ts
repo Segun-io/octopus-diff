@@ -96,7 +96,7 @@ test.describe('§8.6 review marks', () => {
       });
     }
     await app.open(daemon.authUrl);
-    await app.setToggle(TEST_IDS.onlyUnreviewedToggle, true);
+    await app.setFilterOption(TEST_IDS.onlyUnreviewedToggle, true);
     await expect(app.worktreeItem(agent.worktree.id)).toBeHidden();
     await expect(app.worktreeItem(findWorktree(manifest, 'live').worktree.id)).toBeVisible();
 
@@ -107,7 +107,7 @@ test.describe('§8.6 review marks', () => {
     await expect(app.worktreeItem(agent.worktree.id)).toBeVisible({
       timeout: liveBudgetMs() + 1000,
     });
-    await app.setToggle(TEST_IDS.onlyUnreviewedToggle, false);
+    await app.setFilterOption(TEST_IDS.onlyUnreviewedToggle, false);
   });
 
   // Status flow v2 (DECISIONS #95): marks are keyed by (path, patchHash), not by scope kind. A

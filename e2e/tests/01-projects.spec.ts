@@ -149,23 +149,23 @@ test.describe('§8.2 projects and worktrees', () => {
       await app.expectWorktreeItem(worktree);
   });
 
-  test('sidebar filters: text and only-dirty', async ({ manifest, daemon, app }) => {
+  test('sidebar filters: project dropdown and only-dirty', async ({ manifest, daemon, app }) => {
     await app.open(daemon.authUrl);
     const epsilon = findWorktree(manifest, 'epsilon').worktree;
-    const gamma = findWorktree(manifest, 'gamma').worktree;
+    const { project: gammaProject, worktree: gamma } = findWorktree(manifest, 'gamma');
     await expect(app.worktreeItem(epsilon.id)).toBeVisible();
 
-    await app.setToggle(TEST_IDS.onlyDirtyToggle, true);
+    await app.setFilterOption(TEST_IDS.onlyDirtyToggle, true);
     await expect(app.worktreeItem(epsilon.id)).toBeHidden();
     await expect(app.worktreeItem(gamma.id)).toBeVisible();
-    await app.setToggle(TEST_IDS.onlyDirtyToggle, false);
+    await app.setFilterOption(TEST_IDS.onlyDirtyToggle, false);
     await expect(app.worktreeItem(epsilon.id)).toBeVisible();
 
-    await app.byTestId(TEST_IDS.sidebarFilter).fill('gamma');
+    await app.filterProject(gammaProject.id, gammaProject.name);
     await expect(app.worktreeItem(gamma.id)).toBeVisible();
     await expect(app.worktreeItem(epsilon.id)).toBeHidden();
     await expect(app.worktreeItem(findWorktree(manifest, 'alpha').worktree.id)).toBeHidden();
-    await app.byTestId(TEST_IDS.sidebarFilter).fill('');
+    await app.clearFilters();
     await expect(app.worktreeItem(epsilon.id)).toBeVisible();
   });
 });

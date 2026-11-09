@@ -62,7 +62,7 @@ test.describe('UX-1 bulk review (UI)', () => {
     await expect(ui.markAll).toHaveAttribute('data-target', 'all');
     await expect(ui.markAll).toHaveAttribute('data-count', String(total));
 
-    await ui.byTestId(TEST_IDS.sidebarFilter).fill('live');
+    await ui.filterProject(liveProject.id, liveProject.name);
     await expect(ui.markAll).toHaveAttribute('data-target', 'worktree');
     const liveFiles = (await daemon.client.inbox()).entries
       .filter((e) => e.project.id === liveProject.id)
@@ -80,7 +80,7 @@ test.describe('UX-1 bulk review (UI)', () => {
     expect(await reviewedPaths(daemon.client, alpha.id)).toEqual([]);
     expect(await unreviewedTotal(daemon.client)).toBe(total - liveFiles);
 
-    await ui.byTestId(TEST_IDS.sidebarFilter).fill('');
+    await ui.clearFilters();
     await ui.focusApp();
     await ui.press('Control+z');
     await expect(ui.toast).toContainText('Undone');

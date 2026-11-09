@@ -78,11 +78,11 @@ test.describe('§8.7 keyboard', () => {
     await app.focusApp();
 
     await app.press('/');
-    await expect(app.byTestId(TEST_IDS.sidebarFilter)).toBeFocused();
+    await expect(app.byTestId(TEST_IDS.sidebarFilterSearch)).toBeFocused();
     await app.page.keyboard.type('gamma');
+    await app.page.keyboard.press('Enter'); // picks the best match: the gamma project
     await expect(app.worktreeItem(findWorktree(manifest, 'alpha').worktree.id)).toBeHidden();
-    await app.byTestId(TEST_IDS.sidebarFilter).fill('');
-    await app.press('Escape');
+    await app.clearFilters();
     await app.focusApp();
 
     await app.press('g');
