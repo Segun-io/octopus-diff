@@ -1538,3 +1538,34 @@ request, git call or contract change.
      Measured on 2026-11-09: `main` (`1561c3c`, a temporary worktree) failed 1 of 3 `pnpm test` runs, this branch 1
      of 3; `pnpm check` on this branch failed 5 of 9 runs, always this one test. git-core is WS1's; proposal for its
      owner: give that test an explicit timeout (e.g. 30 s). Not changed here (AGENTS: edit only owned paths).
+
+## Sidebar: "Hidden" shelf and the filter dropdown (lead, 2026-11-09)
+
+112. **The sidebar filter is a dropdown with a search field, not a free-text box.** The user asked for it: a text
+     box hides what you can filter by and matches substrings you have to guess. `SidebarFilter.tsx`: a trigger
+     (funnel, a summary such as `alpha, dirty` or `All worktrees`, `/` hint, `×` to clear) opens a listbox under it
+     with a search field (combobox, `aria-activedescendant`, as the command palette) over three groups: **Status**
+     (Only dirty, Only unreviewed: the two chips moved in here), **Projects** and **Worktrees** (every row of
+     `sidebar.byId`, so options stay listed while the filters hide their rows). Multi-select; arrows move, `Enter`
+     or a click ticks, Escape clears the search then closes, an outside click or Tab away closes. Search is the
+     palette's `fuzzyMatch`, best match first inside each group. Semantics: picked projects and worktrees are one
+     union (a row shows when its project or the row is picked; none picked = all), the status options narrow it.
+     `SidebarFilters` loses `text` and gains `projects` / `worktrees` (ids; transient state `filterProjects`,
+     `filterWorktrees`, `filterOpen`, not persisted, like the old text). `/` (`focusFilter`) opens the dropdown,
+     or focuses its search when open. Path substring matching is gone; T3 Code's pickers (branch, project) are
+     the model.
+113. **Contracts (test ids, additive plus one re-pointing).** New: `sidebarFilterSearch`, `sidebarFilterOption`
+     (`data-kind`, `data-project-id` / `data-worktree-id`, `aria-selected`), `sidebarFilterClear`.
+     `sidebarFilter` now sits on the dropdown's trigger and `onlyDirtyToggle` / `onlyUnreviewedToggle` on its
+     status options (`aria-selected` instead of `aria-pressed`): the old elements no longer exist, and keeping the
+     names keeps their meaning ("the sidebar filter", "the only-dirty control"). e2e gains `openFilter`,
+     `closeFilter`, `setFilterOption`, `filterProject`, `clearFilters`; specs 01, 05, 06, 11 use them.
+114. **"Settled" is now "Hidden" everywhere the user reads it.** #84 renamed the action (Hide / Show, "Hide until
+     it changes") but the shelf header still said **Settled** and a project with nothing open said `settled`, so
+     one concept had two names. The shelf is now **Hidden** (aria "Expand hidden" / "Collapse hidden") and the
+     project word `hidden`. The shelf also holds rows that went there on their own (reviewed, clean, merged, review
+     off, missing); "hidden" still fits, since the shelf is closed by default and each row keeps its reason word.
+     Internal names (`state: 'settled'`, `settledOpen`, `settle` pref, `setSettle`) are unchanged, so stored prefs
+     and the e2e `data-state` values keep working.
+115. **Screenshots.** `e2e/scripts/screenshots.ts` adds `sidebar-filter-{light,dark}.png` (dropdown open, Only
+     dirty and `alpha` ticked); every README screenshot was regenerated since the sidebar header changed.

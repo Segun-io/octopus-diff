@@ -123,12 +123,18 @@ Settings → Folders → **Start browsing in** sets where the picker opens (defa
 - **The sidebar is your folders and projects, with the open work under them.** Under the Inbox (and anything
   you pinned), each watched folder lists its repositories, and each repository lists the worktrees that are
   still open: unreviewed files, a conflict or an operation in progress. Everything else (`clean`, `verified`,
-  `review off`, `missing`) sits in the **Settled** shelf at the bottom, closed by default with a count; a
-  project whose worktrees all settled just says `settled`. Hover a row for the check that settles it by hand
-  (or the arrow that brings it back); the next change to that worktree un-settles it automatically, as does a
-  new patch after you verified everything. Blocked work never settles. Click a folder or repository for its
+  `review off`, `missing`) sits in the **Hidden** shelf at the bottom, closed by default with a count; a
+  project whose worktrees are all there just says `hidden`. Hover a row for **Hide** to put it away by hand
+  until it changes (or **Show** to bring it back); the next change to that worktree shows it again, as does a
+  new patch after you reviewed everything. Blocked work never hides. Click a folder or repository for its
   Overview, right-click for the actions, and pin a worktree to keep it at the top. Each worktree is a
   small card: the branch, then its files, `+adds −dels` and ahead/behind; hover a moment for the full details.
+- **Filter from a dropdown, not a text box.** The filter at the top of the sidebar (`/`) opens a searchable
+  list: **Only dirty** and **Only unreviewed**, then every project and every worktree. Type to narrow it,
+  arrows and `Enter` (or a click) to tick as many as you like; ticked projects and worktrees add up, the
+  status options narrow them. The button says what is filtered, and `×` clears it.
+
+  ![The sidebar filter dropdown: status options, projects and worktrees with a search field](docs/screenshots/sidebar-filter-dark.png)
 - **Mark all as verified.** The button above the file list marks every file you can see (respecting the
   sidebar filters); in the Inbox it marks everything. `Shift+R` does the same from the keyboard, and the
   context menu of a worktree, project or folder (and the folder Overview) can mark that whole level, or
