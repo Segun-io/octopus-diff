@@ -179,7 +179,8 @@ multiple machines, fetch-on-demand (opt-in write-ish). (PR/CI status via `gh`/`g
 - Daemon: Hono + `@hono/node-server`. Events: **Server-Sent Events** (`/api/events`), since the client
   never sends commands over the stream. Storage: built-in `node:sqlite`. Config: XDG
   (`~/.config/octopus-diff/`, state in `~/.local/state/octopus-diff/`).
-- Watcher: `@parcel/watcher`.
+- Watcher: `@parcel/watcher`, run in a child process (the watch host) so a native hang cannot block the daemon
+  (DECISIONS #130).
 - Web: Vite + React + TypeScript, TanStack Query (data + SSE-driven invalidation), Tailwind CSS,
   `@pierre/diffs` (+ worker pool for highlighting, as in T3 Code), `@pierre/trees`.
 - Distribution: `npx octopus-diff` / `octopus-diff serve`, serving the built web assets from the daemon.
@@ -297,6 +298,8 @@ All git access goes through **one runner** in `packages/git-core`:
 - Debounce 150–300 ms per worktree, coalesce bursts, then recompute the summary; emit `worktree.changed`
   only if `stateHash` changed. Fallback poll (30 s focused / 5 min others) in case watchers miss events.
 - Must degrade gracefully on inotify limits (WSL, big trees): log a clear warning and fall back to polling.
+- A subscription that reports an error is dropped (never unsubscribed) and re-made with a backoff; polling covers
+  the gap (DECISIONS #131).
 - Detect new / removed worktrees by re-running `worktree list` when git-dir `worktrees/` changes and on a
   timer.
 

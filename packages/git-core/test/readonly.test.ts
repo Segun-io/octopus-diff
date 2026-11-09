@@ -278,7 +278,9 @@ describe('read-only proof', () => {
       fx.git(dir, ['--no-optional-locks', 'status', '--porcelain=v2', '-z', '--branch', '-uall']),
     );
     expect(statusAfter).toEqual(statusBefore);
-  });
+    // Exercises every read path (hundreds of git processes): ~2.5 s on a 12-core machine, over
+    // the 5 s default on a 4-core CI runner that runs the other packages' tests at the same time.
+  }, 30_000);
 });
 
 describe('read-only proof: split index (documented exception)', () => {

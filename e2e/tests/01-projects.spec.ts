@@ -47,7 +47,14 @@ test.describe('§8.2 projects and worktrees', () => {
       const scanInput = app.byTestId(TEST_IDS.folderPickerInput);
       if (!(await scanInput.isVisible())) await app.byTestId(TEST_IDS.addProjectButton).click();
       await scanInput.fill(scan.path);
-      await app.byTestId(TEST_IDS.addScanRootSubmit).click();
+      // Wait for the picker to list the typed folder: until then it cannot tell a folder from a
+      // repository, offers "Add" first, and the two buttons swap actions (and test ids) when the
+      // listing arrives, so a click could land on "Add as one repository" (CI, run 42572487669).
+      const watchButton = app.page.locator(
+        `[data-testid="${TEST_IDS.addScanRootSubmit}"][data-action="watch"]`,
+      );
+      await expect(watchButton).toBeEnabled();
+      await watchButton.click();
       for (const name of scan.expectedProjects) {
         await expect(app.projectItem(name), `scan found ${name}`).toBeVisible({ timeout: 20_000 });
         for (const worktree of findProject(manifest, name).worktrees) {
