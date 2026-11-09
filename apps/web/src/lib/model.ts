@@ -33,6 +33,32 @@ export function compareWorktrees(a: Worktree, b: Worktree): number {
   return cmp(a.branch ?? '', b.branch ?? '') || cmp(a.path, b.path);
 }
 
+/** `summary.activityAt` in ms, or null (no summary yet, an older daemon, or unknown). */
+export function activityMs(summary: Pick<WorktreeSummary, 'activityAt'> | null): number | null {
+  const at = summary?.activityAt;
+  if (!at) return null;
+  const ms = Date.parse(at);
+  return Number.isNaN(ms) ? null : ms;
+}
+
+/**
+ * The sidebar's worktree order: most recent activity first (`summary.activityAt`: commits,
+ * checkouts, edits), worktrees without one after, ties and the rest by `compareWorktrees`.
+ */
+export function compareByActivity(
+  a: { worktree: Worktree; summary: Pick<WorktreeSummary, 'activityAt'> | null },
+  b: { worktree: Worktree; summary: Pick<WorktreeSummary, 'activityAt'> | null },
+): number {
+  const am = activityMs(a.summary);
+  const bm = activityMs(b.summary);
+  if (am !== bm) {
+    if (am === null) return 1;
+    if (bm === null) return -1;
+    return bm - am;
+  }
+  return compareWorktrees(a.worktree, b.worktree);
+}
+
 export function compareFiles(a: ChangedFile, b: ChangedFile): number {
   return cmp(a.path, b.path) || cmp(a.rawPath ?? '', b.rawPath ?? '');
 }
@@ -443,7 +469,7 @@ export function buildSidebar(
   for (const item of sorted) {
     const rows: WorktreeRow[] = [];
     const allRows: WorktreeRow[] = [];
-    const worktrees = [...item.worktrees].sort((a, b) => compareWorktrees(a.worktree, b.worktree));
+    const worktrees = [...item.worktrees].sort(compareByActivity);
     for (const wt of worktrees) {
       const stats = inboxStats.get(wt.worktree.id);
       const review = effectivePolicy(wt.review);
@@ -508,10 +534,10 @@ export function buildSidebar(
   return { groups, folders, pinned: pinnedRows, settled, order, byId };
 }
 
-/** Inbox entries sorted like the sidebar (project name, then worktree order). */
+/** Inbox entries sorted like the sidebar (project name, then most recent activity first). */
 export function sortInboxEntries(entries: readonly InboxEntry[]): InboxEntry[] {
   return [...entries].sort(
-    (a, b) => compareProjects(a.project, b.project) || compareWorktrees(a.worktree, b.worktree),
+    (a, b) => compareProjects(a.project, b.project) || compareByActivity(a, b),
   );
 }
 

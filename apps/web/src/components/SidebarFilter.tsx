@@ -1,7 +1,7 @@
 import { TEST_IDS } from '@octopus-diff/contracts';
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { fuzzyMatch } from '../lib/fuzzy.ts';
-import { type WorktreeRow, worktreeLabel } from '../lib/model.ts';
+import { compareByActivity, type WorktreeRow, worktreeLabel } from '../lib/model.ts';
 import { useAppModel } from '../state/model.tsx';
 import { useUi, useUiStore } from '../state/ui.tsx';
 import { CheckIcon } from './bits.tsx';
@@ -86,7 +86,8 @@ export function SidebarFilter() {
       testId: TEST_IDS.sidebarFilterOption,
       data: { 'data-kind': 'project', 'data-project-id': id },
     })),
-    ...rows.map<FilterOption>((row) => {
+    // Across projects, most recent activity first (like the rows inside each sidebar project).
+    ...[...rows].sort(compareByActivity).map<FilterOption>((row) => {
       const id = row.worktree.id;
       const label = worktreeLabel(row.worktree);
       return {

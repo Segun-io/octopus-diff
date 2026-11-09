@@ -2,7 +2,9 @@ import type { ChangedFile, ChangeRequest, InboxEntry } from '@octopus-diff/contr
 import { describe, expect, it } from 'vitest';
 import { MockBackend } from '../mock/backend.ts';
 import {
+  activityMs,
   buildSidebar,
+  compareByActivity,
   type FileGroup,
   flattenGroups,
   NO_SIDEBAR_FILTERS,
@@ -44,7 +46,7 @@ function withReviewed(entries: InboxEntry[], reviewed: (f: ChangedFile) => boole
 }
 
 describe('sidebar model', () => {
-  it('sorts projects by name and puts the main worktree first', () => {
+  it('sorts projects by name and worktrees by recent activity', () => {
     const { projects, inbox } = demo();
     const model = buildSidebar(projects, inbox.entries, NO_SIDEBAR_FILTERS);
     expect(model.groups.map((g) => g.project.name)).toEqual([
@@ -54,11 +56,44 @@ describe('sidebar model', () => {
       'octopus-api',
       'web-dashboard',
     ]);
-    const api = model.groups.find((g) => g.project.name === 'octopus-api');
-    expect(api?.rows[0]?.worktree.isMain).toBe(true);
-    // Detached worktrees sort after named branches.
-    expect(api?.rows.at(-1)?.worktree.branch).toBeNull();
+    for (const group of model.groups) {
+      const times = group.allRows.map((r) => activityMs(r.summary) ?? -1);
+      expect(times).toEqual([...times].sort((a, b) => b - a));
+    }
+    const branches = (name: string) =>
+      model.groups.find((g) => g.project.name === name)?.allRows.map((r) => r.worktree.branch);
+    expect(branches('octopus-api')).toEqual(['main', 'feat/auth', 'fix/cache', null]);
+    // Recency, not "main first": an agent just committed on agent/codex-123.
+    expect(branches('web-dashboard')).toEqual(['agent/codex-123', 'main']);
     expect(model.order).toHaveLength(model.byId.size);
+  });
+
+  it('puts worktrees without activity last, and breaks ties main first, detached last', () => {
+    const items = demo().projects.flatMap((p) => p.worktrees);
+    const main = items.find((w) => w.worktree.isMain);
+    const branch = items.find((w) => !w.worktree.isMain && w.worktree.branch !== null);
+    const detached = items.find((w) => w.worktree.branch === null);
+    if (!main?.summary || !branch?.summary || !detached) throw new Error('demo fixture changed');
+    const base = main.summary;
+    const at = (iso: string | null) => ({ ...base, activityAt: iso });
+    const older = { worktree: main.worktree, summary: at('2026-11-01T00:00:00.000Z') };
+    const newer = { worktree: branch.worktree, summary: at('2026-11-02T00:00:00.000Z') };
+    const unknown = { worktree: branch.worktree, summary: at(null) };
+    const loading = { worktree: main.worktree, summary: null };
+    expect([older, unknown, newer].sort(compareByActivity)).toEqual([newer, older, unknown]);
+    expect(compareByActivity(loading, newer)).toBeGreaterThan(0);
+    // Same (or no) activity: the previous order.
+    const tie = '2026-11-03T00:00:00.000Z';
+    const rows = [
+      { worktree: detached.worktree, summary: at(tie) },
+      { worktree: branch.worktree, summary: at(tie) },
+      { worktree: main.worktree, summary: at(tie) },
+    ];
+    expect(rows.sort(compareByActivity).map((r) => r.worktree.id)).toEqual([
+      main.worktree.id,
+      branch.worktree.id,
+      detached.worktree.id,
+    ]);
   });
 
   it('filters by picked projects and worktrees (a union), dirty and unreviewed', () => {

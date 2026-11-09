@@ -489,9 +489,9 @@ describe('folder tier, overview and palette', () => {
     const rowActions = (branch: string) =>
       within(worktreeItem(branch).parentElement as HTMLElement);
 
-    // under the projects, in folder order: docs-site (mid-rebase), octopus-api (main, the
-    // conflicted feat/auth, fix/cache), web-dashboard (main); the clean, review-off, failed and
-    // missing worktrees are settled and the shelf is closed
+    // under the projects, in folder order: docs-site (mid-rebase), octopus-api (most recent
+    // first: main, the conflicted feat/auth, fix/cache), web-dashboard (main); the clean,
+    // review-off, failed and missing worktrees are settled and the shelf is closed
     expect(section('folder')).toEqual(['', 'main', 'feat/auth', 'fix/cache', 'main']);
     expect(section('settled')).toEqual([]);
     expect(within(sidebar).getByLabelText('Expand hidden').textContent).toContain('5');
