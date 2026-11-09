@@ -10,9 +10,11 @@
     "node": ">=24"
   },
   "scripts": {
+    "dev": "node scripts/dev.mjs",
     "build": "pnpm -r --workspace-concurrency=4 run build",
     "typecheck": "pnpm -r run typecheck",
-    "test": "pnpm -r run test",
+    "test": "pnpm -r run test && pnpm run test:scripts",
+    "test:scripts": "vitest run --config scripts/vitest.config.mjs",
     "test:e2e": "pnpm --filter @octopus-diff/e2e run test:e2e",
     "lint": "biome check . && pnpm run credits:check",
     "credits": "node scripts/credits/generate.mjs",

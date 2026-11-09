@@ -12,7 +12,8 @@ deviate from it, log why in `docs/DECISIONS.md`.
 | `pnpm install` | Install dependencies (pnpm 12, Node ≥ 24; the dev machine has Node 26) |
 | `pnpm lint` | Biome lint + format check for the whole repo (`pnpm lint:fix` to apply fixes), then `pnpm credits:check` |
 | `pnpm typecheck` | `tsc` in every package (resolves workspace deps to their sources, no build needed) |
-| `pnpm test` | vitest unit tests in every package (no build needed) |
+| `pnpm test` | vitest unit tests in every package (no build needed), then `scripts/` (`pnpm test:scripts`) |
+| `pnpm dev` | Hot-reload dev: Vite HMR on :5173 + daemon from sources under `tsx watch` on :7429, LAN-reachable as `odino` (`--loopback`, `--help`; CONTRIBUTING "Develop with hot reload"). Never :7428 |
 | `pnpm credits` | Regenerate the open-source credits (Settings → About and `CREDITS.md`); run after any dependency change |
 | `pnpm build` | Topological build: contracts → git-core, forge → daemon → cli, plus web (Vite) |
 | `pnpm test:e2e` | Playwright e2e (`e2e/`) |

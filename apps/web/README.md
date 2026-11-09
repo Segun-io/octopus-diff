@@ -23,7 +23,19 @@ copies, deletions, binary, submodule, symlink, typechange, mode-only, whitespace
 non-UTF-8 path, a conflict, a 4000-line file and a too-large/truncated one; plus a detached HEAD, an
 in-progress rebase, a worktree whose summary failed and a missing worktree.
 
-Against a real daemon: `OCTOPUS_DIFF_API=http://127.0.0.1:7428 pnpm --filter @octopus-diff/web dev`.
+## Run against a real daemon with hot reload
+
+From the repository root, `pnpm dev` starts Vite (HMR, port 5173) and a daemon from sources under
+`tsx watch` (port 7429, restarts on daemon/package edits), and prints the URLs with the token for the
+Vite port: `http://localhost:5173/#token=…` and, on the LAN, `http://odino:5173/#token=…`.
+`--loopback` keeps both on 127.0.0.1; `pnpm dev --help` lists the options. Details, the firewall
+note for LAN devices and a systemd recipe: CONTRIBUTING.md, "Develop with hot reload". The
+production server on :7428 serves the built UI and still needs `pnpm build` and a restart.
+
+`vite.config.ts` reads `OCTOPUS_DIFF_API` (proxy target, default `http://127.0.0.1:7428`),
+`OCTOPUS_DIFF_WEB_HOST`, `OCTOPUS_DIFF_WEB_PORT` (strict when set) and `OCTOPUS_DIFF_ALLOWED_HOSTS`
+(comma-separated). Pointing plain `pnpm --filter @octopus-diff/web dev` at another daemon only works
+if that daemon allows the browser's Host on any port (`--allowed-host localhost`).
 
 ## Layout
 

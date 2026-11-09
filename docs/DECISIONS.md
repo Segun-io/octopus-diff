@@ -1638,3 +1638,59 @@ entries (#123) while this was written, so #123–#129 are left to it.
      which by then read "Add as one repository" (screenshot: "not a git repository: …/scan"). The spec now
      waits for `[data-testid=add-scan-root-submit][data-action=watch]`. The UI behaviour (a button changing
      meaning under the pointer while a listing loads) is a WS3 follow-up and is not changed here.
+
+## Dev hot reload: `pnpm dev` (session, 2026-11-09)
+
+Numbering starts at #135: #116–#129 are left to PR #2 and #130–#134 are the CI-flakes entries above.
+
+User request: one command for hot-reload development that stays reachable from the LAN host `odino`, without touching
+the production LAN server (`octopus-diff-lan` unit, :7428). Report: `docs/reports/dev-hot-reload.md`.
+
+135. **`pnpm dev` = `node scripts/dev.mjs`, a plain-Node supervisor of two children** (argv arrays, no shell, no new
+     dependency): Vite from `apps/web` (HMR) and `tsx watch --conditions=@octopus-diff/source apps/cli/src/index.ts
+     serve …` (the daemon from sources). Vite proxies `/api`, SSE included, to the daemon. Reason: the web app already
+     had Vite with the source condition; the daemon had no watch mode, and tsx is already a root dev tool. tsx watch
+     follows every imported file outside `node_modules`, workspace sources included (it resolves the `node_modules`
+     symlinks to `packages/*/src`): edits to git-core, contracts and daemon files each restarted it in testing, so no
+     `--include` globs are needed. Each child gets its own process group; SIGINT/SIGTERM/SIGHUP send one SIGTERM to
+     each child (a second SIGTERM makes `serve` skip its clean shutdown, so the group is not signalled), SIGKILL to the
+     groups after 8 s; if either child exits on its own the other is stopped and `pnpm dev` exits 1.
+136. **Ports: daemon 7429, web 5173, 7428 rejected** with a message naming the production unit. The web port is
+     strict in dev (the banner prints it, so Vite must not drift); both ports are checked before spawning so a taken
+     port fails clearly instead of crash-looping under tsx watch.
+137. **LAN by default, `--loopback` to opt out.** The daemon runs `--host :: --allow-non-loopback`; Vite listens on `::`
+     (dual-stack like the daemon, rather than `0.0.0.0` which is IPv4 only). The daemon's Host check requires its own
+     port unless the name is an `--allowed-host` entry, and the browser sends the Vite port, so the dev daemon gets
+     `--allowed-host` for `localhost`, `127.0.0.1`, `odino`, `odino.local`, extra `--allowed-host` names and (LAN mode)
+     this machine's non-internal IPv4 addresses, so `http://<lan ip>:5173/` works too. Vite's `server.allowedHosts` gets
+     the same names (it allows localhost and IP literals itself). Only the existing mechanism is used; the Host/Origin/
+     token checks are unchanged (an unknown Host gets 403 from Vite, a foreign Origin 403 from the daemon, no token 401).
+138. **Separate state dir for the dev daemon: `$XDG_STATE_HOME/octopus-diff-dev` (`~/.local/state/octopus-diff-dev`),
+     passed as `--state-dir`.** Reason: `serve` allows one daemon per state dir; sharing the production one, the dev
+     daemon would print the production daemon's URL and exit. A `--state-dir` flag rather than `XDG_STATE_HOME` in the
+     child env keeps the rest of the environment untouched; it sits beside the real state dir rather than in
+     `~/.cache` so the dev token and review store survive cache cleanups. The config dir stays shared. A second
+     `pnpm dev` on the same state dir is detected ("already running") and exits 1.
+139. **The token URL is rewritten to the Vite port in a `[dev]` banner**, from the daemon's own `Open:` line (stdout
+     only, nothing written to disk); the daemon's banner and its "built web UI not found" warning are hidden because
+     they repeat on every restart and point at the daemon port. On a restart with the same token a one-line notice is
+     printed instead. If no token is found, the banner points at `<state dir>/token`.
+140. **`apps/web/vite.config.ts` reads `OCTOPUS_DIFF_WEB_HOST`, `OCTOPUS_DIFF_WEB_PORT` and
+     `OCTOPUS_DIFF_ALLOWED_HOSTS`**; unset, the config is what it was (Vite's default host `localhost`, port 5173 with
+     `strictPort: false`, default allowed hosts). `mock/dev.ts` passes its own host and port inline and is unaffected.
+141. **Tests for `scripts/`:** the pure logic lives in `scripts/lib/dev-options.mjs`, tested by
+     `scripts/test/dev-options.test.mjs` through `scripts/vitest.config.mjs`. Root `pnpm test` now runs
+     `pnpm -r run test && pnpm run test:scripts` (the root is not a workspace package, so `pnpm -r` skips it). Plain
+     `.mjs` keeps it out of `tsc` (no root tsconfig) like `scripts/credits`.
+142. **The web client needed no change for daemon restarts.** A restart closes the SSE stream cleanly; the contract
+     client retries after 1 s (backoff to 10 s while the proxy answers 502), and the `hello` on reconnect triggers a
+     full refresh (`collectEventEffects` with `reconnect`). Verified in headless Chromium through `http://odino:5183`:
+     status stayed `Live`, `/api/events` and every query refetched after each restart.
+143. **Review fixes (PR #5, Greptile).** (a) Serve flags after `--` that `pnpm dev` sets itself (`--port`/`-p`,
+     `--host`, `--allow-non-loopback`, `--allowed-host`, `--state-dir`, a second `--`) are rejected with the dev
+     option to use instead: the CLI takes the last value, so `-- --port 7439` left Vite proxying to 7429 and
+     `-- --port 7428` bypassed the reserved-port check. (b) The supervisor keeps every child's process group until
+     the group is gone, not just the live children: if `tsx watch` died, the daemon it spawned kept the port after
+     `pnpm dev` exited. An unexpected child exit now SIGTERMs its group (once; during a stop the daemon already
+     had its SIGTERM), and `pnpm dev` exits only when every group is gone, SIGKILLing leftovers after 8 s.
+     Verified live: `kill -9` of the tsx process → the orphaned daemon logged a clean shutdown, both ports freed.
