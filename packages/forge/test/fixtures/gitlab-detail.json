@@ -1,0 +1,311 @@
+{
+  "data": {
+    "project": {
+      "mergeRequest": {
+        "iid": "4230",
+        "title": "fix(govern): read the fallback sync job's settings as launchd and systemd do [4 of 6]",
+        "webUrl": "https://gitlab.com/gitlab-org/cli/-/merge_requests/4230",
+        "state": "opened",
+        "draft": false,
+        "description": "**Part 4 of 6.** Review and merge in order, starting with part 1 (https://gitlab.com/gitlab-org/cli/-/merge_requests/4227). The full list is under **Where this sits**.\n\n## Description\n\nMakes the fallback periodic sync job carry `CLAUDE_CONFIG_DIR`, and makes glab read an installed job the way launchd and systemd do.\n\n- `fallbacksync.Job` gets `ClaudeConfigDir`. It is written as `CLAUDE_CONFIG_DIR` in the launchd plist `EnvironmentVariables`, or as a systemd `Environment=` line.\n- `Units` refuses any job value with a control character (`InvalidJobError`) before anything changes.\n- `Install` writes every unit to a temp file before it renames any into place, so a failed write leaves the previous job's files as they were.\n- When a job fails to load, systemd gets `disable --now` and `daemon-reload`, and launchd gets `launchctl print`. It returns `RemovedError{MayStillRun}` when glab could not confirm the old job is unloaded.\n- `InstalledBinary` on systemd reads the first `ExecStart=` after drop-ins. This is the new `systemd.go` parser (drop-in dirs, quoting, specifiers). macOS is unchanged.\n- `InstalledClaudeConfigDir` is new. It reads the job's `CLAUDE_CONFIG_DIR` from the plist, from `systemctl --user show` when an executor is given, or else from the service and its drop-ins. It returns an error for `EnvironmentFile=`, `UnsetEnvironment=`, `PassEnvironment=` and a relative value. Its caller arrives in part 6.\n- `setup.go`, two small hunks: `installFallbackSync` passes the cleaned `CLAUDE_CONFIG_DIR` into the job, and the install error now has three cases (old job removed and may still run, old job removed, old job unchanged).\n\n### Why `systemd.go` is not a separate MR\n\nYou asked for the launchd and systemd parsing to be separate. Its functions are all unexported and only `fallbacksync.go` calls them, so on its own it would fail the `unused` linter. It travels with `fallbacksync.go` in this MR.\n\nThe two `setup.go` hunks are here for two reasons. Unloading a job that failed to load would otherwise break `TestRunSetup_FallbackSyncFailureIsAWarning` (it expects one `systemctl` call, and now there are three). And passing `CLAUDE_CONFIG_DIR` makes `Job.ClaudeConfigDir` used code. Part 6 replaces `setup.go` and `setup_test.go` with the final versions.\n\n### Where this sits\n\nPart 4 of 6 in the split of https://gitlab.com/gitlab-org/cli/-/merge_requests/4196. Base branch is `andrew-jung/630020-split-3-claude-config-dir` (https://gitlab.com/gitlab-org/cli/-/merge_requests/4229). It can merge now.\n\n1. https://gitlab.com/gitlab-org/cli/-/merge_requests/4227: redact tokens in debug dumps\n2. https://gitlab.com/gitlab-org/cli/-/merge_requests/4228: cmdtest isolation\n3. https://gitlab.com/gitlab-org/cli/-/merge_requests/4229: `CLAUDE_CONFIG_DIR`\n4. This MR: fallback job settings\n5. https://gitlab.com/gitlab-org/cli/-/merge_requests/4231: `agentsession` and `govern session` (Draft)\n6. https://gitlab.com/gitlab-org/cli/-/merge_requests/4196: `setup --mcp` (Draft)\n\nIt needs part 2 (`fallbacksync/main_test.go`). It uses nothing from part 3. It sits after part 3 so the two can merge back to back: part 3 makes setup write hooks under `CLAUDE_CONFIG_DIR`, and this MR makes the job look there too.\n\n## Related Issues\n\nRelated to https://gitlab.com/gitlab-org/gitlab/-/issues/630020\n\n## How has this been tested?\n\n```shell\ngo test ./internal/commands/govern/...\n```\n\nAlso run: `go build ./...`, `go vet ./...`, `GOOS=windows go build ./...` and `make gen-docs` (no diff).\n\nTo try it on Linux: set `CLAUDE_CONFIG_DIR` to an absolute path, run `glab govern setup`, and check that `systemctl --user show` for the job lists `CLAUDE_CONFIG_DIR` in its environment.",
+        "createdAt": "2026-10-27T15:30:02Z",
+        "updatedAt": "2026-11-09T06:38:25Z",
+        "mergedAt": null,
+        "closedAt": null,
+        "targetBranch": "andrew-jung/630020-split-3-claude-config-dir",
+        "sourceBranch": "andrew-jung/630020-split-3b-fallback-job-settings",
+        "diffHeadSha": "386bdd828a49cd054142e8d362889d0ffafc1f5e",
+        "userNotesCount": 8,
+        "author": {
+          "username": "andrew.jung",
+          "name": "Andrew Jung",
+          "avatarUrl": "/uploads/-/system/user/avatar/23194436/avatar.png?v=1794204719",
+          "bot": false
+        },
+        "mergeUser": null,
+        "sourceProject": {
+          "fullPath": "gitlab-org/cli"
+        },
+        "targetProject": {
+          "fullPath": "gitlab-org/cli"
+        },
+        "conflicts": false,
+        "approved": true,
+        "detailedMergeStatus": "REQUESTED_CHANGES",
+        "diffStatsSummary": {
+          "additions": 1488,
+          "deletions": 55,
+          "fileCount": 5
+        },
+        "commitCount": 2,
+        "commits": {
+          "nodes": [
+            {
+              "sha": "386bdd828a49cd054142e8d362889d0ffafc1f5e",
+              "title": "fix(govern): refuse a relative CLAUDE_CONFIG_DIR in setup and uninstall",
+              "committedDate": "2026-10-27T14:12:41-04:00",
+              "authorName": "Andrew Jung",
+              "author": {
+                "username": "andrew.jung"
+              }
+            },
+            {
+              "sha": "8e985c1587b36348f637246fec7f6ebd9cc187ee",
+              "title": "fix(govern): read the fallback sync job's settings as launchd and systemd do",
+              "committedDate": "2026-10-27T10:27:41-04:00",
+              "authorName": "Andrew Jung",
+              "author": {
+                "username": "andrew.jung"
+              }
+            }
+          ]
+        },
+        "labels": {
+          "nodes": [
+            {
+              "title": "Category:AI Governance",
+              "color": "#6699cc"
+            },
+            {
+              "title": "category:gitlab cli",
+              "color": "#6699cc"
+            },
+            {
+              "title": "devops::security governance",
+              "color": "#e44d2a"
+            },
+            {
+              "title": "group::ai governance",
+              "color": "#A8D695"
+            },
+            {
+              "title": "section::sec",
+              "color": "#F0AD4E"
+            },
+            {
+              "title": "type::bug",
+              "color": "#cc0000"
+            }
+          ]
+        },
+        "assignees": {
+          "nodes": [
+            {
+              "username": "andrew.jung",
+              "name": "Andrew Jung",
+              "avatarUrl": "/uploads/-/system/user/avatar/23194436/avatar.png?v=1794204719",
+              "bot": false
+            }
+          ]
+        },
+        "reviewers": {
+          "nodes": [
+            {
+              "username": "GitLabDuo",
+              "name": "GitLab Duo",
+              "avatarUrl": "/uploads/-/system/user/avatar/21826781/duo-bot.png?v=1792265836",
+              "bot": true,
+              "mergeRequestInteraction": {
+                "reviewState": "REVIEWED",
+                "approved": false
+              }
+            }
+          ]
+        },
+        "approvedBy": {
+          "nodes": []
+        },
+        "diffStats": [
+          {
+            "path": "internal/commands/govern/internal/fallbacksync/fallbacksync.go",
+            "additions": 226,
+            "deletions": 42
+          },
+          {
+            "path": "internal/commands/govern/internal/fallbacksync/fallbacksync_test.go",
+            "additions": 623,
+            "deletions": 9
+          },
+          {
+            "path": "internal/commands/govern/internal/fallbacksync/systemd.go",
+            "additions": 534,
+            "deletions": 0
+          },
+          {
+            "path": "internal/commands/govern/setup/setup.go",
+            "additions": 19,
+            "deletions": 2
+          },
+          {
+            "path": "internal/commands/govern/setup/setup_test.go",
+            "additions": 86,
+            "deletions": 2
+          }
+        ],
+        "headPipeline": {
+          "status": "SUCCESS",
+          "stages": {
+            "nodes": [
+              {
+                "name": "application-security-testing",
+                "jobs": {
+                  "nodes": [
+                    {
+                      "name": "govulncheck",
+                      "status": "MANUAL",
+                      "webPath": "/gitlab-org/cli/-/jobs/17515232339",
+                      "detailedStatus": {
+                        "text": "Manual"
+                      }
+                    },
+                    {
+                      "name": "dependency-scanning-profile-0",
+                      "status": "SUCCESS",
+                      "webPath": "/gitlab-org/cli/-/jobs/17515232340",
+                      "detailedStatus": {
+                        "text": "Passed"
+                      }
+                    },
+                    {
+                      "name": "gitlab-advanced-sast",
+                      "status": "SUCCESS",
+                      "webPath": "/gitlab-org/cli/-/jobs/17515232337",
+                      "detailedStatus": {
+                        "text": "Passed"
+                      }
+                    },
+                    {
+                      "name": "secret_detection",
+                      "status": "SUCCESS",
+                      "webPath": "/gitlab-org/cli/-/jobs/17515232338",
+                      "detailedStatus": {
+                        "text": "Passed"
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "name": "checks",
+                "jobs": {
+                  "nodes": [
+                    {
+                      "name": "check_args",
+                      "status": "SUCCESS",
+                      "webPath": "/gitlab-org/cli/-/jobs/17515232344",
+                      "detailedStatus": {
+                        "text": "Passed"
+                      }
+                    },
+                    {
+                      "name": "check_embed",
+                      "status": "SUCCESS",
+                      "webPath": "/gitlab-org/cli/-/jobs/17515232343",
+                      "detailedStatus": {
+                        "text": "Passed"
+                      }
+                    },
+                    {
+                      "name": "check_go_generated_code",
+                      "status": "SUCCESS",
+                      "webPath": "/gitlab-org/cli/-/jobs/17515232341",
+                      "detailedStatus": {
+                        "text": "Passed"
+                      }
+                    },
+                    {
+                      "name": "lint_commit",
+                      "status": "SUCCESS",
+                      "webPath": "/gitlab-org/cli/-/jobs/17515232342",
+                      "detailedStatus": {
+                        "text": "Passed"
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "name": "documentation",
+                "jobs": {
+                  "nodes": [
+                    {
+                      "name": "check_docs_markdown",
+                      "status": "SUCCESS",
+                      "webPath": "/gitlab-org/cli/-/jobs/17515232346",
+                      "detailedStatus": {
+                        "text": "Passed"
+                      }
+                    },
+                    {
+                      "name": "check_docs_update",
+                      "status": "SUCCESS",
+                      "webPath": "/gitlab-org/cli/-/jobs/17515232345",
+                      "detailedStatus": {
+                        "text": "Passed"
+                      }
+                    },
+                    {
+                      "name": "docs hugo_build",
+                      "status": "SUCCESS",
+                      "webPath": "/gitlab-org/cli/-/jobs/17515232347",
+                      "detailedStatus": {
+                        "text": "Passed"
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "name": "test",
+                "jobs": {
+                  "nodes": [
+                    {
+                      "name": "lint",
+                      "status": "SUCCESS",
+                      "webPath": "/gitlab-org/cli/-/jobs/17515232349",
+                      "detailedStatus": {
+                        "text": "Passed"
+                      }
+                    },
+                    {
+                      "name": "lint:comments",
+                      "status": "SUCCESS",
+                      "webPath": "/gitlab-org/cli/-/jobs/17515232348",
+                      "detailedStatus": {
+                        "text": "Passed"
+                      }
+                    },
+                    {
+                      "name": "tests:coverage",
+                      "status": "SUCCESS",
+                      "webPath": "/gitlab-org/cli/-/jobs/17515232352",
+                      "detailedStatus": {
+                        "text": "Passed"
+                      }
+                    },
+                    {
+                      "name": "tests:integration",
+                      "status": "SUCCESS",
+                      "webPath": "/gitlab-org/cli/-/jobs/17515232351",
+                      "detailedStatus": {
+                        "text": "Passed"
+                      }
+                    },
+                    {
+                      "name": "tests:unit",
+                      "status": "SUCCESS",
+                      "webPath": "/gitlab-org/cli/-/jobs/17515232350",
+                      "detailedStatus": {
+                        "text": "Passed"
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      }
+    }
+  }
+}

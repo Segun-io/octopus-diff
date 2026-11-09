@@ -2,7 +2,18 @@ import { spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { ForgeHostSchema, type ForgeKind } from '@octopus-diff/contracts';
 import { buildGithubQuery, GITHUB_MAX_BRANCHES_PER_QUERY } from './github.js';
+import {
+  buildGithubConversationQuery,
+  buildGithubDetailQuery,
+  buildGithubRepositoryQuery,
+  githubQueryNumber,
+} from './github-details.js';
 import { buildGitlabQuery, GITLAB_MAX_BRANCHES_PER_QUERY } from './gitlab.js';
+import {
+  buildGitlabConversationQuery,
+  buildGitlabDetailQuery,
+  buildGitlabRepositoryQuery,
+} from './gitlab-details.js';
 
 /**
  * The only way octopus-diff runs `gh` / `glab` (docs/FORGES.md "Safety"). Mirrors git-core's
@@ -14,8 +25,8 @@ import { buildGitlabQuery, GITLAB_MAX_BRANCHES_PER_QUERY } from './gitlab.js';
  *   <cli> --version
  *   <cli> auth status [--hostname <host>]        glab also: auth status --all
  *   <cli> api graphql --hostname <host> --raw-field query=<Q> --raw-field <var>=<value>...
- * where Q must be exactly one of the queries built by `buildGithubQuery` / `buildGitlabQuery`
- * (read-only `query` operations) for the number of branch variables given.
+ * where Q must be exactly one of the queries the `QUERY_REGISTRY` rebuilds for the variables given
+ * (read-only `query` operations: the per-branch batch, repository, request detail, conversation).
  */
 
 export const FORGE_EXECUTABLES: Record<ForgeKind, string> = { github: 'gh', gitlab: 'glab' };
@@ -51,6 +62,86 @@ export interface ForgeCliOptions {
   /** Concurrent processes per CLI (default 2). */
   concurrency?: number;
 }
+
+/**
+ * The registry of query kinds the forge CLIs may run (DECISIONS #73). Each entry knows its fixed
+ * variable names, how to read its parameters (branch-variable count, an inlined PR number) and
+ * rebuilds the exact query strings it allows; the caller's query must equal one byte for byte.
+ * `allowed` returns null when the variables do not fit the kind.
+ */
+interface QueryKindEntry {
+  name: 'batch' | 'repository' | 'detail' | 'conversation';
+  allowed(
+    kind: ForgeKind,
+    query: string,
+    names: readonly string[],
+    fields: ReadonlyMap<string, string>,
+  ): string[] | null;
+}
+
+const OWNER_NAME = ['name', 'owner'];
+const FULL_PATH = ['fullPath'];
+const FULL_PATH_IID = ['fullPath', 'iid'];
+
+function sameNames(names: readonly string[], expected: readonly string[]): boolean {
+  return names.length === expected.length && [...names].sort().join() === expected.join();
+}
+
+const IID = /^\d{1,15}$/;
+
+export const QUERY_REGISTRY: readonly QueryKindEntry[] = [
+  {
+    name: 'batch',
+    allowed(kind, _query, names) {
+      const branchVars = names.filter((n) => /^b\d+$/.test(n));
+      const count = branchVars.length;
+      if (count < 1) return null;
+      for (let i = 0; i < count; i++) if (!names.includes(`b${i}`)) return null;
+      const fixed = names.filter((n) => !/^b\d+$/.test(n));
+      if (!sameNames(fixed, kind === 'github' ? OWNER_NAME : FULL_PATH)) return null;
+      const max = kind === 'github' ? GITHUB_MAX_BRANCHES_PER_QUERY : GITLAB_MAX_BRANCHES_PER_QUERY;
+      if (count > max) return null;
+      return kind === 'github'
+        ? [buildGithubQuery(count, 'full'), buildGithubQuery(count, 'basic')]
+        : [buildGitlabQuery(count, 'full'), buildGitlabQuery(count, 'basic')];
+    },
+  },
+  {
+    name: 'repository',
+    allowed(kind, _query, names) {
+      if (kind === 'github') {
+        return sameNames(names, OWNER_NAME) ? [buildGithubRepositoryQuery()] : null;
+      }
+      return sameNames(names, FULL_PATH)
+        ? [buildGitlabRepositoryQuery('full'), buildGitlabRepositoryQuery('basic')]
+        : null;
+    },
+  },
+  {
+    name: 'detail',
+    allowed(kind, query, names, fields) {
+      if (kind === 'github') {
+        const number = githubQueryNumber(query);
+        if (!sameNames(names, OWNER_NAME) || number === null) return null;
+        return [buildGithubDetailQuery(number, 'full'), buildGithubDetailQuery(number, 'basic')];
+      }
+      if (!sameNames(names, FULL_PATH_IID) || !IID.test(fields.get('iid') ?? '')) return null;
+      return [buildGitlabDetailQuery('full'), buildGitlabDetailQuery('basic')];
+    },
+  },
+  {
+    name: 'conversation',
+    allowed(kind, query, names, fields) {
+      if (kind === 'github') {
+        const number = githubQueryNumber(query);
+        if (!sameNames(names, OWNER_NAME) || number === null) return null;
+        return [buildGithubConversationQuery(number)];
+      }
+      if (!sameNames(names, FULL_PATH_IID) || !IID.test(fields.get('iid') ?? '')) return null;
+      return [buildGitlabConversationQuery('full'), buildGitlabConversationQuery('basic')];
+    },
+  },
+];
 
 function deny(message: string): never {
   throw new ForgeCliError('not_allowed', message);
@@ -97,29 +188,17 @@ export function assertAllowedForgeArgs(kind: ForgeKind, args: readonly string[])
     const query = fields.get('query');
     if (query === undefined) deny('api graphql requires a query');
     fields.delete('query');
-    const branchVars = [...fields.keys()].filter((k) => /^b\d+$/.test(k));
-    const count = branchVars.length;
-    for (let i = 0; i < count; i++) {
-      if (!fields.has(`b${i}`)) deny('branch variables must be b0..bN');
-    }
-    const fixed = kind === 'github' ? ['owner', 'name'] : ['fullPath'];
-    for (const name of fields.keys()) {
-      if (!/^b\d+$/.test(name) && !fixed.includes(name)) deny(`field not allowed: ${name}`);
-    }
-    for (const name of fixed) if (!fields.has(name)) deny(`missing field: ${name}`);
     for (const value of fields.values()) {
       if (value.length === 0 || value.length > 1024 || /[\r\n]/.test(value)) {
         deny('invalid field value');
       }
     }
-    const max = kind === 'github' ? GITHUB_MAX_BRANCHES_PER_QUERY : GITLAB_MAX_BRANCHES_PER_QUERY;
-    if (count < 1 || count > max) deny(`branch count out of range: ${count}`);
-    const allowed =
-      kind === 'github'
-        ? [buildGithubQuery(count, 'full'), buildGithubQuery(count, 'basic')]
-        : [buildGitlabQuery(count, 'full'), buildGitlabQuery(count, 'basic')];
-    if (!allowed.includes(query)) deny('query is not one of the built-in read-only queries');
-    return;
+    const names = [...fields.keys()];
+    for (const entry of QUERY_REGISTRY) {
+      const allowed = entry.allowed(kind, query, names, fields);
+      if (allowed?.includes(query)) return;
+    }
+    deny('query is not one of the built-in read-only queries');
   }
   deny(`${FORGE_EXECUTABLES[kind]} invocation not allowed: ${args.slice(0, 2).join(' ')}`);
 }

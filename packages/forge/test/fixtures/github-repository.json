@@ -1,0 +1,628 @@
+{
+  "data": {
+    "rateLimit": {
+      "cost": 1,
+      "remaining": 4889
+    },
+    "repository": {
+      "nameWithOwner": "pingdotgg/t3code",
+      "url": "https://github.com/pingdotgg/t3code",
+      "description": null,
+      "visibility": "PUBLIC",
+      "isArchived": false,
+      "parent": null,
+      "licenseInfo": {
+        "spdxId": "MIT",
+        "name": "MIT License"
+      },
+      "primaryLanguage": {
+        "name": "TypeScript"
+      },
+      "repositoryTopics": {
+        "nodes": []
+      },
+      "pushedAt": "2026-11-09T06:54:52Z",
+      "defaultBranchRef": {
+        "name": "main",
+        "target": {
+          "oid": "4df0c1302a54805f821590e4eabe9e6ea4ab80fd",
+          "messageHeadline": "refactor: upgrade Legend List to 3.7.2 and drop our list workarounds …",
+          "committedDate": "2026-11-09T06:54:51Z",
+          "statusCheckRollup": {
+            "state": "SUCCESS"
+          }
+        }
+      },
+      "openRequests": {
+        "totalCount": 3968
+      },
+      "openIssues": {
+        "totalCount": 1977
+      },
+      "recent": {
+        "nodes": [
+          {
+            "number": 24079,
+            "title": "fix(server): phones get the approval push when a subagent waits",
+            "url": "https://github.com/pingdotgg/t3code/pull/24079",
+            "state": "OPEN",
+            "isDraft": false,
+            "updatedAt": "2026-11-09T06:59:31Z",
+            "baseRefName": "main",
+            "headRefName": "fix/subagent-approval-push",
+            "isCrossRepository": true,
+            "headRepository": {
+              "nameWithOwner": "shivamhwp/t3code"
+            },
+            "author": {
+              "login": "shivamhwp"
+            },
+            "reviewDecision": null,
+            "commits": {
+              "nodes": [
+                {
+                  "commit": {
+                    "statusCheckRollup": {
+                      "state": "PENDING"
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "number": 33221,
+            "title": "fix(web): Cite button appears as fast after a double-click as after a drag",
+            "url": "https://github.com/pingdotgg/t3code/pull/33221",
+            "state": "OPEN",
+            "isDraft": false,
+            "updatedAt": "2026-11-09T06:59:10Z",
+            "baseRefName": "main",
+            "headRefName": "t3/speed-up-cite-popup",
+            "isCrossRepository": true,
+            "headRepository": {
+              "nameWithOwner": "MatthewFeroz/t3code"
+            },
+            "author": {
+              "login": "MatthewFeroz"
+            },
+            "reviewDecision": null,
+            "commits": {
+              "nodes": [
+                {
+                  "commit": {
+                    "statusCheckRollup": {
+                      "state": "PENDING"
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "number": 33219,
+            "title": "feat(web): drop files on the sidebar to start a thread with them attached",
+            "url": "https://github.com/pingdotgg/t3code/pull/33219",
+            "state": "OPEN",
+            "isDraft": false,
+            "updatedAt": "2026-11-09T06:58:59Z",
+            "baseRefName": "main",
+            "headRefName": "feat/sidebar-drop-new-thread",
+            "isCrossRepository": true,
+            "headRepository": {
+              "nameWithOwner": "LucaLow/t3code"
+            },
+            "author": {
+              "login": "LucaLow"
+            },
+            "reviewDecision": null,
+            "commits": {
+              "nodes": [
+                {
+                  "commit": {
+                    "statusCheckRollup": {
+                      "state": "PENDING"
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "number": 32919,
+            "title": "refactor(web,mobile): trim the scheduled task destination picker",
+            "url": "https://github.com/pingdotgg/t3code/pull/32919",
+            "state": "OPEN",
+            "isDraft": false,
+            "updatedAt": "2026-11-09T06:58:26Z",
+            "baseRefName": "main",
+            "headRefName": "t3/scheduled-task-destination-cleanup",
+            "isCrossRepository": true,
+            "headRepository": {
+              "nameWithOwner": "shivamhwp/t3code"
+            },
+            "author": {
+              "login": "shivamhwp"
+            },
+            "reviewDecision": "CHANGES_REQUESTED",
+            "commits": {
+              "nodes": [
+                {
+                  "commit": {
+                    "statusCheckRollup": {
+                      "state": "PENDING"
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "number": 33220,
+            "title": "fix(web,server): keep non-UTF-8 files read-only in the file panel",
+            "url": "https://github.com/pingdotgg/t3code/pull/33220",
+            "state": "OPEN",
+            "isDraft": false,
+            "updatedAt": "2026-11-09T06:58:15Z",
+            "baseRefName": "main",
+            "headRefName": "fix/file-panel-non-utf8-read-only",
+            "isCrossRepository": true,
+            "headRepository": {
+              "nameWithOwner": "ItsThierry/t3code"
+            },
+            "author": {
+              "login": "ItsThierry"
+            },
+            "reviewDecision": null,
+            "commits": {
+              "nodes": [
+                {
+                  "commit": {
+                    "statusCheckRollup": {
+                      "state": "SUCCESS"
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "number": 31032,
+            "title": "fix(server): poll provider usage only while visible",
+            "url": "https://github.com/pingdotgg/t3code/pull/31032",
+            "state": "OPEN",
+            "isDraft": false,
+            "updatedAt": "2026-11-09T06:57:46Z",
+            "baseRefName": "main",
+            "headRefName": "t3/claude-usage-polling",
+            "isCrossRepository": true,
+            "headRepository": {
+              "nameWithOwner": "ElliotDrel/t3code"
+            },
+            "author": {
+              "login": "ElliotDrel"
+            },
+            "reviewDecision": null,
+            "commits": {
+              "nodes": [
+                {
+                  "commit": {
+                    "statusCheckRollup": {
+                      "state": "PENDING"
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "number": 31370,
+            "title": "fix(server): Claude context meter shows the window Claude actually enforces",
+            "url": "https://github.com/pingdotgg/t3code/pull/31370",
+            "state": "OPEN",
+            "isDraft": false,
+            "updatedAt": "2026-11-09T06:54:23Z",
+            "baseRefName": "main",
+            "headRefName": "fix/claude-context-window-meter",
+            "isCrossRepository": true,
+            "headRepository": {
+              "nameWithOwner": "vladikkuzn/t3code"
+            },
+            "author": {
+              "login": "vladikkuzn"
+            },
+            "reviewDecision": null,
+            "commits": {
+              "nodes": [
+                {
+                  "commit": {
+                    "statusCheckRollup": {
+                      "state": "SUCCESS"
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "number": 31286,
+            "title": "fix(mobile): select file text across lines on Android",
+            "url": "https://github.com/pingdotgg/t3code/pull/31286",
+            "state": "OPEN",
+            "isDraft": false,
+            "updatedAt": "2026-11-09T06:54:19Z",
+            "baseRefName": "main",
+            "headRefName": "issue-watch/30178",
+            "isCrossRepository": true,
+            "headRepository": {
+              "nameWithOwner": "shivamhwp/t3code"
+            },
+            "author": {
+              "login": "shivamhwp"
+            },
+            "reviewDecision": null,
+            "commits": {
+              "nodes": [
+                {
+                  "commit": {
+                    "statusCheckRollup": {
+                      "state": "SUCCESS"
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "number": 32602,
+            "title": "feat(web): numbered markers for draft citations in the conversation",
+            "url": "https://github.com/pingdotgg/t3code/pull/32602",
+            "state": "OPEN",
+            "isDraft": false,
+            "updatedAt": "2026-11-09T06:54:05Z",
+            "baseRefName": "main",
+            "headRefName": "t3/cite-response-markers",
+            "isCrossRepository": true,
+            "headRepository": {
+              "nameWithOwner": "ElliotDrel/t3code"
+            },
+            "author": {
+              "login": "ElliotDrel"
+            },
+            "reviewDecision": null,
+            "commits": {
+              "nodes": [
+                {
+                  "commit": {
+                    "statusCheckRollup": {
+                      "state": "SUCCESS"
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "number": 33210,
+            "title": "fix(web): switching threads while dictating keeps the transcript in that thread",
+            "url": "https://github.com/pingdotgg/t3code/pull/33210",
+            "state": "OPEN",
+            "isDraft": false,
+            "updatedAt": "2026-11-09T06:52:48Z",
+            "baseRefName": "main",
+            "headRefName": "fix/issue-33197",
+            "isCrossRepository": false,
+            "headRepository": {
+              "nameWithOwner": "pingdotgg/t3code"
+            },
+            "author": {
+              "login": "juliusmarminge"
+            },
+            "reviewDecision": null,
+            "commits": {
+              "nodes": [
+                {
+                  "commit": {
+                    "statusCheckRollup": {
+                      "state": "SUCCESS"
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "number": 30697,
+            "title": "feat(scheduled-tasks): limit interval runs to a local time window",
+            "url": "https://github.com/pingdotgg/t3code/pull/30697",
+            "state": "OPEN",
+            "isDraft": false,
+            "updatedAt": "2026-11-09T06:52:43Z",
+            "baseRefName": "main",
+            "headRefName": "t3/scheduled-interval-time-window",
+            "isCrossRepository": true,
+            "headRepository": {
+              "nameWithOwner": "vladikkuzn/t3code"
+            },
+            "author": {
+              "login": "vladikkuzn"
+            },
+            "reviewDecision": null,
+            "commits": {
+              "nodes": [
+                {
+                  "commit": {
+                    "statusCheckRollup": {
+                      "state": "SUCCESS"
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "number": 27345,
+            "title": "fix(usage): Claude monthly spend shows the reported budget amounts",
+            "url": "https://github.com/pingdotgg/t3code/pull/27345",
+            "state": "OPEN",
+            "isDraft": false,
+            "updatedAt": "2026-11-09T06:51:19Z",
+            "baseRefName": "main",
+            "headRefName": "feat/usage-limits-budget-amount",
+            "isCrossRepository": true,
+            "headRepository": {
+              "nameWithOwner": "vladikkuzn/t3code"
+            },
+            "author": {
+              "login": "vladikkuzn"
+            },
+            "reviewDecision": null,
+            "commits": {
+              "nodes": [
+                {
+                  "commit": {
+                    "statusCheckRollup": {
+                      "state": "SUCCESS"
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "number": 30068,
+            "title": "fix(desktop): remove glibc 2.39 requirement from Linux capture helpers",
+            "url": "https://github.com/pingdotgg/t3code/pull/30068",
+            "state": "OPEN",
+            "isDraft": false,
+            "updatedAt": "2026-11-09T06:51:05Z",
+            "baseRefName": "main",
+            "headRefName": "voltcrash/linux-helper-glibc-compatibility",
+            "isCrossRepository": true,
+            "headRepository": {
+              "nameWithOwner": "voltcrash/t3code"
+            },
+            "author": {
+              "login": "voltcrash"
+            },
+            "reviewDecision": "CHANGES_REQUESTED",
+            "commits": {
+              "nodes": [
+                {
+                  "commit": {
+                    "statusCheckRollup": {
+                      "state": "SUCCESS"
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "number": 33218,
+            "title": "fix(mobile): select part of a source file's text on iOS",
+            "url": "https://github.com/pingdotgg/t3code/pull/33218",
+            "state": "OPEN",
+            "isDraft": false,
+            "updatedAt": "2026-11-09T06:51:04Z",
+            "baseRefName": "main",
+            "headRefName": "fix/ios-file-text-selection",
+            "isCrossRepository": true,
+            "headRepository": {
+              "nameWithOwner": "binjamshid/t3code"
+            },
+            "author": {
+              "login": "binjamshid"
+            },
+            "reviewDecision": null,
+            "commits": {
+              "nodes": [
+                {
+                  "commit": {
+                    "statusCheckRollup": {
+                      "state": "SUCCESS"
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "number": 28485,
+            "title": "fix(cursor): show Enterprise spend against the personal spend limit in Usage → Limits",
+            "url": "https://github.com/pingdotgg/t3code/pull/28485",
+            "state": "OPEN",
+            "isDraft": false,
+            "updatedAt": "2026-11-09T06:50:44Z",
+            "baseRefName": "main",
+            "headRefName": "fix/cursor-enterprise-usage-limits",
+            "isCrossRepository": true,
+            "headRepository": {
+              "nameWithOwner": "vladikkuzn/t3code"
+            },
+            "author": {
+              "login": "vladikkuzn"
+            },
+            "reviewDecision": null,
+            "commits": {
+              "nodes": [
+                {
+                  "commit": {
+                    "statusCheckRollup": {
+                      "state": "SUCCESS"
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "number": 30471,
+            "title": "fix(server): t3_project_create names the link that refuses it and rejects a model default it would drop",
+            "url": "https://github.com/pingdotgg/t3code/pull/30471",
+            "state": "OPEN",
+            "isDraft": false,
+            "updatedAt": "2026-11-09T06:43:46Z",
+            "baseRefName": "main",
+            "headRefName": "fix/issue-30455",
+            "isCrossRepository": false,
+            "headRepository": {
+              "nameWithOwner": "pingdotgg/t3code"
+            },
+            "author": {
+              "login": "juliusmarminge"
+            },
+            "reviewDecision": null,
+            "commits": {
+              "nodes": [
+                {
+                  "commit": {
+                    "statusCheckRollup": {
+                      "state": "SUCCESS"
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "number": 27606,
+            "title": "fix(server): cloning a Git LFS repo no longer looks stalled while it downloads",
+            "url": "https://github.com/pingdotgg/t3code/pull/27606",
+            "state": "OPEN",
+            "isDraft": false,
+            "updatedAt": "2026-11-09T06:41:26Z",
+            "baseRefName": "main",
+            "headRefName": "fix/clone-lfs-progress",
+            "isCrossRepository": true,
+            "headRepository": {
+              "nameWithOwner": "GuardedAirplane/t3code"
+            },
+            "author": {
+              "login": "GuardedAirplane"
+            },
+            "reviewDecision": null,
+            "commits": {
+              "nodes": [
+                {
+                  "commit": {
+                    "statusCheckRollup": {
+                      "state": "SUCCESS"
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "number": 26271,
+            "title": "fix(server): watched PRs wake the agent when they merge",
+            "url": "https://github.com/pingdotgg/t3code/pull/26271",
+            "state": "OPEN",
+            "isDraft": false,
+            "updatedAt": "2026-11-09T06:36:03Z",
+            "baseRefName": "main",
+            "headRefName": "fix/pr-watch-wakes-on-merge",
+            "isCrossRepository": false,
+            "headRepository": {
+              "nameWithOwner": "pingdotgg/t3code"
+            },
+            "author": {
+              "login": "juliusmarminge"
+            },
+            "reviewDecision": null,
+            "commits": {
+              "nodes": [
+                {
+                  "commit": {
+                    "statusCheckRollup": {
+                      "state": "SUCCESS"
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "number": 20932,
+            "title": "fix(client-runtime): recover threads when resume never completes",
+            "url": "https://github.com/pingdotgg/t3code/pull/20932",
+            "state": "OPEN",
+            "isDraft": false,
+            "updatedAt": "2026-11-09T06:34:36Z",
+            "baseRefName": "main",
+            "headRefName": "fix/resume-completion-deadline-upstream",
+            "isCrossRepository": true,
+            "headRepository": {
+              "nameWithOwner": "JustYannicc/t3code"
+            },
+            "author": {
+              "login": "JustYannicc"
+            },
+            "reviewDecision": null,
+            "commits": {
+              "nodes": [
+                {
+                  "commit": {
+                    "statusCheckRollup": {
+                      "state": "SUCCESS"
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "number": 33168,
+            "title": "fix(acp): resolve zombie background tasks on cancel and turn completion",
+            "url": "https://github.com/pingdotgg/t3code/pull/33168",
+            "state": "OPEN",
+            "isDraft": false,
+            "updatedAt": "2026-11-09T06:33:05Z",
+            "baseRefName": "main",
+            "headRefName": "fix/gh25599-zombie-tasks",
+            "isCrossRepository": true,
+            "headRepository": {
+              "nameWithOwner": "noelsaw1/t3code-fork"
+            },
+            "author": {
+              "login": "noelsaw1"
+            },
+            "reviewDecision": null,
+            "commits": {
+              "nodes": [
+                {
+                  "commit": {
+                    "statusCheckRollup": {
+                      "state": "FAILURE"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  }
+}
