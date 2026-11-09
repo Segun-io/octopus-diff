@@ -102,6 +102,16 @@ describe('folderJobOutcome', () => {
     ).toBeNull();
   });
 
+  it('a folder removed while it scans settles the job (PR #7 review)', () => {
+    const watched: FolderJob = { ...folder, watchedAt: 1000 };
+    // Before: the job stayed working forever once its root was gone.
+    expect(folderJobOutcome(watched, undefined, null, 2000)).toEqual({ state: 'removed' });
+    // A list fetched before the request returned says nothing about the new root.
+    expect(folderJobOutcome(watched, undefined, null, 500)).toBeNull();
+    expect(folderJobOutcome(watched, undefined, null)).toBeNull();
+    expect(folderJobOutcome(folder, undefined, null, 2000)).toBeNull();
+  });
+
   it('reports a scan error for this folder only', () => {
     const error: ScanStatus = { ...scanning, state: 'error', message: 'permission denied' };
     expect(folderJobOutcome(folder, root(), error)).toEqual({

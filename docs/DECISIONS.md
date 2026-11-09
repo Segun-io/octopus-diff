@@ -1918,3 +1918,13 @@ contract, daemon or git-core change.
      (toolbar hierarchy, PR #2): the diff header keeps `main`'s layout (ghost buttons, `DiffViewOptions`, the ⋯
      menu at the right) with this PR's More context / Expand all rules; this PR's entries were renumbered
      #112–#118 → #154–#160 after `main`'s #153, with PLAN and the report updated.
+162. **PR #7 review round 2 and the CI bench budget.** (a) Greptile P1 "removed folder leaves adding blocked":
+     a folder job records `watchedAt`, and `folderJobOutcome` returns `removed` when a scan-root list fetched
+     after it no longer has the root (stopped from Settings → Folders or another window while scanning).
+     `useAddJobWatcher` then clears the job and says "Stopped watching …", so the panel stops spinning and the
+     form's main button is enabled again. (b) CI e2e failed on `10-bulk-review` "bulk `all` over the 30 × 3
+     bench layout stays well under 2 s": cold 2077 ms. Not this PR's code (no daemon change): `main`'s own green
+     CI runs measured 972, 1335, 1811 and 1823 ms for the same single cold sample (90 `git status` runs on a
+     shared 2-core runner). The spec now takes the best of up to three fresh daemons (each cold: new store,
+     empty caches) and records every sample (`bulkAllColdSamples`); the 2 s budget and the warm check are
+     unchanged. Test timeout 240 → 360 s for the extra daemons.

@@ -36,6 +36,8 @@ export type AddJob =
        * done once the value is later (null → a time for a new folder).
        */
       scannedBefore?: string | null;
+      /** `Date.now()` when the watch request returned (scan-root lists fetched before say nothing). */
+      watchedAt?: number;
       /** Repositories registered through this folder, once the scan is done. */
       found?: number;
       error?: string;
@@ -118,19 +120,29 @@ export function projectsOfScanRoot(
 
 /**
  * The folder job's scan is over when the scan root's `lastScannedAt` is later than when the
- * request returned (refreshed by `scan.progress` events or by polling), or a `scan.progress` error event
- * arrived for it.
+ * request returned (refreshed by `scan.progress` events or by polling), or a `scan.progress` error
+ * arrived for it. `removed`: a scan-root list fetched after the request returned (`listedAt`) no
+ * longer has the root (stopped from Settings or another window while it was scanning).
  */
 export function folderJobOutcome(
   job: Extract<AddJob, { kind: 'folder' }>,
   scanRoot: ScanRoot | undefined,
   scan: ScanStatus | null,
-): { state: 'done'; found: number } | { state: 'error'; error: string } | null {
+  listedAt?: number,
+):
+  | { state: 'done'; found: number }
+  | { state: 'error'; error: string }
+  | { state: 'removed' }
+  | null {
   if (job.state !== 'working' || !job.scanRootId) return null;
   if (scan && scan.scanRootId === job.scanRootId && scan.state === 'error') {
     return { state: 'error', error: scan.message ?? 'The scan failed.' };
   }
-  if (!scanRoot) return null;
+  if (!scanRoot) {
+    const listedAfter =
+      listedAt !== undefined && job.watchedAt !== undefined && listedAt > job.watchedAt;
+    return listedAfter ? { state: 'removed' } : null;
+  }
   if (scannedSince(scanRoot.lastScannedAt, job.scannedBefore ?? null)) {
     return { state: 'done', found: scanRoot.projectCount };
   }

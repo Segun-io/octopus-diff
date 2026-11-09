@@ -234,12 +234,14 @@ export function useFolderBrowser({
     },
     onSuccess: async (res: AddScanRootResponse, { job }) => {
       const where = show(res.scanRoot.path);
+      const watchedAt = Date.now();
       // The job's scan is done once lastScannedAt moves (components/AddJobStatus.tsx).
       updateJob(store, job, {
         path: where,
         scanRootId: res.scanRoot.id,
         created: res.created,
         scannedBefore: res.scanRoot.lastScannedAt,
+        watchedAt,
       });
       store.setState((s) => ({
         scanFollows: [
@@ -247,7 +249,7 @@ export function useFolderBrowser({
           {
             scanRootId: res.scanRoot.id,
             scannedBefore: res.scanRoot.lastScannedAt,
-            since: Date.now(),
+            since: watchedAt,
           },
         ],
       }));

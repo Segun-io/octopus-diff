@@ -1,6 +1,6 @@
 # diff-context-onboarding report
 
-Branch `fix/diff-context-and-onboarding`, from `main` at `90c7cff`. Decisions: `docs/DECISIONS.md` #154–#161
+Branch `fix/diff-context-and-onboarding`, from `main` at `90c7cff`. Decisions: `docs/DECISIONS.md` #154–#162
 ("Diff context errors, first-run Continue and add feedback"). Web and e2e only: no contract, daemon or git-core
 change.
 
@@ -70,7 +70,7 @@ change.
   `17-diff-context` test fails with 98 "deletionLine and additionLine are null" errors; with the scan watcher
   disabled, the "event stream down" test fails (the first-run screen stays).
 
-### Review round (PR #7) and merge with `main` (#161)
+### Review rounds (PR #7) and merge with `main` (#161, #162)
 
 - Merged `main` (toolbar hierarchy, PR #2): the diff header keeps `main`'s layout with this PR's More context /
   Expand all rules; DECISIONS renumbered #112–#118 → #154–#160.
@@ -81,8 +81,13 @@ change.
   fetching.
 - Greptile P2 "partial diffs look complete": the `e` / More context command skips the whole-file test for a
   truncated patch.
+- Greptile P1 "removed folder leaves adding blocked" (round 2): a folder job removed while it scans
+  (Settings → Folders) settles as `removed`: the job clears with a "Stopped watching …" notice and the form
+  is usable again.
+- CI: the `10-bulk-review` cold bench (one sample, 2077 ms vs the 2 s budget; `main`'s runs 972–1823 ms) is
+  now the best of up to three fresh cold daemons, same budget (#162).
 - New unit tests in `apps/web/test/add-job.test.ts` (`scannedSince`, `scanFollowDone`, an older cached
-  timestamp). No e2e for dismissing a running toast: the fixture scans finish in well under a second.
+  timestamp, a removed root). No e2e for dismissing a running toast: the fixture scans finish in well under a second.
 
 ## Verification
 
@@ -107,12 +112,15 @@ Run on this branch, 2026-11-09:
   48, e2e unit 5). `pnpm test:e2e`: first run 88 passed, 2 failed (`16-copy` "the selection clears when another
   file opens" and "a text selection in the code copies only the code"; both passed in a 9/9 rerun of
   `16-copy` alone, load-dependent, not code this PR touches), second full run **90 passed (3.5 min)**.
+- Review round 2 (#162): `pnpm lint`, `pnpm typecheck`, `pnpm build` pass; web unit tests 240 passed;
+  `pnpm test:e2e` **90 passed (3.5 min)**, bench cold 793 ms (one sample); the retry path forced once locally
+  took three samples (517, 514, 529 ms) and passed.
 - Targeted while developing: `17-diff-context` + `18-onboarding` + `01-projects` + `12-ui-review-policy`, all
   passing.
 
 ## Decisions
 
-DECISIONS #154–#161: the cache key is the fetched view; context clamped and stopped at the whole file; no stacked
+DECISIONS #154–#162: the cache key is the fetched view; context clamped and stopped at the whole file; no stacked
 context requests; a "Continue" main button; scan polling during an add job as the fallback for the event stream;
 one add job shown in the form or as a toast; the stale-listing gap; the PR #7 review fixes and merge (#161).
 

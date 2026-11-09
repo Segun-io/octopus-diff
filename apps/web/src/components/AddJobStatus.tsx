@@ -82,8 +82,14 @@ export function useAddJobWatcher() {
 
   useEffect(() => {
     if (job?.kind !== 'folder') return;
-    const outcome = folderJobOutcome(job, scanRoot, scan);
+    const outcome = folderJobOutcome(job, scanRoot, scan, rootsData ? polledAt : undefined);
     if (!outcome) return;
+    if (outcome.state === 'removed') {
+      // The folder was stopped while it was scanning: nothing left to wait for.
+      store.setState((s) => (s.addJob?.id === job.id ? { addJob: null } : {}));
+      actions.notice(store, `Stopped watching ${job.path}.`);
+      return;
+    }
     store.setState((s) =>
       s.addJob?.id === job.id ? { addJob: { ...job, ...outcome } as AddJob } : {},
     );
@@ -91,7 +97,7 @@ export function useAddJobWatcher() {
       queryClient.invalidateQueries({ queryKey: queryKeys.projects() }),
       queryClient.invalidateQueries({ queryKey: queryKeys.inboxAll() }),
     ]);
-  }, [job, scanRoot, scan, store, queryClient]);
+  }, [job, scanRoot, scan, rootsData, polledAt, store, queryClient]);
 }
 
 /** Registers an add form on screen (the toast waits until none is). */
