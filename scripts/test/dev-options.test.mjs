@@ -95,6 +95,14 @@ describe('parseDevArgs', () => {
     [['--allowed-host', 'odino:5173'], /bare host name/],
     [['--allowed-host', 'http://x'], /bare host name/],
     [['--bogus'], /Unknown option/],
+    [['--', '--port', '7439'], /--daemon-port/],
+    [['--', '--port=7428'], /--daemon-port/],
+    [['--', '-p7439'], /--daemon-port/],
+    [['--', '--host', '0.0.0.0'], /--loopback/],
+    [['--', '--allow-non-loopback'], /--loopback/],
+    [['--', '--state-dir', '/x'], /--state-dir before --/],
+    [['--', '--allowed-host=x'], /--allowed-host before --/],
+    [['--', '--', 'repo'], /repo paths before --/],
   ])('rejects %j', (argv, message) => {
     expect(() => parse(argv)).toThrow(DevUsageError);
     expect(() => parse(argv)).toThrow(message);

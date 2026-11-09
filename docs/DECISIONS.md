@@ -1686,3 +1686,11 @@ the production LAN server (`octopus-diff-lan` unit, :7428). Report: `docs/report
      client retries after 1 s (backoff to 10 s while the proxy answers 502), and the `hello` on reconnect triggers a
      full refresh (`collectEventEffects` with `reconnect`). Verified in headless Chromium through `http://odino:5183`:
      status stayed `Live`, `/api/events` and every query refetched after each restart.
+143. **Review fixes (PR #5, Greptile).** (a) Serve flags after `--` that `pnpm dev` sets itself (`--port`/`-p`,
+     `--host`, `--allow-non-loopback`, `--allowed-host`, `--state-dir`, a second `--`) are rejected with the dev
+     option to use instead: the CLI takes the last value, so `-- --port 7439` left Vite proxying to 7429 and
+     `-- --port 7428` bypassed the reserved-port check. (b) The supervisor keeps every child's process group until
+     the group is gone, not just the live children: if `tsx watch` died, the daemon it spawned kept the port after
+     `pnpm dev` exited. An unexpected child exit now SIGTERMs its group (once; during a stop the daemon already
+     had its SIGTERM), and `pnpm dev` exits only when every group is gone, SIGKILLing leftovers after 8 s.
+     Verified live: `kill -9` of the tsx process → the orphaned daemon logged a clean shutdown, both ports freed.

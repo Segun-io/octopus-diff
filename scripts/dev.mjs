@@ -92,6 +92,12 @@ const baseEnv = { ...process.env, NO_COLOR: '1', FORCE_COLOR: '0' };
 
 /** @type {Map<string, import('node:child_process').ChildProcess>} */
 const children = new Map();
+/**
+ * Every child's process group, kept after the child exits: `tsx watch` can die while the daemon it
+ * spawned (same group) keeps running and holds the port, so cleanup must still reach the group.
+ * @type {Set<number>}
+ */
+const groups = new Set();
 let stopping = false;
 let exitCode = 0;
 let daemonRestarts = -1;
@@ -107,6 +113,7 @@ function start(name, args, cwd, env, filter = () => ({ show: true }), onLine = (
     detached: true,
   });
   children.set(name, child);
+  if (child.pid !== undefined) groups.add(child.pid);
   for (const stream of [child.stdout, child.stderr]) {
     createInterface({ input: stream, crlfDelay: Number.POSITIVE_INFINITY }).on('line', (line) => {
       const result = filter(line);
@@ -123,35 +130,53 @@ function start(name, args, cwd, env, filter = () => ({ show: true }), onLine = (
     children.delete(name);
     if (!stopping) {
       log(`${name} exited (${signal ?? `code ${code}`}); stopping the rest`);
+      // Its group may outlive it (the daemon under a dead \`tsx watch\`) and got no SIGTERM yet.
+      // While stopping it already had one: a second would skip the daemon's clean shutdown.
+      if (child.pid !== undefined) killGroup(child.pid, 'SIGTERM');
       exitCode = 1;
       stopAll();
     }
-    if (children.size === 0) process.exit(exitCode);
+    if (children.size === 0) exitWhenGroupsGone();
   });
   return child;
 }
 
-function signal(child, name, group) {
+function signal(child, name) {
   if (child.pid === undefined) return;
   try {
-    process.kill(group ? -child.pid : child.pid, name);
+    process.kill(child.pid, name);
   } catch {
     // Already gone.
   }
 }
-const signalGroup = (child, name) => signal(child, name, true);
+
+/** Exits once every process group is gone; stopAll's timeout SIGKILLs any that linger. */
+function exitWhenGroupsGone() {
+  for (const pgid of [...groups]) killGroup(pgid, 0);
+  if (groups.size === 0) process.exit(exitCode);
+  setTimeout(exitWhenGroupsGone, 100);
+}
+
+/** Signals a process group (0 only probes it); forgets it once it no longer exists. */
+function killGroup(pgid, name) {
+  try {
+    process.kill(-pgid, name);
+  } catch {
+    groups.delete(pgid);
+  }
+}
 
 function stopAll() {
   if (stopping) return;
   stopping = true;
   // SIGTERM to the child only: `tsx watch` relays it to the daemon, which shuts down cleanly on the
   // first SIGTERM but skips the clean shutdown on a second one. SIGKILL goes to the whole group.
-  for (const child of children.values()) signal(child, 'SIGTERM', false);
+  for (const child of children.values()) signal(child, 'SIGTERM');
   setTimeout(() => {
-    for (const [name, child] of children) {
+    for (const name of children.keys()) {
       log(`${name} did not stop within ${STOP_TIMEOUT_MS / 1000} s; killing it`);
-      signalGroup(child, 'SIGKILL');
     }
+    for (const pgid of groups) killGroup(pgid, 'SIGKILL');
   }, STOP_TIMEOUT_MS).unref();
 }
 
@@ -164,7 +189,7 @@ for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
 }
 // Last resort (an uncaught error here): don't leave the process groups running.
 process.on('exit', () => {
-  for (const child of children.values()) signalGroup(child, 'SIGKILL');
+  for (const pgid of groups) killGroup(pgid, 'SIGKILL');
 });
 
 function printBanner(token) {

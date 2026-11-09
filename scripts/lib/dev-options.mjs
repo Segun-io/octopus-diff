@@ -33,6 +33,8 @@ Options:
 
 Repo paths default to this checkout (env OCTOPUS_DIFF_DEV_REPOS, separated by "${path.delimiter}").
 Flags after \`--\` go to \`octopus-diff serve\` unchanged, e.g. \`-- --log-level debug --poll\`.
+Flags pnpm dev sets itself (--port, --host, --allow-non-loopback, --allowed-host, --state-dir) are
+rejected there; use the options above.
 Port ${RESERVED_PORT} is reserved for the production LAN server and is rejected.`;
 
 function parsePort(value, what) {
@@ -48,6 +50,33 @@ function parsePort(value, what) {
     );
   }
   return port;
+}
+
+/**
+ * `serve` flags that `pnpm dev` sets itself, with the dev option to use instead. Passed after `--`
+ * they would override the generated ones (the CLI takes the last value) behind the supervisor's back:
+ * Vite would still proxy to the old port, and the reserved-port check would be bypassed.
+ */
+const OWNED_SERVE_FLAGS = new Map([
+  ['--port', '--daemon-port'],
+  ['-p', '--daemon-port'],
+  ['--host', '--loopback (or the default LAN mode)'],
+  ['--allow-non-loopback', '--loopback (or the default LAN mode)'],
+  ['--allowed-host', '--allowed-host before --'],
+  ['--state-dir', '--state-dir before --'],
+  ['--', 'repo paths before --'],
+]);
+
+function assertNoOwnedServeFlags(serveArgs) {
+  for (const arg of serveArgs) {
+    const flag = arg.startsWith('--') ? arg.split('=', 1)[0] : arg.startsWith('-p') ? '-p' : arg;
+    const instead = OWNED_SERVE_FLAGS.get(flag);
+    if (instead !== undefined) {
+      throw new DevUsageError(
+        `"${arg}" after -- is set by pnpm dev itself and cannot be overridden; use ${instead}`,
+      );
+    }
+  }
 }
 
 function splitList(value, separator) {
@@ -101,6 +130,7 @@ export function parseDevArgs(argv, env, ctx) {
   const dashDash = argv.indexOf('--');
   const head = dashDash === -1 ? argv : argv.slice(0, dashDash);
   const serveArgs = dashDash === -1 ? [] : argv.slice(dashDash + 1);
+  assertNoOwnedServeFlags(serveArgs);
   let parsed;
   try {
     parsed = parseArgs({
