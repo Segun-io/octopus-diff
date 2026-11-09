@@ -6,6 +6,7 @@ import {
   RepoPathSchema,
   TimestampSchema,
 } from './common.js';
+import { DEFAULT_FORGE_SETTINGS, ForgeSettingsPatchSchema, ForgeSettingsSchema } from './forge.js';
 import { DiffScopeSchema } from './scope.js';
 
 /**
@@ -143,14 +144,25 @@ export const ReviewSettingsSchema = z.object({
 });
 export type ReviewSettings = z.infer<typeof ReviewSettingsSchema>;
 
-export const AppSettingsSchema = z.object({ review: ReviewSettingsSchema });
+export const AppSettingsSchema = z.object({
+  review: ReviewSettingsSchema,
+  /**
+   * Forge integration (forge.ts, docs/FORGES.md). Always sent by daemons that have it; absent
+   * means the daemon predates it (treat as `DEFAULT_FORGE_SETTINGS`, but there is no data).
+   */
+  forges: ForgeSettingsSchema.optional(),
+});
 export type AppSettings = z.infer<typeof AppSettingsSchema>;
 
-export const DEFAULT_APP_SETTINGS: AppSettings = { review: { defaultEnabled: true } };
+export const DEFAULT_APP_SETTINGS: AppSettings = {
+  review: { defaultEnabled: true },
+  forges: DEFAULT_FORGE_SETTINGS,
+};
 
 /** Partial update: omitted fields keep their value. */
 export const AppSettingsPatchSchema = z.object({
   review: ReviewSettingsSchema.partial().optional(),
+  forges: ForgeSettingsPatchSchema.optional(),
 });
 export type AppSettingsPatch = z.infer<typeof AppSettingsPatchSchema>;
 

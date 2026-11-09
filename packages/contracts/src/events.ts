@@ -91,6 +91,15 @@ export const SettingsChangedEventSchema = z.object({
   revision: z.number().int().min(0),
 });
 
+/**
+ * Forge data (pull/merge requests, CLI status) changed for these projects; clients refetch
+ * `GET /api/forges`. An empty `projectIds` means only the CLI status changed.
+ */
+export const ForgeUpdatedEventSchema = z.object({
+  type: z.literal('forge.updated'),
+  projectIds: z.array(IdSchema),
+});
+
 export const ServerEventSchema = z.discriminatedUnion('type', [
   HelloEventSchema,
   WorktreeChangedEventSchema,
@@ -103,6 +112,7 @@ export const ServerEventSchema = z.discriminatedUnion('type', [
   ReviewChangedEventSchema,
   ReviewBulkEventSchema,
   SettingsChangedEventSchema,
+  ForgeUpdatedEventSchema,
 ]);
 export type ServerEvent = z.infer<typeof ServerEventSchema>;
 export type ServerEventType = ServerEvent['type'];
@@ -120,6 +130,7 @@ export const SERVER_EVENT_TYPES = [
   'review.changed',
   'review.bulk',
   'settings.changed',
+  'forge.updated',
 ] as const satisfies readonly ServerEventType[];
 
 export const SSE_HEARTBEAT_INTERVAL_MS = 15_000;

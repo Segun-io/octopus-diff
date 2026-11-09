@@ -70,6 +70,13 @@ export interface GitCore {
   /** Locations the daemon's watcher should observe for this worktree. */
   getWatchTargets(worktree: WorktreeLocator): Promise<WatchTargets>;
 
+  /**
+   * Remotes and branch tracking config of a project (forge integration, docs/FORGES.md): one
+   * `git config --get-regexp` read; `url.<base>.insteadOf` rewrites are applied to remote URLs.
+   * Optional so that test doubles and older implementations need not provide it.
+   */
+  readRemoteConfig?(project: ProjectLocator): Promise<GitRemoteConfig>;
+
   /** Kills in-flight git processes and rejects queued work. */
   dispose(): Promise<void>;
 }
@@ -119,6 +126,33 @@ export interface WorktreeLocator {
   worktreeId: string;
   /** Realpath of the worktree root. */
   path: string;
+}
+
+/** One configured remote (`remote.<name>.*`). */
+export interface GitRemote {
+  name: string;
+  /** `remote.<name>.url` with `url.<base>.insteadOf` applied; null when unset. */
+  url: string | null;
+  /** `remote.<name>.pushurl` with `pushInsteadOf` / `insteadOf` applied; null when unset. */
+  pushUrl: string | null;
+  /** `remote.<name>.gh-resolved` (written by `gh repo set-default`): `base` or `owner/name`. */
+  ghResolved: string | null;
+}
+
+/** `branch.<name>.*` tracking config of one local branch. */
+export interface GitBranchConfig {
+  remote: string | null;
+  /** Full ref, e.g. `refs/heads/feature/x`. */
+  merge: string | null;
+  pushRemote: string | null;
+}
+
+export interface GitRemoteConfig {
+  remotes: GitRemote[];
+  /** By short branch name. */
+  branches: Record<string, GitBranchConfig>;
+  /** `remote.pushDefault`, or null. */
+  pushDefault: string | null;
 }
 
 export interface ResolvedProject {

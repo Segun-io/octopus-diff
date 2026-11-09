@@ -10,6 +10,7 @@ export * from './common.js';
 export * from './daemon.js';
 export * from './domain.js';
 export * from './events.js';
+export * from './forge.js';
 export * from './git-core.js';
 export * from './scope.js';
 export * from './settings.js';

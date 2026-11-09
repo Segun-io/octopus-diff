@@ -44,6 +44,7 @@ import {
   OkResponseSchema,
 } from './common.js';
 import { parseServerEvent, type ServerEvent, SseParser } from './events.js';
+import { type ForgesResponse, ForgesResponseSchema, type RefreshForgesRequest } from './forge.js';
 import { appendScopeParams, type DiffScope } from './scope.js';
 import {
   type AppSettingsPatch,
@@ -151,6 +152,9 @@ export interface ApiClient {
   undoReview(body: UndoReviewRequest): Promise<UndoReviewResponse>;
   /** Subdirectories of `path` (default: home) for the folder picker. */
   listDirs(params?: { path?: string }): Promise<DirsResponse>;
+  /** Forge integration: CLI status and pull/merge requests per project (forge.ts). */
+  getForges(): Promise<ForgesResponse>;
+  refreshForges(body?: RefreshForgesRequest): Promise<ForgesResponse>;
   /** Absolute or same-origin URL of the SSE stream. */
   eventsUrl(): string;
   /** Subscribes via fetch streaming with the bearer token (browsers and Node). */
@@ -376,6 +380,9 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
       if (params.path !== undefined) query.set('path', params.path);
       return request(DirsResponseSchema, 'GET', ROUTES.listDirs.path, { query });
     },
+    getForges: () => request(ForgesResponseSchema, 'GET', ROUTES.getForges.path),
+    refreshForges: (body = {}) =>
+      request(ForgesResponseSchema, 'POST', ROUTES.refreshForges.path, { body }),
     eventsUrl: () => url(ROUTES.events.path),
     subscribe,
   };

@@ -72,6 +72,7 @@ describe('server events', () => {
     },
     { type: 'review.bulk', projectIds: [id], reviewed: true, changed: 12 },
     { type: 'settings.changed', revision: 3 },
+    { type: 'forge.updated', projectIds: ['0123456789abcdef'] },
   ];
 
   it('covers every event type in SERVER_EVENT_TYPES', () => {

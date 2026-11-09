@@ -60,6 +60,9 @@ export const ROUTES = {
   undoReview: { method: 'POST', path: '/api/review/undo' },
   // --- folder picker (additive; see "folder picker" below) ---
   listDirs: { method: 'GET', path: '/api/fs/dirs' },
+  // --- forges (additive; see forge.ts) ---
+  getForges: { method: 'GET', path: '/api/forges' },
+  refreshForges: { method: 'POST', path: '/api/forges/refresh' },
 } as const;
 export type RouteName = keyof typeof ROUTES;
 
