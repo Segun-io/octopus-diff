@@ -1647,33 +1647,161 @@ The user asked for worktree/branch rows in recency order. This reverses "rows st
      makes a worktree the newest. Unit tests: git-core `summary.test.ts` (reflog time, newest file, clamp, commit-date
      fallback, unborn, `stateHash` unchanged), web `model.test.ts` (order per project, nulls last, tie-break).
 
+## CI flakes: the watch host, test timeouts and two e2e races (lead session, 2026-11-09)
+
+Numbering starts at #130: `main` ends at #115, PR #2 (`ux/toolbar-hierarchy`) uses #116 onwards and was still adding
+entries (#123) while this was written, so #123–#129 are left to it.
+
+130. **`@parcel/watcher` runs in a child process, the "watch host" (`apps/daemon/src/watch-host.ts`).** CI and
+     the dev machine showed two symptoms with one cause. (a) Every run logged bursts of `watcher error; polling
+     continues … Unable to poll: Interrupted system call`, for *every* worktree and git dir at once, and then
+     live-update specs failed (`04-live-updates` "SSE worktree.changed within budget", `12-ui-review-policy`
+     "stateHash … did not change"; the errors precede each failure by seconds). (b) e2e hung until the job
+     timeout (main run 42595070350) with the worker's main thread in `futex_do_wait` (BLOCKERS, PR #2).
+     Cause, from the 2.6.0 source and reproduced here with `tgkill`: `InotifyBackend::start()` throws when
+     `poll()` returns `EINTR` (any signal delivered to that thread, e.g. `SIGCHLD` from the daemon's git
+     processes, when the main thread already has one pending). The backend is shared, so every subscription
+     gets the error, and the thread ends without `mEndedSignal.notify()`. The daemon then polled forever (it
+     never re-subscribed: symptom a). `~InotifyBackend()` waits for that signal, and it runs on whichever
+     thread drops the last `shared_ptr`. Usually that is the dying thread itself, which then blocks forever and
+     leaks its inotify instance. When a subscribe or unsubscribe is in flight, though, its N-API runner holds a
+     reference, and the runner is destroyed on the JavaScript thread, which then never returns (symptom b).
+     Reproduced: an in-process subscribe of a 45k-file tree plus one `EINTR` in the inotify thread hangs Node
+     with the main thread in `futex_do_wait`. **Not calling `unsubscribe()` on a failed subscription is
+     necessary but not sufficient.** After the error, `Watcher::notifyError` has already cleared the
+     callbacks, so that `unsubscribe()` is a native no-op. The hang comes from runners in flight, which
+     JavaScript cannot avoid. Hence a separate process: the host spawns nothing, so it gets no `SIGCHLD`. If it
+     stops answering anyway (60 s per subscribe), it is SIGKILLed and never waited for, and its subscribers get
+     an error. `close()` kills it first (subscribes in flight reject at once), and a process `exit` hook kills
+     live hosts. IPC channel and process are unref'd, except while a request waits. The host is started when
+     the `WatcherService` is built, so projects registered right after start are watched without waiting for
+     a Node boot. The parent never loads the native addon. Cost: one extra Node process per daemon (~40 MB RSS)
+     and an IPC hop per event batch. Verified: the same `EINTR` injected into the host's inotify thread with an
+     in-flight subscribe deadlocks the host; the daemon's thread keeps running, the subscribe rejects after the
+     timeout, and a new host delivers events. Tests: `watch-host.test.ts` (events, death, a SIGSTOPped host,
+     `close()`, exit).
+131. **A subscription that reports an error is dropped, never unsubscribed, and re-made with a backoff.**
+     `watcher.ts`: the error callback marks the subscription dead (`#dead`; `#dispose` skips it everywhere), clears
+     `sub`, polls at the degraded rate and re-subscribes after 1 s, doubling per consecutive error up to 5 min
+     (the streak resets after 10 min without one; `resubscribeDelayMs` option). After re-subscribing, the
+     worktree is refreshed (`fs`; `git` for its project's worktrees after a git-dir re-subscribe), so changes made
+     in the gap are not missed. An error before `subscribe()` resolves is handled the same way. A retry that
+     fails with an unclassified error (e.g. the host was killed) backs off and retries. Known causes (watch or
+     instance limits, permissions) keep polling as before, and `missing` keeps the existing heal path (F1).
+     Dropping a dead subscription leaks nothing that runs later: its native callbacks are already gone, and the
+     shared-backend table is never destroyed at exit. Tests: `watcher-backend-errors.test.ts`.
+132. **The native fix (retry `EINTR` in `InotifyBackend::start()`) was not applied.** It would need a pnpm patch
+     plus `npm_config_build_from_source=true` and a C++ toolchain wherever the repo is installed, and making
+     the runtime load `build/Release/watcher.node`: `index.js` loads the prebuilt `@parcel/watcher-<platform>`
+     package first. It would also not ship: users install the published `@parcel/watcher` with its prebuilds.
+     Worth reporting upstream; #130 makes the daemon safe without it.
+133. **git-core tests get explicit timeouts.** "never writes to any repository" (`readonly.test.ts`) exercises
+     every read path (hundreds of git processes): ~2.5 s on the 12-core dev machine, over vitest's 5 s
+     default on a 4-core CI runner that tests the other packages at the same time. It failed on every CI run
+     (Node 24 and 26). It now has 30 s, and git-core's `vitest.config.ts` sets `testTimeout: 20_000`: every
+     git-core test spawns git, and several others already take 3–4 s on CI (`review-fixes` sha1/sha256,
+     `diff-working` "getFileDiff agrees …") The same for `apps/web` (`testTimeout: 20_000`): its jsdom UI tests
+     take 2–4.6 s each on CI, and `request.test.tsx` "appears only for worktrees with a request" went over 5 s on
+     Node 24 in this PR's first CI run (5.26 s), and Testing Library's async timeout is 5 s (`test/setup.ts`; the default 1 s
+     failed two settings tests on Node 24 in a later run: the lazy `SettingsDialog` / `Credits` chunks were still
+     loading).
+134. **Two e2e races fixed in the specs.** (a) `07-readonly` read the diff of every listed file while the agent
+     simulator edits `live-agent`, so a file could be clean or gone by then (`ApiClientError` `not_found`
+     "file is not changed in this scope"). That is the test racing the agent, not a write. `not_found` from
+     `getDiff` is now tolerated for that worktree only; anything else still fails. (b) `01-projects` "scan
+     found beta" (main run 42572487669, no watcher errors): the spec typed the scan folder and clicked
+     `addScanRootSubmit` at once. Until the picker has listed the typed folder it offers "Add" first, and when
+     the listing arrives the two buttons swap actions and test ids. The click landed on the same DOM button,
+     which by then read "Add as one repository" (screenshot: "not a git repository: …/scan"). The spec now
+     waits for `[data-testid=add-scan-root-submit][data-action=watch]`. The UI behaviour (a button changing
+     meaning under the pointer while a listing loads) is a WS3 follow-up and is not changed here.
+
+## Dev hot reload: `pnpm dev` (session, 2026-11-09)
+
+Numbering starts at #135: #116–#129 are left to PR #2 and #130–#134 are the CI-flakes entries above.
+
+User request: one command for hot-reload development that stays reachable from the LAN host `odino`, without touching
+the production LAN server (`octopus-diff-lan` unit, :7428). Report: `docs/reports/dev-hot-reload.md`.
+
+135. **`pnpm dev` = `node scripts/dev.mjs`, a plain-Node supervisor of two children** (argv arrays, no shell, no new
+     dependency): Vite from `apps/web` (HMR) and `tsx watch --conditions=@octopus-diff/source apps/cli/src/index.ts
+     serve …` (the daemon from sources). Vite proxies `/api`, SSE included, to the daemon. Reason: the web app already
+     had Vite with the source condition; the daemon had no watch mode, and tsx is already a root dev tool. tsx watch
+     follows every imported file outside `node_modules`, workspace sources included (it resolves the `node_modules`
+     symlinks to `packages/*/src`): edits to git-core, contracts and daemon files each restarted it in testing, so no
+     `--include` globs are needed. Each child gets its own process group; SIGINT/SIGTERM/SIGHUP send one SIGTERM to
+     each child (a second SIGTERM makes `serve` skip its clean shutdown, so the group is not signalled), SIGKILL to the
+     groups after 8 s; if either child exits on its own the other is stopped and `pnpm dev` exits 1.
+136. **Ports: daemon 7429, web 5173, 7428 rejected** with a message naming the production unit. The web port is
+     strict in dev (the banner prints it, so Vite must not drift); both ports are checked before spawning so a taken
+     port fails clearly instead of crash-looping under tsx watch.
+137. **LAN by default, `--loopback` to opt out.** The daemon runs `--host :: --allow-non-loopback`; Vite listens on `::`
+     (dual-stack like the daemon, rather than `0.0.0.0` which is IPv4 only). The daemon's Host check requires its own
+     port unless the name is an `--allowed-host` entry, and the browser sends the Vite port, so the dev daemon gets
+     `--allowed-host` for `localhost`, `127.0.0.1`, `odino`, `odino.local`, extra `--allowed-host` names and (LAN mode)
+     this machine's non-internal IPv4 addresses, so `http://<lan ip>:5173/` works too. Vite's `server.allowedHosts` gets
+     the same names (it allows localhost and IP literals itself). Only the existing mechanism is used; the Host/Origin/
+     token checks are unchanged (an unknown Host gets 403 from Vite, a foreign Origin 403 from the daemon, no token 401).
+138. **Separate state dir for the dev daemon: `$XDG_STATE_HOME/octopus-diff-dev` (`~/.local/state/octopus-diff-dev`),
+     passed as `--state-dir`.** Reason: `serve` allows one daemon per state dir; sharing the production one, the dev
+     daemon would print the production daemon's URL and exit. A `--state-dir` flag rather than `XDG_STATE_HOME` in the
+     child env keeps the rest of the environment untouched; it sits beside the real state dir rather than in
+     `~/.cache` so the dev token and review store survive cache cleanups. The config dir stays shared. A second
+     `pnpm dev` on the same state dir is detected ("already running") and exits 1.
+139. **The token URL is rewritten to the Vite port in a `[dev]` banner**, from the daemon's own `Open:` line (stdout
+     only, nothing written to disk); the daemon's banner and its "built web UI not found" warning are hidden because
+     they repeat on every restart and point at the daemon port. On a restart with the same token a one-line notice is
+     printed instead. If no token is found, the banner points at `<state dir>/token`.
+140. **`apps/web/vite.config.ts` reads `OCTOPUS_DIFF_WEB_HOST`, `OCTOPUS_DIFF_WEB_PORT` and
+     `OCTOPUS_DIFF_ALLOWED_HOSTS`**; unset, the config is what it was (Vite's default host `localhost`, port 5173 with
+     `strictPort: false`, default allowed hosts). `mock/dev.ts` passes its own host and port inline and is unaffected.
+141. **Tests for `scripts/`:** the pure logic lives in `scripts/lib/dev-options.mjs`, tested by
+     `scripts/test/dev-options.test.mjs` through `scripts/vitest.config.mjs`. Root `pnpm test` now runs
+     `pnpm -r run test && pnpm run test:scripts` (the root is not a workspace package, so `pnpm -r` skips it). Plain
+     `.mjs` keeps it out of `tsc` (no root tsconfig) like `scripts/credits`.
+142. **The web client needed no change for daemon restarts.** A restart closes the SSE stream cleanly; the contract
+     client retries after 1 s (backoff to 10 s while the proxy answers 502), and the `hello` on reconnect triggers a
+     full refresh (`collectEventEffects` with `reconnect`). Verified in headless Chromium through `http://odino:5183`:
+     status stayed `Live`, `/api/events` and every query refetched after each restart.
+143. **Review fixes (PR #5, Greptile).** (a) Serve flags after `--` that `pnpm dev` sets itself (`--port`/`-p`,
+     `--host`, `--allow-non-loopback`, `--allowed-host`, `--state-dir`, a second `--`) are rejected with the dev
+     option to use instead: the CLI takes the last value, so `-- --port 7439` left Vite proxying to 7429 and
+     `-- --port 7428` bypassed the reserved-port check. (b) The supervisor keeps every child's process group until
+     the group is gone, not just the live children: if `tsx watch` died, the daemon it spawned kept the port after
+     `pnpm dev` exited. An unexpected child exit now SIGTERMs its group (once; during a stop the daemon already
+     had its SIGTERM), and `pnpm dev` exits only when every group is gone, SIGKILLing leftovers after 8 s.
+     Verified live: `kill -9` of the tsx process → the orphaned daemon logged a clean shutdown, both ports freed.
+
 ## Project Overview lists and the default-branch marker (lead, 2026-11-09)
+
+Numbered #144–#150: written as #127–#133 on `ux/toolbar-hierarchy`, renumbered when that branch merged
+`main`, whose #130–#143 (CI flakes, `pnpm dev`) landed first. #127–#129 are unused.
 
 Design record: `docs/OVERVIEW-LISTS.md`. Brief from the user: highlight the default branch where worktrees are
 listed; in the project Overview limit worktrees to 15 with pagination, limit open pull requests to 15 (keep the link
 to the forge), list local branches without a worktree, judge whether tabs would be better, and use TanStack Table
 only if it makes the code easier to maintain.
 
-127. **`default` chip.** The worktree that has the project's default branch checked out carries an outlined ink chip
+144. **`default` chip.** The worktree that has the project's default branch checked out carries an outlined ink chip
      (`.od-chip-default`) after its branch name in the sidebar row (inline, no extra line), the context bar and the
      Overview worktree table. Not a hue (the frame is achromatic) and not an icon (it would need a legend); outlined
      so it reads as a label, unlike the filled grey fact chips. The Overview's faint `main` word moves to the Source
      column as `main checkout`, so the default row no longer reads `main main`.
-128. **Tabs on the project Overview.** Facts and figures stay on top; the lists move behind a segmented tab list
+145. **Tabs on the project Overview.** Facts and figures stay on top; the lists move behind a segmented tab list
      `Worktrees N | Branches N | Pull requests N` (Merge requests on GitLab; the requests tab only with forge
      repository data, Branches hidden only when the daemon sends no branch list). Reason: three lists of up to 15
      rows (two lines each for requests) put the last one three screens down, and they answer separate questions; the
      counts keep the at-a-glance summary. Worktrees is the default tab; the chosen tab is component state that
      survives switching projects, and each list's page starts over per project. The folder Overview is unchanged.
-129. **`SegmentedTabs` (`components/Tabs.tsx`) with the WAI-ARIA keyboard model**: one Tab stop (roving
+146. **`SegmentedTabs` (`components/Tabs.tsx`) with the WAI-ARIA keyboard model**: one Tab stop (roving
      `tabIndex`), `←`/`→` select, `Home`/`End`, `aria-controls` → `tabpanel`. The Request view's
      `Summary | Timeline | Files` switches to it (it had `role="tab"` without the keys; ids and test ids unchanged).
-130. **Pagination, 15 rows (`components/Pager.tsx`).** Client-side `usePage` over the loaded list; `16–30 of 42`
+147. **Pagination, 15 rows (`components/Pager.tsx`).** Client-side `usePage` over the loaded list; `16–30 of 42`
      with previous / next ghost icons, hidden for one page; the page clamps rather than resets when a live list
      shrinks. Worktrees list the default-branch worktree first, then recency (#125), so the baseline stays on page 1;
      the sidebar keeps pure recency. Open requests show the newest 15 with no pager and keep `N more on <host> ↗`
      (the forge holds the rest; the daemon still asks for 20); none open says so with a link.
-131. **Local branches without a worktree.** `GitRepositoryInfo.branches` (contracts, additive, optional;
+148. **Local branches without a worktree.** `GitRepositoryInfo.branches` (contracts, additive, optional;
      `GitBranchInfoSchema`, `MAX_LISTED_BRANCHES` = 500, newest commit first, `localBranches` stays the full count).
      git-core reads it from the `for-each-ref` it already ran (adds `upstream:track,nobracket` and
      `contents:subject`; git ≥ 2.31 folds a multi-line subject into one line) plus one
@@ -1682,11 +1810,11 @@ only if it makes the code easier to maintain.
      a state column (`merged`, `default`, the open request on that head branch from the already-loaded forge data).
      Rows do not navigate (no worktree to open; octopus-diff never creates one). Daemon unchanged: it passes
      `info` through.
-132. **No TanStack Table.** Four small fixed-column, fixed-order tables; the only shared need is paging, which is a
+149. **No TanStack Table.** Four small fixed-column, fixed-order tables; the only shared need is paging, which is a
      ten-line hook. TanStack Table is headless, so it would keep every cell renderer, wrap them in column
      definitions and `flexRender`, and add a dependency and a credits entry to replace a `slice`. Revisit when a
      table needs user sorting, column choice or filtering.
-133. **Mock and tests.** Mock repository info lists branches for every demo project (18 without a worktree on
+150. **Mock and tests.** Mock repository info lists branches for every demo project (18 without a worktree on
      octopus-api so the Branches tab pages; merged, gone and local-only kinds) and octopus-api has 16 more open
      requests (27 in all, so the cap and `12 more` show). Tests: git-core `repository.test.ts` (subject folding,
      upstream ahead/gone, merged); web `repository-info.test.tsx` (tabs and arrow keys, default row first with its

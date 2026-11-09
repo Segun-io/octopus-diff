@@ -2,7 +2,7 @@
 
 Lead, 2026-11-09, on branch `ux/toolbar-hierarchy` (PR #2), after rebasing the local commits onto
 `origin/ux/toolbar-hierarchy` (`c198638`, a review commit pushed from another session). Design record:
-`docs/OVERVIEW-LISTS.md`; DECISIONS #127–#133.
+`docs/OVERVIEW-LISTS.md`; DECISIONS #144–#150.
 
 ## Shipped
 
@@ -19,7 +19,7 @@ Lead, 2026-11-09, on branch `ux/toolbar-hierarchy` (PR #2), after rebasing the l
   updated, upstream (`origin ↑a ↓b`, `gone`, `local only`), state (`merged`, `default`, the open request on that
   branch). Data: `GitRepositoryInfo.branches` from git-core `readRepositoryInfo` (same `for-each-ref` plus one
   `for-each-ref --merged`).
-- **TanStack Table evaluated, not adopted** (DECISIONS #132; `docs/OVERVIEW-LISTS.md` §6).
+- **TanStack Table evaluated, not adopted** (DECISIONS #149; `docs/OVERVIEW-LISTS.md` §6).
 
 ## Verification
 
@@ -33,8 +33,8 @@ Lead, 2026-11-09, on branch `ux/toolbar-hierarchy` (PR #2), after rebasing the l
 
 ## Decisions
 
-DECISIONS #127–#133: the chip (#127), tabs (#128), `SegmentedTabs` (#129), pagination and the 15-request cap (#130),
-the branch list (#131), no TanStack Table (#132), mock and tests (#133).
+DECISIONS #144–#150: the chip (#144), tabs (#145), `SegmentedTabs` (#146), pagination and the 15-request cap (#147),
+the branch list (#148), no TanStack Table (#149), mock and tests (#150).
 
 ## Contract changes
 

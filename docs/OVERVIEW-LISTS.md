@@ -7,7 +7,7 @@
 >   15 (keep the "more on GitHub" link); list the local branches that have no worktree; find out whether tab
 >   navigation would be better; use TanStack Table if and only if it makes the code easier to maintain.
 >
-> Decisions #127–#133 in `docs/DECISIONS.md`.
+> Decisions #144–#150 in `docs/DECISIONS.md`.
 
 ## 1. What was there
 
