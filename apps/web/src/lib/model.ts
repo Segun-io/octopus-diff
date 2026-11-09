@@ -72,10 +72,32 @@ export function sortFilesTreeOrder(files: readonly ChangedFile[]): ChangedFile[]
 
 // --- sidebar --------------------------------------------------------------------------------
 
+/**
+ * The sidebar filter dropdown's selection. Picked projects and worktrees are one union (a row
+ * shows when its project or the row itself is picked; nothing picked = every row); the status
+ * options narrow that further.
+ */
 export interface SidebarFilters {
-  text: string;
+  projects: readonly string[];
+  worktrees: readonly string[];
   onlyDirty: boolean;
   onlyUnreviewed: boolean;
+}
+
+export const NO_SIDEBAR_FILTERS: SidebarFilters = {
+  projects: [],
+  worktrees: [],
+  onlyDirty: false,
+  onlyUnreviewed: false,
+};
+
+export function hasSidebarFilters(filters: SidebarFilters): boolean {
+  return (
+    filters.projects.length > 0 ||
+    filters.worktrees.length > 0 ||
+    filters.onlyDirty ||
+    filters.onlyUnreviewed
+  );
 }
 
 export interface WorktreeRow {
@@ -386,19 +408,15 @@ export function isDirtySummary(summary: WorktreeSummary | null): boolean {
   return summary !== null && summary.changedFiles > 0;
 }
 
-function matchesText(row: WorktreeRow, needle: string): boolean {
-  if (!needle) return true;
-  return (
-    row.project.name.toLowerCase().includes(needle) ||
-    (row.worktree.branch ?? '').toLowerCase().includes(needle) ||
-    row.worktree.path.toLowerCase().includes(needle)
-  );
+function matchesPicked(row: WorktreeRow, filters: SidebarFilters): boolean {
+  if (filters.projects.length === 0 && filters.worktrees.length === 0) return true;
+  return filters.projects.includes(row.project.id) || filters.worktrees.includes(row.worktree.id);
 }
 
 export function rowVisible(row: WorktreeRow, filters: SidebarFilters): boolean {
   if (filters.onlyDirty && !isDirtySummary(row.summary)) return false;
   if (filters.onlyUnreviewed && row.unreviewed === 0) return false;
-  return matchesText(row, filters.text.trim().toLowerCase());
+  return matchesPicked(row, filters);
 }
 
 export function buildSidebar(

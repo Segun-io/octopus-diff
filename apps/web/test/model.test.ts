@@ -5,6 +5,7 @@ import {
   buildSidebar,
   type FileGroup,
   flattenGroups,
+  NO_SIDEBAR_FILTERS,
   nextUnreviewed,
   placeOf,
   repairSelection,
@@ -45,11 +46,7 @@ function withReviewed(entries: InboxEntry[], reviewed: (f: ChangedFile) => boole
 describe('sidebar model', () => {
   it('sorts projects by name and puts the main worktree first', () => {
     const { projects, inbox } = demo();
-    const model = buildSidebar(projects, inbox.entries, {
-      text: '',
-      onlyDirty: false,
-      onlyUnreviewed: false,
-    });
+    const model = buildSidebar(projects, inbox.entries, NO_SIDEBAR_FILTERS);
     expect(model.groups.map((g) => g.project.name)).toEqual([
       'docs-site',
       'infra',
@@ -64,19 +61,35 @@ describe('sidebar model', () => {
     expect(model.order).toHaveLength(model.byId.size);
   });
 
-  it('filters by text, dirty and unreviewed', () => {
+  it('filters by picked projects and worktrees (a union), dirty and unreviewed', () => {
     const { projects, inbox } = demo();
-    const text = buildSidebar(projects, inbox.entries, {
-      text: 'CACHE',
-      onlyDirty: false,
-      onlyUnreviewed: false,
+    const cache = projects
+      .flatMap((p) => p.worktrees)
+      .find((w) => w.worktree.branch === 'fix/cache');
+    const infra = projects.find((p) => p.project.name === 'infra');
+    if (!cache || !infra) throw new Error('demo fixture changed');
+    const one = buildSidebar(projects, inbox.entries, {
+      ...NO_SIDEBAR_FILTERS,
+      worktrees: [cache.worktree.id],
     });
-    expect(text.order.map((id) => text.byId.get(id)?.worktree.branch)).toEqual(['fix/cache']);
+    expect(one.order.map((id) => one.byId.get(id)?.worktree.branch)).toEqual(['fix/cache']);
+    // byId keeps every row: the dropdown lists what the filters hide.
+    expect(one.byId.size).toBe(projects.flatMap((p) => p.worktrees).length);
+
+    const union = buildSidebar(projects, inbox.entries, {
+      ...NO_SIDEBAR_FILTERS,
+      projects: [infra.project.id],
+      worktrees: [cache.worktree.id],
+    });
+    const cacheProject = projects.find((p) => p.worktrees.includes(cache))?.project.name;
+    expect(union.groups.map((g) => g.project.name).sort()).toEqual(
+      [infra.project.name, cacheProject].sort(),
+    );
+    expect(union.order).toHaveLength(infra.worktrees.length + 1);
 
     const dirty = buildSidebar(projects, inbox.entries, {
-      text: '',
+      ...NO_SIDEBAR_FILTERS,
       onlyDirty: true,
-      onlyUnreviewed: false,
     });
     expect(dirty.order).toHaveLength(inbox.entries.length);
     expect([...dirty.order].sort()).toEqual(inbox.entries.map((e) => e.worktree.id).sort());
@@ -86,8 +99,7 @@ describe('sidebar model', () => {
       (f) => f.path === 'README.md' || f.path === 'src/server/router.ts',
     );
     const unreviewed = buildSidebar(projects, allReviewedApiMain, {
-      text: '',
-      onlyDirty: false,
+      ...NO_SIDEBAR_FILTERS,
       onlyUnreviewed: true,
     });
     expect(unreviewed.order).toHaveLength(inbox.entries.length - 1);
@@ -221,9 +233,8 @@ describe('stages (docs/STATUS-FLOW.md §2.2)', () => {
 
   it('the sidebar takes no scope: the same inputs give the same rows', () => {
     const { projects: list, inbox } = demo();
-    const filters = { text: '', onlyDirty: false, onlyUnreviewed: false };
-    const a = buildSidebar(list, inbox.entries, filters);
-    const b = buildSidebar(list, inbox.entries, filters);
+    const a = buildSidebar(list, inbox.entries, NO_SIDEBAR_FILTERS);
+    const b = buildSidebar(list, inbox.entries, NO_SIDEBAR_FILTERS);
     expect([...a.byId.values()].map((r) => [r.worktree.id, r.state, r.stage])).toEqual(
       [...b.byId.values()].map((r) => [r.worktree.id, r.state, r.stage]),
     );

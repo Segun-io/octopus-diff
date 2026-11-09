@@ -45,7 +45,7 @@ export interface Prefs {
   folderStart: string;
   /** Manual settle / un-settle overrides; each holds while the worktree's `stateHash` matches. */
   settle: SettleOverride[];
-  /** The Settled shelf is open (closed by default: density is earned by settling). */
+  /** The Hidden shelf (`settled` rows) is open (closed by default: density is earned by hiding). */
   settledOpen: boolean;
 }
 

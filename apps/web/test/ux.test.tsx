@@ -490,13 +490,13 @@ describe('folder tier, overview and palette', () => {
     // missing worktrees are settled and the shelf is closed
     expect(section('folder')).toEqual(['', 'main', 'feat/auth', 'fix/cache', 'main']);
     expect(section('settled')).toEqual([]);
-    expect(within(sidebar).getByLabelText('Expand settled').textContent).toContain('5');
+    expect(within(sidebar).getByLabelText('Expand hidden').textContent).toContain('5');
     // a project whose worktrees all settled says so instead of listing them
-    expect(project('infra').textContent).toContain('settled');
-    expect(project('octopus-api').textContent).not.toContain('settled');
+    expect(project('infra').textContent).toContain('hidden');
+    expect(project('octopus-api').textContent).not.toContain('hidden');
 
     // opening the shelf lists them, one word each, folder order; the pref persists
-    fireEvent.click(within(sidebar).getByLabelText('Expand settled'));
+    fireEvent.click(within(sidebar).getByLabelText('Expand hidden'));
     expect(section('settled')).toEqual([
       '',
       'agent/codex-123',
@@ -513,12 +513,12 @@ describe('folder tier, overview and palette', () => {
 
     // a closed shelf still shows the selected worktree
     const trunkId = worktreeItem('trunk').dataset.worktreeId as string;
-    fireEvent.click(within(sidebar).getByLabelText('Collapse settled'));
+    fireEvent.click(within(sidebar).getByLabelText('Collapse hidden'));
     expect(section('settled')).toEqual([]);
     store.setState({ view: { kind: 'worktree', worktreeId: trunkId } });
     await waitFor(() => expect(section('settled')).toEqual(['trunk']));
     expect(store.getState().settledOpen).toBe(false);
-    fireEvent.click(within(sidebar).getByLabelText('Expand settled'));
+    fireEvent.click(within(sidebar).getByLabelText('Expand hidden'));
 
     // hide until it changes: the row leaves its project for the shelf, pinned to the state hash
     fireEvent.click(rowActions('fix/cache').getByLabelText('Hide until it changes'));

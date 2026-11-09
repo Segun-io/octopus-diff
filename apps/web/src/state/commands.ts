@@ -225,9 +225,12 @@ export function useCommands(model: AppModel, resolvedTheme: 'light' | 'dark'): C
         });
       },
       focusFilter() {
+        // The filter is a dropdown with a search field: open it; it focuses its own search.
         const input = document.querySelector<HTMLInputElement>('[data-filter-input]');
-        input?.focus();
-        input?.select();
+        if (input) {
+          input.focus();
+          input.select();
+        } else store.setState({ filterOpen: true });
       },
       goInbox() {
         actions.setView(store, { kind: 'inbox' });

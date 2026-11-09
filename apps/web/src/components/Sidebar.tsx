@@ -28,12 +28,12 @@ import { useCommandsContext } from '../state/commandsContext.tsx';
 import { type CopyFn, copyAndReport } from '../state/copy.ts';
 import { useAppModel } from '../state/model.tsx';
 import { actions, useUi, useUiStore, type View } from '../state/ui.tsx';
-import { ToggleButton } from './bits.tsx';
 import { ChangeRequestChip, ChangeRequestHoverBlock } from './ChangeRequest.tsx';
 import { ContextMenu, type MenuItem, useContextMenu } from './ContextMenu.tsx';
 import { separated, worktreeCopyItems } from './copyMenu.ts';
 import { useFolderStart } from './FolderBrowser.tsx';
 import { Wordmark } from './Mark.tsx';
+import { SidebarFilter } from './SidebarFilter.tsx';
 
 /**
  * The sidebar (DECISIONS "UX round 4", status flow v2 in docs/STATUS-FLOW.md): the Inbox;
@@ -497,7 +497,7 @@ function ChevronButton({
   );
 }
 
-/** A shelf header (Pinned, Settled): a label, a muted count, optionally a chevron. */
+/** A shelf header (Pinned, Hidden): a label, a muted count, optionally a chevron. */
 function ShelfHeader({
   label,
   count,
@@ -556,7 +556,8 @@ export function Sidebar() {
   const folderStart = useFolderStart();
   const model = useAppModel();
   const commands = useCommandsContext();
-  const filterText = useUi((s) => s.filterText);
+  const filterProjects = useUi((s) => s.filterProjects);
+  const filterWorktrees = useUi((s) => s.filterWorktrees);
   const onlyDirty = useUi((s) => s.onlyDirty);
   const onlyUnreviewed = useUi((s) => s.onlyUnreviewed);
   const collapsed = useUi((s) => s.collapsed);
@@ -573,7 +574,8 @@ export function Sidebar() {
   const inboxCount = model.inboxEntries.length;
   const onSelect = (id: string) => actions.setView(store, { kind: 'worktree', worktreeId: id });
   const totalWorktrees = model.sidebar.byId.size;
-  const filtering = filterText.trim() !== '' || onlyDirty || onlyUnreviewed;
+  const filtering =
+    filterProjects.length > 0 || filterWorktrees.length > 0 || onlyDirty || onlyUnreviewed;
   // Filters open everything: a hit must never hide behind a closed folder or shelf.
   const isCollapsed = (id: string) => !filtering && collapsed.includes(id);
   const shelfOpen = filtering || settledOpen;
@@ -762,59 +764,8 @@ export function Sidebar() {
           <GearIcon />
         </button>
       </div>
-      <div className="flex flex-col gap-1.5 border-b border-line p-2">
-        <div className="relative">
-          <input
-            data-testid={TEST_IDS.sidebarFilter}
-            data-filter-input=""
-            type="search"
-            name="filter"
-            autoComplete="off"
-            placeholder="Filter worktrees"
-            aria-label="Filter projects and worktrees"
-            aria-keyshortcuts="/"
-            value={filterText}
-            onChange={(e) => store.setState({ filterText: e.target.value })}
-            onKeyDown={(e) => {
-              if (e.key === 'Escape') {
-                e.preventDefault();
-                if (filterText) store.setState({ filterText: '' });
-                else (e.target as HTMLInputElement).blur();
-              } else if (e.key === 'Enter') {
-                (e.target as HTMLInputElement).blur();
-              }
-            }}
-            className="od-input w-full pr-7"
-          />
-          {filterText === '' && (
-            <span
-              aria-hidden="true"
-              className="pointer-events-none absolute top-1/2 right-1.5 -translate-y-1/2"
-            >
-              <kbd className="text-faint">/</kbd>
-            </span>
-          )}
-        </div>
-        <div className="flex items-center gap-1 px-0.5">
-          <ToggleButton
-            variant="chip"
-            pressed={onlyDirty}
-            onClick={() => store.setState({ onlyDirty: !onlyDirty })}
-            title="Only worktrees with changes"
-            testId={TEST_IDS.onlyDirtyToggle}
-          >
-            Only dirty
-          </ToggleButton>
-          <ToggleButton
-            variant="chip"
-            pressed={onlyUnreviewed}
-            onClick={() => store.setState({ onlyUnreviewed: !onlyUnreviewed })}
-            title="Only worktrees with something to review"
-            testId={TEST_IDS.onlyUnreviewedToggle}
-          >
-            Only unreviewed
-          </ToggleButton>
-        </div>
+      <div className="border-b border-line p-2">
+        <SidebarFilter />
       </div>
 
       <div className="od-scroll min-h-0 flex-1 overflow-y-auto p-1.5">
@@ -928,7 +879,7 @@ export function Sidebar() {
             {sidebar.settled.length > 0 && (
               <li role="presentation">
                 <ShelfHeader
-                  label="Settled"
+                  label="Hidden"
                   count={sidebar.settled.length}
                   open={shelfOpen}
                   onToggle={() => actions.toggleSettledOpen(store)}
@@ -1011,9 +962,9 @@ function ProjectFolder({
           ) : active.length === 0 ? (
             <span
               className="ml-auto shrink-0 text-[11px] text-faint"
-              title={`${plural(settledCount, 'worktree')}, nothing to do (in the shelf below)`}
+              title={`${plural(settledCount, 'worktree')}, nothing to do (in Hidden below)`}
             >
-              settled
+              hidden
             </span>
           ) : null}
         </button>
