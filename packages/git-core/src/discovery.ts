@@ -92,7 +92,7 @@ function projectName(commonDir: string, mainWorktreePath: string | null): string
   return base || commonDir;
 }
 
-function projectRepoFor(ctx: GitContext, project: ProjectLocator): Promise<RepoInfo> {
+export function projectRepoFor(ctx: GitContext, project: ProjectLocator): Promise<RepoInfo> {
   assertAbsolute(project.commonDir);
   return ctx.repo(project.commonDir);
 }

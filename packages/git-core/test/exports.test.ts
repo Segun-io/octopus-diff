@@ -18,6 +18,7 @@ describe('public exports', () => {
       'getFileDiff',
       'listCommits',
       'getWatchTargets',
+      'readRemoteConfig',
       'dispose',
     ] as const) {
       expect(typeof core[method]).toBe('function');
