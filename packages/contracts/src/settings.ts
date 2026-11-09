@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import {
+  CommitShaSchema,
   IdSchema,
   RawPathSchema,
   RefNameSchema,
@@ -226,6 +227,12 @@ export const BulkReviewRequestSchema = z.object({
   expectedStateHashes: z.record(IdSchema, z.string().min(1)).optional(),
   /** Also act on worktrees where review is disabled. Default false (they are skipped). */
   includeDisabled: z.boolean().default(false),
+  /**
+   * "Review all" in the To review view (docs/STATUS-FLOW.md §2.3): with `scope.kind === 'review'`,
+   * `reviewed: true` and no `paths`, also move each marked worktree's bookmark to its HEAD (the
+   * HEAD of the state that was marked). Undo restores the bookmarks too. Ignored otherwise.
+   */
+  advanceBookmarks: z.boolean().optional(),
 });
 export type BulkReviewRequest = z.input<typeof BulkReviewRequestSchema>;
 export type BulkReviewRequestParsed = z.output<typeof BulkReviewRequestSchema>;
@@ -251,6 +258,8 @@ export const BulkReviewResponseSchema = z.object({
   stale: z.array(IdSchema),
   /** Pass to `POST /api/review/undo`; null when nothing changed. Valid for `BULK_UNDO_TTL_MS`. */
   undoToken: z.string().min(1).nullable(),
+  /** Bookmarks moved (`advanceBookmarks`); absent from older daemons. */
+  bookmarks: z.number().int().min(0).optional(),
 });
 export type BulkReviewResponse = z.infer<typeof BulkReviewResponseSchema>;
 
@@ -267,3 +276,31 @@ export const UndoReviewResponseSchema = z.object({
   restored: z.number().int().min(0),
 });
 export type UndoReviewResponse = z.infer<typeof UndoReviewResponseSchema>;
+
+// ---------------------------------------------------------------------------------------------
+// Review bookmarks ("reviewed up to", docs/STATUS-FLOW.md §2.1)
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * Moves a worktree's review bookmark (per project and branch; per worktree when detached) to
+ * `to`, which must be HEAD or an ancestor of it. The commits between the old start and `to` are
+ * recorded as reviewed (commit id and patch-id), so they are skipped when they reach another
+ * branch by fast-forward, merge, squash or rebase.
+ */
+export const SetBookmarkRequestSchema = z.object({
+  worktreeId: IdSchema,
+  to: CommitShaSchema,
+});
+export type SetBookmarkRequest = z.infer<typeof SetBookmarkRequestSchema>;
+
+export const SetBookmarkResponseSchema = z.object({
+  ok: z.literal(true),
+  /** Full commit id of the new bookmark. */
+  bookmark: CommitShaSchema,
+  previous: CommitShaSchema.nullable(),
+  /** Commits newly recorded as reviewed. */
+  recorded: z.number().int().min(0),
+  /** `POST /api/review/undo` restores the previous bookmark; null when nothing changed. */
+  undoToken: z.string().min(1).nullable(),
+});
+export type SetBookmarkResponse = z.infer<typeof SetBookmarkResponseSchema>;

@@ -63,6 +63,9 @@ import {
   type BulkReviewRequest,
   type BulkReviewResponse,
   BulkReviewResponseSchema,
+  type SetBookmarkRequest,
+  type SetBookmarkResponse,
+  SetBookmarkResponseSchema,
   type SetReviewPolicyRequest,
   type SettingsResponse,
   SettingsResponseSchema,
@@ -162,6 +165,8 @@ export interface ApiClient {
   /** "Mark all as verified" (or unverified) for a worktree, project, folder or everything. */
   bulkReview(body: BulkReviewRequest): Promise<BulkReviewResponse>;
   undoReview(body: UndoReviewRequest): Promise<UndoReviewResponse>;
+  /** Moves a worktree's review bookmark (status flow v2). 404 on older daemons. */
+  setBookmark(body: SetBookmarkRequest): Promise<SetBookmarkResponse>;
   /** Subdirectories of `path` (default: home) for the folder picker. */
   listDirs(params?: { path?: string }): Promise<DirsResponse>;
   /** Forge integration: CLI status and pull/merge requests per project (forge.ts). */
@@ -397,6 +402,8 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
       request(BulkReviewResponseSchema, 'POST', ROUTES.bulkReview.path, { body }),
     undoReview: (body) =>
       request(UndoReviewResponseSchema, 'POST', ROUTES.undoReview.path, { body }),
+    setBookmark: (body) =>
+      request(SetBookmarkResponseSchema, 'PUT', ROUTES.setBookmark.path, { body }),
     listDirs: (params = {}) => {
       const query = new URLSearchParams();
       if (params.path !== undefined) query.set('path', params.path);

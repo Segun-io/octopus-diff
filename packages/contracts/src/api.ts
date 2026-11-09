@@ -59,6 +59,8 @@ export const ROUTES = {
   setReviewPolicy: { method: 'PUT', path: '/api/review-policy' },
   bulkReview: { method: 'POST', path: '/api/review/bulk' },
   undoReview: { method: 'POST', path: '/api/review/undo' },
+  // --- status flow v2 (additive; docs/STATUS-FLOW.md) ---
+  setBookmark: { method: 'PUT', path: '/api/review/bookmark' },
   // --- folder picker (additive; see "folder picker" below) ---
   listDirs: { method: 'GET', path: '/api/fs/dirs' },
   // --- forges (additive; see forge.ts) ---
@@ -225,9 +227,9 @@ export type DirsResponse = z.infer<typeof DirsResponseSchema>;
 export const InboxQuerySchema = z
   .object({ ...scopeQueryShape, onlyUnreviewed: QueryBool.default(false) })
   .superRefine(refineScopeQuery)
-  .transform(({ scope, base, sha, ...rest }) => ({
+  .transform(({ scope, base, sha, working, ...rest }) => ({
     ...rest,
-    scope: scopeFromQueryFields({ scope, base, sha }),
+    scope: scopeFromQueryFields({ scope, base, sha, working }),
   }));
 export type InboxQuery = z.output<typeof InboxQuerySchema>;
 
@@ -272,9 +274,9 @@ export const DiffQuerySchema = z
     full: QueryBool.default(false),
   })
   .superRefine(refineScopeQuery)
-  .transform(({ scope, base, sha, ...rest }) => ({
+  .transform(({ scope, base, sha, working, ...rest }) => ({
     ...rest,
-    scope: scopeFromQueryFields({ scope, base, sha }),
+    scope: scopeFromQueryFields({ scope, base, sha, working }),
   }));
 export type DiffQuery = z.output<typeof DiffQuerySchema>;
 
@@ -301,7 +303,10 @@ export type RefreshResponse = z.infer<typeof RefreshResponseSchema>;
 
 // --- app state: review marks, focus ----------------------------------------------------------
 
-/** Review marks are keyed by (projectId, scopeKind, rawPath ?? path, patchHash). */
+/**
+ * Review marks are keyed by (projectId, rawPath ?? path, patchHash). `scopeKind` is still sent and
+ * stored (where the mark was made) but no longer part of the key (docs/STATUS-FLOW.md §2.4).
+ */
 export const ReviewRequestSchema = z.object({
   projectId: IdSchema,
   scopeKind: ScopeKindSchema,

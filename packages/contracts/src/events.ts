@@ -1,5 +1,11 @@
 import { z } from 'zod';
-import { IdSchema, RawPathSchema, RepoPathSchema, TimestampSchema } from './common.js';
+import {
+  CommitShaSchema,
+  IdSchema,
+  RawPathSchema,
+  RepoPathSchema,
+  TimestampSchema,
+} from './common.js';
 import { ScopeKindSchema } from './scope.js';
 
 /**
@@ -81,6 +87,18 @@ export const ReviewBulkEventSchema = z.object({
 });
 
 /**
+ * A worktree's review bookmark ("reviewed up to", docs/STATUS-FLOW.md) moved: `PUT
+ * /api/review/bookmark`, a bulk review with `advanceBookmarks`, or its undo. Clients refetch
+ * projects (summaries carry `review`) and the worktree's files.
+ */
+export const ReviewBookmarkEventSchema = z.object({
+  type: z.literal('review.bookmark'),
+  projectId: IdSchema,
+  worktreeId: IdSchema,
+  bookmark: CommitShaSchema.nullable(),
+});
+
+/**
  * Settings or a review-policy override changed. Clients that did not make the change refetch
  * `GET /api/settings`, projects and the inbox (effective policies may have moved). Sent to every
  * client including the caller (compare `revision` with the response you already applied), and only
@@ -111,6 +129,7 @@ export const ServerEventSchema = z.discriminatedUnion('type', [
   ScanProgressEventSchema,
   ReviewChangedEventSchema,
   ReviewBulkEventSchema,
+  ReviewBookmarkEventSchema,
   SettingsChangedEventSchema,
   ForgeUpdatedEventSchema,
 ]);
@@ -129,6 +148,7 @@ export const SERVER_EVENT_TYPES = [
   'scan.progress',
   'review.changed',
   'review.bulk',
+  'review.bookmark',
   'settings.changed',
   'forge.updated',
 ] as const satisfies readonly ServerEventType[];
