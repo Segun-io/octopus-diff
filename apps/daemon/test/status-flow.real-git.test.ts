@@ -165,3 +165,137 @@ describe.skipIf(!GIT_CORE_IMPLEMENTED)('status flow v2: bookmarks (real git)', (
     expect((await review(api2, featureId)).bookmark).toBe(tip);
   });
 });
+
+describe.skipIf(!GIT_CORE_IMPLEMENTED)('status flow v2: no double review (real git)', () => {
+  /** Reviews a feature branch through PUT (records commits, writes no file marks). */
+  async function reviewBranch(api: Api, fx: RealGitFixture, dir: string, worktreeId: string) {
+    await review(api, worktreeId);
+    const res = await api.setBookmark({ worktreeId, to: head(fx, dir) });
+    expect(res.recorded).toBeGreaterThan(0);
+  }
+
+  async function unreviewed(api: Api, worktreeId: string): Promise<string[]> {
+    const { files } = await api.listFiles(worktreeId, { scope: { kind: 'review' } });
+    return files.filter((f) => !f.reviewed).map((f) => f.path);
+  }
+
+  it('marks do not depend on the scope kind', async () => {
+    const { feature, api, projectId, featureId } = await setup();
+    await writeFile(path.join(feature, 'a.txt'), 'one\nTWO\n');
+    await review(api, featureId);
+    const [file] = (await api.listFiles(featureId)).files;
+    if (!file) throw new Error('a.txt');
+    await api.setReview({
+      projectId,
+      scopeKind: 'working',
+      path: file.path,
+      patchHash: file.patchHash,
+      reviewed: true,
+    });
+    // Same patch in the review scope (bookmark = merge-base = HEAD): reviewed there too.
+    expect((await api.listFiles(featureId, { scope: { kind: 'review' } })).files[0]?.reviewed).toBe(
+      true,
+    );
+    expect((await review(api, featureId)).unreviewedFiles).toBe(0);
+    // Unreviewing from another scope removes it everywhere.
+    await api.setReview({
+      projectId,
+      scopeKind: 'review',
+      path: file.path,
+      patchHash: file.patchHash,
+      reviewed: false,
+    });
+    expect((await api.listFiles(featureId)).files[0]?.reviewed).toBe(false);
+  });
+
+  it('fast-forward: commits reviewed on the branch are skipped on main (by commit id)', async () => {
+    const { fx, repo, feature, api, mainId, featureId } = await setup();
+    await writeFile(path.join(feature, 'a.txt'), 'one\nTWO\n');
+    commit(fx, feature, 'a');
+    await reviewBranch(api, fx, feature, featureId);
+    fx.git(repo, 'merge', '-q', '--ff-only', 'feature');
+    expect(await review(api, mainId)).toMatchObject({ newCommits: 0, unreviewedFiles: 0 });
+    // The file is in main's review diff, shown as reviewed.
+    const files = await api.listFiles(mainId, { scope: { kind: 'review' } });
+    expect(files.files.map((f) => [f.path, f.reviewed])).toEqual([['a.txt', true]]);
+  });
+
+  it('merge commit: a clean merge of reviewed commits brings nothing; new main commits still count', async () => {
+    const { fx, repo, feature, api, mainId, featureId } = await setup();
+    await writeFile(path.join(feature, 'a.txt'), 'one\nTWO\n');
+    commit(fx, feature, 'feature a');
+    await reviewBranch(api, fx, feature, featureId);
+    await writeFile(path.join(repo, 'b.txt'), 'B on main\n');
+    commit(fx, repo, 'main b');
+    fx.git(repo, 'merge', '-q', '--no-ff', '--no-edit', 'feature');
+    // main's own unreviewed commit counts; the feature's commit and the clean merge do not.
+    expect(await review(api, mainId)).toMatchObject({ newCommits: 1, unreviewedFiles: 1 });
+    expect(await unreviewed(api, mainId)).toEqual(['b.txt']);
+  });
+
+  it('squash merge: skipped by the reviewed range patch-id', async () => {
+    const { fx, repo, feature, api, mainId, featureId } = await setup();
+    await writeFile(path.join(feature, 'a.txt'), 'one\nTWO\n');
+    commit(fx, feature, 'first');
+    await writeFile(path.join(feature, 'c.txt'), 'new\n');
+    commit(fx, feature, 'second');
+    await reviewBranch(api, fx, feature, featureId);
+    fx.git(repo, 'merge', '-q', '--squash', 'feature');
+    fx.git(repo, 'commit', '-q', '-m', 'squashed');
+    expect(await review(api, mainId)).toMatchObject({ newCommits: 0, unreviewedFiles: 0 });
+    expect(await unreviewed(api, mainId)).toEqual([]);
+  });
+
+  it('rebase: history rewritten, nothing previously reviewed shows as unreviewed (patch-id)', async () => {
+    const { fx, repo, feature, api, mainId, featureId } = await setup();
+    await writeFile(path.join(feature, 'a.txt'), 'one\nTWO\n');
+    commit(fx, feature, 'feature a');
+    await reviewBranch(api, fx, feature, featureId);
+    await writeFile(path.join(repo, 'b.txt'), 'B on main\n');
+    commit(fx, repo, 'main b');
+    await review(api, mainId);
+    await api.setBookmark({ worktreeId: mainId, to: head(fx, repo) });
+    fx.git(feature, 'rebase', '-q', 'main');
+    expect(await review(api, featureId)).toMatchObject({
+      historyRewritten: true,
+      base: head(fx, repo),
+      newCommits: 0,
+      unreviewedFiles: 0,
+    });
+  });
+
+  it('reset: the reviewed commits left are not shown as unreviewed', async () => {
+    const { fx, feature, api, featureId } = await setup();
+    await writeFile(path.join(feature, 'a.txt'), 'one\nTWO\n');
+    commit(fx, feature, 'one');
+    await writeFile(path.join(feature, 'b.txt'), 'B\n');
+    commit(fx, feature, 'two');
+    await reviewBranch(api, fx, feature, featureId);
+    fx.git(feature, 'reset', '-q', '--hard', 'HEAD~1');
+    expect(await review(api, featureId)).toMatchObject({
+      historyRewritten: true,
+      newCommits: 0,
+      unreviewedFiles: 0,
+    });
+  });
+
+  it('a merge with a conflict resolution shows the resolved file', async () => {
+    const { fx, repo, feature, api, mainId, featureId } = await setup();
+    await writeFile(path.join(feature, 'a.txt'), 'one\nFEATURE\n');
+    commit(fx, feature, 'feature a');
+    await reviewBranch(api, fx, feature, featureId);
+    await writeFile(path.join(repo, 'a.txt'), 'one\nMAIN\n');
+    commit(fx, repo, 'main a');
+    await review(api, mainId);
+    await api.setBookmark({ worktreeId: mainId, to: head(fx, repo) });
+    try {
+      fx.git(repo, 'merge', '-q', '--no-edit', 'feature');
+    } catch {
+      // conflict expected
+    }
+    await writeFile(path.join(repo, 'a.txt'), 'one\nRESOLVED\n');
+    commit(fx, repo, 'merge feature');
+    expect(await review(api, mainId)).toMatchObject({ newCommits: 1, unreviewedFiles: 1 });
+    expect(await unreviewed(api, mainId)).toEqual(['a.txt']);
+  });
+});

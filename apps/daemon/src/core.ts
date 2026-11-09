@@ -1315,11 +1315,42 @@ export class DaemonCore {
    * commit facts every commit counts and coverage is unknown.
    */
   async #commitCoverage(
-    _project: ProjectEntry,
-    _entry: WorktreeEntry,
+    project: ProjectEntry,
+    entry: WorktreeEntry,
     range: ReviewRange,
   ): Promise<{ unreviewedCommits: string[]; uncovered: Set<string> | null }> {
-    return { unreviewedCommits: range.commits.map((c) => c.sha), uncovered: null };
+    const all = range.commits.map((c) => c.sha);
+    if (range.commits.length === 0) return { unreviewedCommits: [], uncovered: new Set() };
+    const describe = this.#git.describeCommits;
+    if (!describe) return { unreviewedCommits: all, uncovered: null };
+    const reviewedShas = new Set<string>();
+    const reviewedPatches = new Set<string>();
+    for (const c of this.#store.listReviewedCommits(project.row.id)) {
+      reviewedShas.add(c.sha);
+      if (c.patchId) reviewedPatches.add(c.patchId);
+    }
+    const unknown = range.commits.filter((c) => !reviewedShas.has(c.sha));
+    if (unknown.length === 0) return { unreviewedCommits: [], uncovered: new Set() };
+    const details = await describe.call(
+      this.#git,
+      this.#locator(entry),
+      unknown.map((c) => c.sha),
+    );
+    const unreviewedCommits: string[] = [];
+    const uncovered = new Set<string>();
+    unknown.forEach((commit, i) => {
+      const d = details[i];
+      if (!d) return;
+      const merge = commit.parents.length > 1;
+      // Same change already reviewed elsewhere (rebase, cherry-pick, squash of a reviewed range).
+      if (!merge && d.patchId !== null && reviewedPatches.has(d.patchId)) return;
+      // A clean merge or an empty commit brings nothing new; a merge's `--cc` paths are its
+      // conflict resolutions and evil-merge edits.
+      if (d.paths.length === 0) return;
+      unreviewedCommits.push(commit.sha);
+      for (const p of d.paths) uncovered.add(p);
+    });
+    return { unreviewedCommits, uncovered: range.truncated ? null : uncovered };
   }
 
   /**
@@ -1384,13 +1415,34 @@ export class DaemonCore {
     return { projectId, worktreeId, key, previous, bookmark: target, recorded };
   }
 
-  /** Step 3 records reviewed commits; until then nothing is recorded. */
+  /**
+   * Records the commits a bookmark move passes as reviewed (§2.4): each commit by id and
+   * patch-id, plus the whole range's patch-id as `<base>..<to>` (a squash merge of it has the
+   * same one). Only when `to` is HEAD (Review all), where the range is the review range itself.
+   */
   async #recordReviewed(
-    _project: ProjectEntry,
-    _entry: WorktreeEntry,
-    _to: string,
+    project: ProjectEntry,
+    entry: WorktreeEntry,
+    to: string,
   ): Promise<string[]> {
-    return [];
+    const review = await this.#reviewOf(project, entry);
+    const range = review?.range;
+    if (!range || range.head !== to || range.base === null || range.base === to) return [];
+    const commits = range.commits;
+    const details = this.#git.describeCommits
+      ? await this.#git.describeCommits(
+          this.#locator(entry),
+          commits.map((c) => c.sha),
+        )
+      : [];
+    const rows = commits.map((c, i) => ({ sha: c.sha, patchId: details[i]?.patchId ?? null }));
+    const whole = this.#git.rangePatchId
+      ? await this.#git.rangePatchId(this.#locator(entry), range.base, to)
+      : null;
+    if (whole !== null) rows.push({ sha: `${range.base}..${to}`, patchId: whole });
+    return this.#store.transaction(() =>
+      this.#store.addReviewedCommits(project.row.id, rows, this.#nowIso()),
+    );
   }
 
   /** Undo of a bookmark move: restores `previous` unless the bookmark moved again since. */

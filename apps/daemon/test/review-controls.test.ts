@@ -621,7 +621,7 @@ describe('UX round 1: settings, review policy, bulk review (fake git-core)', () 
     expect(emptyToken.status).toBe(400);
   });
 
-  it('bulk-marks staged and branch scopes with the scope kind as part of the key', async () => {
+  it('bulk-marks staged and branch scopes; a mark covers the same patch in every scope', async () => {
     const wt = mainOf(alpha);
     // The summary counts (from the working list) drive the staged prefilter, as in the inbox.
     fake.setFiles(wt, 'working', [
@@ -637,13 +637,14 @@ describe('UX round 1: settings, review policy, bulk review (fake git-core)', () 
     });
     expect(staged).toMatchObject({ changed: 1, worktrees: 1 });
     expect((await api.listFiles(wt, { scope: { kind: 'staged' } })).files[0]?.reviewed).toBe(true);
-    expect(await reviewedPaths(wt)).toEqual([]);
+    // The fake's a.ts has the same patch hash in every scope: reviewed in `working` too.
+    expect(await reviewedPaths(wt)).toEqual(['a.ts']);
     const branch = await api.bulkReview({ target: { kind: 'all' }, scope: { kind: 'branch' } });
-    expect(branch).toMatchObject({ changed: 2 });
+    expect(branch).toMatchObject({ changed: 1, unchanged: 1 });
     expect(
       (await api.listFiles(wt, { scope: { kind: 'branch' } })).files.map((f) => f.reviewed),
     ).toEqual([true, true]);
-    expect(await reviewedPaths(wt)).toEqual([]);
+    expect(await reviewedPaths(wt)).toEqual(['a.ts']);
   });
 
   it('never spawns git per file: one (cached) file list per worktree for `all`', async () => {

@@ -405,10 +405,17 @@ export class Store {
 
   // --- review marks ----------------------------------------------------------------------------
 
-  listReviewMarks(projectId: string, scopeKind: ScopeKind): ReviewMark[] {
+  /**
+   * Review marks of a project. Marks no longer depend on the scope kind (status flow v2,
+   * docs/STATUS-FLOW.md §2.4): `scope_kind` still records where a mark was made, and old rows of
+   * every kind stay readable, but a mark applies wherever the same (path, patchHash) appears.
+   * `_scopeKind` is accepted for older callers and ignored.
+   */
+  listReviewMarks(projectId: string, _scopeKind?: ScopeKind): ReviewMark[] {
     const rows = this.#stmt(
-      'SELECT path, raw, patch_hash, reviewed_at, last_seen_at FROM reviewed WHERE project_id = ? AND scope_kind = ?',
-    ).all(projectId, scopeKind) as Row[];
+      `SELECT path, raw, patch_hash, MAX(reviewed_at) AS reviewed_at, MAX(last_seen_at) AS last_seen_at
+       FROM reviewed WHERE project_id = ? GROUP BY raw, path, patch_hash`,
+    ).all(projectId) as Row[];
     return rows.map((r) => ({
       path: str(r.path),
       raw: Number(r.raw) === 1,
@@ -429,24 +436,25 @@ export class Store {
          DO UPDATE SET reviewed_at = excluded.reviewed_at, last_seen_at = excluded.last_seen_at`,
       ).run(key.projectId, key.scopeKind, p, raw ? 1 : 0, key.patchHash, at, at);
     } else {
+      // Unreviewing removes the mark whatever scope it was made in.
       this.#stmt(
-        'DELETE FROM reviewed WHERE project_id = ? AND scope_kind = ? AND raw = ? AND path = ? AND patch_hash = ?',
-      ).run(key.projectId, key.scopeKind, raw ? 1 : 0, p, key.patchHash);
+        'DELETE FROM reviewed WHERE project_id = ? AND raw = ? AND path = ? AND patch_hash = ?',
+      ).run(key.projectId, raw ? 1 : 0, p, key.patchHash);
     }
   }
 
   touchReviewMarks(
     projectId: string,
-    scopeKind: ScopeKind,
+    _scopeKind: ScopeKind,
     marks: ReadonlyArray<Pick<ReviewMark, 'path' | 'raw' | 'patchHash'>>,
     at: string,
   ): void {
     if (marks.length === 0) return;
     const stmt = this.#stmt(
-      'UPDATE reviewed SET last_seen_at = ? WHERE project_id = ? AND scope_kind = ? AND raw = ? AND path = ? AND patch_hash = ?',
+      'UPDATE reviewed SET last_seen_at = ? WHERE project_id = ? AND raw = ? AND path = ? AND patch_hash = ?',
     );
     this.transaction(() => {
-      for (const m of marks) stmt.run(at, projectId, scopeKind, m.raw ? 1 : 0, m.path, m.patchHash);
+      for (const m of marks) stmt.run(at, projectId, m.raw ? 1 : 0, m.path, m.patchHash);
     });
   }
 

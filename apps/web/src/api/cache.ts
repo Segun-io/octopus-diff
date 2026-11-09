@@ -25,11 +25,6 @@ export interface ReviewPatch {
   reviewed: boolean;
 }
 
-function scopeKindOfKey(key: unknown): string | undefined {
-  // scopeKey(scope) is `<kind>` or `<kind>:<detail>`.
-  return typeof key === 'string' ? key.split(':')[0] : undefined;
-}
-
 function matches(
   file: Pick<ChangedFile, 'path' | 'rawPath' | 'patchHash'>,
   patch: ReviewPatch,
@@ -60,8 +55,8 @@ function patchFiles(files: ChangedFile[], patch: ReviewPatch): ChangedFile[] | n
 }
 
 /**
- * Sets the reviewed flag on every cached file that matches (projectId, scopeKind, path,
- * patchHash). Returns a function that restores the previous cache values (for rollback).
+ * Sets the reviewed flag on every cached file that matches (projectId, path, patchHash), in any
+ * scope. Returns a function that restores the previous cache values (for rollback).
  */
 export function applyReviewToCaches(queryClient: QueryClient, patch: ReviewPatch): () => void {
   const restore: (() => void)[] = [];
@@ -69,7 +64,9 @@ export function applyReviewToCaches(queryClient: QueryClient, patch: ReviewPatch
   for (const [key, data] of queryClient.getQueriesData<InboxResponse>({
     queryKey: queryKeys.inboxAll(),
   })) {
-    if (!data || data.scope.kind !== patch.scopeKind) continue;
+    // Marks do not depend on the scope kind (status flow v2): a (path, patchHash) mark applies
+    // in every scope where the same patch appears.
+    if (!data) continue;
     let changed = false;
     const entries = data.entries.map((entry) => {
       if (entry.project.id !== patch.projectId) return entry;
@@ -84,7 +81,7 @@ export function applyReviewToCaches(queryClient: QueryClient, patch: ReviewPatch
   }
 
   for (const [key, data] of queryClient.getQueriesData<FilesResponse>({ queryKey: ['files'] })) {
-    if (!data || data.scope.kind !== patch.scopeKind) continue;
+    if (!data) continue;
     const projectId = projectIdOf(queryClient, data.worktreeId);
     if (projectId !== undefined && projectId !== patch.projectId) continue;
     const files = patchFiles(data.files, patch);
@@ -94,7 +91,7 @@ export function applyReviewToCaches(queryClient: QueryClient, patch: ReviewPatch
   }
 
   for (const [key, data] of queryClient.getQueriesData<DiffResponse>({ queryKey: ['diff'] })) {
-    if (!data || scopeKindOfKey(key[2]) !== patch.scopeKind) continue;
+    if (!data) continue;
     if (data.diff.reviewed === patch.reviewed || !matches(data.diff, patch)) continue;
     const projectId = projectIdOf(queryClient, data.worktreeId);
     if (projectId !== undefined && projectId !== patch.projectId) continue;
