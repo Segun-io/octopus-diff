@@ -2025,6 +2025,10 @@
         {
           "path": "apps/web/src/components/CopyButton.tsx",
           "what": "Copy feedback (copied state, check icon, anchored \"Copied!\" toast), modelled on useCopyToClipboard, DiffFilePathCopyButton and anchoredCopyToast."
+        },
+        {
+          "path": "apps/web/src/components/diff/CopySelectionBar.tsx",
+          "what": "Placement of the floating Copy bar next to the pointer, after resolveSelectionActionPosition in apps/web/src/lib/selectionActions.ts."
         }
       ],
       "design": "The sidebar (folders, the Settled shelf, settling by hand), the folder picker and the command palette's browse mode are modelled on T3 Code's UI. The forge integration (remote recognition, CLI-login refinement for self-hosted hosts, the GitHub base-repository order, the merge request fields and PR glyphs) follows T3 Code's source-control packages.",

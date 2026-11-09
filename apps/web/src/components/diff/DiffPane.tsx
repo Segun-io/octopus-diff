@@ -1,7 +1,7 @@
 import { type FileDiff, scopeKey, TEST_IDS } from '@octopus-diff/contracts';
 import { lazy, type ReactNode, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { describeError, useDiffQuery } from '../../api/queries.ts';
-import { fileCopyTexts } from '../../lib/copyFormat.ts';
+import { fileCopyTexts, type SelectionCopyMeta } from '../../lib/copyFormat.ts';
 import {
   classifyDiff,
   type DiffDisplay,
@@ -138,6 +138,27 @@ export function DiffPane() {
   const oldPath = file?.oldPath && file.oldPath !== selected?.path ? file.oldPath : null;
   const pathTexts = selected ? fileCopyTexts({ path: selected.path }, '') : null;
   const copy: CopyFn = (text, options) => void copyAndReport(store, text, options);
+  const worktree = row?.worktree;
+  const projectName = row?.project.name;
+  const defaultBranch = row?.project.defaultBranch;
+  const scope = model.scope;
+  const selectedPath = selected?.path;
+  const copyMeta = useMemo<SelectionCopyMeta | undefined>(
+    () =>
+      worktree && projectName !== undefined && selectedPath !== undefined
+        ? {
+            project: projectName,
+            branch: worktree.branch,
+            worktreePath: worktree.path,
+            headSha: worktree.headSha,
+            scope,
+            defaultBranch: defaultBranch ?? null,
+            filePath: selectedPath,
+            oldPath,
+          }
+        : undefined,
+    [worktree, projectName, defaultBranch, scope, selectedPath, oldPath],
+  );
 
   return (
     <section
@@ -330,6 +351,8 @@ export function DiffPane() {
             diffTheme={appTheme.diff.theme}
             ignoreWhitespace={ignoreWhitespace}
             context={opts.context}
+            copyMeta={copyMeta}
+            suspicious={suspicious.length > 0}
             onLoadAnyway={() => key && actions.setFileOptions(store, key, { ...opts, full: true })}
           />
         )}
@@ -346,6 +369,8 @@ function DiffBody({
   diffTheme,
   ignoreWhitespace,
   context,
+  copyMeta,
+  suspicious,
   onLoadAnyway,
 }: {
   diff: FileDiff;
@@ -355,6 +380,8 @@ function DiffBody({
   diffTheme: string;
   ignoreWhitespace: boolean;
   context: number | undefined;
+  copyMeta: SelectionCopyMeta | undefined;
+  suspicious: boolean;
   onLoadAnyway: () => void;
 }) {
   switch (display.kind) {
@@ -438,6 +465,8 @@ function DiffBody({
                 mode={mode}
                 theme={theme}
                 diffTheme={diffTheme}
+                copyMeta={copyMeta}
+                suspicious={suspicious}
               />
             </Suspense>
           </div>

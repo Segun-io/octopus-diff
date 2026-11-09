@@ -1494,3 +1494,27 @@ request, git call or contract change.
      mount effect now depends on the position's x / y and reads `onClose` through a ref, so callers may pass an inline
      `onClose` (the tree's `renderContextMenu` does) without the menu re-focusing its first item on every render. The
      file list renders its menu outside the `listbox`, so the menu's arrow keys do not move the file selection.
+106. **Spike (plan §4 step 3.2), Chromium via Playwright on the `live` fixture, `@pierre/diffs` 1.6.4.** (a) Line
+     selection starts only on a line number (`requireNumberColumn`) or the gutter button. `start` / `end` are the
+     line numbers of the side pressed and released; `side` / `endSide` are `deletions` for a deleted row and
+     `additions` for added and context rows, the same in split and unified (`endSide` is omitted when equal). A drag
+     from deleted line 29 to added line 3 gives `{start: 29, side: deletions, end: 3, endSide: additions}`, i.e.
+     5 rows in diff order; `selectedDiffLines` resolves that correctly. In split mode the library highlights the
+     whole row band across both columns, but a range pressed and released in one column keeps that column's lines
+     (#102 d). (b) A native text drag on the code plus Ctrl+C copies **only the code text**, no line numbers and no
+     `+` / `-` markers, in both modes (the gutter and markers are not selectable text), and keeps the visible
+     `⟨U+…⟩` escapes, so no `copy` interception is needed. (c) Gotchas: a selection inside the shadow root shows on
+     `document.getSelection()` with `isCollapsed: true` but `type: 'Range'` and a non-empty `toString()`, so "has a
+     text selection" is tested with `type` + `toString()`; and a gutter drag does not clear an earlier text
+     selection. Rule: the last gesture wins (a line selection removes the text selection; a later text drag keeps
+     its native Ctrl+C). The library refuses `onGutterUtilityClick` together with `renderGutterUtility` ("Use only
+     one gutter utility API"), so the gutter button is the library's default one (T3 does the same).
+107. **Step 3: code selection.** `DiffRenderer` turns on `enableLineSelection` + `enableGutterUtility` when it gets
+     `copyMeta` (the raw `<pre>` fallback and the placeholders have no selection), holds `{ file index, range }` and
+     passes it back as `selectedLines`; per-file options are memoised and call through a ref, because new callbacks
+     would make the library re-render every diff. A new `cacheKey` (patch hash + whitespace + context) drops the
+     selection; another file remounts `DiffBody`. The Copy bar (`CopySelectionBar.tsx`: `N lines`, Copy, Copy as
+     Markdown, close) appears below-right of where the pointer was released, inside the diff area; on scroll it
+     docks to the bottom-right corner. It never takes focus (`mousedown` prevented, buttons `tabIndex=-1`); Esc or
+     the close button clears. Ctrl/⌘ C with a line selection and no text selection copies the plain code (outside
+     inputs). `copyMeta` comes from the diff pane (selected row, project, scope, default branch).
