@@ -130,6 +130,14 @@ branch has a matched pull/merge request, a `Changes | PR #n` switch opens the **
 checks, conversation, timeline, files; `docs/FORGES.md`). Folder and project Overviews show repository information
 (local git facts; the project Overview also the forge's facts and open requests).
 
+Copy (`docs/COPY-TOOLS.md`, web only): a "Copy" group in the worktree menus (sidebar, Overview, Inbox group
+headers: branch name, worktree path, commit id), a file menu on list and tree rows (path, old path, name, absolute
+path), a copy-path button and a `⋯` menu in the diff header (plus the file's patch), a copy button for the commit
+scope, and palette commands. In the diff, a press-and-drag on the line numbers selects lines; a floating bar copies
+them as plain code or as Markdown with where they live (file, lines, branch, worktree, project, scope, HEAD), and
+`Ctrl/⌘ C` copies them too. Copies keep invisible / bidirectional characters escaped (SEC-05) and fall back to
+`execCommand('copy')` where `navigator.clipboard` is missing (plain-http LAN).
+
 Keyboard: `j`/`k` next/prev file · `J`/`K` next/prev worktree · `n` next **unreviewed** file anywhere ·
 `r` toggle reviewed · `s` split/unified · `/` filter · `g i` inbox · `?` help. All actions reachable
 without a mouse.
@@ -442,6 +450,16 @@ Status flow v2 (`docs/STATUS-FLOW.md` §5, added 2026-11-09):
 16. "Hide until it changes" returns the row on the next commit or edit.
 17. No pulse; no "verify"/"verified" strings in the UI.
 18. Restart the daemon: bookmarks and marks survive. Read-only proof tests still pass.
+
+Copy tools (`docs/COPY-TOOLS.md` §8, added 2026-11-09):
+
+19. Branch name, worktree path, file path, file name and absolute path can each be copied from a menu or button
+    on the worktree row, the file row and the diff header, and from the palette.
+20. Selecting diff lines shows a Copy bar; plain copy yields only the selected code; Markdown copy yields the
+    `docs/COPY-TOOLS.md` §5 format.
+21. Copying works on `http://localhost` and on a plain-http LAN address (textarea fallback).
+22. Invisible / bidirectional characters are never copied raw.
+23. No daemon request, git call or contract change was added; the read-only proof harness still passes.
 
 ## 9. Risks and mitigations
 

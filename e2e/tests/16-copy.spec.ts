@@ -114,6 +114,13 @@ test.describe('copy names and paths', () => {
     await app.byTestId(COPY.diffMenu).click();
     await app.byTestId(COPY.worktreePath).click();
     await expect.poll(() => clipboard(page)).toBe(live.path);
+
+    // …and the whole file's patch.
+    await app.byTestId(COPY.diffMenu).click();
+    await app.byTestId('copy-file-diff').click();
+    await expect
+      .poll(() => clipboard(page))
+      .toMatch(/^diff --git a\/src\/review-me\.ts b\/src\/review-me\.ts\n/);
   });
 
   test('palette commands copy the open worktree and file', async ({

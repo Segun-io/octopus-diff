@@ -7,24 +7,12 @@
  * Inc., apps/web/src/lib/selectionActions.ts): next to the pointer, kept inside the diff area.
  */
 import type { SelectedLineRange } from '@pierre/diffs';
+import { resolveBarPosition } from '../../lib/selectionPosition.ts';
 import { CheckIcon, CloseIcon, CopyIcon } from '../bits.tsx';
 import { useCopyFeedback } from '../CopyButton.tsx';
 import { COPY_TEST_IDS } from '../copyMenu.ts';
 
 export type BarPlacement = { kind: 'pointer'; x: number; y: number } | { kind: 'docked' };
-
-/** Where the bar goes inside `bounds` (wrapper-relative), preferring just below-right of the pointer. */
-export function resolveBarPosition(options: {
-  pointer: { x: number; y: number };
-  bounds: { width: number; height: number };
-  bar: { width: number; height: number };
-}): { left: number; top: number } {
-  const { pointer, bounds, bar } = options;
-  const left = Math.max(8, Math.min(pointer.x + 8, bounds.width - bar.width - 8));
-  const below = pointer.y + 12;
-  const top = below + bar.height + 8 <= bounds.height ? below : pointer.y - bar.height - 12;
-  return { left, top: Math.max(8, Math.min(top, bounds.height - bar.height - 8)) };
-}
 
 const BAR_SIZE = { width: 260, height: 30 };
 

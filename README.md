@@ -147,6 +147,15 @@ Settings → Folders → **Start browsing in** sets where the picker opens (defa
   daemon and shared by every browser that opens it; appearance and layout preferences are stored in the
   browser, per device. The **command palette** (`Ctrl/Cmd+K`) jumps to any worktree, project or folder
   and runs any command.
+- **Copy anything you are reading.** Right-click a worktree for its branch name, worktree path or commit id;
+  right-click a file (list or tree) for its path, old path, name or absolute path; the diff header has a
+  copy-path button and a `⋯` menu (also the whole file's patch), and the palette has the same commands.
+  Press on a line number in the diff and drag to select lines: a small bar offers **Copy** (just the code)
+  and **Copy as Markdown** (a fenced block headed by the file, line range, branch, worktree, scope and HEAD,
+  ready for an issue or an agent prompt); `Ctrl/Cmd+C` copies the selected lines too. Copies keep
+  invisible or bidirectional characters escaped as `⟨U+…⟩`, and work on a plain-http LAN address as well.
+
+  ![Two diff lines selected, with the Copy and Copy as Markdown bar](docs/screenshots/copy-selection-dark.png)
 - **Pull and merge requests.** If the GitHub CLI (`gh`) or GitLab CLI (`glab`) is installed and signed in,
   each worktree on a feature branch shows its PR/MR next to the branch: number, open / draft / merged /
   closed, and a CI dot; the tooltip adds the review decision, conflicts and whether the request's head

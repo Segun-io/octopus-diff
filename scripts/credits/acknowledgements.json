@@ -91,7 +91,7 @@
           "what": "Copy feedback (copied state, check icon, anchored \"Copied!\" toast), modelled on useCopyToClipboard, DiffFilePathCopyButton and anchoredCopyToast."
         },
         {
-          "path": "apps/web/src/components/diff/CopySelectionBar.tsx",
+          "path": "apps/web/src/lib/selectionPosition.ts",
           "what": "Placement of the floating Copy bar next to the pointer, after resolveSelectionActionPosition in apps/web/src/lib/selectionActions.ts."
         }
       ],

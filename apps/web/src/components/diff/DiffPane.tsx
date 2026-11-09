@@ -279,6 +279,21 @@ export function DiffPane() {
               copy,
               menu.state.position,
             ),
+            ...(diff?.patch && display?.kind !== 'too-large'
+              ? [
+                  {
+                    id: 'copy-file-diff',
+                    label: 'Copy file diff (patch)',
+                    testId: COPY_TEST_IDS.fileDiff,
+                    onSelect: () =>
+                      copy(escapeSuspicious(diff.patch), {
+                        what: 'file diff',
+                        escaped: suspicious.length > 0,
+                        at: menu.state?.position,
+                      }),
+                  },
+                ]
+              : []),
             ...(row ? separated(worktreeCopyItems(row.worktree, copy, menu.state.position)) : []),
           ]}
           position={menu.state.position}

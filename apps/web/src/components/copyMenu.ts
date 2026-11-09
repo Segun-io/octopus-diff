@@ -16,6 +16,7 @@ export const COPY_TEST_IDS = {
   oldPath: 'copy-old-path',
   name: 'copy-name',
   absolutePath: 'copy-absolute-path',
+  fileDiff: 'copy-file-diff',
   /** The icon button next to the path in the diff header. */
   pathButton: 'copy-path-button',
   /** The diff header's "more" (⋯) menu button. */

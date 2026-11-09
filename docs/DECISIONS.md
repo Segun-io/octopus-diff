@@ -1518,3 +1518,23 @@ request, git call or contract change.
      docks to the bottom-right corner. It never takes focus (`mousedown` prevented, buttons `tabIndex=-1`); Esc or
      the close button clears. Ctrl/⌘ C with a line selection and no text selection copies the plain code (outside
      inputs). `copyMeta` comes from the diff pane (selected row, project, scope, default branch).
+108. **Gutter button stays the library's "+".** T3 uses the same default button (its comment affordance). A copy
+     glyph through `renderGutterUtility` was tried and dropped inside the spike's time box: the library rejects it
+     next to `onGutterUtilityClick`, and on its own the custom element did not appear on hover with `FileDiff`
+     1.6.4 in a `Virtualizer`. Pressing the "+" (or any line number) and dragging selects lines; the title of the
+     bar's buttons and the help dialog say what it is for. Follow-up if it confuses: swap the glyph once the library
+     renders custom gutter utilities in this setup.
+109. **Step 4 (polish), partly.** Done: "Copy file diff (patch)" in the diff header's `⋯` menu (the escaped patch,
+     as shown); a `Ctrl/⌘ C` row in the help dialog and Settings → Keyboard (registry entry `copySelection`,
+     group "Copy", hidden from the palette, handled by the renderer); README feature line and
+     `docs/screenshots/copy-selection-{light,dark}.png`, written by a new `e2e/support/copy-screenshots.ts` (the
+     shared `e2e/scripts/screenshots.ts` is untouched, so the other README screenshots were not regenerated and do
+     not show the new header buttons yet). Not done: the Settings → copy toggles (Markdown header without the
+     worktree path, absolute vs relative path in Markdown); the §5 format is fixed until someone asks.
+110. **PLAN change: copy tools.** PLAN §4.2 gains a "Copy" paragraph and §8 items 19–23 (from `docs/COPY-TOOLS.md`
+     §8). `docs/COPY-TOOLS.md` stays as the design record; #101–#109 record where the build differs from it.
+111. **Flaky check, not from this round: git-core `test/readonly.test.ts` "never writes to any repository".** It takes
+     ~2.4 s alone but 5.7–5.8 s when `pnpm test` runs every package in parallel, over vitest's default 5 s timeout.
+     Measured on 2026-11-09: `main` (`1561c3c`, a temporary worktree) failed 1 of 3 `pnpm test` runs, this branch 1
+     of 3; `pnpm check` on this branch failed 5 of 9 runs, always this one test. git-core is WS1's; proposal for its
+     owner: give that test an explicit timeout (e.g. 30 s). Not changed here (AGENTS: edit only owned paths).

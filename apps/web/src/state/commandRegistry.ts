@@ -191,6 +191,15 @@ export const COMMANDS: readonly CommandDef[] = [
   },
   // copy (palette only; menus and buttons have the same actions)
   {
+    id: 'copySelection',
+    label: 'Copy the selected diff lines (drag on the line numbers to select)',
+    group: 'copy',
+    keys: ['Ctrl/⌘ C'],
+    // Handled by the diff renderer while a line selection exists (docs/COPY-TOOLS.md §3.7).
+    run: () => {},
+    hideInPalette: true,
+  },
+  {
     id: 'copyBranch',
     label: 'Copy branch name',
     group: 'copy',
