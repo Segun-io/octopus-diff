@@ -1836,3 +1836,16 @@ only if it makes the code easier to maintain.
      for `branch`, false for `review`, else the pref. The `(5 of 12)` count applies only to the current scope when
      it has the eye. e2e: 12 (review policy) starts `n` from beta with nothing listed instead of a reviewed file
      shown by the eye; 13 (prefs migration) checks the eye in Uncommitted; 15 drops the eye toggle in To review.
+
+## PR #2 review (Greptile), 2026-11-09
+
+153. **`activityAt` counts fully staged files; activity-only changes are not announced.** (a) Greptile: a file edited
+     and staged before the next refresh (`x` set, `y` = `.`) was not in `dirtyKeys`, so its mtime dropped out and the
+     worktree fell back to the reflog time. git-core now stats those paths too (`stagedOnlyKeys`), for `activityAt`
+     only; the `stateHash` is unchanged (git status already reports them). Test in `summary.test.ts`. (b) Greptile also
+     noted that a change to `activityAt` alone (e.g. `git reset --soft HEAD`) never reaches an open page, because the
+     daemon announces `worktree.changed` only on a new `stateHash` and the web drops events whose hash it already has.
+     Not changed: every real activity also changes the `stateHash` (a commit or checkout moves HEAD's oid and the
+     status, an edit or `git add` changes the status), so only no-op HEAD moves are missed, and the next event or
+     reconnect corrects the order. Announcing activity separately would need an additive event field plus daemon and
+     web changes for a cosmetic ordering signal; revisit if the order is seen going stale in practice.

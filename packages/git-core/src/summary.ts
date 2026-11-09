@@ -222,6 +222,12 @@ export async function getSummary(
   const dirtyKeys: string[] = [];
   /** dirtyKeys entries that are submodules (gitlinks) in the worktree. */
   const gitlinkKeys = new Set<string>();
+  /**
+   * Fully staged paths (index changed, worktree matches it). Not in the stateHash (git status
+   * already reports them); only their mtimes feed `activityAt`, so staging an edit before the next
+   * refresh does not drop it from the activity time.
+   */
+  const stagedOnlyKeys: string[] = [];
   /** Paths git status reports as changed (incl. rename sources). */
   const statusPaths = new Set<string>();
   let tracked = 0;
@@ -237,6 +243,8 @@ export async function getSummary(
           unstaged += 1;
           dirtyKeys.push(entry.path);
           if (entry.modeWorktree === '160000') gitlinkKeys.add(entry.path);
+        } else if (entry.x !== '.') {
+          stagedOnlyKeys.push(entry.path);
         }
         break;
       case 'unmerged':
@@ -301,8 +309,8 @@ export async function getSummary(
       ),
     }),
   );
-  const [numstatResult, aheadBehind, inProgress, signatures, untracked, headMs] = await Promise.all(
-    [
+  const [numstatResult, aheadBehind, inProgress, signatures, untracked, headMs, stagedSigs] =
+    await Promise.all([
       numstatPromise,
       aheadBehindPromise,
       detectInProgress(repo.gitDir),
@@ -311,8 +319,8 @@ export async function getSummary(
       ),
       untrackedPromise,
       headActivityMs(ctx, repo, headSha),
-    ],
-  );
+      mapLimit(stagedOnlyKeys, STAT_CONCURRENCY, (key) => lstatSignature(repo.cwd, key)),
+    ]);
   const untrackedInfos = untracked.infos;
 
   let additions = 0;
@@ -389,6 +397,7 @@ export async function getSummary(
     updatedAt: new Date().toISOString(),
     activityAt: activityAt(headMs, [
       ...signatures.map(sigMtimeMs),
+      ...stagedSigs.map(sigMtimeMs),
       ...untrackedInfos.map((info) => sigMtimeMs(info.statSig)),
     ]),
   };

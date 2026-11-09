@@ -221,6 +221,28 @@ describe('getSummary activityAt', () => {
     expect(Date.parse(clamped as string)).toBeLessThanOrEqual(Date.now());
   });
 
+  it('counts fully staged files, without changing the stateHash', async () => {
+    const repo = fx.repo('activity-staged', { files: { 'a.txt': 'one\n' } });
+    utimesSync(
+      path.join(repo, '.git', 'logs', 'HEAD'),
+      at('2026-03-01T10:00:00Z'),
+      at('2026-03-01T10:00:00Z'),
+    );
+    const tracked = path.join(repo, 'a.txt');
+    writeFileSync(tracked, 'two\n');
+    fx.git(repo, ['add', 'a.txt']);
+    utimesSync(tracked, at('2026-04-01T10:00:00Z'), at('2026-04-01T10:00:00Z'));
+    const first = await core.getSummary(locator(repo));
+    expect(first.counts.staged).toBe(1);
+    expect(first.counts.unstaged).toBe(0);
+    expect(first.activityAt).toBe('2026-04-01T10:00:00.000Z');
+
+    utimesSync(tracked, at('2026-04-02T10:00:00Z'), at('2026-04-02T10:00:00Z'));
+    const second = await core.getSummary(locator(repo));
+    expect(second.activityAt).toBe('2026-04-02T10:00:00.000Z');
+    expect(second.stateHash).toBe(first.stateHash);
+  });
+
   it('falls back to the HEAD commit date without a reflog, and is null on an unborn branch', async () => {
     const repo = fx.repo('activity-noreflog');
     rmSync(path.join(repo, '.git', 'logs'), { recursive: true, force: true });
