@@ -128,6 +128,19 @@ export const TEST_IDS = {
   commandPalette: 'command-palette',
   commandPaletteInput: 'command-palette-input',
   commandPaletteItem: 'command-palette-item',
+  // --- forges (forge.ts) ---
+  /**
+   * Pull/merge request chip on a sidebar row. `data-kind` (`github` | `gitlab`), `data-number`,
+   * `data-state` (`open` | `draft` | `merged` | `closed`), `data-checks` (`success` | `failure` |
+   * `pending` | `neutral` | `none`).
+   */
+  changeRequestChip: 'change-request-chip',
+  /** Toolbar link to the selected worktree's request; same data attributes as the chip. */
+  changeRequestBadge: 'change-request-badge',
+  /** Settings → Forges: the enable switch (`aria-checked`). */
+  settingsForgesEnabled: 'settings-forges-enabled',
+  /** Settings → Forges: one row per CLI; `data-kind`, `data-available`, `data-auth`. */
+  forgeCliStatus: 'forge-cli-status',
 } as const;
 
 export type TestId = (typeof TEST_IDS)[keyof typeof TEST_IDS];
