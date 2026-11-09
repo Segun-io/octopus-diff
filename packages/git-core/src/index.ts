@@ -29,7 +29,11 @@ export {
 export { forEachRefFormat, parseForEachRef } from './parse/refs.js';
 export { parseStatusV2, type StatusBranch, type StatusEntry } from './parse/status.js';
 export { parseWorktreeList, type WorktreeRecord } from './parse/worktrees.js';
-export { ALLOWED_SUBCOMMANDS, assertAllowedGitArgs } from './runner/allowlist.js';
+export {
+  ALLOWED_SUBCOMMANDS,
+  assertAllowedGitArgs,
+  assertStdinAllowed,
+} from './runner/allowlist.js';
 export { CONFIG_PINS } from './runner/config-pins.js';
 export { buildGitEnv, SAFETY_ENV } from './runner/env.js';
 export { buildGitArgv, GitRunner, resolveExecutable } from './runner/runner.js';

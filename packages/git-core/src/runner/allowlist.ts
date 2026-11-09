@@ -22,6 +22,8 @@ export const ALLOWED_SUBCOMMANDS: ReadonlySet<string> = new Set([
   'config',
   // Reads .gitattributes (no filters or drivers run); used for untracked files (F8).
   'check-attr',
+  // Reads a patch on stdin and prints its id; only `--stable` (status flow §2.4).
+  'patch-id',
 ]);
 
 /** Subcommands that produce diffs and therefore always get `--no-ext-diff --no-textconv`. */
@@ -81,7 +83,21 @@ const CONFIG_OPTIONS = new Set([
 
 const CHECK_ATTR_OPTIONS = new Set(['-z', '--stdin', '-a', '--all', '--cached']);
 
+const PATCH_ID_OPTIONS = new Set(['--stable']);
+
 const SYMBOLIC_REF_OPTIONS = new Set(['-q', '--quiet', '--short', '--no-recurse', '--recurse']);
+
+/**
+ * Throws `command_not_allowed` unless `args` may receive data on stdin. Stdin is explicit:
+ * only `check-attr --stdin` (paths) and `patch-id` (a patch) read it; every other command gets
+ * no stdin at all.
+ */
+export function assertStdinAllowed(args: readonly string[]): void {
+  const sub = args[0];
+  if (sub === 'patch-id') return;
+  if (sub === 'check-attr' && args.includes('--stdin')) return;
+  deny(`git ${sub ?? ''} may not read stdin`, args);
+}
 
 function deny(message: string, args: readonly string[]): never {
   throw new GitCoreError('command_not_allowed', message, { args: [...args] });
@@ -143,6 +159,12 @@ export function assertAllowedGitArgs(args: readonly string[]): void {
         if (arg.startsWith('-') && !CHECK_ATTR_OPTIONS.has(arg)) {
           deny(`check-attr option not allowed: ${arg}`, args);
         }
+      }
+      return;
+    }
+    case 'patch-id': {
+      for (const arg of rest) {
+        if (!PATCH_ID_OPTIONS.has(arg)) deny(`patch-id argument not allowed: ${arg}`, args);
       }
       return;
     }

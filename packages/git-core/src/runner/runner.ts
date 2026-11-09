@@ -2,7 +2,7 @@ import { type ChildProcess, spawn } from 'node:child_process';
 import { accessSync, constants, existsSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { GitCoreError, type Logger, noopLogger } from '@octopus-diff/contracts';
-import { assertAllowedGitArgs, DIFF_FAMILY } from './allowlist.js';
+import { assertAllowedGitArgs, assertStdinAllowed, DIFF_FAMILY } from './allowlist.js';
 import { CONFIG_PIN_ARGS } from './config-pins.js';
 import { buildGitEnv, withConfigEnv } from './env.js';
 
@@ -40,7 +40,10 @@ export interface GitRunOptions {
    * discovery (SEC-06). Both must be absolute.
    */
   location?: GitLocation;
-  /** Written to the process's stdin, which is then closed (default: no stdin at all). */
+  /**
+   * Written to the process's stdin, which is then closed (default: no stdin at all). Only
+   * `check-attr --stdin` and `patch-id` may get input (`assertStdinAllowed`).
+   */
   input?: Buffer;
 }
 
@@ -254,6 +257,7 @@ export class GitRunner {
     let argv: string[];
     try {
       assertAllowedGitArgs(args);
+      if (options.input !== undefined) assertStdinAllowed(args);
       argv = buildGitArgv(args, this.extraPins, options.location);
     } catch (error) {
       return Promise.reject(error);

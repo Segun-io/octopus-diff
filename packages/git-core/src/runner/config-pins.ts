@@ -59,6 +59,10 @@ export const CONFIG_PINS: ReadonlyArray<readonly [string, string]> = [
   ['log.decorate', 'false'],
   ['log.mailmap', 'false'],
   ['log.showRoot', 'true'],
+  // `git patch-id` ids must not depend on config (`patchid.verbatim` keeps whitespace;
+  // git 2.53 lets `--stable` win anyway, older versions may not).
+  ['patchid.stable', 'true'],
+  ['patchid.verbatim', 'false'],
   ['i18n.logOutputEncoding', 'UTF-8'],
 ];
 
