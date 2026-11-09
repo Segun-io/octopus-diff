@@ -3,8 +3,8 @@
  * toast once no form is on screen (the first-run screen is replaced by the app as soon as the
  * first repository appears; the dialog and the palette may close while a folder is scanned).
  *
- * `useAddJobWatcher` (mounted once by the app shell) follows a folder's scan: it polls the scan
- * roots while the scan runs, so the outcome and the new repositories show up even when the event
+ * `useAddJobWatcher` (mounted once by the app shell) follows folder scans: it polls the scan
+ * roots while one runs (even after its message is dismissed or replaced), so the outcome and the new repositories show up even when the event
  * stream is late or down (a proxy that buffers it, a reconnect), and then refetches the projects.
  */
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -16,6 +16,7 @@ import {
   type AddJobSummary,
   describeAddJob,
   folderJobOutcome,
+  scanFollowDone,
 } from '../state/addJob.ts';
 import { actions, type UiStore, useUi, useUiStore } from '../state/ui.tsx';
 import { CheckIcon, CloseIcon, SpinnerIcon, WarningIcon } from './bits.tsx';
@@ -30,14 +31,18 @@ export const ADD_JOB_TEST_IDS = {
 const POLL_MS = 1000;
 const SUCCESS_TOAST_MS = 10_000;
 
-/** Follows the current folder job's scan to its outcome. Mount once. */
+/**
+ * Follows folder scans to their outcome (`UiState.scanFollows`, kept even when the job's message
+ * is dismissed or replaced) and settles the current folder job. Mount once.
+ */
 export function useAddJobWatcher() {
   const api = useApi();
   const store = useUiStore();
   const queryClient = useQueryClient();
   const job = useUi((s) => s.addJob);
   const scan = useUi((s) => s.scan);
-  const following = job?.kind === 'folder' && job.state === 'working' && !!job.scanRootId;
+  const follows = useUi((s) => s.scanFollows);
+  const following = follows.length > 0;
   const roots = useQuery({
     queryKey: queryKeys.scanRoots(),
     queryFn: () => api.listScanRoots(),
@@ -50,12 +55,30 @@ export function useAddJobWatcher() {
   // While scanning, projects are registered one by one: refetch them with the poll too, so the
   // first-run screen gives way to the app as soon as the first one exists.
   const polledAt = roots.dataUpdatedAt;
+  const followedFound = follows.reduce(
+    (n, f) => n + (roots.data?.scanRoots.find((r) => r.id === f.scanRootId)?.projectCount ?? 0),
+    0,
+  );
   useEffect(() => {
     if (!following || polledAt === 0) return;
-    if ((scanRoot?.projectCount ?? 0) > 0) {
+    if (followedFound > 0) {
       void queryClient.invalidateQueries({ queryKey: queryKeys.projects() });
     }
-  }, [following, polledAt, scanRoot?.projectCount, queryClient]);
+  }, [following, polledAt, followedFound, queryClient]);
+
+  // Stop following finished scans, and fetch what they found.
+  const rootsData = roots.data;
+  useEffect(() => {
+    if (follows.length === 0) return;
+    const listed = rootsData ? { scanRoots: rootsData.scanRoots, updatedAt: polledAt } : undefined;
+    const done = follows.filter((f) => scanFollowDone(f, listed, scan));
+    if (done.length === 0) return;
+    store.setState((s) => ({ scanFollows: s.scanFollows.filter((f) => !done.includes(f)) }));
+    void Promise.all([
+      queryClient.invalidateQueries({ queryKey: queryKeys.projects() }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.inboxAll() }),
+    ]);
+  }, [follows, rootsData, polledAt, scan, store, queryClient]);
 
   useEffect(() => {
     if (job?.kind !== 'folder') return;
@@ -101,6 +124,10 @@ function useRunAction(onRetry?: () => void) {
     if (action.id === 'stop-watching' && job.kind === 'folder' && job.scanRootId) {
       try {
         await api.removeScanRoot(job.scanRootId);
+        const stopped = job.scanRootId;
+        store.setState((s) => ({
+          scanFollows: s.scanFollows.filter((f) => f.scanRootId !== stopped),
+        }));
         await queryClient.invalidateQueries({ queryKey: queryKeys.scanRoots() });
         dismiss(store, job.id);
         actions.notice(store, `Stopped watching ${job.path}.`);

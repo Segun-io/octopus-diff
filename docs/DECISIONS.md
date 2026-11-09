@@ -1905,3 +1905,16 @@ contract, daemon or git-core change.
 160. **Known gap, not changed: folder listings can be stale for up to their cache life.** A folder created while the
      picker lists its parent is "No folder named …" until the listing refetches (navigate away and back). Seen
      while writing the e2e; not part of this report's issues.
+161. **PR #7 review (Greptile) and merge with `main`.** (a) A folder job is done only when the scan root's
+     `lastScannedAt` is strictly later than when the watch request returned (`scannedSince`), not merely
+     different: a cached scan-root list can hold an older timestamp (scanned elsewhere while events were missed),
+     which used to finish the job with the old count and stop polling. (b) Following a scan is kept apart from its
+     message: `UiState.scanFollows` (`ScanFollow`: root id, `scannedBefore`, start time) is added when the watch
+     request returns and removed when the scan is done, a scan error event arrives, the user stops watching, or a
+     list fetched after the follow started no longer has the root. `useAddJobWatcher` polls while any follow is
+     open, so dismissing the toast or starting another add no longer stops fetching what a scan finds with the
+     event stream down. (c) `e` / the More context command skips the whole-file test for a truncated patch, as
+     the pane already did (a patch cut inside its first hunk can look like the whole file). (d) Merging `main`
+     (toolbar hierarchy, PR #2): the diff header keeps `main`'s layout (ghost buttons, `DiffViewOptions`, the ⋯
+     menu at the right) with this PR's More context / Expand all rules; this PR's entries were renumbered
+     #112–#118 → #154–#160 after `main`'s #153, with PLAN and the report updated.

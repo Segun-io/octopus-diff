@@ -1,6 +1,6 @@
 # diff-context-onboarding report
 
-Branch `fix/diff-context-and-onboarding`, from `main` at `90c7cff`. Decisions: `docs/DECISIONS.md` #154–#160
+Branch `fix/diff-context-and-onboarding`, from `main` at `90c7cff`. Decisions: `docs/DECISIONS.md` #154–#161
 ("Diff context errors, first-run Continue and add feedback"). Web and e2e only: no contract, daemon or git-core
 change.
 
@@ -70,6 +70,20 @@ change.
   `17-diff-context` test fails with 98 "deletionLine and additionLine are null" errors; with the scan watcher
   disabled, the "event stream down" test fails (the first-run screen stays).
 
+### Review round (PR #7) and merge with `main` (#161)
+
+- Merged `main` (toolbar hierarchy, PR #2): the diff header keeps `main`'s layout with this PR's More context /
+  Expand all rules; DECISIONS renumbered #112–#118 → #154–#160.
+- Greptile P1 "old results finish new scans": `scannedSince` requires a `lastScannedAt` strictly later than
+  the one the watch request returned.
+- Greptile P1 "closing progress stops fetching": `UiState.scanFollows` tracks running scans apart from the
+  job's message; `useAddJobWatcher` polls while any is open, so dismissing or replacing the toast keeps
+  fetching.
+- Greptile P2 "partial diffs look complete": the `e` / More context command skips the whole-file test for a
+  truncated patch.
+- New unit tests in `apps/web/test/add-job.test.ts` (`scannedSince`, `scanFollowDone`, an older cached
+  timestamp). No e2e for dismissing a running toast: the fixture scans finish in well under a second.
+
 ## Verification
 
 Run on this branch, 2026-11-09:
@@ -88,14 +102,19 @@ Run on this branch, 2026-11-09:
   spec now waits for the main button's `data-action` before every folder click; `17-diff-context` +
   `18-onboarding` then passed 3/3 in a row, and the full suite rerun passed: **90 passed (3.5 min)**, read-only
   proof 12 control repos, 5127 lock polls, 0 violations.
+- After the merge with `main` and the review fixes: `pnpm lint`, `pnpm typecheck`, `pnpm build` pass;
+  `pnpm test` passes (web 239, daemon 199, git-core 176, cli 139, forge 94 + 4 skipped, contracts 83, fixtures
+  48, e2e unit 5). `pnpm test:e2e`: first run 88 passed, 2 failed (`16-copy` "the selection clears when another
+  file opens" and "a text selection in the code copies only the code"; both passed in a 9/9 rerun of
+  `16-copy` alone, load-dependent, not code this PR touches), second full run **90 passed (3.5 min)**.
 - Targeted while developing: `17-diff-context` + `18-onboarding` + `01-projects` + `12-ui-review-policy`, all
   passing.
 
 ## Decisions
 
-DECISIONS #154–#160: the cache key is the fetched view; context clamped and stopped at the whole file; no stacked
+DECISIONS #154–#161: the cache key is the fetched view; context clamped and stopped at the whole file; no stacked
 context requests; a "Continue" main button; scan polling during an add job as the fallback for the event stream;
-one add job shown in the form or as a toast; the stale-listing gap.
+one add job shown in the form or as a toast; the stale-listing gap; the PR #7 review fixes and merge (#161).
 
 ## Contract changes
 

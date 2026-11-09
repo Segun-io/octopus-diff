@@ -241,6 +241,16 @@ export function useFolderBrowser({
         created: res.created,
         scannedBefore: res.scanRoot.lastScannedAt,
       });
+      store.setState((s) => ({
+        scanFollows: [
+          ...s.scanFollows.filter((f) => f.scanRootId !== res.scanRoot.id),
+          {
+            scanRootId: res.scanRoot.id,
+            scannedBefore: res.scanRoot.lastScannedAt,
+            since: Date.now(),
+          },
+        ],
+      }));
       await refresh();
       onWatched?.(res, where);
     },

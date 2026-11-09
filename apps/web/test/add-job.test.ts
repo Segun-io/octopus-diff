@@ -1,6 +1,13 @@
 import type { ProjectListItem, ScanRoot } from '@octopus-diff/contracts';
 import { describe, expect, it } from 'vitest';
-import { type AddJob, describeAddJob, folderJobOutcome } from '../src/state/addJob.ts';
+import {
+  type AddJob,
+  describeAddJob,
+  folderJobOutcome,
+  type ScanFollow,
+  scanFollowDone,
+  scannedSince,
+} from '../src/state/addJob.ts';
 import type { ScanStatus } from '../src/state/ui.tsx';
 
 type FolderJob = Extract<AddJob, { kind: 'folder' }>;
@@ -84,6 +91,17 @@ describe('folderJobOutcome', () => {
     ).toEqual({ state: 'done', found: 1 });
   });
 
+  it('an older cached lastScannedAt does not finish a re-watched folder', () => {
+    const again: FolderJob = {
+      ...folder,
+      created: false,
+      scannedBefore: '2026-11-09T10:00:00.000Z',
+    };
+    expect(
+      folderJobOutcome(again, root({ lastScannedAt: '2026-11-09T09:00:00.000Z' }), null),
+    ).toBeNull();
+  });
+
   it('reports a scan error for this folder only', () => {
     const error: ScanStatus = { ...scanning, state: 'error', message: 'permission denied' };
     expect(folderJobOutcome(folder, root(), error)).toEqual({
@@ -156,5 +174,45 @@ describe('describeAddJob', () => {
     expect(failed.tone).toBe('error');
     expect(failed.title).toBe('Could not add ~/code/app');
     expect(failed.detail).toBe('not a git repository');
+  });
+});
+
+describe('scannedSince', () => {
+  it('needs a scan strictly later than the one before', () => {
+    expect(scannedSince(null, null)).toBe(false);
+    expect(scannedSince('2026-11-09T01:00:00.000Z', null)).toBe(true);
+    expect(scannedSince('2026-11-09T01:00:00.000Z', '2026-11-09T01:00:00.000Z')).toBe(false);
+    expect(scannedSince('2026-11-09T00:00:00.000Z', '2026-11-09T01:00:00.000Z')).toBe(false);
+    expect(scannedSince('2026-11-09T02:00:00.000Z', '2026-11-09T01:00:00.000Z')).toBe(true);
+  });
+});
+
+describe('scanFollowDone', () => {
+  const follow: ScanFollow = {
+    scanRootId: 'root1',
+    scannedBefore: '2026-11-09T01:00:00.000Z',
+    since: 1000,
+  };
+  const listed = (scanRoots: ScanRoot[], updatedAt = 2000) => ({ scanRoots, updatedAt });
+
+  it('keeps following until the root is scanned after the request', () => {
+    expect(scanFollowDone(follow, undefined, null)).toBe(false);
+    expect(
+      scanFollowDone(follow, listed([root({ lastScannedAt: '2026-11-09T00:00:00.000Z' })]), null),
+    ).toBe(false);
+    expect(
+      scanFollowDone(follow, listed([root({ lastScannedAt: '2026-11-09T02:00:00.000Z' })]), null),
+    ).toBe(true);
+  });
+
+  it('stops on a scan error for the root', () => {
+    const error: ScanStatus = { ...scanning, state: 'error', message: 'boom' };
+    expect(scanFollowDone(follow, undefined, error)).toBe(true);
+    expect(scanFollowDone(follow, undefined, { ...error, scanRootId: 'other' })).toBe(false);
+  });
+
+  it('stops when a list fetched after the follow started has no such root', () => {
+    expect(scanFollowDone(follow, listed([], 500), null)).toBe(false);
+    expect(scanFollowDone(follow, listed([], 2000), null)).toBe(true);
   });
 });

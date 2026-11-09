@@ -237,7 +237,9 @@ export function useCommands(model: AppModel, resolvedTheme: 'light' | 'dark'): C
         if (!shown?.diff.patch) return;
         if (
           isFullContext(current.context) ||
-          patchShowsWholeFile(shown.diff.patch, current.context ?? DEFAULT_CONTEXT)
+          // A truncated patch can look like the whole file (cut inside its first hunk).
+          (!shown.diff.truncated &&
+            patchShowsWholeFile(shown.diff.patch, current.context ?? DEFAULT_CONTEXT))
         ) {
           actions.notice(store, 'The whole file is already shown.');
           return;

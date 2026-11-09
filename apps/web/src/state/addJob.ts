@@ -33,7 +33,7 @@ export type AddJob =
       created?: boolean;
       /**
        * `lastScannedAt` of the scan root when the request returned: the scan this job started is
-       * done once the value moves (null → a time for a new folder).
+       * done once the value is later (null → a time for a new folder).
        */
       scannedBefore?: string | null;
       /** Repositories registered through this folder, once the scan is done. */
@@ -41,6 +41,46 @@ export type AddJob =
       error?: string;
       dismissed?: boolean;
     };
+
+/**
+ * A folder scan the UI follows to its end, kept apart from the job's message: dismissing the
+ * message or starting another add must not stop fetching what the scan finds when the event
+ * stream is down (components/AddJobStatus.tsx `useAddJobWatcher`).
+ */
+export interface ScanFollow {
+  scanRootId: string;
+  /** `lastScannedAt` when the watch request returned. */
+  scannedBefore: string | null;
+  /** `Date.now()` when the follow started: scan-root lists fetched earlier say nothing about it. */
+  since: number;
+}
+
+/**
+ * True when `lastScannedAt` is a scan that finished after `before`. Strictly later: a cached
+ * scan-root list can hold a timestamp older than `before` (scanned elsewhere while events were
+ * missed), which is not this scan finishing.
+ */
+export function scannedSince(lastScannedAt: string | null, before: string | null): boolean {
+  if (lastScannedAt === null) return false;
+  if (before === null) return true;
+  return Date.parse(lastScannedAt) > Date.parse(before);
+}
+
+/**
+ * Whether a followed scan is over: its root was scanned since, a `scan.progress` error arrived for
+ * it, or a scan-root list fetched after the follow started no longer has the root (stopped).
+ */
+export function scanFollowDone(
+  follow: ScanFollow,
+  roots: { scanRoots: readonly ScanRoot[]; updatedAt: number } | undefined,
+  scan: ScanStatus | null,
+): boolean {
+  if (scan && scan.scanRootId === follow.scanRootId && scan.state === 'error') return true;
+  if (!roots) return false;
+  const root = roots.scanRoots.find((r) => r.id === follow.scanRootId);
+  if (!root) return roots.updatedAt > follow.since;
+  return scannedSince(root.lastScannedAt, follow.scannedBefore);
+}
 
 export type AddJobTone = 'working' | 'success' | 'empty' | 'error';
 
@@ -77,8 +117,8 @@ export function projectsOfScanRoot(
 }
 
 /**
- * The folder job's scan is over when the scan root's `lastScannedAt` moved since the request
- * returned (refreshed by `scan.progress` events or by polling), or a `scan.progress` error event
+ * The folder job's scan is over when the scan root's `lastScannedAt` is later than when the
+ * request returned (refreshed by `scan.progress` events or by polling), or a `scan.progress` error event
  * arrived for it.
  */
 export function folderJobOutcome(
@@ -91,7 +131,7 @@ export function folderJobOutcome(
     return { state: 'error', error: scan.message ?? 'The scan failed.' };
   }
   if (!scanRoot) return null;
-  if (scanRoot.lastScannedAt !== null && scanRoot.lastScannedAt !== job.scannedBefore) {
+  if (scannedSince(scanRoot.lastScannedAt, job.scannedBefore ?? null)) {
     return { state: 'done', found: scanRoot.projectCount };
   }
   return null;
