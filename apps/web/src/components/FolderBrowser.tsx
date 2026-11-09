@@ -26,7 +26,8 @@ import {
   type Target,
   tabCompletion,
 } from '../lib/folderPath.ts';
-import { type UiState, useUi } from '../state/ui.tsx';
+import type { AddJob } from '../state/addJob.ts';
+import { type UiState, type UiStore, useUi, useUiStore } from '../state/ui.tsx';
 import { CornerLeftUpIcon, FolderIcon, RepoIcon } from './bits.tsx';
 
 /*
@@ -108,6 +109,27 @@ export interface FolderBrowserOptions {
   onWatched?: (res: AddScanRootResponse, shown: string) => void;
 }
 
+let jobCounter = 0;
+
+/** Starts a new add job (replacing any previous one). */
+type NewJob =
+  | Omit<Extract<AddJob, { kind: 'repo' }>, 'id' | 'state'>
+  | Omit<Extract<AddJob, { kind: 'folder' }>, 'id' | 'state'>;
+
+function startJob(store: UiStore, job: NewJob) {
+  jobCounter += 1;
+  const id = jobCounter;
+  store.setState({ addJob: { ...job, id, state: 'working' } as AddJob });
+  return id;
+}
+
+/** Updates the add job `id`, if it is still the current one. */
+function updateJob(store: UiStore, id: number, patch: Partial<AddJob>) {
+  store.setState((s) =>
+    s.addJob && s.addJob.id === id ? { addJob: { ...s.addJob, ...patch } as AddJob } : {},
+  );
+}
+
 export function useFolderBrowser({
   text,
   setText,
@@ -117,12 +139,12 @@ export function useFolderBrowser({
   onWatched,
 }: FolderBrowserOptions) {
   const api = useApi();
+  const store = useUiStore();
   const queryClient = useQueryClient();
   const projects = useProjectsQuery();
   const scanRoots = useScanRootsQuery();
   const base = useRelativeBase();
   const [active, setActive] = useState(-1);
-  const [message, setMessage] = useState<string | null>(null);
   const navGeneration = useRef(0);
   const sepRef = useRef('/');
 
@@ -189,46 +211,62 @@ export function useFolderBrowser({
     ]);
 
   const addProject = useMutation({
-    mutationFn: (path: string) => api.addProject({ path }),
-    onSuccess: async (res: AddProjectResponse) => {
+    mutationFn: ({ path }: { path: string; job: number }) => api.addProject({ path }),
+    onError: (error, { job }) => {
+      updateJob(store, job, { state: 'error', error: describeError(error).detail });
+    },
+    onSuccess: async (res: AddProjectResponse, { job }) => {
       await refresh();
-      if (onOpen) {
-        onOpen({ kind: 'project', projectId: res.project.project.id });
-        return;
-      }
-      setMessage(
-        res.created
-          ? `Added ${res.project.project.name}.`
-          : `${res.project.project.name} was already added.`,
-      );
+      updateJob(store, job, {
+        state: 'done',
+        projectId: res.project.project.id,
+        name: res.project.project.name,
+        created: res.created,
+        worktrees: res.project.worktrees.length,
+      });
+      if (onOpen) onOpen({ kind: 'project', projectId: res.project.project.id });
     },
   });
   const addScanRoot = useMutation({
-    mutationFn: (path: string) => api.addScanRoot({ path, depth }),
-    onSuccess: async (res: AddScanRootResponse) => {
+    mutationFn: ({ path }: { path: string; job: number }) => api.addScanRoot({ path, depth }),
+    onError: (error, { job }) => {
+      updateJob(store, job, { state: 'error', error: describeError(error).detail });
+    },
+    onSuccess: async (res: AddScanRootResponse, { job }) => {
       const where = show(res.scanRoot.path);
+      // The job's scan is done once lastScannedAt moves (components/AddJobStatus.tsx).
+      updateJob(store, job, {
+        path: where,
+        scanRootId: res.scanRoot.id,
+        created: res.created,
+        scannedBefore: res.scanRoot.lastScannedAt,
+      });
       await refresh();
-      if (onWatched) {
-        onWatched(res, where);
-        return;
-      }
-      setMessage(
-        res.created
-          ? `Watching ${where}. Scanning for repositories…`
-          : `${where} is already watched.`,
-      );
+      onWatched?.(res, where);
     },
   });
+  const runAddProject = (path: string) => {
+    const job = startJob(store, { kind: 'repo', path: show(path) });
+    addProject.mutate({ path, job });
+  };
+  const runAddScanRoot = (path: string) => {
+    // Progress events from now on belong to this scan (or to another folder's, by id).
+    store.setState({ scan: null });
+    const job = startJob(store, { kind: 'folder', path: show(path), depth });
+    addScanRoot.mutate({ path, job });
+  };
   const pending = addProject.isPending || addScanRoot.isPending;
   const error = addProject.error ?? addScanRoot.error;
-  const canSubmit = target !== null && target.exists !== false && !foreign && !pending;
+  // A folder that cannot be listed (missing, unreadable) cannot be added or watched either.
+  const canSubmit = target !== null && target.exists !== false && !missing && !foreign && !pending;
   const primary: 'add' | 'watch' | 'open' =
     openTarget && onOpen ? 'open' : target?.kind === 'dir' ? 'watch' : 'add';
 
   const resetFeedback = () => {
-    setMessage(null);
     addProject.reset();
     addScanRoot.reset();
+    // A finished job's message goes away once the user moves on; a running one stays.
+    store.setState((s) => (s.addJob && s.addJob.state !== 'working' ? { addJob: null } : {}));
   };
 
   /** Loads the next listing first, then switches (no empty flash); a newer action wins. */
@@ -251,14 +289,14 @@ export function useFolderBrowser({
     if (!target || !canSubmit) return;
     resetFeedback();
     if (kind === 'open' && openTarget && onOpen) onOpen(openTarget);
-    else if (kind === 'watch') addScanRoot.mutate(target.path);
-    else addProject.mutate(target.path);
+    else if (kind === 'watch') runAddScanRoot(target.path);
+    else runAddProject(target.path);
   };
   const addEntry = (entry: DirEntry) => {
     resetFeedback();
     const open = registered.get(entry.path);
     if (open && onOpen) onOpen(open);
-    else addProject.mutate(entry.path);
+    else runAddProject(entry.path);
   };
   const change = (next: string) => {
     navGeneration.current++; // typing beats an in-flight navigation
@@ -354,7 +392,6 @@ export function useFolderBrowser({
     canSubmit,
     pending,
     error,
-    message,
     status,
     registered,
     watched,

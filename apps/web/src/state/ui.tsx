@@ -3,6 +3,7 @@ import { createContext, type ReactNode, useContext, useState } from 'react';
 import { type FileRef, fileRefKey } from '../lib/fileRef.ts';
 import type { SettingsSectionId } from '../settings/registry.ts';
 import type { ThemePrefs } from '../theme/registry.ts';
+import type { AddJob } from './addJob.ts';
 import {
   DEFAULT_PREFS,
   type Density,
@@ -78,6 +79,10 @@ export interface UiState extends Prefs {
   fileOptions: Record<string, FileViewOptions>;
   connection: ConnectionState;
   scan: ScanStatus | null;
+  /** The last "add a repository" / "watch a folder" request and its outcome (state/addJob.ts). */
+  addJob: AddJob | null;
+  /** How many add forms are on screen; the add-job toast shows only while none is. */
+  addFormsOpen: number;
   /** Transient one-line message (e.g. "No unreviewed files left"). */
   notice: { id: number; text: string } | null;
   /** Result of the last copy (docs/COPY-TOOLS.md): anchored near `at`, else bottom-centre. */
@@ -110,6 +115,8 @@ export const DEFAULT_UI_STATE: UiState = {
   fileOptions: {},
   connection: 'connecting',
   scan: null,
+  addJob: null,
+  addFormsOpen: 0,
   notice: null,
   copyToast: null,
 };

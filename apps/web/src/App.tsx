@@ -15,6 +15,7 @@ import {
   createQueryClient,
   describeError,
 } from './api/queries.ts';
+import { AddJobToast, useAddJobWatcher } from './components/AddJobStatus.tsx';
 import { AddProjectForm } from './components/AddProjectForm.tsx';
 import { BulkReviewToast } from './components/BulkReviewToast.tsx';
 import { CopyToastHost } from './components/CopyButton.tsx';
@@ -188,12 +189,13 @@ function EmptyState() {
         </div>
       </div>
       <p className="mb-4 text-sm text-muted">
-        Watch a folder where your repositories and worktrees live. Every repository and every
-        worktree inside it shows up here, and the diffs update as files change. Nothing is ever
-        written to a repository.
+        Pick the folder where your repositories and worktrees live, then press{' '}
+        <span className="font-medium text-fg">Continue</span>. Every repository inside it shows up
+        here, and the diffs update as files change. You can also pick a single repository. Nothing
+        is ever written to a repository.
       </p>
       <div className="rounded-lg border border-line bg-surface p-4">
-        <AddProjectForm />
+        <AddProjectForm variant="onboarding" autoFocus />
       </div>
       <p className="mt-4 text-xs text-faint">
         From a terminal: <code className="font-mono">octopus-diff scan ~/code</code> or{' '}
@@ -286,6 +288,7 @@ function AppShell({ eventSourceFactory }: { eventSourceFactory?: EventSourceFact
   useDocumentTitle(model.unreviewedTotal, titleCount);
   useFaviconDot(titleCount && model.unreviewedTotal > 0);
   useServerEvents(eventSourceFactory);
+  useAddJobWatcher();
   const focusWorktree =
     model.view.kind === 'worktree' ? model.view.worktreeId : (selected?.worktreeId ?? null);
   useFocusReporting(focusWorktree);
@@ -456,6 +459,7 @@ function AppShell({ eventSourceFactory }: { eventSourceFactory?: EventSourceFact
             />
           </Dialog>
         )}
+        <AddJobToast />
         <Notice />
       </main>
     </CommandsContext>

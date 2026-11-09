@@ -68,15 +68,8 @@ export function CommandPalette() {
       close();
       actions.setView(store, view);
     },
-    onWatched: (res, where) => {
-      close();
-      actions.notice(
-        store,
-        res.created
-          ? `Watching ${where}. Scanning for repositories…`
-          : `${where} is already watched.`,
-      );
-    },
+    // The scan's progress and outcome show in the add-job toast (components/AddJobStatus.tsx).
+    onWatched: () => close(),
   });
 
   const copyId = copyWorktreeId(model);

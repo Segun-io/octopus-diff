@@ -245,3 +245,12 @@ export function FolderPlusIcon(props: IconProps) {
     </Svg>
   );
 }
+
+/** A quarter-open ring that turns while something loads (still under reduced motion). */
+export function SpinnerIcon({ size, className = '' }: IconProps) {
+  return (
+    <Svg size={size} className={`animate-spin ${className}`}>
+      <path d="M8 2a6 6 0 1 1-6 6" />
+    </Svg>
+  );
+}
