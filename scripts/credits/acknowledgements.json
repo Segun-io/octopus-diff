@@ -65,6 +65,18 @@
         {
           "path": "packages/forge/src/auth.ts",
           "what": "The auth-status host parser, adapted from packages/source-control-gitlab/src/server/gitLabAuthStatus.ts."
+        },
+        {
+          "path": "packages/forge/src/details.ts",
+          "what": "The check-status mapping and the \"unfinished runs outrank finished ones\" dedupe, adapted from toCheckStatus / toCheckEntries in packages/source-control-github/src/server/gitHubPullRequestJson.ts."
+        },
+        {
+          "path": "apps/web/src/lib/request.ts",
+          "what": "Checks grouping and the status-line wording, adapted from groupPullRequestChecks / describePullRequestChecks in apps/web/src/components/pullRequest/pullRequestDetail.logic.ts."
+        },
+        {
+          "path": "apps/web/src/lib/markdown.ts",
+          "what": "visibleBody (HTML comments stripped before rendering), from apps/web/src/components/pullRequest/pullRequestDetail.logic.ts."
         }
       ],
       "design": "The sidebar (folders, the Settled shelf, settling by hand), the folder picker and the command palette's browse mode are modelled on T3 Code's UI. The forge integration (remote recognition, CLI-login refinement for self-hosted hosts, the GitHub base-repository order, the merge request fields and PR glyphs) follows T3 Code's source-control packages.",

@@ -204,6 +204,9 @@ Each adapted file also carries an attribution comment.
   - `apps/web/src/lib/folderPath.ts`: The path rules of the command-palette browse mode.
   - `apps/web/test/folderPath.test.ts`: Test cases ported from packages/shared/src/path.test.ts.
   - `packages/forge/src/auth.ts`: The auth-status host parser, adapted from packages/source-control-gitlab/src/server/gitLabAuthStatus.ts.
+  - `packages/forge/src/details.ts`: The check-status mapping and the "unfinished runs outrank finished ones" dedupe, adapted from toCheckStatus / toCheckEntries in packages/source-control-github/src/server/gitHubPullRequestJson.ts.
+  - `apps/web/src/lib/request.ts`: Checks grouping and the status-line wording, adapted from groupPullRequestChecks / describePullRequestChecks in apps/web/src/components/pullRequest/pullRequestDetail.logic.ts.
+  - `apps/web/src/lib/markdown.ts`: visibleBody (HTML comments stripped before rendering), from apps/web/src/components/pullRequest/pullRequestDetail.logic.ts.
   - The sidebar (folders, the Settled shelf, settling by hand), the folder picker and the command palette's browse mode are modelled on T3 Code's UI. The forge integration (remote recognition, CLI-login refinement for self-hosted hosts, the GitHub base-repository order, the merge request fields and PR glyphs) follows T3 Code's source-control packages.
 
 ## Inspiration (ideas only, no code)

@@ -3,7 +3,8 @@
 > Status: MVP complete (Phases 0–2, 2026-11-08): see `docs/reports/mvp.md`. Phase 3 needs the user. UX rounds 1–4
 > (identity, themes, settings, bulk review; two unslop passes; the sidebar: folders, settle, a closed shelf) are done:
 > `docs/reports/ux-*.md`. Forges (read-only PR/MR status through `gh`/`glab`, 2026-11-09) are done: `docs/FORGES.md`,
-> `docs/reports/forges.md`.
+> `docs/reports/forges.md`. The Request tab and repository information on the Overviews (2026-11-09) are done:
+> `docs/FORGES.md`, `docs/reports/forge-details.md`.
 > This file is the source of truth for every session working on the project. If reality disagrees
 > with it, fix the code or update this file and log why in `docs/DECISIONS.md`. Never leave them out of sync.
 
@@ -35,9 +36,9 @@ speaks git, so it works with any tool that edits files or creates worktrees.
 ### Non-goals (MVP and near term)
 
 History graph, rebase / merge / conflict editors, staging / committing / pushing / discarding, PR hosting
-or forge write features (create / merge / approve / comment), embedded editor or terminal, agent orchestration,
-holding credentials for remotes. (Read-only PR/MR status through the user's own `gh`/`glab` logins is in scope
-since 2026-11-09: `docs/FORGES.md`, DECISIONS #61.) Other tools do
+or forge write features (create / merge / approve / comment / react / label), embedded editor or terminal, agent
+orchestration, holding credentials for remotes. (Read-only PR/MR status and detail through the user's own
+`gh`/`glab` logins are in scope since 2026-11-09: `docs/FORGES.md`, DECISIONS #61, #71–#80.) Other tools do
 these well (lazygit, GitButler, forges). A read-only product also removes the riskiest class of bugs.
 
 ## 2. Locked decisions (from the user, 2026-11-08)
@@ -110,7 +111,10 @@ Three-pane layout, dark and light themes:
    regions, lazy rendering with virtualization for huge diffs, binary / too-large placeholders,
    rename display (`old → new`), submodule and symlink diffs shown sanely.
 
-Toolbar: scope selector, split/unified, whitespace, "show reviewed" toggle, refresh indicator.
+Toolbar: scope selector, split/unified, whitespace, "show reviewed" toggle, refresh indicator. For a worktree whose
+branch has a matched pull/merge request, a `Changes | PR #n` switch opens the **Request** tab (read-only: summary,
+checks, conversation, timeline, files; `docs/FORGES.md`). Folder and project Overviews show repository information
+(local git facts; the project Overview also the forge's facts and open requests).
 
 Keyboard: `j`/`k` next/prev file · `J`/`K` next/prev worktree · `n` next **unreviewed** file anywhere ·
 `r` toggle reviewed · `s` split/unified · `/` filter · `g i` inbox · `?` help. All actions reachable
