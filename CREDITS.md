@@ -207,6 +207,9 @@ Each adapted file also carries an attribution comment.
   - `packages/forge/src/details.ts`: The check-status mapping and the "unfinished runs outrank finished ones" dedupe, adapted from toCheckStatus / toCheckEntries in packages/source-control-github/src/server/gitHubPullRequestJson.ts.
   - `apps/web/src/lib/request.ts`: Checks grouping and the status-line wording, adapted from groupPullRequestChecks / describePullRequestChecks in apps/web/src/components/pullRequest/pullRequestDetail.logic.ts.
   - `apps/web/src/lib/markdown.ts`: visibleBody (HTML comments stripped before rendering), from apps/web/src/components/pullRequest/pullRequestDetail.logic.ts.
+  - `apps/web/src/lib/copy.ts`: The hidden-textarea clipboard fallback, adapted from writeTextWithExecCommand / writeTextToClipboard in apps/web/src/hooks/useCopyToClipboard.ts.
+  - `apps/web/src/lib/copyFormat.ts`: Diff lines of a selected range and the fence language by extension, adapted from buildDiffReviewLines / inferReviewCommentFenceLanguage / formatReviewCommentFence in apps/web/src/reviewCommentContext.ts.
+  - `apps/web/src/components/CopyButton.tsx`: Copy feedback (copied state, check icon, anchored "Copied!" toast), modelled on useCopyToClipboard, DiffFilePathCopyButton and anchoredCopyToast.
   - The sidebar (folders, the Settled shelf, settling by hand), the folder picker and the command palette's browse mode are modelled on T3 Code's UI. The forge integration (remote recognition, CLI-login refinement for self-hosted hosts, the GitHub base-repository order, the merge request fields and PR glyphs) follows T3 Code's source-control packages.
 
 ## Inspiration (ideas only, no code)

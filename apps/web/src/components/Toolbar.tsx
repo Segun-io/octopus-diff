@@ -13,6 +13,7 @@ import { useResolvedTheme } from '../api/hooks.ts';
 import { queryKeys, useApi, useCommitsQuery, useFilesQuery } from '../api/queries.ts';
 import { useScanRootsQuery, useSettingsSupport } from '../api/settings.ts';
 import { LOOK_TONE, lookOf } from '../lib/forge.ts';
+import { SCOPE_LABELS } from '../lib/scopeLabels.ts';
 import { useCommandsContext } from '../state/commandsContext.tsx';
 import { useAppModel } from '../state/model.tsx';
 import { actions, useUi, useUiStore } from '../state/ui.tsx';
@@ -20,19 +21,6 @@ import { activeView } from '../views/registry.ts';
 import { MoonIcon, SunIcon, ToggleButton } from './bits.tsx';
 import { ChangeRequestBadge, ChangeRequestGlyph } from './ChangeRequest.tsx';
 import { ReviewPolicyChip } from './ReviewPolicyChip.tsx';
-
-/**
- * The scope select is a filter over what the diff pane shows, with live counts; it never moves a
- * sidebar row (docs/STATUS-FLOW.md §2.3). Order: the main views first, the index views after.
- */
-const SCOPE_LABELS: Record<ScopeKind, string> = {
-  review: 'To review',
-  branch: 'All on branch',
-  working: 'Uncommitted',
-  staged: 'Staged',
-  unstaged: 'Unstaged',
-  commit: 'Commit…',
-};
 
 /** Files per scope for the open worktree: from its summary, else from a loaded file list. */
 function scopeCounts(

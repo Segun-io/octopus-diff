@@ -80,6 +80,16 @@ export interface UiState extends Prefs {
   scan: ScanStatus | null;
   /** Transient one-line message (e.g. "No unreviewed files left"). */
   notice: { id: number; text: string } | null;
+  /** Result of the last copy (docs/COPY-TOOLS.md): anchored near `at`, else bottom-centre. */
+  copyToast: CopyToast | null;
+}
+
+export interface CopyToast {
+  id: number;
+  ok: boolean;
+  text: string;
+  /** Viewport point to anchor the toast above (a copy button's centre-top). */
+  at?: { x: number; y: number };
 }
 
 export const DEFAULT_UI_STATE: UiState = {
@@ -101,6 +111,7 @@ export const DEFAULT_UI_STATE: UiState = {
   connection: 'connecting',
   scan: null,
   notice: null,
+  copyToast: null,
 };
 
 export type UiStore = Store<UiState>;
@@ -158,6 +169,9 @@ let noticeId = 0;
 export const actions = {
   notice(store: UiStore, text: string) {
     store.setState({ notice: { id: ++noticeId, text } });
+  },
+  copyToast(store: UiStore, toast: Omit<CopyToast, 'id'>) {
+    store.setState({ copyToast: { ...toast, id: ++noticeId } });
   },
   select(store: UiStore, ref: FileRef | null) {
     const current = store.getState().selected;

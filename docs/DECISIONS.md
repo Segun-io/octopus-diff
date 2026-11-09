@@ -1449,3 +1449,27 @@ user). Report: `docs/reports/status-flow.md`. Steps 1 → 4 of the plan's build 
      includes bookmarks), §5.7 (the v3 tables, the review state and the new read-only git commands) and §8 (items
      12–18 from `docs/STATUS-FLOW.md` §5) now describe what this round built. `docs/STATUS-FLOW.md` stays as the
      design record.
+
+## Copy tools: branch, path, file and code selection (lead, 2026-11-09)
+
+Plan: `docs/COPY-TOOLS.md` (written against `6c53f1a`; built on `1561c3c`, after status flow v2). Web only: no daemon
+request, git call or contract change.
+
+101. **Step 1: foundation.** `lib/copy.ts` `copyText` (async Clipboard API, then a hidden `<textarea>` +
+     `execCommand('copy')`; never throws, resolves to whether it copied). `lib/copyFormat.ts` (pure): file / branch /
+     sha texts, `fenceFor`, `inlineCode`, `languageForPath`, `selectedDiffLines`, `buildSelectionCopy` (§5 format).
+     Every copied text goes through `escapeSuspicious`, so invisible / bidirectional characters are copied as the
+     visible `⟨U+…⟩`. Feedback is a new `CopyToastHost` + `useCopyFeedback` + `CopyButton`
+     (`components/CopyButton.tsx`), not the bulk toast: that one carries undo and bulk test ids, and generalising it
+     would change its behaviour. The copy toast sits above the button that copied (T3's anchored "Copied!") or
+     bottom-centre for menu and palette copies; failures say "Failed to copy: the clipboard is not available here".
+     Adapted T3 Code code is credited in `scripts/credits/acknowledgements.json`.
+102. **Differences from the plan, after the status-flow merge.** (a) Scope words: the plan's `working tree` /
+     `branch vs <base>` predate the new scopes; the header uses the toolbar's words lower-cased (`to review`,
+     `uncommitted`, `staged`, `unstaged`, `branch vs \`main\``, `all on branch vs \`main\``, `commit \`a1b2c3d\``).
+     The toolbar's `SCOPE_LABELS` moved to `lib/scopeLabels.ts` so both share one table. (b) A rename's Markdown
+     header names the old path: `` `new.ts` (renamed from `old.ts`) L3 ``. (c) A selection of only deleted lines is
+     labelled `old L10–12` (no `→ new`), with a `+N,0` hunk side. (d) In split mode a range that stays in one
+     column keeps only that column's lines; in unified mode (or across columns) the range is the rows between the
+     two ends in diff order (T3's behaviour). (e) No `contracts:` change: the new elements use plain `data-testid`s
+     (`copy-toast`, `copy-selection-bar`, …), as plan §7 allows.

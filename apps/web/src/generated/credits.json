@@ -2013,6 +2013,18 @@
         {
           "path": "apps/web/src/lib/markdown.ts",
           "what": "visibleBody (HTML comments stripped before rendering), from apps/web/src/components/pullRequest/pullRequestDetail.logic.ts."
+        },
+        {
+          "path": "apps/web/src/lib/copy.ts",
+          "what": "The hidden-textarea clipboard fallback, adapted from writeTextWithExecCommand / writeTextToClipboard in apps/web/src/hooks/useCopyToClipboard.ts."
+        },
+        {
+          "path": "apps/web/src/lib/copyFormat.ts",
+          "what": "Diff lines of a selected range and the fence language by extension, adapted from buildDiffReviewLines / inferReviewCommentFenceLanguage / formatReviewCommentFence in apps/web/src/reviewCommentContext.ts."
+        },
+        {
+          "path": "apps/web/src/components/CopyButton.tsx",
+          "what": "Copy feedback (copied state, check icon, anchored \"Copied!\" toast), modelled on useCopyToClipboard, DiffFilePathCopyButton and anchoredCopyToast."
         }
       ],
       "design": "The sidebar (folders, the Settled shelf, settling by hand), the folder picker and the command palette's browse mode are modelled on T3 Code's UI. The forge integration (remote recognition, CLI-login refinement for self-hosted hosts, the GitHub base-repository order, the merge request fields and PR glyphs) follows T3 Code's source-control packages.",

@@ -17,6 +17,7 @@ import {
 } from './api/queries.ts';
 import { AddProjectForm } from './components/AddProjectForm.tsx';
 import { BulkReviewToast } from './components/BulkReviewToast.tsx';
+import { CopyToastHost } from './components/CopyButton.tsx';
 import { Dialog } from './components/Dialog.tsx';
 import { DiffPane } from './components/diff/DiffPane.tsx';
 import { FileList } from './components/FileList.tsx';
@@ -438,6 +439,7 @@ function AppShell({ eventSourceFactory }: { eventSourceFactory?: EventSourceFact
           </Suspense>
         )}
         <BulkReviewToast />
+        <CopyToastHost />
         {addProjectOpen && (
           <Dialog
             title="Add repositories"
