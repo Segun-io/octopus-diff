@@ -71,9 +71,9 @@ export function buildGitlabConversationQuery(variant: GitlabQueryVariant): strin
 }
 
 function pipelineState(status: unknown) {
-  switch (asString(status)?.toUpperCase()) {
-    case undefined:
-      return null;
+  const text = asString(status);
+  if (text === null) return null;
+  switch (text.toUpperCase()) {
     case 'SUCCESS':
       return 'success' as const;
     case 'FAILED':
@@ -272,7 +272,7 @@ export function normaliseGitlabRepository(
   const mergeRequests = asRecord(project.mergeRequests);
   const requests = nodesOf(mergeRequests).flatMap((n): ForgeRepositoryRequest[] => {
     const cr = normaliseGitlabMergeRequest(n);
-    if (!cr || cr.state !== 'open') return [];
+    if (cr?.state !== 'open') return [];
     return [
       {
         number: cr.number,

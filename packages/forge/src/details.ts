@@ -111,7 +111,9 @@ export function githubCheckStatus(status: unknown, conclusion: unknown): CheckSt
 
 /** GitLab job status -> `CheckStatus`. */
 export function gitlabJobStatus(status: unknown): CheckStatus {
-  switch (asString(status)?.toUpperCase()) {
+  const text = asString(status);
+  if (text === null) return 'neutral';
+  switch (text.toUpperCase()) {
     case 'SUCCESS':
       return 'success';
     case 'FAILED':
@@ -122,8 +124,6 @@ export function gitlabJobStatus(status: unknown): CheckStatus {
     case 'SKIPPED':
       return 'skipped';
     case 'MANUAL':
-      return 'neutral';
-    case undefined:
       return 'neutral';
     default:
       // CREATED, PENDING, RUNNING, PREPARING, SCHEDULED, WAITING_FOR_RESOURCE, ...

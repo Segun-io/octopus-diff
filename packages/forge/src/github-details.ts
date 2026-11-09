@@ -295,7 +295,7 @@ export function normaliseGithubRepository(
   const headSha = toSha(target?.oid);
   const requests = nodesOf(asRecord(repo.recent)).flatMap((n): ForgeRepositoryRequest[] => {
     const cr = normaliseGithubPullRequest(n);
-    if (!cr || cr.state !== 'open') return [];
+    if (cr?.state !== 'open') return [];
     const head = asRecord(asRecord(nodesOf(asRecord(n)?.commits)[0])?.commit);
     return [
       {
