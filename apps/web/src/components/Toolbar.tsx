@@ -20,6 +20,8 @@ import { actions, useUi, useUiStore } from '../state/ui.tsx';
 import { activeView } from '../views/registry.ts';
 import { MoonIcon, SunIcon, ToggleButton } from './bits.tsx';
 import { ChangeRequestBadge, ChangeRequestGlyph } from './ChangeRequest.tsx';
+import { CopyButton } from './CopyButton.tsx';
+import { COPY_TEST_IDS } from './copyMenu.ts';
 import { ReviewPolicyChip } from './ReviewPolicyChip.tsx';
 
 /** Files per scope for the open worktree: from its summary, else from a loaded file list. */
@@ -215,6 +217,17 @@ export function Toolbar() {
                 </option>
               ))}
             </select>
+          )}
+          {scope.kind === 'commit' && commitList && (
+            <CopyButton
+              text={
+                commitList.find((c) => c.sha.toLowerCase().startsWith(scope.sha.toLowerCase()))
+                  ?.sha ?? scope.sha
+              }
+              label="Copy commit id"
+              what="commit id"
+              testId={COPY_TEST_IDS.commitButton}
+            />
           )}
 
           <span className="mx-1 h-4 w-px bg-line" aria-hidden="true" />

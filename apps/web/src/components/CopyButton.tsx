@@ -5,24 +5,18 @@
  * tooltip-style "Copied!" above the button, or "Failed to copy").
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { copyText } from '../lib/copy.ts';
-import { actions, useUi, useUiStore } from '../state/ui.tsx';
+import { type CopyOptions, copyAndReport } from '../state/copy.ts';
+import { useUi, useUiStore } from '../state/ui.tsx';
 import { CheckIcon, CopyIcon } from './bits.tsx';
 
 /** How long the check icon and the anchored "Copied!" stay (T3: 1000 ms). */
 export const COPIED_TIMEOUT_MS = 1000;
 const ERROR_TIMEOUT_MS = 3500;
 
-export interface CopyOptions {
-  /** What was copied, for the toast: `Copied file path`. Without it: `Copied!`. */
-  what?: string;
-  /** Anchor the toast above this element (a button); otherwise it shows bottom-centre. */
-  anchor?: Element | null;
-  /** The text had invisible / bidirectional characters and was copied escaped. */
-  escaped?: boolean;
-}
-
-function anchorPoint(anchor: Element | null | undefined): { x: number; y: number } | undefined {
+/** The point above an element's top centre (where an anchored toast goes). */
+export function anchorPoint(
+  anchor: Element | null | undefined,
+): { x: number; y: number } | undefined {
   if (!anchor?.isConnected) return undefined;
   const rect = anchor.getBoundingClientRect();
   return { x: rect.left + rect.width / 2, y: rect.top };
@@ -41,17 +35,7 @@ export function useCopyFeedback() {
   );
   const copy = useCallback(
     async (text: string, options: CopyOptions = {}): Promise<boolean> => {
-      // Measure before the await: a menu that closes takes its anchor with it.
-      const at = anchorPoint(options.anchor);
-      const ok = await copyText(text);
-      const note = options.escaped ? ' (invisible characters escaped)' : '';
-      actions.copyToast(store, {
-        ok,
-        text: ok
-          ? `${options.what ? `Copied ${options.what}` : 'Copied!'}${note}`
-          : 'Failed to copy: the clipboard is not available here',
-        ...(at ? { at } : {}),
-      });
+      const ok = await copyAndReport(store, text, options);
       if (ok) {
         if (timer.current) clearTimeout(timer.current);
         setCopied(true);
@@ -94,7 +78,7 @@ export function CopyButton({
       data-copied={copied ? 'true' : undefined}
       aria-label={label}
       title={copied ? 'Copied' : label}
-      onClick={() => void copy(text, { what, escaped, anchor: ref.current })}
+      onClick={() => void copy(text, { what, escaped, at: anchorPoint(ref.current) })}
       className={`od-btn od-btn-ghost h-5 px-1 ${copied ? 'text-add' : 'text-muted'} ${className}`}
     >
       {copied ? <CheckIcon /> : <CopyIcon size={12} />}

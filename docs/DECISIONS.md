@@ -1473,3 +1473,24 @@ request, git call or contract change.
      column keeps only that column's lines; in unified mode (or across columns) the range is the rows between the
      two ends in diff order (T3's behaviour). (e) No `contracts:` change: the new elements use plain `data-testid`s
      (`copy-toast`, `copy-selection-bar`, …), as plan §7 allows.
+103. **Step 2: names and paths, where they landed in the merged UI.** A "Copy" group (separator, then Copy branch
+     name / Copy worktree path / Copy commit id (`a1b2c3d`)) closes the sidebar worktree menu, below the review and
+     policy items; the same group is in the Overview's worktree rows (right-click, after "Open changes") and on the
+     Inbox file list's group headers. File rows (list and tree) get a right-click menu: Copy path / Copy old path
+     (renames) / Copy file name / Copy absolute path (a tree directory row offers its path and absolute path). The
+     diff header gets T3's copy-path icon button next to the path, and a ⋯ button (also the header's right-click)
+     with every file item plus the worktree group. The toolbar's commit select gets a copy button for the selected
+     commit id. Palette: Copy branch name / worktree path / file path / file name / absolute file path, in a new
+     "Copy" command group. Shared item builders: `components/copyMenu.ts` (`COPY_TEST_IDS`).
+104. **Plan items changed or dropped.** (a) The sidebar hover card's `Path` line has no copy button: the card is
+     `pointer-events: none` and closes when the pointer leaves the row, so nothing in it can be clicked; the row menu
+     has "Copy worktree path". (b) "Copy commit id" copies the full 40-character id (unambiguous in any repository,
+     accepted everywhere git takes a commit); the label shows the short one. (c) The diff header's branch label stays
+     text: its copy actions are in the ⋯ menu next to it, rather than a second control on the label. (d) Palette
+     copy commands are *hidden* without an open worktree / selected file (the palette has no greyed-out rows); run by
+     a stale palette they show a notice ("No file selected."). (e) Copy toasts anchor at the menu's position (a
+     menu item has gone by the time the copy resolves) or above the button that copied.
+105. **ContextMenu changes.** `MenuItem.title` (the disabled "Copy branch name" says "Detached HEAD"). The menu's
+     mount effect now depends on the position's x / y and reads `onClose` through a ref, so callers may pass an inline
+     `onClose` (the tree's `renderContextMenu` does) without the menu re-focusing its first item on every render. The
+     file list renders its menu outside the `listbox`, so the menu's arrow keys do not move the file selection.

@@ -20,15 +20,19 @@ import {
   type NodeStats,
   type ProjectGroup,
   statsOfRows,
+  type WorktreeRow,
   worktreeLabel,
 } from '../lib/model.ts';
 import { SOURCE_LABELS, shortenHome } from '../lib/policy.ts';
 import { worktreeSource } from '../lib/source.ts';
 import { absoluteTime, relativeTime } from '../lib/time.ts';
 import { useCommandsContext } from '../state/commandsContext.tsx';
+import { type CopyFn, copyAndReport } from '../state/copy.ts';
 import { useAppModel } from '../state/model.tsx';
 import { actions, useUiStore, type View } from '../state/ui.tsx';
 import { ChangeRequestChip } from './ChangeRequest.tsx';
+import { ContextMenu, useContextMenu } from './ContextMenu.tsx';
+import { separated, worktreeCopyItems } from './copyMenu.ts';
 import { Mark } from './Mark.tsx';
 import { ForgeRepositoryFacts, LocalRepositoryFacts, OpenRequests } from './RepositoryInfo.tsx';
 /**
@@ -438,6 +442,8 @@ function FolderOverview({ node }: { node: FolderNode }) {
 function ProjectOverview({ group }: { group: ProjectGroup }) {
   const store = useUiStore();
   const commands = useCommandsContext();
+  const menu = useContextMenu<WorktreeRow>();
+  const copy: CopyFn = (text, options) => void copyAndReport(store, text, options);
   const { project } = group;
   const repositories = useRepositories([project.id]);
   const forgeState = useForgesQuery().data?.projects.find((p) => p.projectId === project.id);
@@ -503,6 +509,9 @@ function ProjectOverview({ group }: { group: ProjectGroup }) {
                 key={row.worktree.id}
                 className="cursor-pointer hover:bg-hover"
                 onClick={go}
+                onContextMenu={(e) => menu.open(e, row)}
+                data-testid="overview-worktree-row"
+                data-worktree-id={row.worktree.id}
                 title={row.worktree.path}
               >
                 <td className={CELL}>
@@ -559,6 +568,25 @@ function ProjectOverview({ group }: { group: ProjectGroup }) {
         </tbody>
       </table>
       <OpenRequests projectId={project.id} />
+      {menu.state && (
+        <ContextMenu
+          items={[
+            {
+              id: 'open',
+              label: 'Open changes',
+              onSelect: () =>
+                actions.setView(store, {
+                  kind: 'worktree',
+                  worktreeId: menu.state?.target.worktree.id ?? '',
+                }),
+            },
+            ...separated(worktreeCopyItems(menu.state.target.worktree, copy, menu.state.position)),
+          ]}
+          position={menu.state.position}
+          onClose={menu.close}
+          label="Actions"
+        />
+      )}
     </div>
   );
 }

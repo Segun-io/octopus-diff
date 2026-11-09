@@ -4,13 +4,25 @@ import { useEffect, useMemo, useRef } from 'react';
 import { useReviewMutation } from '../api/hooks.ts';
 import { queryKeys, useApi } from '../api/queries.ts';
 import { type BulkPlan, planBulk, planBulkForTarget } from '../lib/bulk.ts';
+import { branchCopyText, fileCopyTexts } from '../lib/copyFormat.ts';
 import { fileRefKey, toFileRef } from '../lib/fileRef.ts';
 import { type NavEntry, nextUnreviewed, stepFile, stepWorktree } from '../lib/model.ts';
+import { escapeSuspicious, hasSuspicious } from '../lib/unicode.ts';
 import type { SettingsSectionId } from '../settings/registry.ts';
 import { type BulkActions, hasUndoableToast, useBulkActions } from './bulk.ts';
+import { copyAndReport } from './copy.ts';
 import { CONTEXT_STEP, DEFAULT_CONTEXT } from './diffContext.ts';
 import type { AppModel } from './model.tsx';
 import { actions, useUiStore } from './ui.tsx';
+
+/** What the palette's Copy commands copy (docs/COPY-TOOLS.md §4 step 2). */
+export type CopyCommand = 'branch' | 'worktreePath' | 'filePath' | 'fileName' | 'absolutePath';
+
+/** The worktree the copy commands act on: the open one, else the selected file's. */
+export function copyWorktreeId(model: Pick<AppModel, 'view' | 'selectedEntry'>): string | null {
+  if (model.view.kind === 'worktree') return model.view.worktreeId;
+  return model.selectedEntry?.worktreeId ?? null;
+}
 
 export interface Commands {
   nextFile(): void;
@@ -31,6 +43,8 @@ export interface Commands {
   openSettings(section?: SettingsSectionId): void;
   togglePalette(): void;
   refreshNow(): void;
+  /** Copies a name or path of the open worktree / file (palette commands). */
+  copy(what: CopyCommand): void;
   /** Bulk mark for what is on screen (current view, filters and "show reviewed" respected). */
   markAll(reviewed: boolean): void;
   /** Bulk mark for a sidebar node, ignoring UI filters. */
@@ -226,6 +240,34 @@ export function useCommands(model: AppModel, resolvedTheme: 'light' | 'dark'): C
       },
       togglePalette() {
         store.setState((s) => ({ paletteOpen: !s.paletteOpen, helpOpen: false }));
+      },
+      copy(what) {
+        const m = latest.current.model;
+        const id = copyWorktreeId(m);
+        const row = id ? m.sidebar.byId.get(id) : undefined;
+        const report = (text: string, label: string, escaped = false) =>
+          void copyAndReport(store, text, { what: label, escaped });
+        if (what === 'branch' || what === 'worktreePath') {
+          if (!row) return actions.notice(store, 'No worktree selected.');
+          if (what === 'worktreePath') {
+            return report(
+              escapeSuspicious(row.worktree.path),
+              'worktree path',
+              hasSuspicious(row.worktree.path),
+            );
+          }
+          const branch = branchCopyText(row.worktree);
+          if (branch === null) return actions.notice(store, 'Detached HEAD: no branch name.');
+          return report(branch, 'branch name', hasSuspicious(row.worktree.branch ?? ''));
+        }
+        const entry = m.selectedEntry;
+        if (!entry) return actions.notice(store, 'No file selected.');
+        const root = m.sidebar.byId.get(entry.worktreeId)?.worktree.path ?? '';
+        const t = fileCopyTexts(entry.file, root);
+        if (what === 'filePath') return report(t.relative, 'path', t.escaped);
+        if (what === 'fileName') return report(t.name, 'file name', t.escaped);
+        if (!root) return actions.notice(store, 'Unknown worktree path.');
+        return report(t.absolute, 'absolute path', t.escaped);
       },
       refreshNow() {
         const id = currentWorktreeId();

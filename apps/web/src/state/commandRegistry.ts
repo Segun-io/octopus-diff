@@ -6,7 +6,7 @@
 import type { Commands } from './commands.ts';
 import { CONTEXT_STEP } from './diffContext.ts';
 
-export type CommandGroup = 'navigate' | 'review' | 'view' | 'diff' | 'app';
+export type CommandGroup = 'navigate' | 'review' | 'view' | 'diff' | 'copy' | 'app';
 
 export interface CommandDef {
   id: string;
@@ -21,6 +21,8 @@ export interface CommandDef {
   paletteOnly?: boolean;
   /** Hidden from the palette (navigation primitives nobody searches for). */
   hideInPalette?: boolean;
+  /** Listed in the palette only with an open worktree / a selected file. */
+  needs?: 'worktree' | 'file';
 }
 
 export const COMMANDS: readonly CommandDef[] = [
@@ -187,6 +189,52 @@ export const COMMANDS: readonly CommandDef[] = [
     run: (c) => c.refreshNow(),
     paletteOnly: true,
   },
+  // copy (palette only; menus and buttons have the same actions)
+  {
+    id: 'copyBranch',
+    label: 'Copy branch name',
+    group: 'copy',
+    keys: [],
+    run: (c) => c.copy('branch'),
+    paletteOnly: true,
+    needs: 'worktree',
+  },
+  {
+    id: 'copyWorktreePath',
+    label: 'Copy worktree path',
+    group: 'copy',
+    keys: [],
+    run: (c) => c.copy('worktreePath'),
+    paletteOnly: true,
+    needs: 'worktree',
+  },
+  {
+    id: 'copyFilePath',
+    label: 'Copy file path',
+    group: 'copy',
+    keys: [],
+    run: (c) => c.copy('filePath'),
+    paletteOnly: true,
+    needs: 'file',
+  },
+  {
+    id: 'copyFileName',
+    label: 'Copy file name',
+    group: 'copy',
+    keys: [],
+    run: (c) => c.copy('fileName'),
+    paletteOnly: true,
+    needs: 'file',
+  },
+  {
+    id: 'copyAbsolutePath',
+    label: 'Copy absolute file path',
+    group: 'copy',
+    keys: [],
+    run: (c) => c.copy('absolutePath'),
+    paletteOnly: true,
+    needs: 'file',
+  },
   // app
   {
     id: 'settings',
@@ -217,6 +265,7 @@ export const GROUP_LABELS: Record<CommandGroup, string> = {
   review: 'Review',
   view: 'View',
   diff: 'Diff',
+  copy: 'Copy',
   app: 'App',
 };
 

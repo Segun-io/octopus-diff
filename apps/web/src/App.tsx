@@ -392,6 +392,7 @@ function AppShell({ eventSourceFactory }: { eventSourceFactory?: EventSourceFact
                   selectedKey={model.selectedKey}
                   onSelect={onSelectEntry}
                   theme={theme}
+                  worktreePathOf={(id) => model.sidebar.byId.get(id)?.worktree.path}
                 />
               </Suspense>
             ) : (

@@ -25,11 +25,13 @@ import {
 } from '../lib/model.ts';
 import { worktreeSource } from '../lib/source.ts';
 import { useCommandsContext } from '../state/commandsContext.tsx';
+import { type CopyFn, copyAndReport } from '../state/copy.ts';
 import { useAppModel } from '../state/model.tsx';
 import { actions, useUi, useUiStore, type View } from '../state/ui.tsx';
 import { ToggleButton } from './bits.tsx';
 import { ChangeRequestChip, ChangeRequestHoverBlock } from './ChangeRequest.tsx';
 import { ContextMenu, type MenuItem, useContextMenu } from './ContextMenu.tsx';
+import { separated, worktreeCopyItems } from './copyMenu.ts';
 import { useFolderStart } from './FolderBrowser.tsx';
 import { Wordmark } from './Mark.tsx';
 
@@ -638,6 +640,7 @@ export function Sidebar() {
     onSelect: () => actions.setView(store, v),
   });
 
+  const copy: CopyFn = (text, options) => void copyAndReport(store, text, options);
   const menuItems = (t: MenuTarget): MenuItem[] => {
     switch (t.kind) {
       case 'folder': {
@@ -706,6 +709,7 @@ export function Sidebar() {
           ...(branch
             ? policyItems({ kind: 'branch', projectId: row.project.id, branch }, `branch ${branch}`)
             : []),
+          ...separated(worktreeCopyItems(row.worktree, copy, menu.state?.position)),
         ];
       }
     }
