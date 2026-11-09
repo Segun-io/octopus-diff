@@ -152,7 +152,9 @@ test.describe('forge details (UI)', () => {
       const view = ui.byTestId(TEST_IDS.requestView);
       await expect(view).toHaveAttribute('data-status', 'ok');
       await expect(view.getByRole('heading', { level: 1 })).toHaveText('Login with passkeys');
-      await expect(view.getByTestId(TEST_IDS.markdown).first()).toContainText('Adds passkey login.');
+      await expect(view.getByTestId(TEST_IDS.markdown).first()).toContainText(
+        'Adds passkey login.',
+      );
       expect(
         await ui.page.evaluate(() => (window as { __pwned?: number }).__pwned),
       ).toBeUndefined();
