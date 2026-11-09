@@ -35,7 +35,7 @@ test.describe('UX-2/3/4 settings and review policy (API)', () => {
   }) => {
     const settings = await daemon.client.getSettings();
     expect(settings).toEqual({
-      settings: { review: { defaultEnabled: true } },
+      settings: { review: { defaultEnabled: true }, forges: { enabled: true, hosts: {} } },
       overrides: [],
       revision: 0,
     });

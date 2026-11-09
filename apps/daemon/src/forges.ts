@@ -183,10 +183,14 @@ export class ForgeService {
   start(): void {
     this.#unsubscribe = this.#o.hub.on((event) => this.#onEvent(event));
     this.#timer = setInterval(() => {
-      void this.refresh().catch((error) => this.#o.logger.warn('forge poll failed', { error }));
+      void this.refresh().catch((error) => {
+        if (!this.#closed) this.#o.logger.warn('forge poll failed', { error });
+      });
     }, this.#o.pollMs);
     this.#timer.unref();
-    void this.refresh().catch((error) => this.#o.logger.warn('forge refresh failed', { error }));
+    void this.refresh().catch((error) => {
+      if (!this.#closed) this.#o.logger.warn('forge refresh failed', { error });
+    });
   }
 
   async close(): Promise<void> {
@@ -286,7 +290,7 @@ export class ForgeService {
     }
     const queue = items.filter((i) => wanted === null || wanted.has(i.project.id));
     const workers = Array.from({ length: Math.min(4, queue.length) }, async () => {
-      for (let item = queue.shift(); item; item = queue.shift()) {
+      for (let item = queue.shift(); item && !this.#closed; item = queue.shift()) {
         await this.#refreshProject(item, options);
       }
     });
@@ -306,6 +310,8 @@ export class ForgeService {
     if (cache.inflight) return cache.inflight;
     const run = this.#doRefresh(item, cache, options)
       .catch((error) => {
+        // Shutting down: git-core may already be disposed.
+        if (this.#closed) return;
         this.#o.logger.warn('forge refresh failed', { projectId: id, error });
       })
       .finally(() => {

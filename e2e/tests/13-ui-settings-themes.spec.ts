@@ -9,10 +9,10 @@ import { findProject, findWorktree } from '@octopus-diff/fixtures';
 import { reviewedPaths } from '../support/api.js';
 import { expect, FIRST_RENDER_PROBE, test, unreviewedTotal } from '../support/ui.js';
 
-const SECTIONS = ['general', 'review', 'appearance', 'folders', 'keyboard', 'about'];
+const SECTIONS = ['general', 'review', 'appearance', 'folders', 'forges', 'keyboard', 'about'];
 
 test.describe('UX-4/5/6 settings, themes and assets (UI)', () => {
-  test('settings: `,` opens, six sections by keyboard, Esc closes; Review lists overrides and can remove one', async ({
+  test('settings: `,` opens, seven sections by keyboard, Esc closes; Review lists overrides and can remove one', async ({
     manifest,
     daemon,
     ui,
@@ -25,7 +25,7 @@ test.describe('UX-4/5/6 settings, themes and assets (UI)', () => {
     await ui.open(daemon.authUrl);
     await ui.openSettings();
     const sections = ui.byTestId(TEST_IDS.settingsSection);
-    await expect(sections).toHaveCount(6);
+    await expect(sections).toHaveCount(SECTIONS.length);
     expect(
       await sections.evaluateAll((els) => els.map((e) => e.getAttribute('data-section'))),
     ).toEqual(SECTIONS);

@@ -85,10 +85,11 @@ export function webUiProblem(): string | null {
   if (process.env[ENV.skipUiCheck] === '1') return null;
   const assets = join(WEB_DIST, 'assets');
   const bundles = existsSync(assets) ? readdirSync(assets).filter((f) => f.endsWith('.js')) : [];
-  const hasHooks = bundles.some((file) => {
-    const text = readFileSync(join(assets, file), 'utf8');
-    return text.includes('data-ready') && text.includes('worktree-item');
-  });
+  // The hooks may land in different chunks (Rollup moves shared modules such as TEST_IDS).
+  const texts = bundles.map((file) => readFileSync(join(assets, file), 'utf8'));
+  const hasHooks =
+    texts.some((text) => text.includes('data-ready')) &&
+    texts.some((text) => text.includes('worktree-item'));
   return hasHooks
     ? null
     : 'apps/web/dist looks like the Phase 0 placeholder UI: its bundle has no TEST_IDS hooks ' +
