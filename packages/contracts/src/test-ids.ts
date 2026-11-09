@@ -139,6 +139,8 @@ export const TEST_IDS = {
   changeRequestBadge: 'change-request-badge',
   /** Settings → Forges: the enable switch (`aria-checked`). */
   settingsForgesEnabled: 'settings-forges-enabled',
+  /** Settings → Forges: load images from the forge hosts (`aria-checked`). */
+  settingsForgesImages: 'settings-forges-images',
   /** Settings → Forges: one row per CLI; `data-kind`, `data-available`, `data-auth`. */
   forgeCliStatus: 'forge-cli-status',
   // --- request detail and repository information (forge.ts) ---
