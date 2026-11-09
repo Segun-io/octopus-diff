@@ -276,3 +276,40 @@ export const InboxEntrySchema = z.object({
   review: EffectiveReviewPolicySchema.optional(),
 });
 export type InboxEntry = z.infer<typeof InboxEntrySchema>;
+
+// --- repository information (Overview; docs/FORGES.md "Repository information") ------------
+
+/** Local git facts about a project, from `GitCore.readRepositoryInfo` (local refs only). */
+export const GitRepositoryInfoSchema = z.object({
+  defaultBranch: z
+    .object({
+      name: z.string().min(1),
+      head: z
+        .object({
+          sha: CommitShaSchema,
+          subject: z.string(),
+          authorName: z.string(),
+          authorDate: TimestampSchema,
+        })
+        .nullable(),
+      /** Short upstream name (`origin/main`), or null. */
+      upstream: z.string().nullable(),
+      /** Against the upstream, as of the last fetch (octopus-diff never fetches). */
+      ahead: z.number().int().min(0).nullable(),
+      behind: z.number().int().min(0).nullable(),
+    })
+    .nullable(),
+  localBranches: z.number().int().min(0),
+  tags: z.number().int().min(0),
+  /** URLs with any `user:password@` removed. */
+  remotes: z.array(
+    z.object({
+      name: z.string().min(1),
+      url: z.string().nullable(),
+      pushUrl: z.string().nullable(),
+    }),
+  ),
+  /** Latest committer date over local branches, or null. */
+  lastActivityAt: TimestampSchema.nullable(),
+});
+export type GitRepositoryInfo = z.infer<typeof GitRepositoryInfoSchema>;

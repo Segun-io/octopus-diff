@@ -5,6 +5,7 @@ import type {
   GitChangedFile,
   GitFileDiff,
   GitProjectInfo,
+  GitRepositoryInfo,
   Worktree,
   WorktreeSummary,
 } from './domain.js';
@@ -76,6 +77,18 @@ export interface GitCore {
    * Optional so that test doubles and older implementations need not provide it.
    */
   readRemoteConfig?(project: ProjectLocator): Promise<GitRemoteConfig>;
+
+  /**
+   * Local facts for the Overview (docs/FORGES.md "Repository information"): default branch head
+   * and its ahead/behind against its upstream (local refs only), branch and tag counts, remotes
+   * (credentials stripped from URLs) and the latest commit date over all branches. Uses only
+   * allowlisted reads. `defaultBranch` is the project's effective default branch; detected when
+   * absent. Optional so that test doubles and older implementations need not provide it.
+   */
+  readRepositoryInfo?(
+    project: ProjectLocator,
+    options?: { defaultBranch?: string | null },
+  ): Promise<GitRepositoryInfo>;
 
   /** Kills in-flight git processes and rejects queued work. */
   dispose(): Promise<void>;

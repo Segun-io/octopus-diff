@@ -1240,3 +1240,21 @@ discover them correctly and get valid information about PRs/MRs", then to build 
     `03-scopes` "the scope selector switches the file list" is flaky on `main` too (1 of 4 runs on an untouched
     `main` build, "element is not attached to the DOM"): not caused by this change, left for its owner.
 
+
+## Forge details: the Request tab and repository information (session, 2026-11-09)
+
+Brief: `/home/santosa/.claude/plans/you-are-planning-the-cosmic-abelson.md` (PR/MR detail as a `Request` tab, a richer
+hover card, repository information on the Overviews). Design: `docs/FORGES.md`. Report: `docs/reports/forge-details.md`.
+
+71. **[contracts] Request detail, conversation and repository information, all additive.** `ChangeRequest` gains
+    optional scalars (`createdAt`, `additions`, `deletions`, `changedFiles`, `mergeState`). New schemas:
+    `ForgeActor`, `ChangeRequestLabel`, `ChangeRequestReviewer`, `ChangeRequestCheck`, `ChangeRequestCommit`,
+    `ChangeRequestFile`, `ChangeRequestDetail`, `ChangeRequestConversation` (+ comment, review entry, thread),
+    their `*Response`s, `ForgeRepositoryInfo`, `RepositoryForgeResponse`; `ForgeSettings.images?`;
+    `GitRepositoryInfo` (domain.ts) and optional `GitCore.readRepositoryInfo(project, { defaultBranch })`;
+    six routes (`getChangeRequest`, `getChangeRequestConversation`, `refreshChangeRequest`, `getRepositoryForge`,
+    `refreshRepositoryForge`, `listRepositories`) with client methods; test ids for the new surfaces.
+    Deviation from the brief: the detail's per-check list is **`checkList`**, not `checks`, because `ChangeRequest`
+    already has `checks` (the CI summary object) and the detail extends `ChangeRequest`; renaming would have broken
+    the existing field. `readRepositoryInfo` takes the project's effective default branch (it has the override) and
+    detects it only when absent.

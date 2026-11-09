@@ -141,6 +141,32 @@ export const TEST_IDS = {
   settingsForgesEnabled: 'settings-forges-enabled',
   /** Settings → Forges: one row per CLI; `data-kind`, `data-available`, `data-auth`. */
   forgeCliStatus: 'forge-cli-status',
+  // --- request detail and repository information (forge.ts) ---
+  /** Hover card's pull/merge request block; `data-number`, `data-state`. */
+  changeRequestHoverBlock: 'change-request-hover-block',
+  /** Toolbar `Changes | Request` segmented control; each button has `data-tab` and `aria-pressed`. */
+  worktreeTabs: 'worktree-tabs',
+  worktreeTab: 'worktree-tab',
+  /** The Request tab's root; `data-status` (`loading` | `ok` | `no-request` | `unavailable` | `error`). */
+  requestView: 'request-view',
+  /** Request tab sub-tabs (`Summary | Timeline | Files`); `data-tab`, `aria-selected`. */
+  requestTab: 'request-tab',
+  /** One check row; `data-status`. */
+  requestCheck: 'request-check',
+  /** One conversation card (comment, review or thread); `data-kind`. */
+  requestConversationItem: 'request-conversation-item',
+  /** One timeline entry; `data-kind`. */
+  requestTimelineItem: 'request-timeline-item',
+  /** One file row in the Files tab; `data-path`, `data-changed-here`. */
+  requestFile: 'request-file',
+  /** Rendered markdown container. */
+  markdown: 'markdown',
+  /** Overview: local repository facts block. */
+  repoInfoLocal: 'repo-info-local',
+  /** Overview: forge repository block; `data-status`. */
+  repoInfoForge: 'repo-info-forge',
+  /** Overview: one open pull/merge request row; `data-number`, `data-worktree`. */
+  repoOpenRequest: 'repo-open-request',
 } as const;
 
 export type TestId = (typeof TEST_IDS)[keyof typeof TEST_IDS];
