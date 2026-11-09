@@ -1570,12 +1570,83 @@ request, git call or contract change.
 115. **Screenshots.** `e2e/scripts/screenshots.ts` adds `sidebar-filter-{light,dark}.png` (dropdown open, Only
      dirty and `alpha` ticked); every README screenshot was regenerated since the sidebar header changed.
 
+## CI flakes: the watch host, test timeouts and two e2e races (lead session, 2026-11-09)
+
+Numbering starts at #130: `main` ends at #115, PR #2 (`ux/toolbar-hierarchy`) uses #116 onwards and was still adding
+entries (#123) while this was written, so #123–#129 are left to it.
+
+130. **`@parcel/watcher` runs in a child process, the "watch host" (`apps/daemon/src/watch-host.ts`).** CI and
+     the dev machine showed two symptoms with one cause. (a) Every run logged bursts of `watcher error; polling
+     continues … Unable to poll: Interrupted system call`, for *every* worktree and git dir at once, and then
+     live-update specs failed (`04-live-updates` "SSE worktree.changed within budget", `12-ui-review-policy`
+     "stateHash … did not change"; the errors precede each failure by seconds). (b) e2e hung until the job
+     timeout (main run 42595070350) with the worker's main thread in `futex_do_wait` (BLOCKERS, PR #2).
+     Cause, from the 2.6.0 source and reproduced here with `tgkill`: `InotifyBackend::start()` throws when
+     `poll()` returns `EINTR` (any signal delivered to that thread, e.g. `SIGCHLD` from the daemon's git
+     processes, when the main thread already has one pending). The backend is shared, so every subscription
+     gets the error, and the thread ends without `mEndedSignal.notify()`. The daemon then polled forever (it
+     never re-subscribed: symptom a). `~InotifyBackend()` waits for that signal, and it runs on whichever
+     thread drops the last `shared_ptr`. Usually that is the dying thread itself, which then blocks forever and
+     leaks its inotify instance. When a subscribe or unsubscribe is in flight, though, its N-API runner holds a
+     reference, and the runner is destroyed on the JavaScript thread, which then never returns (symptom b).
+     Reproduced: an in-process subscribe of a 45k-file tree plus one `EINTR` in the inotify thread hangs Node
+     with the main thread in `futex_do_wait`. **Not calling `unsubscribe()` on a failed subscription is
+     necessary but not sufficient.** After the error, `Watcher::notifyError` has already cleared the
+     callbacks, so that `unsubscribe()` is a native no-op. The hang comes from runners in flight, which
+     JavaScript cannot avoid. Hence a separate process: the host spawns nothing, so it gets no `SIGCHLD`. If it
+     stops answering anyway (60 s per subscribe), it is SIGKILLed and never waited for, and its subscribers get
+     an error. `close()` kills it first (subscribes in flight reject at once), and a process `exit` hook kills
+     live hosts. IPC channel and process are unref'd, except while a request waits. The host is started when
+     the `WatcherService` is built, so projects registered right after start are watched without waiting for
+     a Node boot. The parent never loads the native addon. Cost: one extra Node process per daemon (~40 MB RSS)
+     and an IPC hop per event batch. Verified: the same `EINTR` injected into the host's inotify thread with an
+     in-flight subscribe deadlocks the host; the daemon's thread keeps running, the subscribe rejects after the
+     timeout, and a new host delivers events. Tests: `watch-host.test.ts` (events, death, a SIGSTOPped host,
+     `close()`, exit).
+131. **A subscription that reports an error is dropped, never unsubscribed, and re-made with a backoff.**
+     `watcher.ts`: the error callback marks the subscription dead (`#dead`; `#dispose` skips it everywhere), clears
+     `sub`, polls at the degraded rate and re-subscribes after 1 s, doubling per consecutive error up to 5 min
+     (the streak resets after 10 min without one; `resubscribeDelayMs` option). After re-subscribing, the
+     worktree is refreshed (`fs`; `git` for its project's worktrees after a git-dir re-subscribe), so changes made
+     in the gap are not missed. An error before `subscribe()` resolves is handled the same way. A retry that
+     fails with an unclassified error (e.g. the host was killed) backs off and retries. Known causes (watch or
+     instance limits, permissions) keep polling as before, and `missing` keeps the existing heal path (F1).
+     Dropping a dead subscription leaks nothing that runs later: its native callbacks are already gone, and the
+     shared-backend table is never destroyed at exit. Tests: `watcher-backend-errors.test.ts`.
+132. **The native fix (retry `EINTR` in `InotifyBackend::start()`) was not applied.** It would need a pnpm patch
+     plus `npm_config_build_from_source=true` and a C++ toolchain wherever the repo is installed, and making
+     the runtime load `build/Release/watcher.node`: `index.js` loads the prebuilt `@parcel/watcher-<platform>`
+     package first. It would also not ship: users install the published `@parcel/watcher` with its prebuilds.
+     Worth reporting upstream; #130 makes the daemon safe without it.
+133. **git-core tests get explicit timeouts.** "never writes to any repository" (`readonly.test.ts`) exercises
+     every read path (hundreds of git processes): ~2.5 s on the 12-core dev machine, over vitest's 5 s
+     default on a 4-core CI runner that tests the other packages at the same time. It failed on every CI run
+     (Node 24 and 26). It now has 30 s, and git-core's `vitest.config.ts` sets `testTimeout: 20_000`: every
+     git-core test spawns git, and several others already take 3–4 s on CI (`review-fixes` sha1/sha256,
+     `diff-working` "getFileDiff agrees …") The same for `apps/web` (`testTimeout: 20_000`): its jsdom UI tests
+     take 2–4.6 s each on CI, and `request.test.tsx` "appears only for worktrees with a request" went over 5 s on
+     Node 24 in this PR's first CI run (5.26 s), and Testing Library's async timeout is 5 s (`test/setup.ts`; the default 1 s
+     failed two settings tests on Node 24 in a later run: the lazy `SettingsDialog` / `Credits` chunks were still
+     loading).
+134. **Two e2e races fixed in the specs.** (a) `07-readonly` read the diff of every listed file while the agent
+     simulator edits `live-agent`, so a file could be clean or gone by then (`ApiClientError` `not_found`
+     "file is not changed in this scope"). That is the test racing the agent, not a write. `not_found` from
+     `getDiff` is now tolerated for that worktree only; anything else still fails. (b) `01-projects` "scan
+     found beta" (main run 42572487669, no watcher errors): the spec typed the scan folder and clicked
+     `addScanRootSubmit` at once. Until the picker has listed the typed folder it offers "Add" first, and when
+     the listing arrives the two buttons swap actions and test ids. The click landed on the same DOM button,
+     which by then read "Add as one repository" (screenshot: "not a git repository: …/scan"). The spec now
+     waits for `[data-testid=add-scan-root-submit][data-action=watch]`. The UI behaviour (a button changing
+     meaning under the pointer while a listing loads) is a WS3 follow-up and is not changed here.
+
 ## Dev hot reload: `pnpm dev` (session, 2026-11-09)
+
+Numbering starts at #135: #116–#129 are left to PR #2 and #130–#134 are the CI-flakes entries above.
 
 User request: one command for hot-reload development that stays reachable from the LAN host `odino`, without touching
 the production LAN server (`octopus-diff-lan` unit, :7428). Report: `docs/reports/dev-hot-reload.md`.
 
-116. **`pnpm dev` = `node scripts/dev.mjs`, a plain-Node supervisor of two children** (argv arrays, no shell, no new
+135. **`pnpm dev` = `node scripts/dev.mjs`, a plain-Node supervisor of two children** (argv arrays, no shell, no new
      dependency): Vite from `apps/web` (HMR) and `tsx watch --conditions=@octopus-diff/source apps/cli/src/index.ts
      serve …` (the daemon from sources). Vite proxies `/api`, SSE included, to the daemon. Reason: the web app already
      had Vite with the source condition; the daemon had no watch mode, and tsx is already a root dev tool. tsx watch
@@ -1584,34 +1655,34 @@ the production LAN server (`octopus-diff-lan` unit, :7428). Report: `docs/report
      `--include` globs are needed. Each child gets its own process group; SIGINT/SIGTERM/SIGHUP send one SIGTERM to
      each child (a second SIGTERM makes `serve` skip its clean shutdown, so the group is not signalled), SIGKILL to the
      groups after 8 s; if either child exits on its own the other is stopped and `pnpm dev` exits 1.
-117. **Ports: daemon 7429, web 5173, 7428 rejected** with a message naming the production unit. The web port is
+136. **Ports: daemon 7429, web 5173, 7428 rejected** with a message naming the production unit. The web port is
      strict in dev (the banner prints it, so Vite must not drift); both ports are checked before spawning so a taken
      port fails clearly instead of crash-looping under tsx watch.
-118. **LAN by default, `--loopback` to opt out.** The daemon runs `--host :: --allow-non-loopback`; Vite listens on `::`
+137. **LAN by default, `--loopback` to opt out.** The daemon runs `--host :: --allow-non-loopback`; Vite listens on `::`
      (dual-stack like the daemon, rather than `0.0.0.0` which is IPv4 only). The daemon's Host check requires its own
      port unless the name is an `--allowed-host` entry, and the browser sends the Vite port, so the dev daemon gets
      `--allowed-host` for `localhost`, `127.0.0.1`, `odino`, `odino.local`, extra `--allowed-host` names and (LAN mode)
      this machine's non-internal IPv4 addresses, so `http://<lan ip>:5173/` works too. Vite's `server.allowedHosts` gets
      the same names (it allows localhost and IP literals itself). Only the existing mechanism is used; the Host/Origin/
      token checks are unchanged (an unknown Host gets 403 from Vite, a foreign Origin 403 from the daemon, no token 401).
-119. **Separate state dir for the dev daemon: `$XDG_STATE_HOME/octopus-diff-dev` (`~/.local/state/octopus-diff-dev`),
+138. **Separate state dir for the dev daemon: `$XDG_STATE_HOME/octopus-diff-dev` (`~/.local/state/octopus-diff-dev`),
      passed as `--state-dir`.** Reason: `serve` allows one daemon per state dir; sharing the production one, the dev
      daemon would print the production daemon's URL and exit. A `--state-dir` flag rather than `XDG_STATE_HOME` in the
      child env keeps the rest of the environment untouched; it sits beside the real state dir rather than in
      `~/.cache` so the dev token and review store survive cache cleanups. The config dir stays shared. A second
      `pnpm dev` on the same state dir is detected ("already running") and exits 1.
-120. **The token URL is rewritten to the Vite port in a `[dev]` banner**, from the daemon's own `Open:` line (stdout
+139. **The token URL is rewritten to the Vite port in a `[dev]` banner**, from the daemon's own `Open:` line (stdout
      only, nothing written to disk); the daemon's banner and its "built web UI not found" warning are hidden because
      they repeat on every restart and point at the daemon port. On a restart with the same token a one-line notice is
      printed instead. If no token is found, the banner points at `<state dir>/token`.
-121. **`apps/web/vite.config.ts` reads `OCTOPUS_DIFF_WEB_HOST`, `OCTOPUS_DIFF_WEB_PORT` and
+140. **`apps/web/vite.config.ts` reads `OCTOPUS_DIFF_WEB_HOST`, `OCTOPUS_DIFF_WEB_PORT` and
      `OCTOPUS_DIFF_ALLOWED_HOSTS`**; unset, the config is what it was (Vite's default host `localhost`, port 5173 with
      `strictPort: false`, default allowed hosts). `mock/dev.ts` passes its own host and port inline and is unaffected.
-122. **Tests for `scripts/`:** the pure logic lives in `scripts/lib/dev-options.mjs`, tested by
+141. **Tests for `scripts/`:** the pure logic lives in `scripts/lib/dev-options.mjs`, tested by
      `scripts/test/dev-options.test.mjs` through `scripts/vitest.config.mjs`. Root `pnpm test` now runs
      `pnpm -r run test && pnpm run test:scripts` (the root is not a workspace package, so `pnpm -r` skips it). Plain
      `.mjs` keeps it out of `tsc` (no root tsconfig) like `scripts/credits`.
-123. **The web client needed no change for daemon restarts.** A restart closes the SSE stream cleanly; the contract
+142. **The web client needed no change for daemon restarts.** A restart closes the SSE stream cleanly; the contract
      client retries after 1 s (backoff to 10 s while the proxy answers 502), and the `hello` on reconnect triggers a
      full refresh (`collectEventEffects` with `reconnect`). Verified in headless Chromium through `http://odino:5183`:
      status stayed `Live`, `/api/events` and every query refetched after each restart.

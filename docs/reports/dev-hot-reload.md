@@ -24,7 +24,7 @@
 - `apps/web/vite.config.ts`: `server.host`, `server.port` (strict when set) and `server.allowedHosts` come
   from `OCTOPUS_DIFF_WEB_HOST` / `OCTOPUS_DIFF_WEB_PORT` / `OCTOPUS_DIFF_ALLOWED_HOSTS`. Unset, nothing changes.
 - Docs: CONTRIBUTING "Develop with hot reload" (with the firewall note and a `systemd-run` recipe),
-  `apps/web/README.md`, the AGENTS.md command table, DECISIONS #116–#123.
+  `apps/web/README.md`, the AGENTS.md command table, DECISIONS #135–#142.
 
 ## Verification
 
@@ -69,7 +69,7 @@ stayed free, and 7428 was never bound or signalled.
 
 ## Decisions
 
-DECISIONS #116–#123:
+DECISIONS #135–#142:
 
 - tsx watch with no `--include` globs, since it follows workspace sources.
 - One SIGTERM per child, with process groups only for SIGKILL.

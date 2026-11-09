@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import type { Logger, WatcherMode, WatchTargets } from '@octopus-diff/contracts';
-import parcelWatcher from '@parcel/watcher';
+import type parcelWatcher from '@parcel/watcher';
 import { isSameOrInside } from './paths.js';
 import {
   defaultGuardDirs,
@@ -12,6 +12,7 @@ import {
   type WatchRefusal,
   worktreeRootRefusal,
 } from './watch-guard.js';
+import { createWatchHost, type WatchHost } from './watch-host.js';
 import { dirIdentity } from './watch-identity.js';
 import {
   ancestorsOf,
@@ -88,7 +89,17 @@ export const WATCH_DEFAULTS = {
   /** Focused worktree without a working native watcher. */
   pollDegradedFocusedMs: 5_000,
   relistMs: 60_000,
+  /**
+   * First retry after a subscription reported an error (its backend died, e.g. `EINTR` in
+   * @parcel/watcher's inotify thread); doubles per consecutive error, up to 5 minutes.
+   */
+  resubscribeDelayMs: 1_000,
 } as const;
+
+/** Upper bound of the re-subscribe backoff. */
+const MAX_RESUBSCRIBE_DELAY_MS = 300_000;
+/** Errors further apart than this restart the backoff. */
+const ERROR_STREAK_RESET_MS = 600_000;
 
 export interface WatchedWorktree {
   projectId: string;
@@ -116,10 +127,14 @@ export interface WatcherServiceOptions {
   pollIdleMs?: number;
   pollDegradedFocusedMs?: number;
   relistMs?: number;
+  resubscribeDelayMs?: number;
   /** Natively watched worktrees per project (default 64); the rest are polled (SEC-07). */
   maxWorktreesPerProject?: number;
   logger: Logger;
-  /** Injected for tests (e.g. to simulate inotify limits). Default: `@parcel/watcher`. */
+  /**
+   * Injected for tests (e.g. to simulate inotify limits). Default: `@parcel/watcher` in a
+   * child process (`watch-host.ts`, DECISIONS #130).
+   */
   subscribe?: SubscribeFn;
   /** Home and temp directories for the watch guard (tests). Default: the real ones. */
   guardDirs?: GuardDirs;
@@ -170,7 +185,19 @@ interface WorktreeState {
   poll: NodeJS.Timeout | undefined;
   /** When this worktree last fired a refresh (any reason); 0 = never. */
   lastFireAt: number;
+  /** Re-subscribe after the subscription reported an error. */
+  retry: ErrorRetry;
 }
+
+/** Backoff state for re-subscribing after a subscription error (DECISIONS #130). */
+interface ErrorRetry {
+  timer: NodeJS.Timeout | undefined;
+  /** Consecutive errors (reset after ERROR_STREAK_RESET_MS without one). */
+  count: number;
+  lastAt: number;
+}
+
+const newRetry = (): ErrorRetry => ({ timer: undefined, count: 0, lastAt: 0 });
 
 interface ProjectState {
   projectId: string;
@@ -186,6 +213,7 @@ interface ProjectState {
   worktreeIds: Set<string>;
   relist: NodeJS.Timeout | undefined;
   listDebounce: NodeJS.Timeout | undefined;
+  retry: ErrorRetry;
 }
 
 const REFUSAL_LABELS: Record<WatchRefusal, string> = {
@@ -300,6 +328,10 @@ export class WatcherService {
   >;
   readonly #log: Logger;
   readonly #subscribe: SubscribeFn;
+  /** The child process running @parcel/watcher, unless `subscribe` was injected. */
+  readonly #host: WatchHost | null;
+  /** Subscriptions that reported an error: never unsubscribed (see `#dispose`). */
+  readonly #dead = new WeakSet<parcelWatcher.AsyncSubscription>();
   /** Always-ignored names and the user's extra entries (not compacted). */
   readonly #baseIgnores: string[];
   readonly #guard: GuardDirs;
@@ -332,9 +364,21 @@ export class WatcherService {
           ),
       ),
       relistMs: Math.max(50, options.relistMs ?? WATCH_DEFAULTS.relistMs),
+      resubscribeDelayMs: Math.max(
+        1,
+        options.resubscribeDelayMs ?? WATCH_DEFAULTS.resubscribeDelayMs,
+      ),
     };
     this.#log = options.logger;
-    this.#subscribe = options.subscribe ?? parcelWatcher.subscribe;
+    if (options.subscribe) {
+      this.#host = null;
+      this.#subscribe = options.subscribe;
+    } else {
+      this.#host = createWatchHost({ logger: this.#log });
+      this.#subscribe = this.#host.subscribe;
+      // Boot the host now: projects registered right after start are then watched at once.
+      if (this.#opts.enabled && !this.#opts.forcePolling) this.#host.warm();
+    }
     this.#baseIgnores = buildWorktreeIgnores(options.ignore);
     this.#guard = options.guardDirs ?? defaultGuardDirs();
     this.#maxPerProject = Math.max(
@@ -385,6 +429,7 @@ export class WatcherService {
         worktreeIds: new Set(),
         relist: undefined,
         listDebounce: undefined,
+        retry: newRetry(),
       };
       this.#projects.set(projectId, project);
       this.#scheduleRelist(project);
@@ -425,6 +470,7 @@ export class WatcherService {
     this.#projects.delete(projectId);
     clearTimeout(project.relist);
     clearTimeout(project.listDebounce);
+    clearTimeout(project.retry.timer);
     const pending = [...project.worktreeIds].map((id) => this.#unwatchWorktree(id));
     pending.push(this.#releaseProjectSub(project));
     await Promise.all(pending);
@@ -655,6 +701,7 @@ export class WatcherService {
       pendingReason: 'fs',
       poll: undefined,
       lastFireAt: 0,
+      retry: newRetry(),
     };
     this.#worktrees.set(info.worktreeId, st);
     this.#schedulePoll(info.worktreeId);
@@ -736,13 +783,26 @@ export class WatcherService {
       .filter((r) => r !== root && isSameOrInside(root, r));
     const ignore = compactIgnores([...this.#baseIgnores, ...buildIgnores, ...nested]);
     try {
+      const link = this.#link((error) => this.#onWorktreeError(st, error));
       const sub = await this.#subscribe(
         root,
-        (error, events) => this.#onWorktreeEvents(st, error, events),
+        (error, events) => {
+          if (link.failed) return;
+          if (error) link.fail(error);
+          else this.#onWorktreeEvents(st, events);
+        },
         { ignore },
       );
+      const failedEarly = link.attach(sub);
       if (!current() || st.policy) {
-        await sub.unsubscribe().catch(() => {});
+        await this.#dispose(sub);
+        return;
+      }
+      if (failedEarly) {
+        // It failed before subscribe() returned: never active, retried like any other error.
+        st.failure = link.error ? classifyError(link.error) : { kind: 'other', message: '' };
+        this.#scheduleWorktreeRetry(st);
+        this.#schedulePoll(id);
         return;
       }
       st.sub = sub;
@@ -755,6 +815,9 @@ export class WatcherService {
     } catch (error) {
       st.failure = classifyError(error);
       this.#logFailure(st.failure, root);
+      // A retry that failed for no known reason (e.g. the watch host was restarted) backs off
+      // and tries again; known causes (limits, permissions, a missing folder) keep polling.
+      if (st.retry.count > 0 && st.failure.kind === 'other') this.#scheduleWorktreeRetry(st);
       this.#schedulePoll(id);
     }
   }
@@ -763,7 +826,91 @@ export class WatcherService {
     const sub = st.sub;
     st.sub = null;
     st.native = false;
-    if (sub) await sub.unsubscribe().catch(() => {});
+    if (sub) await this.#dispose(sub);
+  }
+
+  /**
+   * Ties a subscription to its error handler. An error marks the subscription dead: it is
+   * dropped, never unsubscribed (`#dispose`). The error can arrive before `subscribe()`
+   * returns; `attach` then reports it, and the handler is not called (the caller handles it).
+   */
+  #link(onError: (error: Error) => void): {
+    readonly failed: boolean;
+    readonly error: Error | null;
+    fail(error: Error): void;
+    attach(sub: parcelWatcher.AsyncSubscription): boolean;
+  } {
+    let sub: parcelWatcher.AsyncSubscription | null = null;
+    let failure: Error | null = null;
+    return {
+      get failed() {
+        return failure !== null;
+      },
+      get error() {
+        return failure;
+      },
+      fail: (error) => {
+        failure = error;
+        if (!sub) return;
+        this.#dead.add(sub);
+        onError(error);
+      },
+      attach: (s) => {
+        sub = s;
+        if (failure) this.#dead.add(s);
+        return failure !== null;
+      },
+    };
+  }
+
+  /**
+   * Releases a subscription, unless it reported an error. @parcel/watcher's backend is dead
+   * then: its thread has ended without signalling it, and native cleanup that reaches the
+   * backend's destructor waits for that signal forever (DECISIONS #130). The error already
+   * removed the subscription's callbacks natively, so dropping the reference leaks nothing
+   * that runs later, at exit included (the shared backend table is never destroyed).
+   */
+  async #dispose(sub: parcelWatcher.AsyncSubscription): Promise<void> {
+    if (this.#dead.has(sub)) return;
+    await sub.unsubscribe().catch(() => {});
+  }
+
+  /** Next delay of a re-subscribe backoff (and records the error). */
+  #nextRetryDelay(retry: ErrorRetry): number {
+    const now = Date.now();
+    retry.count = now - retry.lastAt > ERROR_STREAK_RESET_MS ? 1 : retry.count + 1;
+    retry.lastAt = now;
+    const delay = this.#opts.resubscribeDelayMs * 2 ** Math.min(retry.count - 1, 20);
+    return Math.min(delay, Math.max(MAX_RESUBSCRIBE_DELAY_MS, this.#opts.resubscribeDelayMs));
+  }
+
+  #scheduleWorktreeRetry(st: WorktreeState): void {
+    if (this.#closed) return;
+    clearTimeout(st.retry.timer);
+    st.retry.timer = setTimeout(() => {
+      st.retry.timer = undefined;
+      if (this.#closed || this.#worktrees.get(st.info.worktreeId) !== st || st.sub) return;
+      void this.#enqueue(st, () => this.#subscribeWorktree(st)).then(() => {
+        // Changes made while nothing was watching were missed.
+        if (st.sub) this.markDirty(st.info.worktreeId, 'fs');
+      });
+    }, this.#nextRetryDelay(st.retry));
+    st.retry.timer.unref();
+  }
+
+  /** The worktree's subscription reported an error: drop it, poll, re-subscribe later. */
+  #onWorktreeError(st: WorktreeState, error: Error): void {
+    if (this.#closed || this.#worktrees.get(st.info.worktreeId) !== st) return;
+    this.#log.warn('watcher error; polling until re-subscribed', {
+      worktreeId: st.info.worktreeId,
+      error,
+    });
+    st.sub = null;
+    st.native = false;
+    st.failure = classifyError(error);
+    if (st.failure.kind !== 'missing') this.#scheduleWorktreeRetry(st);
+    this.#schedulePoll(st.info.worktreeId);
+    this.#onListDirty(st.info.projectId, 'missing');
   }
 
   /** Serializes subscribe / unsubscribe work per worktree or project. */
@@ -810,24 +957,14 @@ export class WatcherService {
     clearTimeout(st.debounce);
     clearTimeout(st.poll);
     clearTimeout(st.build.recheck);
+    clearTimeout(st.retry.timer);
     if (this.#focus === worktreeId) this.#focus = null;
     if (st.subscribing) await st.subscribing;
     await this.#releaseSub(st);
   }
 
-  #onWorktreeEvents(st: WorktreeState, error: Error | null, events: parcelWatcher.Event[]): void {
+  #onWorktreeEvents(st: WorktreeState, events: parcelWatcher.Event[]): void {
     if (this.#closed || this.#worktrees.get(st.info.worktreeId) !== st) return;
-    if (error) {
-      this.#log.warn('watcher error; polling continues', {
-        worktreeId: st.info.worktreeId,
-        error,
-      });
-      st.failure = classifyError(error);
-      st.native = false;
-      this.#schedulePoll(st.info.worktreeId);
-      this.#onListDirty(st.info.projectId, 'missing');
-      return;
-    }
     // Ignore-file changes first: they change which build directories are filtered below.
     for (const event of events) {
       if (path.basename(event.path) !== '.gitignore') continue;
@@ -986,13 +1123,24 @@ export class WatcherService {
       return;
     }
     try {
+      const link = this.#link((error) => this.#onProjectError(project, error));
       const sub = await this.#subscribe(
         project.commonDir,
-        (error, events) => this.#onGitEvents(project, error, events),
+        (error, events) => {
+          if (link.failed) return;
+          if (error) link.fail(error);
+          else this.#onGitEvents(project, events);
+        },
         { ignore: [...GIT_DIR_IGNORES] },
       );
+      const failedEarly = link.attach(sub);
       if (!current()) {
-        await sub.unsubscribe().catch(() => {});
+        await this.#dispose(sub);
+        return;
+      }
+      if (failedEarly) {
+        project.failure = link.error ? classifyError(link.error) : { kind: 'other', message: '' };
+        this.#scheduleProjectRetry(project);
         return;
       }
       project.sub = sub;
@@ -1003,7 +1151,40 @@ export class WatcherService {
     } catch (error) {
       project.failure = classifyError(error);
       this.#logFailure(project.failure, project.commonDir);
+      if (project.retry.count > 0 && project.failure.kind === 'other') {
+        this.#scheduleProjectRetry(project);
+      }
     }
+  }
+
+  #scheduleProjectRetry(project: ProjectState): void {
+    if (this.#closed) return;
+    clearTimeout(project.retry.timer);
+    project.retry.timer = setTimeout(() => {
+      project.retry.timer = undefined;
+      if (this.#closed || this.#projects.get(project.projectId) !== project || project.sub) {
+        return;
+      }
+      void this.#enqueue(project, () => this.#subscribeProject(project)).then(() => {
+        if (project.sub) for (const id of project.worktreeIds) this.markDirty(id, 'git');
+      });
+    }, this.#nextRetryDelay(project.retry));
+    project.retry.timer.unref();
+  }
+
+  /** The git dir's subscription reported an error: drop it, poll, re-subscribe later. */
+  #onProjectError(project: ProjectState, error: Error): void {
+    if (this.#closed || this.#projects.get(project.projectId) !== project) return;
+    this.#log.warn('git dir watcher error; polling until re-subscribed', {
+      projectId: project.projectId,
+      error,
+    });
+    project.sub = null;
+    project.native = false;
+    project.failure = classifyError(error);
+    if (project.failure.kind !== 'missing') this.#scheduleProjectRetry(project);
+    for (const id of project.worktreeIds) this.#schedulePoll(id);
+    this.#onListDirty(project.projectId, 'missing');
   }
 
   /** Re-subscribes a project's git dir that was deleted or replaced at the same path (F1). */
@@ -1029,7 +1210,7 @@ export class WatcherService {
     const sub = project.sub;
     project.sub = null;
     project.native = false;
-    if (sub) await sub.unsubscribe().catch(() => {});
+    if (sub) await this.#dispose(sub);
   }
 
   async #releaseProjectSub(project: ProjectState): Promise<void> {
@@ -1037,19 +1218,8 @@ export class WatcherService {
     await this.#releaseProjectSubNow(project);
   }
 
-  #onGitEvents(project: ProjectState, error: Error | null, events: parcelWatcher.Event[]): void {
+  #onGitEvents(project: ProjectState, events: parcelWatcher.Event[]): void {
     if (this.#closed || this.#projects.get(project.projectId) !== project) return;
-    if (error) {
-      this.#log.warn('git dir watcher error; polling continues', {
-        projectId: project.projectId,
-        error,
-      });
-      project.failure = classifyError(error);
-      project.native = false;
-      for (const id of project.worktreeIds) this.#schedulePoll(id);
-      this.#onListDirty(project.projectId, 'missing');
-      return;
-    }
     const dirty = new Set<WorktreeState>();
     let relist = false;
     const worktreesDir = path.join(project.commonDir, 'worktrees');
@@ -1205,11 +1375,15 @@ export class WatcherService {
   async close(): Promise<void> {
     if (this.#closed) return;
     this.#closed = true;
+    // Kill the watch host first, never waiting for it: subscribes in flight reject at once
+    // (a stuck host cannot delay close) and the unsubscribes below have nothing left to do.
+    this.#host?.close();
     const pending: Promise<void>[] = [];
     for (const st of this.#worktrees.values()) {
       clearTimeout(st.debounce);
       clearTimeout(st.poll);
       clearTimeout(st.build.recheck);
+      clearTimeout(st.retry.timer);
       pending.push(
         (async () => {
           if (st.subscribing) await st.subscribing;
@@ -1220,6 +1394,7 @@ export class WatcherService {
     for (const project of this.#projects.values()) {
       clearTimeout(project.relist);
       clearTimeout(project.listDebounce);
+      clearTimeout(project.retry.timer);
       pending.push(this.#releaseProjectSub(project));
     }
     this.#worktrees.clear();
