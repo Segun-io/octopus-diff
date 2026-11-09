@@ -49,8 +49,8 @@ function levelsFor(row: WorktreeRow, folderPath: string | undefined): LevelRow[]
 }
 
 /**
- * Toolbar chip for the selected worktree: shows the effective review policy and where it comes
- * from; opens a menu with On / Off / Inherit per level (worktree, branch, project, folder).
+ * Context-bar chip for the selected worktree: shows the effective review policy and where it
+ * comes from (quiet when on, raised when off); opens a menu with On / Off / Inherit per level (worktree, branch, project, folder).
  */
 export function ReviewPolicyChip({
   row,
@@ -112,7 +112,7 @@ export function ReviewPolicyChip({
         aria-controls={open ? menuId : undefined}
         onClick={() => setOpen((v) => !v)}
         title={`${policyLabel(policy)}. Click to change.`}
-        className={`od-btn ${policy.enabled ? '' : 'border-line-strong bg-raised text-fg'}`}
+        className={`od-btn ${policy.enabled ? 'od-btn-ghost' : 'border-line-strong bg-raised text-fg'}`}
       >
         Review {policy.enabled ? 'on' : 'off'}
       </button>

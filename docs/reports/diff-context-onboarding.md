@@ -1,6 +1,6 @@
 # diff-context-onboarding report
 
-Branch `fix/diff-context-and-onboarding`, from `main` at `90c7cff`. Decisions: `docs/DECISIONS.md` #112–#118
+Branch `fix/diff-context-and-onboarding`, from `main` at `90c7cff`. Decisions: `docs/DECISIONS.md` #154–#160
 ("Diff context errors, first-run Continue and add feedback"). Web and e2e only: no contract, daemon or git-core
 change.
 
@@ -8,17 +8,17 @@ change.
 
 ### A. Diff viewer: "More context" / "Expand all" errors
 
-- **"deletionLine and additionLine are null, something is wrong"** (root cause, #112): while a new context or
+- **"deletionLine and additionLine are null, something is wrong"** (root cause, #154): while a new context or
   whitespace view loads, the diff query shows the previous view's patch as placeholder data, but the highlight
   cache key was built from the options *asked for*. The old patch was highlighted and cached by the worker pool
   under the new key, and the real patch then rendered with the shorter patch's highlighted lines. Fix:
   `useDiffQuery` (`apps/web/src/api/queries.ts`) returns `DiffQueryData` = the response plus `view`
   (`diffViewKey(params)`) and `params`; `DiffPane` keys the renderer with `patchHash:view:patch.length`.
-- **"Could not load this diff … expected number to be less than or equal to 1000000"** (#113): the real limit is
+- **"Could not load this diff … expected number to be less than or equal to 1000000"** (#155): the real limit is
   `DIFF_CONTEXT_MAX = 1_000_000` (contracts, and git-core's own check). "Expand all" set exactly that and "More
   context" / `e` added 20 to it. Now `state/diffContext.ts` has `FULL_CONTEXT` (= `DIFF_CONTEXT_MAX`),
   `clampContext`, `nextContext` (never above the maximum) and `patchShowsWholeFile` (is every line already shown?).
-- **Controls** (`components/diff/DiffPane.tsx`, `state/commands.ts`, #114): "More context" is disabled while the
+- **Controls** (`components/diff/DiffPane.tsx`, `state/commands.ts`, #156): "More context" is disabled while the
   previous view is still on screen (`aria-busy`) and once the whole file is shown ("The whole file is already
   shown"); "Expand all" becomes "Collapse" when everything is shown, and is disabled when the default context
   already shows everything. The `e` key follows the same rules and says so in a notice. "Expand all" / "Collapse"
@@ -27,7 +27,7 @@ change.
 
 ### B. First run: a way to continue, and the app appears without a reload
 
-- **Root cause of "nothing changes until I reload"** (#116): watching a folder returns at once and scans in the
+- **Root cause of "nothing changes until I reload"** (#158): watching a folder returns at once and scans in the
   background; the UI learnt the outcome only from server events. With a working event stream the switch happened
   (checked by hand through the daemon and through the Vite dev proxy), but with the stream down or late the
   first-run screen stayed until a reload: reproduced in e2e by aborting `/api/events`. The second half of the
@@ -36,7 +36,7 @@ change.
 - **Fix:** `components/AddJobStatus.tsx` `useAddJobWatcher` (mounted once in the shell) polls the scan roots every
   second while a folder is being scanned, refetches the projects as soon as the folder has some (the app replaces
   the first-run screen at the first repository) and marks the scan done when `lastScannedAt` moves.
-- **Continue button** (`components/AddProjectForm.tsx`, #115): the form ends with a selection line ("~/code has 3
+- **Continue button** (`components/AddProjectForm.tsx`, #157): the form ends with a selection line ("~/code has 3
   repositories directly inside.") and a primary button, "Continue" on the first run ("Watch this folder" / "Add
   this repository" / "Open it" elsewhere), disabled until the text points at something valid (a missing or
   unreadable folder included, `FolderBrowser.tsx` `canSubmit`). The other action is a ghost button next to it.
@@ -44,7 +44,7 @@ change.
 
 ### C. Add / watch feedback
 
-- `state/addJob.ts` (#117): one add job in the UI store (`addJob`), pure `describeAddJob` / `folderJobOutcome`.
+- `state/addJob.ts` (#159): one add job in the UI store (`addJob`), pure `describeAddJob` / `folderJobOutcome`.
   States: working (spinner, "Looking for repositories in ~/code…", "120 folders checked, 2 repositories found so
   far."), success ("Watching ~/code: 3 repositories found" with the first five names, or "Added app", "3 worktrees,
   all shown in the sidebar."), empty ("No repositories found in ~/code", "Looked 3 levels deep. The folder stays
@@ -93,7 +93,7 @@ Run on this branch, 2026-11-09:
 
 ## Decisions
 
-DECISIONS #112–#118: the cache key is the fetched view; context clamped and stopped at the whole file; no stacked
+DECISIONS #154–#160: the cache key is the fetched view; context clamped and stopped at the whole file; no stacked
 context requests; a "Continue" main button; scan polling during an add job as the fallback for the event stream;
 one add job shown in the form or as a toast; the stale-listing gap.
 
@@ -116,7 +116,7 @@ None added or removed (`pnpm credits:check` passes).
 - Scan errors reach the job only through `scan.progress` events (the scan roots API has no error field), so with
   the event stream down a failed scan keeps the spinner ("Big folders can take a while"); the folder still shows
   up once a later scan works.
-- Folder listings can be stale for their short cache life (#118): a folder created while its parent is listed is
+- Folder listings can be stale for their short cache life (#160): a folder created while its parent is listed is
   "No folder named …" until the listing refetches.
 - The user's own setup could not be observed: with a healthy event stream, the app already switched after
   "Watch" in every setup tried here (built daemon, Vite dev proxy). The fix covers both the missing main button

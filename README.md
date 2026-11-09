@@ -123,20 +123,26 @@ Settings → Folders → **Start browsing in** sets where the picker opens (defa
 - **The sidebar is your folders and projects, with the open work under them.** Under the Inbox (and anything
   you pinned), each watched folder lists its repositories, and each repository lists the worktrees that are
   still open: unreviewed files, a conflict or an operation in progress. Everything else (`clean`, `verified`,
-  `review off`, `missing`) sits in the **Settled** shelf at the bottom, closed by default with a count; a
-  project whose worktrees all settled just says `settled`. Hover a row for the check that settles it by hand
-  (or the arrow that brings it back); the next change to that worktree un-settles it automatically, as does a
-  new patch after you verified everything. Blocked work never settles. Click a folder or repository for its
+  `review off`, `missing`) sits in the **Hidden** shelf at the bottom, closed by default with a count; a
+  project whose worktrees are all there just says `hidden`. Hover a row for **Hide** to put it away by hand
+  until it changes (or **Show** to bring it back); the next change to that worktree shows it again, as does a
+  new patch after you reviewed everything. Blocked work never hides. Click a folder or repository for its
   Overview, right-click for the actions, and pin a worktree to keep it at the top. Each worktree is a
   small card: the branch, then its files, `+adds −dels` and ahead/behind; hover a moment for the full details.
+- **Filter from a dropdown, not a text box.** The filter at the top of the sidebar (`/`) opens a searchable
+  list: **Only dirty** and **Only unreviewed**, then every project and every worktree. Type to narrow it,
+  arrows and `Enter` (or a click) to tick as many as you like; ticked projects and worktrees add up, the
+  status options narrow them. The button says what is filtered, and `×` clears it.
+
+  ![The sidebar filter dropdown: status options, projects and worktrees with a search field](docs/screenshots/sidebar-filter-dark.png)
 - **Mark all as verified.** The button above the file list marks every file you can see (respecting the
   sidebar filters); in the Inbox it marks everything. `Shift+R` does the same from the keyboard, and the
   context menu of a worktree, project or folder (and the folder Overview) can mark that whole level, or
   clear it again ("Mark all as unreviewed"). A toast offers **Undo** (also `Ctrl/Cmd+Z`) for ten minutes.
   A worktree that changed after you last looked is skipped and reported, so you never verify a diff you
   did not see.
-- **Review on or off, per level.** The chip in the toolbar shows whether review is on for the selected
-  worktree and where that comes from. You can turn it on or off for the worktree, its branch, its
+- **Review on or off, per level.** `Review on` in the bar above the panes shows whether review is on for the
+  selected worktree and where that comes from. You can turn it on or off for the worktree, its branch, its
   project, or the folder (scan root) it was discovered in; the most specific setting wins (worktree,
   then branch, project, folder, then the default). **Review is on by default**, which is what every new
   repository, worktree and branch gets; switch the default off in Settings to make review opt-in. A
@@ -159,15 +165,15 @@ Settings → Folders → **Start browsing in** sets where the picker opens (defa
 - **Pull and merge requests.** If the GitHub CLI (`gh`) or GitLab CLI (`glab`) is installed and signed in,
   each worktree on a feature branch shows its PR/MR next to the branch: number, open / draft / merged /
   closed, and a CI dot; the tooltip adds the review decision, conflicts and whether the request's head
-  matches your HEAD, and the toolbar links to it. Forges are found from your remotes (github.com, GitHub
+  matches your HEAD, and the bar above the panes links to it. Forges are found from your remotes (github.com, GitHub
   Enterprise, gitlab.com, self-managed GitLab, ssh aliases, forks through `upstream`) with no setup;
   Settings → Forges shows what was found, turns the feature off, or names a host by hand. Read-only:
   octopus-diff only runs the CLIs' query commands and never sees a token. Details:
   [`docs/FORGES.md`](docs/FORGES.md).
 
-  ![Pull request chips in the sidebar and the PR link in the toolbar](docs/screenshots/forges-dark.png)
+  ![Pull request chips in the sidebar and the PR link in the bar above the panes](docs/screenshots/forges-dark.png)
 - **The Request tab.** A worktree whose branch has a PR/MR gets a `Changes | PR #12` switch in the
-  toolbar. The Request tab shows, read-only: reviewers (with `stale` verdicts), labels and mergeability;
+  bar above the panes. The Request tab shows, read-only: reviewers (with `stale` verdicts), labels and mergeability;
   the description (markdown, no raw HTML); the checks grouped as *needs attention*, *running* and
   *passed*, refreshed while they run; the conversation (comments, reviews, review threads, with filters
   and paging); a timeline; and the changed files, marking the ones also changed in your worktree (click
@@ -177,11 +183,16 @@ Settings → Folders → **Start browsing in** sets where the picker opens (defa
   ![The Request tab: summary, reviewers, description and checks](docs/screenshots/request-dark.png)
 - **Repository information on the Overviews.** A project's Overview shows its remotes, default branch
   (with ahead/behind as of the last fetch), last commit, branch and tag counts, and, from the forge, the
-  description, visibility, open PR and issue counts, default-branch CI and the newest open requests,
-  each linked to its worktree when you have it checked out. A folder's Overview adds the default branch,
-  last commit, forge and open requests per repository without asking any forge.
+  description, visibility, open PR and issue counts and default-branch CI. Below, three tabs with
+  counts, 15 rows a page: **Worktrees** (the one on the default branch first, marked `default`, as in
+  the sidebar), **Branches** (local branches no worktree has checked out, with upstream state, whether
+  they are merged and their open PR) and **Pull requests** (the newest 15, each linked to its worktree
+  when you have it checked out, then a link to the rest on the forge). A folder's Overview adds the
+  default branch, last commit, forge and open requests per repository without asking any forge.
 
-  ![The project Overview with local and forge facts and open pull requests](docs/screenshots/overview-project-dark.png)
+  ![The project Overview with local and forge facts and its worktrees](docs/screenshots/overview-project-dark.png)
+
+  ![The Branches tab: local branches without a worktree](docs/screenshots/overview-branches-dark.png)
 - **Themes.** Octopus Dark, Octopus Light and a high-contrast theme; "System" follows the OS. Themes
   are plain data files, so adding one is a one-file change: see [`docs/design/THEMING.md`](docs/design/THEMING.md).
   The identity and palette are described in [`docs/design/IDENTITY.md`](docs/design/IDENTITY.md).
@@ -254,6 +265,52 @@ bundled UI; omit it normally.
 | `~/.local/state/octopus-diff/daemon.json` | address and pid of the running daemon (removed on exit) |
 | `~/.local/state/octopus-diff/open-*.html` | short-lived page `--open` hands to the browser opener (mode 0600, deleted after a minute) |
 | `~/.local/state/octopus-diff/` | project registry and review marks (SQLite) |
+
+## Start at login (Linux, WSL2 with systemd)
+
+To have octopus-diff running whenever the machine is up, with no terminal open, install the tarball
+(see [Install](#install)) and run it as a systemd user service:
+
+```sh
+mkdir -p ~/.config/systemd/user
+cat > ~/.config/systemd/user/octopus-diff.service <<EOF
+[Unit]
+Description=octopus-diff
+After=network.target
+
+[Service]
+Environment=PATH=$PATH
+ExecStart=$(command -v octopus-diff) serve --no-open
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
+EOF
+
+systemctl --user daemon-reload
+systemctl --user enable --now octopus-diff
+loginctl enable-linger "$USER"    # start at boot, before you open a shell
+```
+
+The heredoc is unquoted on purpose: your shell fills in the full path of `octopus-diff` and your
+`PATH`, which a node version manager (mise, nvm, fnm) needs, because systemd starts services with a
+minimal environment. Open `http://127.0.0.1:7428`. The first time, get the URL with the token from
+`octopus-diff status` (or `journalctl --user -u octopus-diff`); the browser remembers it afterwards.
+
+- **Logs and control:** `journalctl --user -u octopus-diff -f`, `systemctl --user restart octopus-diff`.
+- **Updating:** reinstall the tarball, then `systemctl --user restart octopus-diff`.
+- **Running next to a dev copy.** Daemons that share a state directory are one daemon: a second
+  `serve` attaches to the first instead of starting. To keep an installed copy and a checkout (or
+  `pnpm dev`) apart, give each its own state directory, config directory and port. Add this to the
+  service's `ExecStart`:
+
+  ```
+  serve --no-open --state-dir %h/.local/state/octopus-diff-prod --config-dir %h/.config/octopus-diff-prod --port 7428
+  ```
+
+  Each copy then has its own token, project list and review marks. Use the same flags on `status`,
+  `add` and `token` so they talk to the right daemon. systemd does not expand `~` in `ExecStart`,
+  hence `%h` (the home directory).
 
 ## Security model
 

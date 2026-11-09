@@ -1,4 +1,4 @@
-import { appendFileSync, mkdirSync, utimesSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { GitCore } from '@octopus-diff/contracts';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -182,5 +182,87 @@ describe('getSummary', () => {
     mkdirSync(path.join(gitDir, 'rebase-apply'));
     writeFileSync(path.join(gitDir, 'rebase-apply', 'applying'), '');
     expect((await core.getSummary(locator(repo))).inProgress).toBe('am');
+  });
+});
+
+describe('getSummary activityAt', () => {
+  const at = (iso: string): Date => new Date(iso);
+
+  it('is the reflog time of a clean worktree', async () => {
+    const repo = fx.repo('activity-clean');
+    utimesSync(
+      path.join(repo, '.git', 'logs', 'HEAD'),
+      at('2026-03-01T10:00:00Z'),
+      at('2026-03-01T10:00:00Z'),
+    );
+    const summary = await core.getSummary(locator(repo));
+    expect(summary.activityAt).toBe('2026-03-01T10:00:00.000Z');
+  });
+
+  it('is the newest of the reflog and the changed files, clamped to now', async () => {
+    const repo = fx.repo('activity-dirty', { files: { 'a.txt': 'one\n' } });
+    utimesSync(
+      path.join(repo, '.git', 'logs', 'HEAD'),
+      at('2026-03-01T10:00:00Z'),
+      at('2026-03-01T10:00:00Z'),
+    );
+    const tracked = path.join(repo, 'a.txt');
+    writeFileSync(tracked, 'two\n');
+    utimesSync(tracked, at('2026-04-01T10:00:00Z'), at('2026-04-01T10:00:00Z'));
+    const untracked = path.join(repo, 'new.txt');
+    writeFileSync(untracked, 'new\n');
+    utimesSync(untracked, at('2026-05-01T10:00:00Z'), at('2026-05-01T10:00:00Z'));
+    expect((await core.getSummary(locator(repo))).activityAt).toBe('2026-05-01T10:00:00.000Z');
+
+    const future = new Date(Date.now() + 86_400_000);
+    utimesSync(untracked, future, future);
+    const clamped = (await core.getSummary(locator(repo))).activityAt;
+    expect(clamped).not.toBeNull();
+    expect(Date.parse(clamped as string)).toBeLessThanOrEqual(Date.now());
+  });
+
+  it('counts fully staged files, without changing the stateHash', async () => {
+    const repo = fx.repo('activity-staged', { files: { 'a.txt': 'one\n' } });
+    utimesSync(
+      path.join(repo, '.git', 'logs', 'HEAD'),
+      at('2026-03-01T10:00:00Z'),
+      at('2026-03-01T10:00:00Z'),
+    );
+    const tracked = path.join(repo, 'a.txt');
+    writeFileSync(tracked, 'two\n');
+    fx.git(repo, ['add', 'a.txt']);
+    utimesSync(tracked, at('2026-04-01T10:00:00Z'), at('2026-04-01T10:00:00Z'));
+    const first = await core.getSummary(locator(repo));
+    expect(first.counts.staged).toBe(1);
+    expect(first.counts.unstaged).toBe(0);
+    expect(first.activityAt).toBe('2026-04-01T10:00:00.000Z');
+
+    utimesSync(tracked, at('2026-04-02T10:00:00Z'), at('2026-04-02T10:00:00Z'));
+    const second = await core.getSummary(locator(repo));
+    expect(second.activityAt).toBe('2026-04-02T10:00:00.000Z');
+    expect(second.stateHash).toBe(first.stateHash);
+  });
+
+  it('falls back to the HEAD commit date without a reflog, and is null on an unborn branch', async () => {
+    const repo = fx.repo('activity-noreflog');
+    rmSync(path.join(repo, '.git', 'logs'), { recursive: true, force: true });
+    expect((await core.getSummary(locator(repo))).activityAt).toBe('2026-01-01T00:00:00.000Z');
+
+    const empty = fx.repo('activity-unborn', { empty: true });
+    rmSync(path.join(empty, '.git', 'logs'), { recursive: true, force: true });
+    expect((await core.getSummary(locator(empty))).activityAt).toBeNull();
+  });
+
+  it('does not change the stateHash', async () => {
+    const repo = fx.repo('activity-hash');
+    const first = await core.getSummary(locator(repo));
+    utimesSync(
+      path.join(repo, '.git', 'logs', 'HEAD'),
+      at('2026-06-01T10:00:00Z'),
+      at('2026-06-01T10:00:00Z'),
+    );
+    const second = await core.getSummary(locator(repo));
+    expect(second.activityAt).not.toBe(first.activityAt);
+    expect(second.stateHash).toBe(first.stateHash);
   });
 });

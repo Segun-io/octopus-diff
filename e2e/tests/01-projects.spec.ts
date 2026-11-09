@@ -47,7 +47,14 @@ test.describe('§8.2 projects and worktrees', () => {
       const scanInput = app.byTestId(TEST_IDS.folderPickerInput);
       if (!(await scanInput.isVisible())) await app.byTestId(TEST_IDS.addProjectButton).click();
       await scanInput.fill(scan.path);
-      await app.byTestId(TEST_IDS.addScanRootSubmit).click();
+      // Wait for the picker to list the typed folder: until then it cannot tell a folder from a
+      // repository, offers "Add" first, and the two buttons swap actions (and test ids) when the
+      // listing arrives, so a click could land on "Add as one repository" (CI, run 42572487669).
+      const watchButton = app.page.locator(
+        `[data-testid="${TEST_IDS.addScanRootSubmit}"][data-action="watch"]`,
+      );
+      await expect(watchButton).toBeEnabled();
+      await watchButton.click();
       for (const name of scan.expectedProjects) {
         await expect(app.projectItem(name), `scan found ${name}`).toBeVisible({ timeout: 20_000 });
         for (const worktree of findProject(manifest, name).worktrees) {
@@ -149,23 +156,23 @@ test.describe('§8.2 projects and worktrees', () => {
       await app.expectWorktreeItem(worktree);
   });
 
-  test('sidebar filters: text and only-dirty', async ({ manifest, daemon, app }) => {
+  test('sidebar filters: project dropdown and only-dirty', async ({ manifest, daemon, app }) => {
     await app.open(daemon.authUrl);
     const epsilon = findWorktree(manifest, 'epsilon').worktree;
-    const gamma = findWorktree(manifest, 'gamma').worktree;
+    const { project: gammaProject, worktree: gamma } = findWorktree(manifest, 'gamma');
     await expect(app.worktreeItem(epsilon.id)).toBeVisible();
 
-    await app.setToggle(TEST_IDS.onlyDirtyToggle, true);
+    await app.setFilterOption(TEST_IDS.onlyDirtyToggle, true);
     await expect(app.worktreeItem(epsilon.id)).toBeHidden();
     await expect(app.worktreeItem(gamma.id)).toBeVisible();
-    await app.setToggle(TEST_IDS.onlyDirtyToggle, false);
+    await app.setFilterOption(TEST_IDS.onlyDirtyToggle, false);
     await expect(app.worktreeItem(epsilon.id)).toBeVisible();
 
-    await app.byTestId(TEST_IDS.sidebarFilter).fill('gamma');
+    await app.filterProject(gammaProject.id, gammaProject.name);
     await expect(app.worktreeItem(gamma.id)).toBeVisible();
     await expect(app.worktreeItem(epsilon.id)).toBeHidden();
     await expect(app.worktreeItem(findWorktree(manifest, 'alpha').worktree.id)).toBeHidden();
-    await app.byTestId(TEST_IDS.sidebarFilter).fill('');
+    await app.clearFilters();
     await expect(app.worktreeItem(epsilon.id)).toBeVisible();
   });
 });

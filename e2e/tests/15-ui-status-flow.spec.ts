@@ -199,7 +199,7 @@ test.describe('status flow v2 (UI)', () => {
     await expect(main).toHaveAttribute('data-unreviewed', '0', { timeout: 15_000 });
     await expect(main).toHaveAttribute('data-stage', 'reviewed');
     await app.selectWorktree(repo.worktreeId);
-    await app.setToggle(TEST_IDS.showReviewedToggle, false);
+    // To review never lists reviewed files (no eye there): nothing is left.
     await expect.poll(() => app.filePaths()).toEqual([]);
   });
 });

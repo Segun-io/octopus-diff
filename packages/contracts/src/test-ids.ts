@@ -14,12 +14,24 @@ export const TEST_IDS = {
 
   // --- sidebar ---------------------------------------------------------------------------
   sidebar: 'sidebar',
-  /** Text filter input (focused by `/`). */
+  /**
+   * The sidebar filter (focused by `/`). Since the filter dropdown (DECISIONS #112): the dropdown's
+   * trigger button, `aria-expanded`, `data-filtering`; its search field is `sidebarFilterSearch`.
+   */
   sidebarFilter: 'sidebar-filter',
-  /** `aria-pressed`. */
+  /** Status option in the filter dropdown, `aria-selected` (was a chip with `aria-pressed`). */
   onlyDirtyToggle: 'only-dirty-toggle',
-  /** `aria-pressed`. */
+  /** Status option in the filter dropdown, `aria-selected` (was a chip with `aria-pressed`). */
   onlyUnreviewedToggle: 'only-unreviewed-toggle',
+  /** The filter dropdown's search field (`/` focuses it). */
+  sidebarFilterSearch: 'sidebar-filter-search',
+  /**
+   * A project or worktree option in the filter dropdown: `aria-selected`, `data-kind`
+   * (`project` | `worktree`), `data-project-id` or `data-worktree-id`.
+   */
+  sidebarFilterOption: 'sidebar-filter-option',
+  /** Clears every sidebar filter (shown while filtering). */
+  sidebarFilterClear: 'sidebar-filter-clear',
   /** The Inbox entry. `data-count` = number of dirty worktrees; `aria-current="true"` if selected. */
   inboxItem: 'inbox-item',
   /** `data-project-id`, `data-project-name`. */
@@ -169,6 +181,14 @@ export const TEST_IDS = {
   repoInfoForge: 'repo-info-forge',
   /** Overview: one open pull/merge request row; `data-number`, `data-worktree`. */
   repoOpenRequest: 'repo-open-request',
+  /** Project Overview: one section tab (`data-tab`: worktrees, branches, requests). */
+  overviewTab: 'overview-tab',
+  /** Project Overview: one local branch without a worktree; `data-branch`, `data-merged`. */
+  overviewBranchRow: 'overview-branch-row',
+  /** A list pager; `data-page`, `data-pages`. */
+  pager: 'pager',
+  /** The default-branch marker on a worktree (sidebar, context bar, Overview). */
+  defaultBranchChip: 'default-branch-chip',
 } as const;
 
 export type TestId = (typeof TEST_IDS)[keyof typeof TEST_IDS];

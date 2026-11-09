@@ -18,15 +18,15 @@ import {
 import { AddJobToast, useAddJobWatcher } from './components/AddJobStatus.tsx';
 import { AddProjectForm } from './components/AddProjectForm.tsx';
 import { BulkReviewToast } from './components/BulkReviewToast.tsx';
+import { ContextBar } from './components/ContextBar.tsx';
 import { CopyToastHost } from './components/CopyButton.tsx';
 import { Dialog } from './components/Dialog.tsx';
 import { DiffPane } from './components/diff/DiffPane.tsx';
 import { FileList } from './components/FileList.tsx';
+import { FilePaneHeader } from './components/FilePaneHeader.tsx';
 import { HelpDialog } from './components/HelpDialog.tsx';
 import { Mark } from './components/Mark.tsx';
-import { MarkAllButton } from './components/MarkAllButton.tsx';
 import { Sidebar } from './components/Sidebar.tsx';
-import { Toolbar } from './components/Toolbar.tsx';
 import { useFaviconDot } from './lib/favicon.ts';
 import { toFileRef } from './lib/fileRef.ts';
 import { type NavEntry, repairSelection } from './lib/model.ts';
@@ -242,34 +242,6 @@ function LoadingSkeleton() {
   );
 }
 
-/** Above the file list: what is listed, and the bulk action for it. */
-function FilePaneHeader() {
-  const model = useAppModel();
-  const inbox = model.view.kind === 'inbox';
-  const total = model.entries.length;
-  const shown = model.entries.filter(model.visible).length;
-  const unreviewed = model.entries.filter(
-    (e) => !e.file.reviewed && !model.disabledWorktrees.has(e.worktreeId),
-  ).length;
-  const label = inbox
-    ? `${model.groups.length} ${model.groups.length === 1 ? 'worktree' : 'worktrees'}`
-    : (model.viewPolicy?.enabled ?? true)
-      ? `${unreviewed} unreviewed`
-      : 'review off';
-  return (
-    <div className="flex h-[var(--od-row-header)] shrink-0 items-center gap-2 border-b border-line bg-surface px-[var(--od-pad-x)] text-[11px] text-muted">
-      <span className="flex min-w-0 gap-3">
-        <span className="shrink-0 tabular-nums">
-          {shown < total ? `${shown}/${total}` : total} {total === 1 ? 'file' : 'files'}
-        </span>
-        <span className="truncate tabular-nums">{label}</span>
-      </span>
-      <span className="ml-auto" />
-      <MarkAllButton compact />
-    </div>
-  );
-}
-
 function AppShell({ eventSourceFactory }: { eventSourceFactory?: EventSourceFactory | null }) {
   const model = useAppModel();
   const store = useUiStore();
@@ -322,7 +294,7 @@ function AppShell({ eventSourceFactory }: { eventSourceFactory?: EventSourceFact
           <Sidebar />
         </div>
         <div>
-          <Toolbar />
+          <ContextBar />
         </div>
         <div className="min-h-0 min-w-0 bg-canvas">
           <Suspense fallback={<p className="p-5 text-xs text-muted">Loading…</p>}>
@@ -358,7 +330,7 @@ function AppShell({ eventSourceFactory }: { eventSourceFactory?: EventSourceFact
           <Sidebar />
         </div>
         <div className="col-span-2">
-          <Toolbar />
+          <ContextBar />
         </div>
         <div className="flex min-h-0 flex-col border-r border-line bg-surface">
           {model.projects.isError && (

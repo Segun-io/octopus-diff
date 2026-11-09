@@ -29,8 +29,11 @@ import { actions, useUi, useUiStore } from '../../state/ui.tsx';
 import { useTheme } from '../../theme/useTheme.ts';
 import {
   CheckIcon,
+  ColumnsIcon,
   LineCounts,
   MoreIcon,
+  PilcrowIcon,
+  RowsIcon,
   StatusIcon,
   statusLabel,
   WarningIcon,
@@ -88,6 +91,65 @@ function short(sha: string | null): string {
   return sha ? sha.slice(0, 12) : '(none)';
 }
 
+/**
+ * The diff's rendering options (docs/TOOLBAR.md §3.3): unified or split as a segmented pair, and
+ * whitespace. They are persisted preferences, so they sit in the header whether or not a file is
+ * open. The group carries the mode for the tests; its buttons carry `data-mode-option`.
+ */
+function DiffViewOptions() {
+  const store = useUiStore();
+  const commands = useCommandsContext();
+  const diffMode = useUi((s) => s.diffMode);
+  const ignoreWhitespace = useUi((s) => s.ignoreWhitespace);
+  const setMode = (mode: typeof diffMode) => {
+    if (mode !== diffMode) store.setState({ diffMode: mode });
+  };
+  return (
+    <>
+      <fieldset
+        data-testid={TEST_IDS.diffModeToggle}
+        data-mode={diffMode}
+        aria-label="Diff layout"
+        className="od-seg m-0 p-0"
+      >
+        <button
+          type="button"
+          data-mode-option="unified"
+          aria-pressed={diffMode === 'unified'}
+          aria-label="Unified"
+          title="Unified (s)"
+          onClick={() => setMode('unified')}
+          className="px-1.5"
+        >
+          <RowsIcon />
+        </button>
+        <button
+          type="button"
+          data-mode-option="split"
+          aria-pressed={diffMode === 'split'}
+          aria-label="Split"
+          title="Split (s)"
+          onClick={() => setMode('split')}
+          className="px-1.5"
+        >
+          <ColumnsIcon />
+        </button>
+      </fieldset>
+      <button
+        type="button"
+        data-testid={TEST_IDS.whitespaceToggle}
+        aria-pressed={ignoreWhitespace}
+        onClick={commands.toggleWhitespace}
+        title="Hide whitespace changes (w)"
+        aria-label="Hide whitespace changes"
+        className="od-btn od-btn-ghost od-btn-icon"
+      >
+        <PilcrowIcon />
+      </button>
+    </>
+  );
+}
+
 export function DiffPane() {
   const store = useUiStore();
   const model = useAppModel();
@@ -112,6 +174,9 @@ export function DiffPane() {
   const entry = model.selectedEntry;
   const reviewed = diff?.reviewed ?? entry?.file.reviewed ?? false;
   const row = selected ? model.sidebar.byId.get(selected.worktreeId) : undefined;
+  // In the Inbox the list mixes worktrees, so the header names the file's; elsewhere the context
+  // bar already does.
+  const inbox = model.view.kind === 'inbox';
   const menu = useContextMenu<null>();
 
   // "Updated" banner: the open file's patchHash changed underneath the reader. Keyed by file
@@ -204,115 +269,126 @@ export function DiffPane() {
       aria-busy={state === 'loading'}
       className="flex h-full min-h-0 min-w-0 flex-col bg-canvas"
     >
-      {selected && (
-        // biome-ignore lint/a11y/noStaticElementInteractions: right-click shortcut for the ⋯ menu button
-        <header
-          className="flex min-h-10 flex-wrap items-center gap-2 border-b border-line bg-surface px-3 py-1.5"
-          onContextMenu={(e) => menu.open(e, null)}
-        >
-          {status && <StatusIcon status={status} />}
-          <h2 className="min-w-0 truncate font-mono text-xs" title={selected.path}>
-            {file?.oldPath && file.oldPath !== selected.path ? (
-              <>
-                <span className="text-muted">{escapeSuspicious(file.oldPath)}</span>
-                <span className="text-faint"> → </span>
-                <span>{escapeSuspicious(selected.path)}</span>
-              </>
-            ) : (
-              escapeSuspicious(selected.path)
+      {/* biome-ignore lint/a11y/noStaticElementInteractions: right-click shortcut for the ⋯ menu button */}
+      <header
+        className="flex min-h-9 flex-wrap items-center gap-2 border-b border-line bg-surface px-3 py-1.5"
+        onContextMenu={selected ? (e) => menu.open(e, null) : undefined}
+      >
+        {selected && (
+          <>
+            {status && <StatusIcon status={status} />}
+            <h2 className="min-w-0 truncate font-mono text-xs" title={selected.path}>
+              {file?.oldPath && file.oldPath !== selected.path ? (
+                <>
+                  <span className="text-muted">{escapeSuspicious(file.oldPath)}</span>
+                  <span className="text-faint"> → </span>
+                  <span>{escapeSuspicious(selected.path)}</span>
+                </>
+              ) : (
+                escapeSuspicious(selected.path)
+              )}
+            </h2>
+            {pathTexts && (
+              <CopyButton
+                text={pathTexts.relative}
+                label="Copy path"
+                what="path"
+                escaped={pathTexts.escaped}
+                testId={COPY_TEST_IDS.pathButton}
+                className="-ml-1"
+              />
             )}
-          </h2>
-          {pathTexts && (
-            <CopyButton
-              text={pathTexts.relative}
-              label="Copy path"
-              what="path"
-              escaped={pathTexts.escaped}
-              testId={COPY_TEST_IDS.pathButton}
-              className="-ml-1"
-            />
-          )}
-          {status && <span className="text-[11px] text-muted">{statusLabel(status)}</span>}
-          {file && <LineCounts additions={file.additions} deletions={file.deletions} />}
-          {row && (
-            <WorktreeName
-              project={row.project.name}
-              branch={row.worktree.branch ?? 'detached'}
-              className="text-[11px] text-muted"
-              branchClassName="text-faint"
-            />
-          )}
-          <span className="ml-auto flex items-center gap-1.5">
-            <button
-              type="button"
-              data-testid={COPY_TEST_IDS.diffMenuButton}
-              aria-label="More actions"
-              aria-haspopup="menu"
-              title="Copy path, name, branch…"
-              onClick={(e) => menu.open(e, null)}
-              className="od-btn od-btn-ghost"
-            >
-              <MoreIcon />
-            </button>
-            {display?.kind === 'patch' && (
-              <>
-                <button
-                  type="button"
-                  data-testid={DIFF_CONTEXT_TEST_IDS.more}
-                  onClick={commands.expandContext}
-                  disabled={!canMore}
-                  aria-busy={placeholder}
-                  className="od-btn disabled:cursor-default disabled:opacity-50"
-                  title={moreTitle}
-                >
-                  More context
-                </button>
-                <button
-                  type="button"
-                  data-testid={DIFF_CONTEXT_TEST_IDS.expandAll}
-                  onClick={() =>
-                    key &&
-                    actions.setFileOptions(store, key, {
-                      ...opts,
-                      context: expanded ? DEFAULT_CONTEXT : FULL_CONTEXT,
-                    })
-                  }
-                  disabled={!expanded && settledWhole}
-                  aria-pressed={expanded}
-                  className="od-btn disabled:cursor-default disabled:opacity-50"
-                  title={
-                    expanded
-                      ? `Back to ${DEFAULT_CONTEXT} context lines around each change`
-                      : settledWhole
-                        ? 'The whole file is already shown'
-                        : 'Expand every collapsed unchanged region'
-                  }
-                >
-                  {expanded ? 'Collapse' : 'Expand all'}
-                </button>
-              </>
-            )}
-            {selected && model.disabledWorktrees.has(selected.worktreeId) ? (
-              <span className="text-[11px] text-faint" title="Review is off for this worktree">
-                review off
+            {status && <span className="text-[11px] text-muted">{statusLabel(status)}</span>}
+            {file && <LineCounts additions={file.additions} deletions={file.deletions} />}
+            {inbox && row && (
+              <span data-testid="diff-header-worktree" className="inline-flex min-w-0">
+                <WorktreeName
+                  project={row.project.name}
+                  branch={row.worktree.branch ?? 'detached'}
+                  className="text-[11px] text-muted"
+                  branchClassName="text-faint"
+                />
               </span>
-            ) : (
+            )}
+          </>
+        )}
+        <span className="ml-auto flex items-center gap-1">
+          <DiffViewOptions />
+          {selected && (
+            <>
+              <span className="od-sep" aria-hidden="true" />
+              {display?.kind === 'patch' && (
+                <>
+                  <button
+                    type="button"
+                    data-testid={DIFF_CONTEXT_TEST_IDS.more}
+                    onClick={commands.expandContext}
+                    disabled={!canMore}
+                    aria-busy={placeholder}
+                    className="od-btn od-btn-ghost disabled:cursor-default disabled:opacity-50"
+                    title={moreTitle}
+                  >
+                    More context
+                  </button>
+                  <button
+                    type="button"
+                    data-testid={DIFF_CONTEXT_TEST_IDS.expandAll}
+                    onClick={() =>
+                      key &&
+                      actions.setFileOptions(store, key, {
+                        ...opts,
+                        context: expanded ? DEFAULT_CONTEXT : FULL_CONTEXT,
+                      })
+                    }
+                    disabled={!expanded && settledWhole}
+                    aria-pressed={expanded}
+                    className="od-btn od-btn-ghost disabled:cursor-default disabled:opacity-50"
+                    title={
+                      expanded
+                        ? `Back to ${DEFAULT_CONTEXT} context lines around each change`
+                        : settledWhole
+                          ? 'The whole file is already shown'
+                          : 'Expand every collapsed unchanged region'
+                    }
+                  >
+                    {expanded ? 'Collapse' : 'Expand all'}
+                  </button>
+                </>
+              )}
               <button
                 type="button"
-                data-testid={TEST_IDS.reviewToggle}
-                aria-pressed={reviewed}
-                onClick={commands.toggleReviewed}
-                disabled={!entry && !diff}
-                title="Mark reviewed (r)"
-                className={`od-btn font-medium ${reviewed ? 'border-add bg-add text-canvas' : 'text-fg'}`}
+                data-testid={COPY_TEST_IDS.diffMenuButton}
+                aria-label="More actions"
+                aria-haspopup="menu"
+                title="Copy path, name, branch…"
+                onClick={(e) => menu.open(e, null)}
+                className="od-btn od-btn-ghost od-btn-icon"
               >
-                <CheckIcon />
-                {reviewed ? 'Reviewed' : 'Mark reviewed'}
+                <MoreIcon />
               </button>
-            )}
-          </span>
-        </header>
-      )}
+              <span className="od-sep" aria-hidden="true" />
+              {model.disabledWorktrees.has(selected.worktreeId) ? (
+                <span className="text-[11px] text-faint" title="Review is off for this worktree">
+                  review off
+                </span>
+              ) : (
+                <button
+                  type="button"
+                  data-testid={TEST_IDS.reviewToggle}
+                  aria-pressed={reviewed}
+                  onClick={commands.toggleReviewed}
+                  disabled={!entry && !diff}
+                  title="Mark reviewed (r)"
+                  className={`od-btn font-medium ${reviewed ? 'border-add bg-add text-canvas' : 'text-fg'}`}
+                >
+                  <CheckIcon />
+                  {reviewed ? 'Reviewed' : 'Mark reviewed'}
+                </button>
+              )}
+            </>
+          )}
+        </span>
+      </header>
       {selected && menu.state && (
         <ContextMenu
           items={[

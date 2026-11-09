@@ -1,10 +1,16 @@
-import { type ReviewPolicyTarget, reviewTargetKey } from '@octopus-diff/contracts';
-import type { ReactNode } from 'react';
+import {
+  changeRequestNoun,
+  type ReviewPolicyTarget,
+  reviewTargetKey,
+  TEST_IDS,
+} from '@octopus-diff/contracts';
+import { type ReactNode, useState } from 'react';
 import {
   type RepositoryEntry,
   useForgeIndex,
   useForgesQuery,
   useRepositories,
+  useRepositoryForge,
 } from '../api/forges.ts';
 import {
   useRescanScanRoot,
@@ -14,8 +20,11 @@ import {
 } from '../api/settings.ts';
 import { type ForgeIndexEntry, needsAttention, REVIEW_WORD, remoteLabel } from '../lib/forge.ts';
 import {
+  branchesWithoutWorktree,
   DIRECT_FOLDER_ID,
+  defaultBranchFirst,
   type FolderNode,
+  isDefaultBranch,
   isDirtySummary,
   type NodeStats,
   type ProjectGroup,
@@ -34,10 +43,20 @@ import { ChangeRequestChip } from './ChangeRequest.tsx';
 import { ContextMenu, useContextMenu } from './ContextMenu.tsx';
 import { separated, worktreeCopyItems } from './copyMenu.ts';
 import { Mark } from './Mark.tsx';
-import { ForgeRepositoryFacts, LocalRepositoryFacts, OpenRequests } from './RepositoryInfo.tsx';
+import { Pager, usePage } from './Pager.tsx';
+import {
+  ForgeRepositoryFacts,
+  LocalBranches,
+  LocalRepositoryFacts,
+  OpenRequests,
+} from './RepositoryInfo.tsx';
+import { SegmentedTabs, type TabItem, tabPanelProps } from './Tabs.tsx';
+import { DefaultBranchChip } from './WorktreeChips.tsx';
 /**
  * Overview for a folder or a project (views/registry.ts): figures, the worktrees or projects
- * inside, bulk actions and the review policy of the node. Future read-only views (Files, History)
+ * inside, bulk actions and the review policy of the node. A project's lists (worktrees, local
+ * branches without a worktree, open pull/merge requests) sit behind `SegmentedTabs`, 15 rows a
+ * page (docs/OVERVIEW-LISTS.md). Future read-only views (Files, History)
  * sit next to it; see docs/design/FOLDERS.md.
  */
 export function Overview({ view }: { view: Extract<View, { kind: 'folder' | 'project' }> }) {
@@ -439,16 +458,44 @@ function FolderOverview({ node }: { node: FolderNode }) {
   );
 }
 
+type OverviewTab = 'worktrees' | 'branches' | 'requests';
+
 function ProjectOverview({ group }: { group: ProjectGroup }) {
   const store = useUiStore();
   const commands = useCommandsContext();
   const menu = useContextMenu<WorktreeRow>();
   const copy: CopyFn = (text, options) => void copyAndReport(store, text, options);
+  // The chosen tab survives moving between projects (compare the same list across repositories);
+  // the pages start over (the lists below are keyed by project).
+  const [tab, setTab] = useState<OverviewTab>('worktrees');
   const { project } = group;
   const repositories = useRepositories([project.id]);
+  const entry = repositories.data?.get(project.id);
   const forgeState = useForgesQuery().data?.projects.find((p) => p.projectId === project.id);
+  const forgeInfo = useRepositoryForge(project.id).data?.repository ?? null;
   const ids = group.allRows.map((r) => r.worktree.id);
   const stats = statsOfRows(group.allRows);
+  const branches = entry?.info?.branches;
+  const free = branches ? branchesWithoutWorktree(branches, group.allRows) : null;
+  const noun = forgeInfo ? changeRequestNoun(forgeInfo.kind).long : null;
+  const tabs: Array<TabItem<OverviewTab>> = [
+    { id: 'worktrees', label: 'Worktrees', count: group.allRows.length },
+    // Hidden when the daemon answered without a branch list (an older daemon).
+    ...(entry?.info && !branches
+      ? []
+      : [{ id: 'branches' as const, label: 'Branches', count: free?.length ?? null }]),
+    ...(forgeInfo && noun
+      ? [
+          {
+            id: 'requests' as const,
+            label: `${noun[0]?.toUpperCase()}${noun.slice(1)}s`,
+            count: forgeInfo.openRequests ?? forgeInfo.requests.length,
+          },
+        ]
+      : []),
+  ];
+  const active = tabs.some((t) => t.id === tab) ? tab : 'worktrees';
+  const prefix = `overview-${project.id}`;
   return (
     <div className="od-scroll h-full overflow-y-auto p-5">
       <header className="mb-4 flex flex-wrap items-start gap-3">
@@ -477,14 +524,83 @@ function ProjectOverview({ group }: { group: ProjectGroup }) {
       </header>
       <div className="mb-4 grid gap-x-8 gap-y-4 border-t border-line pt-3 lg:grid-cols-2">
         <LocalRepositoryFacts
-          entry={repositories.data?.get(project.id)}
+          entry={entry}
           forge={forgeState?.forge ?? null}
           worktrees={group.allRows.length}
         />
         <ForgeRepositoryFacts projectId={project.id} />
       </div>
       <StatsRow stats={stats} repos={false} />
-      <table className="mt-4 w-full text-xs">
+      <div className="mt-4 mb-2 flex items-center">
+        <SegmentedTabs
+          tabs={tabs}
+          value={active}
+          onChange={setTab}
+          label={`${project.name} lists`}
+          idPrefix={prefix}
+          testId={TEST_IDS.overviewTab}
+        />
+      </div>
+      <div {...tabPanelProps(prefix, active)}>
+        {active === 'worktrees' ? (
+          <WorktreeTable
+            key={project.id}
+            rows={group.allRows}
+            onMenu={(e, row) => menu.open(e, row)}
+          />
+        ) : active === 'branches' ? (
+          <LocalBranches
+            key={project.id}
+            projectId={project.id}
+            branches={free}
+            total={entry?.info?.localBranches ?? null}
+            listed={branches?.length ?? null}
+            defaultBranch={entry?.info?.defaultBranch?.name ?? project.defaultBranch}
+            error={entry && !entry.info ? (entry.error ?? 'Could not read the repository.') : null}
+          />
+        ) : (
+          <OpenRequests projectId={project.id} />
+        )}
+      </div>
+      {menu.state && (
+        <ContextMenu
+          items={[
+            {
+              id: 'open',
+              label: 'Open changes',
+              onSelect: () =>
+                actions.setView(store, {
+                  kind: 'worktree',
+                  worktreeId: menu.state?.target.worktree.id ?? '',
+                }),
+            },
+            ...separated(worktreeCopyItems(menu.state.target.worktree, copy, menu.state.position)),
+          ]}
+          position={menu.state.position}
+          onClose={menu.close}
+          label="Actions"
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * The project's worktrees, the default-branch one first and the rest by recent activity, 15 a
+ * page (`PAGE_SIZE`).
+ */
+function WorktreeTable({
+  rows,
+  onMenu,
+}: {
+  rows: readonly WorktreeRow[];
+  onMenu: (event: React.MouseEvent, row: WorktreeRow) => void;
+}) {
+  const store = useUiStore();
+  const slice = usePage(defaultBranchFirst(rows));
+  return (
+    <>
+      <table className="w-full text-xs">
         <thead>
           <tr>
             <th className="od-th">Worktree</th>
@@ -498,10 +614,11 @@ function ProjectOverview({ group }: { group: ProjectGroup }) {
           </tr>
         </thead>
         <tbody>
-          {group.allRows.map((row) => {
+          {slice.rows.map((row) => {
             const s = row.summary;
             const source = row.worktree.isMain ? null : worktreeSource(row.worktree.path);
             const dirty = s ? isDirtySummary(s) : false;
+            const isDefault = isDefaultBranch(row.worktree, row.project);
             const go = () =>
               actions.setView(store, { kind: 'worktree', worktreeId: row.worktree.id });
             return (
@@ -509,29 +626,33 @@ function ProjectOverview({ group }: { group: ProjectGroup }) {
                 key={row.worktree.id}
                 className="cursor-pointer hover:bg-hover"
                 onClick={go}
-                onContextMenu={(e) => menu.open(e, row)}
+                onContextMenu={(e) => onMenu(e, row)}
                 data-testid="overview-worktree-row"
                 data-worktree-id={row.worktree.id}
+                data-default={isDefault ? 'true' : undefined}
                 title={row.worktree.path}
               >
                 <td className={CELL}>
-                  <RowLink onClick={go}>
-                    <span className={row.worktree.branch ? 'font-medium' : 'italic text-muted'}>
-                      {worktreeLabel(row.worktree)}
-                    </span>
-                  </RowLink>
-                  {row.worktree.isMain && (
-                    <span className="ml-1.5 text-[11px] text-faint">main</span>
-                  )}
-                  {s?.inProgress && (
-                    <span className="ml-1.5 text-[11px] text-warn">{s.inProgress}</span>
-                  )}
-                  {row.worktree.missing && (
-                    <span className="ml-1.5 text-[11px] text-danger">missing</span>
-                  )}
+                  <span className="flex min-w-0 items-center gap-1.5">
+                    <RowLink onClick={go} className="min-w-0 truncate">
+                      <span className={row.worktree.branch ? 'font-medium' : 'italic text-muted'}>
+                        {worktreeLabel(row.worktree)}
+                      </span>
+                    </RowLink>
+                    <DefaultBranchChip row={row} />
+                    {s?.inProgress && <span className="text-[11px] text-warn">{s.inProgress}</span>}
+                    {row.worktree.missing && (
+                      <span className="text-[11px] text-danger">missing</span>
+                    )}
+                  </span>
                 </td>
                 <td className={`${CELL} font-mono text-[11px] text-muted`}>
-                  {source?.label ?? (row.worktree.isMain ? '–' : 'plain')}
+                  {source?.label ??
+                    (row.worktree.isMain ? (
+                      <span className="font-sans">main checkout</span>
+                    ) : (
+                      'plain'
+                    ))}
                 </td>
                 <td className={`${NUM} text-muted`}>
                   {s && s.ahead !== null && s.behind !== null ? `↑${s.ahead} ↓${s.behind}` : '–'}
@@ -567,26 +688,7 @@ function ProjectOverview({ group }: { group: ProjectGroup }) {
           })}
         </tbody>
       </table>
-      <OpenRequests projectId={project.id} />
-      {menu.state && (
-        <ContextMenu
-          items={[
-            {
-              id: 'open',
-              label: 'Open changes',
-              onSelect: () =>
-                actions.setView(store, {
-                  kind: 'worktree',
-                  worktreeId: menu.state?.target.worktree.id ?? '',
-                }),
-            },
-            ...separated(worktreeCopyItems(menu.state.target.worktree, copy, menu.state.position)),
-          ]}
-          position={menu.state.position}
-          onClose={menu.close}
-          label="Actions"
-        />
-      )}
-    </div>
+      <Pager slice={slice} what="worktrees" />
+    </>
   );
 }

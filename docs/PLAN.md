@@ -116,20 +116,30 @@ Three-pane layout, dark and light themes:
    bottom, closed by default. A commit or a merge moves work into a bookmark range; it never settles it. Status
    comes from `WorktreeSummary.review` (status flow v2), never from the toolbar scope. Folder and project headers
    collapse, open their Overview on click, and show what they hide while closed. "Hide until it changes" / "Show"
-   on hover and in the row menu; it holds until the worktree's state hash changes. No activity pulse. Rows keep a
-   static folder, project and worktree order. Filters: text filter, "only dirty", "only unreviewed" (chips).
+   on hover and in the row menu; it holds until the worktree's state hash changes. No activity pulse. Folders and
+   projects keep a static order; inside a project, worktrees are listed by recent activity, newest first
+   (`WorktreeSummary.activityAt`, DECISIONS #124). Filters: text filter, "only dirty", "only unreviewed" (chips).
 2. **File list** (`@pierre/trees`): changed files for the selected worktree (or, in Inbox mode, grouped by
    project → worktree). Status icons, +/− counts, reviewed checkmark.
 3. **Diff viewer** (`@pierre/diffs`): split / unified toggle, hide-whitespace toggle, collapsed unchanged
    regions ("More context" +20 lines up to the whole file, "Expand all" / "Collapse"; never past the API's
-   `context` maximum, DECISIONS #112–#114), lazy rendering with virtualization for huge diffs, binary / too-large placeholders,
+   `context` maximum, DECISIONS #154–#156), lazy rendering with virtualization for huge diffs, binary / too-large placeholders,
    rename display (`old → new`), submodule and symlink diffs shown sanely.
 
-Toolbar: scope filter with counts (`To review (5) · All on branch (12) · Uncommitted (3) · Staged · Unstaged ·
-Commit…`), one verb "Reviewed" (`r` per file, **Review all** `⇧R`, undo restores the bookmark too), split/unified, whitespace, "show reviewed" toggle, refresh indicator. For a worktree whose
-branch has a matched pull/merge request, a `Changes | PR #n` switch opens the **Request** tab (read-only: summary,
-checks, conversation, timeline, files; `docs/FORGES.md`). Folder and project Overviews show repository information
-(local git facts; the project Overview also the forge's facts and open requests).
+Chrome (`docs/TOOLBAR.md`, DECISIONS #116–#122): three tiers, one row each. A **context bar** above both panes says
+where you are (the Inbox with its counts, or the worktree's project and branch with its chips and `↑a ↓b`), holds the
+`Changes | PR #n` switch for a worktree whose branch has a matched pull/merge request (the **Request** tab, read-only:
+summary, checks, conversation, timeline, files; `docs/FORGES.md`), the forge link, the review policy and, at the
+right, the refresh indicator, theme and help. The **file pane header** holds the scope select with counts
+(`To review (5)`, `All on branch (12)`, `Uncommitted (3)`, `Staged`, `Unstaged`, `Commit…`), the show-reviewed and
+tree-view toggles and **Review N** (`⇧R`; undo restores the bookmark too). The **diff header** holds the file's
+identity and, at the right, unified / split and whitespace, `More context` / `Expand all`, the `⋯` menu and the one
+verb **Reviewed** (`r`). A control sits over what it changes. Folder and project Overviews show repository
+information (local git facts; the project Overview also the forge's facts). The project Overview's lists sit behind
+`Worktrees | Branches | Pull requests` tabs with counts, 15 rows a page: worktrees (the default-branch one first),
+local branches no worktree has checked out, and the newest 15 open requests with a link to the rest on the forge
+(`docs/OVERVIEW-LISTS.md`). The worktree with the default branch checked out carries a `default` chip wherever
+worktrees are listed.
 
 Copy (`docs/COPY-TOOLS.md`, web only): a "Copy" group in the worktree menus (sidebar, Overview, Inbox group
 headers: branch name, worktree path, commit id), a file menu on list and tree rows (path, old path, name, absolute
@@ -139,7 +149,7 @@ them as plain code or as Markdown with where they live (file, lines, branch, wor
 `Ctrl/⌘ C` copies them too. Copies keep invisible / bidirectional characters escaped (SEC-05) and fall back to
 `execCommand('copy')` where `navigator.clipboard` is missing (plain-http LAN).
 
-Adding (DECISIONS #115–#117): the first-run screen, the Add dialog and Settings → Folders share one form. Its main
+Adding (DECISIONS #157–#159): the first-run screen, the Add dialog and Settings → Folders share one form. Its main
 button ("Continue" on the first run) watches the folder or adds the repository the text points at and is disabled
 until that is valid; a status panel (a toast once the form is gone) shows progress, what was found and the next
 step, and the app replaces the first-run screen as soon as a repository exists, events or not.
@@ -185,7 +195,8 @@ multiple machines, fetch-on-demand (opt-in write-ish). (PR/CI status via `gh`/`g
 - Daemon: Hono + `@hono/node-server`. Events: **Server-Sent Events** (`/api/events`), since the client
   never sends commands over the stream. Storage: built-in `node:sqlite`. Config: XDG
   (`~/.config/octopus-diff/`, state in `~/.local/state/octopus-diff/`).
-- Watcher: `@parcel/watcher`.
+- Watcher: `@parcel/watcher`, run in a child process (the watch host) so a native hang cannot block the daemon
+  (DECISIONS #130).
 - Web: Vite + React + TypeScript, TanStack Query (data + SSE-driven invalidation), Tailwind CSS,
   `@pierre/diffs` (+ worker pool for highlighting, as in T3 Code), `@pierre/trees`.
 - Distribution: `npx octopus-diff` / `octopus-diff serve`, serving the built web assets from the daemon.
@@ -303,6 +314,8 @@ All git access goes through **one runner** in `packages/git-core`:
 - Debounce 150–300 ms per worktree, coalesce bursts, then recompute the summary; emit `worktree.changed`
   only if `stateHash` changed. Fallback poll (30 s focused / 5 min others) in case watchers miss events.
 - Must degrade gracefully on inotify limits (WSL, big trees): log a clear warning and fall back to polling.
+- A subscription that reports an error is dropped (never unsubscribed) and re-made with a backoff; polling covers
+  the gap (DECISIONS #131).
 - Detect new / removed worktrees by re-running `worktree list` when git-dir `worktrees/` changes and on a
   timer.
 

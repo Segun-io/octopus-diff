@@ -10,6 +10,7 @@ import type {
   Project,
   ProjectListItem,
   ScanRoot,
+  ScopeKind,
   Worktree,
   WorktreeForge,
   WorktreeListItem,
@@ -31,6 +32,32 @@ export function compareWorktrees(a: Worktree, b: Worktree): number {
   if (a.isMain !== b.isMain) return a.isMain ? -1 : 1;
   if ((a.branch === null) !== (b.branch === null)) return a.branch === null ? 1 : -1;
   return cmp(a.branch ?? '', b.branch ?? '') || cmp(a.path, b.path);
+}
+
+/** `summary.activityAt` in ms, or null (no summary yet, an older daemon, or unknown). */
+export function activityMs(summary: Pick<WorktreeSummary, 'activityAt'> | null): number | null {
+  const at = summary?.activityAt;
+  if (!at) return null;
+  const ms = Date.parse(at);
+  return Number.isNaN(ms) ? null : ms;
+}
+
+/**
+ * The sidebar's worktree order: most recent activity first (`summary.activityAt`: commits,
+ * checkouts, edits), worktrees without one after, ties and the rest by `compareWorktrees`.
+ */
+export function compareByActivity(
+  a: { worktree: Worktree; summary: Pick<WorktreeSummary, 'activityAt'> | null },
+  b: { worktree: Worktree; summary: Pick<WorktreeSummary, 'activityAt'> | null },
+): number {
+  const am = activityMs(a.summary);
+  const bm = activityMs(b.summary);
+  if (am !== bm) {
+    if (am === null) return 1;
+    if (bm === null) return -1;
+    return bm - am;
+  }
+  return compareWorktrees(a.worktree, b.worktree);
 }
 
 export function compareFiles(a: ChangedFile, b: ChangedFile): number {
@@ -72,10 +99,32 @@ export function sortFilesTreeOrder(files: readonly ChangedFile[]): ChangedFile[]
 
 // --- sidebar --------------------------------------------------------------------------------
 
+/**
+ * The sidebar filter dropdown's selection. Picked projects and worktrees are one union (a row
+ * shows when its project or the row itself is picked; nothing picked = every row); the status
+ * options narrow that further.
+ */
 export interface SidebarFilters {
-  text: string;
+  projects: readonly string[];
+  worktrees: readonly string[];
   onlyDirty: boolean;
   onlyUnreviewed: boolean;
+}
+
+export const NO_SIDEBAR_FILTERS: SidebarFilters = {
+  projects: [],
+  worktrees: [],
+  onlyDirty: false,
+  onlyUnreviewed: false,
+};
+
+export function hasSidebarFilters(filters: SidebarFilters): boolean {
+  return (
+    filters.projects.length > 0 ||
+    filters.worktrees.length > 0 ||
+    filters.onlyDirty ||
+    filters.onlyUnreviewed
+  );
 }
 
 export interface WorktreeRow {
@@ -201,6 +250,21 @@ export function placeOf(stage: Stage, uncommittedLeft = false): RowState {
 
 export function autoRowState(row: StageInput): RowState {
   return placeOf(stageOf(row), (row.summary?.changedFiles ?? 0) > 0);
+}
+
+/**
+ * The override the row's Hide / Show action sets (`null` removes it), or `undefined` when the
+ * row cannot be hidden (blocked, or no summary yet). Works from the row's own `stage`, which
+ * already includes the forge data: a `WorktreeRow` carries that as `request`, not `forge`, so
+ * `autoRowState(row)` would miss a merged/closed PR and get the automatic place wrong.
+ */
+export function settleToggle(
+  row: Pick<WorktreeRow, 'stage' | 'state' | 'summary'>,
+): 'settled' | 'active' | null | undefined {
+  if (!row.summary || row.state === 'blocked') return undefined;
+  const auto = placeOf(row.stage, row.summary.changedFiles > 0);
+  if (row.state === 'settled') return auto === 'settled' ? 'active' : null;
+  return auto === 'settled' ? null : 'settled';
 }
 
 /** True while an override still applies to the worktree's current state. */
@@ -386,19 +450,15 @@ export function isDirtySummary(summary: WorktreeSummary | null): boolean {
   return summary !== null && summary.changedFiles > 0;
 }
 
-function matchesText(row: WorktreeRow, needle: string): boolean {
-  if (!needle) return true;
-  return (
-    row.project.name.toLowerCase().includes(needle) ||
-    (row.worktree.branch ?? '').toLowerCase().includes(needle) ||
-    row.worktree.path.toLowerCase().includes(needle)
-  );
+function matchesPicked(row: WorktreeRow, filters: SidebarFilters): boolean {
+  if (filters.projects.length === 0 && filters.worktrees.length === 0) return true;
+  return filters.projects.includes(row.project.id) || filters.worktrees.includes(row.worktree.id);
 }
 
 export function rowVisible(row: WorktreeRow, filters: SidebarFilters): boolean {
   if (filters.onlyDirty && !isDirtySummary(row.summary)) return false;
   if (filters.onlyUnreviewed && row.unreviewed === 0) return false;
-  return matchesText(row, filters.text.trim().toLowerCase());
+  return matchesPicked(row, filters);
 }
 
 export function buildSidebar(
@@ -425,7 +485,7 @@ export function buildSidebar(
   for (const item of sorted) {
     const rows: WorktreeRow[] = [];
     const allRows: WorktreeRow[] = [];
-    const worktrees = [...item.worktrees].sort((a, b) => compareWorktrees(a.worktree, b.worktree));
+    const worktrees = [...item.worktrees].sort(compareByActivity);
     for (const wt of worktrees) {
       const stats = inboxStats.get(wt.worktree.id);
       const review = effectivePolicy(wt.review);
@@ -490,10 +550,10 @@ export function buildSidebar(
   return { groups, folders, pinned: pinnedRows, settled, order, byId };
 }
 
-/** Inbox entries sorted like the sidebar (project name, then worktree order). */
+/** Inbox entries sorted like the sidebar (project name, then most recent activity first). */
 export function sortInboxEntries(entries: readonly InboxEntry[]): InboxEntry[] {
   return [...entries].sort(
-    (a, b) => compareProjects(a.project, b.project) || compareWorktrees(a.worktree, b.worktree),
+    (a, b) => compareProjects(a.project, b.project) || compareByActivity(a, b),
   );
 }
 
@@ -530,6 +590,21 @@ export function flattenGroups(groups: readonly FileGroup[]): NavEntry[] {
 }
 
 export type VisiblePredicate = (entry: NavEntry) => boolean;
+
+/**
+ * Whether the eye ("Show reviewed") applies to a scope. All on branch lists everything on the
+ * branch and To review only what is left, so neither has the eye: their names say what they show.
+ */
+export function eyeApplies(kind: ScopeKind): boolean {
+  return kind !== 'branch' && kind !== 'review';
+}
+
+/** Whether the list shows reviewed files: All on branch always, To review never, else the eye. */
+export function listsReviewed(showReviewed: boolean, kind: ScopeKind): boolean {
+  if (kind === 'branch') return true;
+  if (kind === 'review') return false;
+  return showReviewed;
+}
 
 export function visibleIf(showReviewed: boolean): VisiblePredicate {
   return showReviewed ? () => true : (e) => !e.file.reviewed;
@@ -628,4 +703,28 @@ export function worktreeLabel(worktree: Worktree): string {
   if (worktree.branch) return worktree.branch;
   if (worktree.headSha) return `detached @ ${worktree.headSha.slice(0, 7)}`;
   return 'detached';
+}
+
+/** The worktree has the project's default branch checked out (the baseline of the others). */
+export function isDefaultBranch(worktree: Worktree, project: Project): boolean {
+  return worktree.branch !== null && worktree.branch === project.defaultBranch;
+}
+
+/**
+ * Overview order: the default-branch worktree first (the reference every other row compares
+ * with, so pagination never hides it), then the given (recency) order.
+ */
+export function defaultBranchFirst(rows: readonly WorktreeRow[]): WorktreeRow[] {
+  const index = rows.findIndex((r) => isDefaultBranch(r.worktree, r.project));
+  if (index <= 0) return [...rows];
+  return [rows[index] as WorktreeRow, ...rows.slice(0, index), ...rows.slice(index + 1)];
+}
+
+/** Local branches that no worktree of the project has checked out, in the given order. */
+export function branchesWithoutWorktree<B extends { name: string }>(
+  branches: readonly B[],
+  rows: readonly WorktreeRow[],
+): B[] {
+  const checkedOut = new Set(rows.map((r) => r.worktree.branch).filter((b) => b !== null));
+  return branches.filter((b) => !checkedOut.has(b.name));
 }

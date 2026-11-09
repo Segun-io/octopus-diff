@@ -14,12 +14,12 @@ import {
   useSettingsSupport,
 } from '../api/settings.ts';
 import {
-  autoRowState,
   DIRECT_FOLDER_ID,
   type FolderNode,
   isDirtySummary,
   type ProjectGroup,
   settledWord,
+  settleToggle,
   type WorktreeRow,
   worktreeLabel,
 } from '../lib/model.ts';
@@ -28,12 +28,13 @@ import { useCommandsContext } from '../state/commandsContext.tsx';
 import { type CopyFn, copyAndReport } from '../state/copy.ts';
 import { useAppModel } from '../state/model.tsx';
 import { actions, useUi, useUiStore, type View } from '../state/ui.tsx';
-import { ToggleButton } from './bits.tsx';
-import { ChangeRequestChip, ChangeRequestHoverBlock } from './ChangeRequest.tsx';
+import { ChangeRequestHoverBlock } from './ChangeRequest.tsx';
 import { ContextMenu, type MenuItem, useContextMenu } from './ContextMenu.tsx';
 import { separated, worktreeCopyItems } from './copyMenu.ts';
 import { useFolderStart } from './FolderBrowser.tsx';
 import { Wordmark } from './Mark.tsx';
+import { SidebarFilter } from './SidebarFilter.tsx';
+import { DefaultBranchChip, RowChips } from './WorktreeChips.tsx';
 
 /**
  * The sidebar (DECISIONS "UX round 4", status flow v2 in docs/STATUS-FLOW.md): the Inbox;
@@ -102,35 +103,6 @@ function rowAttributes(row: WorktreeRow, selected: boolean) {
   };
 }
 
-/** `main` (off the default branch), the worktree source, an in-progress operation, its PR/MR. */
-function RowChips({ row }: { row: WorktreeRow }) {
-  const { worktree, summary, project } = row;
-  const source = worktree.isMain ? null : worktreeSource(worktree.path);
-  // The main checkout on the default branch is the expected case; the chip speaks only when the
-  // main checkout sits elsewhere, or when the project has no default branch to compare with.
-  const mainChip = worktree.isMain && worktree.branch !== project.defaultBranch;
-  return (
-    <>
-      {mainChip && (
-        <span className="od-chip" title="Main checkout">
-          main
-        </span>
-      )}
-      {source && (
-        <span className="od-chip font-mono" title={source.title}>
-          {source.label}
-        </span>
-      )}
-      {summary?.inProgress && (
-        <span className="od-chip text-warn" title={`${summary.inProgress} in progress`}>
-          {summary.inProgress}
-        </span>
-      )}
-      <ChangeRequestChip worktreeId={worktree.id} />
-    </>
-  );
-}
-
 function ReviewOffBadge({ row }: { row: WorktreeRow }) {
   return (
     <span
@@ -147,14 +119,18 @@ function ReviewOffBadge({ row }: { row: WorktreeRow }) {
 /**
  * The status slot at the top right of a card: `N commits ·` and the unreviewed-files pill (the one
  * filled shape) for To review, `N conflicts` for blocked work, or one word for a quiet row. Hover
- * swaps it for the actions, as T3 Code swaps the time for "Settle".
+ * slides it left to make room for the action (the counts stay visible).
  */
-function RowStatus({ row }: { row: WorktreeRow }) {
+function RowStatus({ row, makeRoom }: { row: WorktreeRow; makeRoom: boolean }) {
   const counts = row.summary?.counts;
   const word = settledWord(row);
   const quiet = row.state === 'settled' || row.state === 'active';
   return (
-    <span className="ml-auto flex shrink-0 items-center gap-1.5 text-[11px] group-focus-within/wt:invisible group-hover/wt:invisible">
+    <span
+      className={`ml-auto flex shrink-0 items-center gap-1.5 text-[11px] ${
+        makeRoom ? 'group-focus-within/wt:mr-14 group-hover/wt:mr-14' : ''
+      }`}
+    >
       {!row.review.enabled && <ReviewOffBadge row={row} />}
       {counts && counts.conflicted > 0 && (
         <span className="text-danger">{plural(counts.conflicted, 'conflict')}</span>
@@ -382,8 +358,8 @@ function hideLabel(row: WorktreeRow): string {
 /**
  * One worktree as a card (T3 Code's row anatomy). Under a project: the branch with the status
  * slot, then the meta line. Pinned and settled rows sit outside their project, so they start
- * with a project line (repo glyph and name). Hover or focus swaps the status slot for the
- * hide / show action and, after a moment, shows the hover card. Right-click (or the keyboard's menu
+ * with a project line (repo glyph and name). Hover or focus shows the hide / show action
+ * beside the status slot and, after a moment, shows the hover card. Right-click (or the keyboard's menu
  * key) opens the actions, as on folder and project headers; there is no `⋯`.
  */
 const WorktreeItem = memo(function WorktreeItem({
@@ -424,7 +400,7 @@ const WorktreeItem = memo(function WorktreeItem({
           <span className="flex w-full items-center gap-1.5 text-[11px] text-muted">
             <RepoIcon />
             <span className="min-w-0 truncate">{row.project.name}</span>
-            <RowStatus row={row} />
+            <RowStatus row={row} makeRoom={canSettle} />
           </span>
         )}
         <span className="relative flex w-full items-center gap-1.5">
@@ -435,7 +411,8 @@ const WorktreeItem = memo(function WorktreeItem({
           >
             {worktreeLabel(worktree)}
           </span>
-          {inFolder && <RowStatus row={row} />}
+          <DefaultBranchChip row={row} />
+          {inFolder && <RowStatus row={row} makeRoom={canSettle} />}
         </span>
         <RowMeta row={row} />
       </button>
@@ -497,7 +474,7 @@ function ChevronButton({
   );
 }
 
-/** A shelf header (Pinned, Settled): a label, a muted count, optionally a chevron. */
+/** A shelf header (Pinned, Hidden): a label, a muted count, optionally a chevron. */
 function ShelfHeader({
   label,
   count,
@@ -556,7 +533,8 @@ export function Sidebar() {
   const folderStart = useFolderStart();
   const model = useAppModel();
   const commands = useCommandsContext();
-  const filterText = useUi((s) => s.filterText);
+  const filterProjects = useUi((s) => s.filterProjects);
+  const filterWorktrees = useUi((s) => s.filterWorktrees);
   const onlyDirty = useUi((s) => s.onlyDirty);
   const onlyUnreviewed = useUi((s) => s.onlyUnreviewed);
   const collapsed = useUi((s) => s.collapsed);
@@ -573,7 +551,8 @@ export function Sidebar() {
   const inboxCount = model.inboxEntries.length;
   const onSelect = (id: string) => actions.setView(store, { kind: 'worktree', worktreeId: id });
   const totalWorktrees = model.sidebar.byId.size;
-  const filtering = filterText.trim() !== '' || onlyDirty || onlyUnreviewed;
+  const filtering =
+    filterProjects.length > 0 || filterWorktrees.length > 0 || onlyDirty || onlyUnreviewed;
   // Filters open everything: a hit must never hide behind a closed folder or shelf.
   const isCollapsed = (id: string) => !filtering && collapsed.includes(id);
   const shelfOpen = filtering || settledOpen;
@@ -591,15 +570,9 @@ export function Sidebar() {
   }, [sidebar.byId, store]);
 
   const onSettle = (row: WorktreeRow) => {
-    const hash = row.summary?.stateHash;
-    if (!hash || row.state === 'blocked') return;
-    const auto = autoRowState(row);
-    const id = row.worktree.id;
-    if (row.state === 'settled') {
-      actions.setSettle(store, id, auto === 'settled' ? 'active' : null, hash);
-    } else {
-      actions.setSettle(store, id, auto === 'settled' ? null : 'settled', hash);
-    }
+    const next = settleToggle(row);
+    if (next === undefined || !row.summary) return;
+    actions.setSettle(store, row.worktree.id, next, row.summary.stateHash);
   };
 
   const policyItems = (target: ReviewPolicyTarget | null, label: string): MenuItem[] => {
@@ -762,59 +735,8 @@ export function Sidebar() {
           <GearIcon />
         </button>
       </div>
-      <div className="flex flex-col gap-1.5 border-b border-line p-2">
-        <div className="relative">
-          <input
-            data-testid={TEST_IDS.sidebarFilter}
-            data-filter-input=""
-            type="search"
-            name="filter"
-            autoComplete="off"
-            placeholder="Filter worktrees"
-            aria-label="Filter projects and worktrees"
-            aria-keyshortcuts="/"
-            value={filterText}
-            onChange={(e) => store.setState({ filterText: e.target.value })}
-            onKeyDown={(e) => {
-              if (e.key === 'Escape') {
-                e.preventDefault();
-                if (filterText) store.setState({ filterText: '' });
-                else (e.target as HTMLInputElement).blur();
-              } else if (e.key === 'Enter') {
-                (e.target as HTMLInputElement).blur();
-              }
-            }}
-            className="od-input w-full pr-7"
-          />
-          {filterText === '' && (
-            <span
-              aria-hidden="true"
-              className="pointer-events-none absolute top-1/2 right-1.5 -translate-y-1/2"
-            >
-              <kbd className="text-faint">/</kbd>
-            </span>
-          )}
-        </div>
-        <div className="flex items-center gap-1 px-0.5">
-          <ToggleButton
-            variant="chip"
-            pressed={onlyDirty}
-            onClick={() => store.setState({ onlyDirty: !onlyDirty })}
-            title="Only worktrees with changes"
-            testId={TEST_IDS.onlyDirtyToggle}
-          >
-            Only dirty
-          </ToggleButton>
-          <ToggleButton
-            variant="chip"
-            pressed={onlyUnreviewed}
-            onClick={() => store.setState({ onlyUnreviewed: !onlyUnreviewed })}
-            title="Only worktrees with something to review"
-            testId={TEST_IDS.onlyUnreviewedToggle}
-          >
-            Only unreviewed
-          </ToggleButton>
-        </div>
+      <div className="border-b border-line p-2">
+        <SidebarFilter />
       </div>
 
       <div className="od-scroll min-h-0 flex-1 overflow-y-auto p-1.5">
@@ -928,7 +850,7 @@ export function Sidebar() {
             {sidebar.settled.length > 0 && (
               <li role="presentation">
                 <ShelfHeader
-                  label="Settled"
+                  label="Hidden"
                   count={sidebar.settled.length}
                   open={shelfOpen}
                   onToggle={() => actions.toggleSettledOpen(store)}
@@ -1011,9 +933,9 @@ function ProjectFolder({
           ) : active.length === 0 ? (
             <span
               className="ml-auto shrink-0 text-[11px] text-faint"
-              title={`${plural(settledCount, 'worktree')}, nothing to do (in the shelf below)`}
+              title={`${plural(settledCount, 'worktree')}, nothing to do (in Hidden below)`}
             >
-              settled
+              hidden
             </span>
           ) : null}
         </button>

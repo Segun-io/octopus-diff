@@ -7,6 +7,7 @@
  *
  * (The subcommand allowlist itself is unit-tested in packages/git-core, WS1.)
  */
+import { ApiClientError } from '@octopus-diff/contracts';
 import {
   type FixtureSet,
   findWorktree,
@@ -75,10 +76,24 @@ test.describe('§8.8 read-only proof', () => {
               path: file.path,
               ...(file.rawPath ? { rawPath: file.rawPath } : {}),
             };
-            await client.getDiff(worktree.id, base);
-            await client.getDiff(worktree.id, { ...base, ignoreWhitespace: true, context: 10 });
+            // The simulator keeps editing live-agent: a file listed a moment ago can be clean
+            // or gone by the time its diff is read (`not_found`). That is the test racing the
+            // agent, not a read-only problem; any other error, or any other worktree, fails.
+            const tolerant = async (query: Parameters<typeof client.getDiff>[1]) => {
+              try {
+                await client.getDiff(worktree.id, query);
+              } catch (error) {
+                const raced =
+                  worktree.id === live.id &&
+                  error instanceof ApiClientError &&
+                  error.code === 'not_found';
+                if (!raced) throw error;
+              }
+            };
+            await tolerant(base);
+            await tolerant({ ...base, ignoreWhitespace: true, context: 10 });
             if (file.additions !== null && file.additions > 1000)
-              await client.getDiff(worktree.id, { ...base, full: true });
+              await tolerant({ ...base, full: true });
           }
         }
       }

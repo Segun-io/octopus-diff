@@ -2,14 +2,21 @@ import type { ChangedFile, ChangeRequest, InboxEntry } from '@octopus-diff/contr
 import { describe, expect, it } from 'vitest';
 import { MockBackend } from '../mock/backend.ts';
 import {
+  activityMs,
+  branchesWithoutWorktree,
   buildSidebar,
+  compareByActivity,
+  defaultBranchFirst,
   type FileGroup,
   flattenGroups,
+  isDefaultBranch,
+  NO_SIDEBAR_FILTERS,
   nextUnreviewed,
   placeOf,
   repairSelection,
   rowState,
   settledWord,
+  settleToggle,
   sortFiles,
   sortInboxEntries,
   stageOf,
@@ -43,13 +50,9 @@ function withReviewed(entries: InboxEntry[], reviewed: (f: ChangedFile) => boole
 }
 
 describe('sidebar model', () => {
-  it('sorts projects by name and puts the main worktree first', () => {
+  it('sorts projects by name and worktrees by recent activity', () => {
     const { projects, inbox } = demo();
-    const model = buildSidebar(projects, inbox.entries, {
-      text: '',
-      onlyDirty: false,
-      onlyUnreviewed: false,
-    });
+    const model = buildSidebar(projects, inbox.entries, NO_SIDEBAR_FILTERS);
     expect(model.groups.map((g) => g.project.name)).toEqual([
       'docs-site',
       'infra',
@@ -57,26 +60,75 @@ describe('sidebar model', () => {
       'octopus-api',
       'web-dashboard',
     ]);
-    const api = model.groups.find((g) => g.project.name === 'octopus-api');
-    expect(api?.rows[0]?.worktree.isMain).toBe(true);
-    // Detached worktrees sort after named branches.
-    expect(api?.rows.at(-1)?.worktree.branch).toBeNull();
+    for (const group of model.groups) {
+      const times = group.allRows.map((r) => activityMs(r.summary) ?? -1);
+      expect(times).toEqual([...times].sort((a, b) => b - a));
+    }
+    const branches = (name: string) =>
+      model.groups.find((g) => g.project.name === name)?.allRows.map((r) => r.worktree.branch);
+    expect(branches('octopus-api')).toEqual(['main', 'feat/auth', 'fix/cache', null]);
+    // Recency, not "main first": an agent just committed on agent/codex-123.
+    expect(branches('web-dashboard')).toEqual(['agent/codex-123', 'main']);
     expect(model.order).toHaveLength(model.byId.size);
   });
 
-  it('filters by text, dirty and unreviewed', () => {
+  it('puts worktrees without activity last, and breaks ties main first, detached last', () => {
+    const items = demo().projects.flatMap((p) => p.worktrees);
+    const main = items.find((w) => w.worktree.isMain);
+    const branch = items.find((w) => !w.worktree.isMain && w.worktree.branch !== null);
+    const detached = items.find((w) => w.worktree.branch === null);
+    if (!main?.summary || !branch?.summary || !detached) throw new Error('demo fixture changed');
+    const base = main.summary;
+    const at = (iso: string | null) => ({ ...base, activityAt: iso });
+    const older = { worktree: main.worktree, summary: at('2026-11-01T00:00:00.000Z') };
+    const newer = { worktree: branch.worktree, summary: at('2026-11-02T00:00:00.000Z') };
+    const unknown = { worktree: branch.worktree, summary: at(null) };
+    const loading = { worktree: main.worktree, summary: null };
+    expect([older, unknown, newer].sort(compareByActivity)).toEqual([newer, older, unknown]);
+    expect(compareByActivity(loading, newer)).toBeGreaterThan(0);
+    // Same (or no) activity: the previous order.
+    const tie = '2026-11-03T00:00:00.000Z';
+    const rows = [
+      { worktree: detached.worktree, summary: at(tie) },
+      { worktree: branch.worktree, summary: at(tie) },
+      { worktree: main.worktree, summary: at(tie) },
+    ];
+    expect(rows.sort(compareByActivity).map((r) => r.worktree.id)).toEqual([
+      main.worktree.id,
+      branch.worktree.id,
+      detached.worktree.id,
+    ]);
+  });
+
+  it('filters by picked projects and worktrees (a union), dirty and unreviewed', () => {
     const { projects, inbox } = demo();
-    const text = buildSidebar(projects, inbox.entries, {
-      text: 'CACHE',
-      onlyDirty: false,
-      onlyUnreviewed: false,
+    const cache = projects
+      .flatMap((p) => p.worktrees)
+      .find((w) => w.worktree.branch === 'fix/cache');
+    const infra = projects.find((p) => p.project.name === 'infra');
+    if (!cache || !infra) throw new Error('demo fixture changed');
+    const one = buildSidebar(projects, inbox.entries, {
+      ...NO_SIDEBAR_FILTERS,
+      worktrees: [cache.worktree.id],
     });
-    expect(text.order.map((id) => text.byId.get(id)?.worktree.branch)).toEqual(['fix/cache']);
+    expect(one.order.map((id) => one.byId.get(id)?.worktree.branch)).toEqual(['fix/cache']);
+    // byId keeps every row: the dropdown lists what the filters hide.
+    expect(one.byId.size).toBe(projects.flatMap((p) => p.worktrees).length);
+
+    const union = buildSidebar(projects, inbox.entries, {
+      ...NO_SIDEBAR_FILTERS,
+      projects: [infra.project.id],
+      worktrees: [cache.worktree.id],
+    });
+    const cacheProject = projects.find((p) => p.worktrees.includes(cache))?.project.name;
+    expect(union.groups.map((g) => g.project.name).sort()).toEqual(
+      [infra.project.name, cacheProject].sort(),
+    );
+    expect(union.order).toHaveLength(infra.worktrees.length + 1);
 
     const dirty = buildSidebar(projects, inbox.entries, {
-      text: '',
+      ...NO_SIDEBAR_FILTERS,
       onlyDirty: true,
-      onlyUnreviewed: false,
     });
     expect(dirty.order).toHaveLength(inbox.entries.length);
     expect([...dirty.order].sort()).toEqual(inbox.entries.map((e) => e.worktree.id).sort());
@@ -86,11 +138,39 @@ describe('sidebar model', () => {
       (f) => f.path === 'README.md' || f.path === 'src/server/router.ts',
     );
     const unreviewed = buildSidebar(projects, allReviewedApiMain, {
-      text: '',
-      onlyDirty: false,
+      ...NO_SIDEBAR_FILTERS,
       onlyUnreviewed: true,
     });
     expect(unreviewed.order).toHaveLength(inbox.entries.length - 1);
+  });
+});
+
+describe('Overview helpers', () => {
+  it('puts the default-branch worktree first and keeps the rest in order', () => {
+    const { projects, inbox } = demo();
+    const model = buildSidebar(projects, inbox.entries, NO_SIDEBAR_FILTERS);
+    const web = model.groups.find((g) => g.project.name === 'web-dashboard');
+    if (!web) throw new Error('no web-dashboard');
+    expect(web.allRows.map((r) => r.worktree.branch)).toEqual(['agent/codex-123', 'main']);
+    expect(defaultBranchFirst(web.allRows).map((r) => r.worktree.branch)).toEqual([
+      'main',
+      'agent/codex-123',
+    ]);
+    expect(web.allRows.filter((r) => isDefaultBranch(r.worktree, r.project))).toHaveLength(1);
+    // Detached worktrees are never the default branch.
+    const api = model.groups.find((g) => g.project.name === 'octopus-api');
+    const detached = api?.allRows.find((r) => r.worktree.branch === null);
+    if (!detached) throw new Error('no detached worktree');
+    expect(isDefaultBranch(detached.worktree, detached.project)).toBe(false);
+  });
+
+  it('lists the branches no worktree has checked out', () => {
+    const { projects, inbox } = demo();
+    const model = buildSidebar(projects, inbox.entries, NO_SIDEBAR_FILTERS);
+    const web = model.groups.find((g) => g.project.name === 'web-dashboard');
+    if (!web) throw new Error('no web-dashboard');
+    const branches = [{ name: 'main' }, { name: 'old/x' }, { name: 'agent/codex-123' }];
+    expect(branchesWithoutWorktree(branches, web.allRows)).toEqual([{ name: 'old/x' }]);
   });
 });
 
@@ -183,6 +263,74 @@ describe('stages (docs/STATUS-FLOW.md §2.2)', () => {
     );
   });
 
+  it('Show brings back a merged worktree with unreviewed files (forge data on the row)', () => {
+    const { projects: list } = demo();
+    const target = list.flatMap((p) => p.worktrees).find((w) => w.worktree.id === worktree.id);
+    if (!target?.summary) throw new Error('fixture');
+    const merged = {
+      ...target.summary,
+      counts: { ...target.summary.counts, conflicted: 0 },
+      inProgress: null,
+      changedFiles: 0,
+      review: {
+        bookmark: 'a'.repeat(40),
+        base: 'a'.repeat(40),
+        newCommits: 3,
+        unreviewedFiles: 1,
+        historyRewritten: false,
+      },
+    };
+    const projects = list.map((p) => ({
+      ...p,
+      worktrees: p.worktrees.map((w) =>
+        w.worktree.id === worktree.id ? { ...w, summary: merged } : w,
+      ),
+    }));
+    const forges = new Map([
+      [
+        worktree.id,
+        {
+          changeRequest: {
+            kind: 'github' as const,
+            number: 3,
+            title: 't',
+            url: 'https://github.com/o/r/pull/3',
+            state: 'merged' as const,
+            draft: false,
+            author: null,
+            baseBranch: 'main',
+            headBranch: 'feature',
+            headSha: merged.headSha,
+            crossRepository: false,
+            headRepository: null,
+            updatedAt: null,
+            checks: null,
+            review: null,
+            conflicts: null,
+            comments: null,
+          },
+          sync: 'unknown' as const,
+        },
+      ],
+    ]);
+    const build = (settle: Parameters<typeof buildSidebar>[5] = []) =>
+      buildSidebar(projects, undefined, NO_SIDEBAR_FILTERS, undefined, [], settle, forges).byId.get(
+        worktree.id,
+      );
+    const hidden = build();
+    expect(hidden?.state).toBe('settled');
+    if (!hidden) throw new Error('row');
+    const next = settleToggle(hidden);
+    expect(next).toBe('active');
+    const shown = build([
+      { worktreeId: worktree.id, state: 'active', stateHash: merged.stateHash },
+    ]);
+    expect(shown?.state).toBe('active');
+    // and Hide sends it back to the shelf by dropping the override
+    if (!shown) throw new Error('row');
+    expect(settleToggle(shown)).toBeNull();
+  });
+
   it('places stages: blocked and To review under the project, the rest in the shelf', () => {
     expect(placeOf('blocked')).toBe('blocked');
     expect(placeOf('review')).toBe('attention');
@@ -221,9 +369,8 @@ describe('stages (docs/STATUS-FLOW.md §2.2)', () => {
 
   it('the sidebar takes no scope: the same inputs give the same rows', () => {
     const { projects: list, inbox } = demo();
-    const filters = { text: '', onlyDirty: false, onlyUnreviewed: false };
-    const a = buildSidebar(list, inbox.entries, filters);
-    const b = buildSidebar(list, inbox.entries, filters);
+    const a = buildSidebar(list, inbox.entries, NO_SIDEBAR_FILTERS);
+    const b = buildSidebar(list, inbox.entries, NO_SIDEBAR_FILTERS);
     expect([...a.byId.values()].map((r) => [r.worktree.id, r.state, r.stage])).toEqual(
       [...b.byId.values()].map((r) => [r.worktree.id, r.state, r.stage]),
     );

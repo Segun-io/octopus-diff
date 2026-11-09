@@ -1539,12 +1539,323 @@ request, git call or contract change.
      of 3; `pnpm check` on this branch failed 5 of 9 runs, always this one test. git-core is WS1's; proposal for its
      owner: give that test an explicit timeout (e.g. 30 s). Not changed here (AGENTS: edit only owned paths).
 
+## Sidebar: "Hidden" shelf and the filter dropdown (lead, 2026-11-09)
+
+112. **The sidebar filter is a dropdown with a search field, not a free-text box.** The user asked for it: a text
+     box hides what you can filter by and matches substrings you have to guess. `SidebarFilter.tsx`: a trigger
+     (funnel, a summary such as `alpha, dirty` or `All worktrees`, `/` hint, `×` to clear) opens a listbox under it
+     with a search field (combobox, `aria-activedescendant`, as the command palette) over three groups: **Status**
+     (Only dirty, Only unreviewed: the two chips moved in here), **Projects** and **Worktrees** (every row of
+     `sidebar.byId`, so options stay listed while the filters hide their rows). Multi-select; arrows move, `Enter`
+     or a click ticks, Escape clears the search then closes, an outside click or Tab away closes. Search is the
+     palette's `fuzzyMatch`, best match first inside each group. Semantics: picked projects and worktrees are one
+     union (a row shows when its project or the row is picked; none picked = all), the status options narrow it.
+     `SidebarFilters` loses `text` and gains `projects` / `worktrees` (ids; transient state `filterProjects`,
+     `filterWorktrees`, `filterOpen`, not persisted, like the old text). `/` (`focusFilter`) opens the dropdown,
+     or focuses its search when open. Path substring matching is gone; T3 Code's pickers (branch, project) are
+     the model.
+113. **Contracts (test ids, additive plus one re-pointing).** New: `sidebarFilterSearch`, `sidebarFilterOption`
+     (`data-kind`, `data-project-id` / `data-worktree-id`, `aria-selected`), `sidebarFilterClear`.
+     `sidebarFilter` now sits on the dropdown's trigger and `onlyDirtyToggle` / `onlyUnreviewedToggle` on its
+     status options (`aria-selected` instead of `aria-pressed`): the old elements no longer exist, and keeping the
+     names keeps their meaning ("the sidebar filter", "the only-dirty control"). e2e gains `openFilter`,
+     `closeFilter`, `setFilterOption`, `filterProject`, `clearFilters`; specs 01, 05, 06, 11 use them.
+114. **"Settled" is now "Hidden" everywhere the user reads it.** #84 renamed the action (Hide / Show, "Hide until
+     it changes") but the shelf header still said **Settled** and a project with nothing open said `settled`, so
+     one concept had two names. The shelf is now **Hidden** (aria "Expand hidden" / "Collapse hidden") and the
+     project word `hidden`. The shelf also holds rows that went there on their own (reviewed, clean, merged, review
+     off, missing); "hidden" still fits, since the shelf is closed by default and each row keeps its reason word.
+     Internal names (`state: 'settled'`, `settledOpen`, `settle` pref, `setSettle`) are unchanged, so stored prefs
+     and the e2e `data-state` values keep working.
+115. **Screenshots.** `e2e/scripts/screenshots.ts` adds `sidebar-filter-{light,dark}.png` (dropdown open, Only
+     dirty and `alpha` ticked); every README screenshot was regenerated since the sidebar header changed.
+
+## Chrome hierarchy: the context bar and the pane headers (lead, 2026-11-09)
+
+Design record: `docs/TOOLBAR.md`. Brief from the user: the controls above the file list and the diff are too dense,
+with little context and no hierarchy of what belongs to what; rearrange them, taking the Request tab into account.
+Web only, plus two e2e helper lines; no daemon, contract or preference change.
+
+116. **Three tiers, one row each.** The toolbar that spanned both panes is gone. A **context bar**
+     (`components/ContextBar.tsx`) above both panes says where you are (the Inbox with its worktree and file counts,
+     or the worktree's project and branch with its chips and `↑a ↓b`, the path in the tooltip), holds the
+     `Changes | PR #n` switch, the forge link, the review policy and, at the right, the app chrome (Live, theme,
+     help). Each pane then has one header: the **file pane header** (`components/FilePaneHeader.tsx`, moved out of
+     `App.tsx`) with the scope select, the two list toggles and `Review N`; the **diff header** with the file's
+     identity and, at the right, the rendering options, the per-file actions and `Reviewed`. A control sits over
+     what it changes. Reason: the one-row toolbar mixed app, worktree, list and diff concerns in identical bordered
+     buttons, and nothing named the worktree.
+117. **The context bar is the same on both tabs**; the tabs switch what sits below it. The forge link
+     (`ChangeRequestBadge`) shows on the Changes tab only: the Request header already carries `#n ↗` and the state
+     word. The link now says the state words set apart by space (`open  changes requested  out of sync`) instead of
+     `PR #100 · open · …`: the tab beside it has the number, and IDENTITY §5 bans the middle dot between facts.
+118. **Toggles are ghost icons; the primary verb keeps the border.** Show reviewed (an eye, pressed while reviewed
+     files are listed), tree view, whitespace (a pilcrow) and the `⋯` menu are icon-only ghost buttons with a `title`
+     and an `aria-label`; a pressed ghost keeps the soft fill (new rules in `styles.css`: `.od-btn-ghost[aria-pressed]`,
+     `.od-btn-icon`, `.od-sep`). Unified / split is a segmented pair of icons, after T3 Code's layout group: the group
+     carries `data-testid="diff-mode-toggle"` and `data-mode` for the tests, each button `data-mode-option`, and
+     `AppPage.setDiffMode` (e2e) clicks the wanted half. `More context` and `Expand all` are ghost text. `Review N`
+     and `Reviewed` stay bordered: one filled control per row. `Review on` is ghost when on and raised when off, so
+     the exception is the loud one.
+119. **Dropped as redundant.** The `N files  N unreviewed` line over the list (the select carries the total,
+     `Review N` the unreviewed count; the Inbox's `N worktrees` moved into the bar); the worktree name in the diff
+     header outside the Inbox (the bar names it; in the Inbox the list mixes worktrees, so the header keeps it); the
+     `Show` label before the scope select (its place over the list says it; `aria-label` and `title` keep the words);
+     `PR #n` repeated in the link.
+120. **The diff header is always rendered in the Changes view**, so the rendering options have a fixed home with no
+     file open (and the e2e theme spec, which reads `data-mode` right after load, keeps working); the per-file
+     actions appear with a selection.
+121. **Not changed.** The Overview keeps its own heading and no bar (the app chrome is absent there, as before; a
+     follow-up if it is missed). The Request view's header and its `Summary | Timeline | Files` control are
+     untouched. The scope select stays a native `<select>` (the unit and e2e tests drive it with `change` /
+     `selectOption`; T3's dropdown menu would need a custom listbox). Both pane headers are 36 px so their hairlines
+     meet; the two-row wrap in the commit scope (commit list and copy button under the select) is accepted.
+122. **Files.** New `ContextBar.tsx`, `FilePaneHeader.tsx`, `ScopeSelect.tsx` (the scope logic from the old
+     toolbar), `WorktreeChips.tsx` (`RowChips`, shared with the sidebar); `Toolbar.tsx` deleted; `ALL_ON_BRANCH`
+     moved to `lib/scopeLabels.ts`; five stroke icons in `bits.tsx`; `scripts/shots.ts` gains `commit-scope`.
+     Outside `apps/web`: `e2e/support/app.ts` `setDiffMode` and `e2e/tests/16-copy.spec.ts` `setMode` (the segmented
+     control), and `e2e/tests/04-live-updates.spec.ts` "sidebar counts follow external edits in the inbox view": it
+     asserted a row of the virtualized Inbox list with `toBeVisible`, and the 6 px taller file pane header (30 → 36)
+     left that row outside the mounted window; it now scans the list with the existing `allFileItems()` helper. PLAN §4.2 "Toolbar" paragraph rewritten; IDENTITY §6 gains the chrome rule; README and `FORGES.md` say
+     "the bar above the panes".
+123. **Default scope is now "All on branch" (2026-11-09).** `DEFAULT_PREFS.defaultScope` changes from `review` to
+     `branch` (working tree vs merge-base, `includeWorking`), per the user's request. A stored `defaultScope` keeps its
+     value. Web unit tests that rely on To review pin it via `scopeForPref('review')`; e2e seeds prefs explicitly.
+
+## Worktrees ordered by recent activity (lead, 2026-11-09)
+
+The user asked for worktree/branch rows in recency order. This reverses "rows stay in project and worktree order"
+(#40, #46), which held only because `summary.updatedAt` is the poll time; #46 proposed a daemon timestamp, built here.
+
+124. **`WorktreeSummary.activityAt` (contracts, additive, optional and nullable).** git-core sets it to the newest of:
+     the mtime of HEAD's reflog (`<gitDir>/logs/HEAD`, appended on every commit, checkout, reset, merge or pull in
+     that worktree), the mtime of every file with uncommitted changes and of every untracked file (both already
+     `lstat`ed for the `stateHash`, so no extra I/O), clamped to now so a file stamped in the future cannot pin a row
+     to the top. Without a reflog (disabled, or bare repositories) the HEAD commit's committer date
+     (`git log -1 --format=%ct`); null on an unborn branch without one. Not part of `stateHash`. Deleted files have
+     no mtime and do not count (the reflog or the other files usually do). Reason: no new process in the common case,
+     and it answers "where did something last happen" for both agents that commit and agents that only edit.
+125. **Order.** Inside each project the sidebar lists worktrees by `activityAt`, newest first; worktrees without one
+     (loading, older daemon, unknown) after them; ties fall back to the previous order (main first, then branch name,
+     detached last). Pinned and Hidden shelves, the keyboard order (`J`/`K`, `n`), the command palette and the Inbox
+     (project name, then recency) follow it; the filter dropdown lists its worktrees by recency across projects.
+     Folders and projects keep their static order (not asked for, and a moving project header is more disorienting
+     than a moving row). No pref toggle and no "2 h ago" label yet: both are small follow-ups if wanted.
+126. **Mock and tests.** The mock gives demo worktrees an explicit `activeMinutesAgo` (octopus-api keeps main,
+     feat/auth, fix/cache; in web-dashboard `agent/codex-123` now sits above `main`) and every other worktree a stable
+     3–10-day stagger from its id, not from the seeded PRNG, so the rest of the dataset is unchanged; a simulated edit
+     makes a worktree the newest. Unit tests: git-core `summary.test.ts` (reflog time, newest file, clamp, commit-date
+     fallback, unborn, `stateHash` unchanged), web `model.test.ts` (order per project, nulls last, tie-break).
+
+## CI flakes: the watch host, test timeouts and two e2e races (lead session, 2026-11-09)
+
+Numbering starts at #130: `main` ends at #115, PR #2 (`ux/toolbar-hierarchy`) uses #116 onwards and was still adding
+entries (#123) while this was written, so #123–#129 are left to it.
+
+130. **`@parcel/watcher` runs in a child process, the "watch host" (`apps/daemon/src/watch-host.ts`).** CI and
+     the dev machine showed two symptoms with one cause. (a) Every run logged bursts of `watcher error; polling
+     continues … Unable to poll: Interrupted system call`, for *every* worktree and git dir at once, and then
+     live-update specs failed (`04-live-updates` "SSE worktree.changed within budget", `12-ui-review-policy`
+     "stateHash … did not change"; the errors precede each failure by seconds). (b) e2e hung until the job
+     timeout (main run 42595070350) with the worker's main thread in `futex_do_wait` (BLOCKERS, PR #2).
+     Cause, from the 2.6.0 source and reproduced here with `tgkill`: `InotifyBackend::start()` throws when
+     `poll()` returns `EINTR` (any signal delivered to that thread, e.g. `SIGCHLD` from the daemon's git
+     processes, when the main thread already has one pending). The backend is shared, so every subscription
+     gets the error, and the thread ends without `mEndedSignal.notify()`. The daemon then polled forever (it
+     never re-subscribed: symptom a). `~InotifyBackend()` waits for that signal, and it runs on whichever
+     thread drops the last `shared_ptr`. Usually that is the dying thread itself, which then blocks forever and
+     leaks its inotify instance. When a subscribe or unsubscribe is in flight, though, its N-API runner holds a
+     reference, and the runner is destroyed on the JavaScript thread, which then never returns (symptom b).
+     Reproduced: an in-process subscribe of a 45k-file tree plus one `EINTR` in the inotify thread hangs Node
+     with the main thread in `futex_do_wait`. **Not calling `unsubscribe()` on a failed subscription is
+     necessary but not sufficient.** After the error, `Watcher::notifyError` has already cleared the
+     callbacks, so that `unsubscribe()` is a native no-op. The hang comes from runners in flight, which
+     JavaScript cannot avoid. Hence a separate process: the host spawns nothing, so it gets no `SIGCHLD`. If it
+     stops answering anyway (60 s per subscribe), it is SIGKILLed and never waited for, and its subscribers get
+     an error. `close()` kills it first (subscribes in flight reject at once), and a process `exit` hook kills
+     live hosts. IPC channel and process are unref'd, except while a request waits. The host is started when
+     the `WatcherService` is built, so projects registered right after start are watched without waiting for
+     a Node boot. The parent never loads the native addon. Cost: one extra Node process per daemon (~40 MB RSS)
+     and an IPC hop per event batch. Verified: the same `EINTR` injected into the host's inotify thread with an
+     in-flight subscribe deadlocks the host; the daemon's thread keeps running, the subscribe rejects after the
+     timeout, and a new host delivers events. Tests: `watch-host.test.ts` (events, death, a SIGSTOPped host,
+     `close()`, exit).
+131. **A subscription that reports an error is dropped, never unsubscribed, and re-made with a backoff.**
+     `watcher.ts`: the error callback marks the subscription dead (`#dead`; `#dispose` skips it everywhere), clears
+     `sub`, polls at the degraded rate and re-subscribes after 1 s, doubling per consecutive error up to 5 min
+     (the streak resets after 10 min without one; `resubscribeDelayMs` option). After re-subscribing, the
+     worktree is refreshed (`fs`; `git` for its project's worktrees after a git-dir re-subscribe), so changes made
+     in the gap are not missed. An error before `subscribe()` resolves is handled the same way. A retry that
+     fails with an unclassified error (e.g. the host was killed) backs off and retries. Known causes (watch or
+     instance limits, permissions) keep polling as before, and `missing` keeps the existing heal path (F1).
+     Dropping a dead subscription leaks nothing that runs later: its native callbacks are already gone, and the
+     shared-backend table is never destroyed at exit. Tests: `watcher-backend-errors.test.ts`.
+132. **The native fix (retry `EINTR` in `InotifyBackend::start()`) was not applied.** It would need a pnpm patch
+     plus `npm_config_build_from_source=true` and a C++ toolchain wherever the repo is installed, and making
+     the runtime load `build/Release/watcher.node`: `index.js` loads the prebuilt `@parcel/watcher-<platform>`
+     package first. It would also not ship: users install the published `@parcel/watcher` with its prebuilds.
+     Worth reporting upstream; #130 makes the daemon safe without it.
+133. **git-core tests get explicit timeouts.** "never writes to any repository" (`readonly.test.ts`) exercises
+     every read path (hundreds of git processes): ~2.5 s on the 12-core dev machine, over vitest's 5 s
+     default on a 4-core CI runner that tests the other packages at the same time. It failed on every CI run
+     (Node 24 and 26). It now has 30 s, and git-core's `vitest.config.ts` sets `testTimeout: 20_000`: every
+     git-core test spawns git, and several others already take 3–4 s on CI (`review-fixes` sha1/sha256,
+     `diff-working` "getFileDiff agrees …") The same for `apps/web` (`testTimeout: 20_000`): its jsdom UI tests
+     take 2–4.6 s each on CI, and `request.test.tsx` "appears only for worktrees with a request" went over 5 s on
+     Node 24 in this PR's first CI run (5.26 s), and Testing Library's async timeout is 5 s (`test/setup.ts`; the default 1 s
+     failed two settings tests on Node 24 in a later run: the lazy `SettingsDialog` / `Credits` chunks were still
+     loading).
+134. **Two e2e races fixed in the specs.** (a) `07-readonly` read the diff of every listed file while the agent
+     simulator edits `live-agent`, so a file could be clean or gone by then (`ApiClientError` `not_found`
+     "file is not changed in this scope"). That is the test racing the agent, not a write. `not_found` from
+     `getDiff` is now tolerated for that worktree only; anything else still fails. (b) `01-projects` "scan
+     found beta" (main run 42572487669, no watcher errors): the spec typed the scan folder and clicked
+     `addScanRootSubmit` at once. Until the picker has listed the typed folder it offers "Add" first, and when
+     the listing arrives the two buttons swap actions and test ids. The click landed on the same DOM button,
+     which by then read "Add as one repository" (screenshot: "not a git repository: …/scan"). The spec now
+     waits for `[data-testid=add-scan-root-submit][data-action=watch]`. The UI behaviour (a button changing
+     meaning under the pointer while a listing loads) is a WS3 follow-up and is not changed here.
+
+## Dev hot reload: `pnpm dev` (session, 2026-11-09)
+
+Numbering starts at #135: #116–#129 are left to PR #2 and #130–#134 are the CI-flakes entries above.
+
+User request: one command for hot-reload development that stays reachable from the LAN host `odino`, without touching
+the production LAN server (`octopus-diff-lan` unit, :7428). Report: `docs/reports/dev-hot-reload.md`.
+
+135. **`pnpm dev` = `node scripts/dev.mjs`, a plain-Node supervisor of two children** (argv arrays, no shell, no new
+     dependency): Vite from `apps/web` (HMR) and `tsx watch --conditions=@octopus-diff/source apps/cli/src/index.ts
+     serve …` (the daemon from sources). Vite proxies `/api`, SSE included, to the daemon. Reason: the web app already
+     had Vite with the source condition; the daemon had no watch mode, and tsx is already a root dev tool. tsx watch
+     follows every imported file outside `node_modules`, workspace sources included (it resolves the `node_modules`
+     symlinks to `packages/*/src`): edits to git-core, contracts and daemon files each restarted it in testing, so no
+     `--include` globs are needed. Each child gets its own process group; SIGINT/SIGTERM/SIGHUP send one SIGTERM to
+     each child (a second SIGTERM makes `serve` skip its clean shutdown, so the group is not signalled), SIGKILL to the
+     groups after 8 s; if either child exits on its own the other is stopped and `pnpm dev` exits 1.
+136. **Ports: daemon 7429, web 5173, 7428 rejected** with a message naming the production unit. The web port is
+     strict in dev (the banner prints it, so Vite must not drift); both ports are checked before spawning so a taken
+     port fails clearly instead of crash-looping under tsx watch.
+137. **LAN by default, `--loopback` to opt out.** The daemon runs `--host :: --allow-non-loopback`; Vite listens on `::`
+     (dual-stack like the daemon, rather than `0.0.0.0` which is IPv4 only). The daemon's Host check requires its own
+     port unless the name is an `--allowed-host` entry, and the browser sends the Vite port, so the dev daemon gets
+     `--allowed-host` for `localhost`, `127.0.0.1`, `odino`, `odino.local`, extra `--allowed-host` names and (LAN mode)
+     this machine's non-internal IPv4 addresses, so `http://<lan ip>:5173/` works too. Vite's `server.allowedHosts` gets
+     the same names (it allows localhost and IP literals itself). Only the existing mechanism is used; the Host/Origin/
+     token checks are unchanged (an unknown Host gets 403 from Vite, a foreign Origin 403 from the daemon, no token 401).
+138. **Separate state dir for the dev daemon: `$XDG_STATE_HOME/octopus-diff-dev` (`~/.local/state/octopus-diff-dev`),
+     passed as `--state-dir`.** Reason: `serve` allows one daemon per state dir; sharing the production one, the dev
+     daemon would print the production daemon's URL and exit. A `--state-dir` flag rather than `XDG_STATE_HOME` in the
+     child env keeps the rest of the environment untouched; it sits beside the real state dir rather than in
+     `~/.cache` so the dev token and review store survive cache cleanups. The config dir stays shared. A second
+     `pnpm dev` on the same state dir is detected ("already running") and exits 1.
+139. **The token URL is rewritten to the Vite port in a `[dev]` banner**, from the daemon's own `Open:` line (stdout
+     only, nothing written to disk); the daemon's banner and its "built web UI not found" warning are hidden because
+     they repeat on every restart and point at the daemon port. On a restart with the same token a one-line notice is
+     printed instead. If no token is found, the banner points at `<state dir>/token`.
+140. **`apps/web/vite.config.ts` reads `OCTOPUS_DIFF_WEB_HOST`, `OCTOPUS_DIFF_WEB_PORT` and
+     `OCTOPUS_DIFF_ALLOWED_HOSTS`**; unset, the config is what it was (Vite's default host `localhost`, port 5173 with
+     `strictPort: false`, default allowed hosts). `mock/dev.ts` passes its own host and port inline and is unaffected.
+141. **Tests for `scripts/`:** the pure logic lives in `scripts/lib/dev-options.mjs`, tested by
+     `scripts/test/dev-options.test.mjs` through `scripts/vitest.config.mjs`. Root `pnpm test` now runs
+     `pnpm -r run test && pnpm run test:scripts` (the root is not a workspace package, so `pnpm -r` skips it). Plain
+     `.mjs` keeps it out of `tsc` (no root tsconfig) like `scripts/credits`.
+142. **The web client needed no change for daemon restarts.** A restart closes the SSE stream cleanly; the contract
+     client retries after 1 s (backoff to 10 s while the proxy answers 502), and the `hello` on reconnect triggers a
+     full refresh (`collectEventEffects` with `reconnect`). Verified in headless Chromium through `http://odino:5183`:
+     status stayed `Live`, `/api/events` and every query refetched after each restart.
+143. **Review fixes (PR #5, Greptile).** (a) Serve flags after `--` that `pnpm dev` sets itself (`--port`/`-p`,
+     `--host`, `--allow-non-loopback`, `--allowed-host`, `--state-dir`, a second `--`) are rejected with the dev
+     option to use instead: the CLI takes the last value, so `-- --port 7439` left Vite proxying to 7429 and
+     `-- --port 7428` bypassed the reserved-port check. (b) The supervisor keeps every child's process group until
+     the group is gone, not just the live children: if `tsx watch` died, the daemon it spawned kept the port after
+     `pnpm dev` exited. An unexpected child exit now SIGTERMs its group (once; during a stop the daemon already
+     had its SIGTERM), and `pnpm dev` exits only when every group is gone, SIGKILLing leftovers after 8 s.
+     Verified live: `kill -9` of the tsx process → the orphaned daemon logged a clean shutdown, both ports freed.
+
+## Project Overview lists and the default-branch marker (lead, 2026-11-09)
+
+Numbered #144–#150: written as #127–#133 on `ux/toolbar-hierarchy`, renumbered when that branch merged
+`main`, whose #130–#143 (CI flakes, `pnpm dev`) landed first. #127–#129 are unused.
+
+Design record: `docs/OVERVIEW-LISTS.md`. Brief from the user: highlight the default branch where worktrees are
+listed; in the project Overview limit worktrees to 15 with pagination, limit open pull requests to 15 (keep the link
+to the forge), list local branches without a worktree, judge whether tabs would be better, and use TanStack Table
+only if it makes the code easier to maintain.
+
+144. **`default` chip.** The worktree that has the project's default branch checked out carries an outlined ink chip
+     (`.od-chip-default`) after its branch name in the sidebar row (inline, no extra line), the context bar and the
+     Overview worktree table. Not a hue (the frame is achromatic) and not an icon (it would need a legend); outlined
+     so it reads as a label, unlike the filled grey fact chips. The Overview's faint `main` word moves to the Source
+     column as `main checkout`, so the default row no longer reads `main main`.
+145. **Tabs on the project Overview.** Facts and figures stay on top; the lists move behind a segmented tab list
+     `Worktrees N | Branches N | Pull requests N` (Merge requests on GitLab; the requests tab only with forge
+     repository data, Branches hidden only when the daemon sends no branch list). Reason: three lists of up to 15
+     rows (two lines each for requests) put the last one three screens down, and they answer separate questions; the
+     counts keep the at-a-glance summary. Worktrees is the default tab; the chosen tab is component state that
+     survives switching projects, and each list's page starts over per project. The folder Overview is unchanged.
+146. **`SegmentedTabs` (`components/Tabs.tsx`) with the WAI-ARIA keyboard model**: one Tab stop (roving
+     `tabIndex`), `←`/`→` select, `Home`/`End`, `aria-controls` → `tabpanel`. The Request view's
+     `Summary | Timeline | Files` switches to it (it had `role="tab"` without the keys; ids and test ids unchanged).
+147. **Pagination, 15 rows (`components/Pager.tsx`).** Client-side `usePage` over the loaded list; `16–30 of 42`
+     with previous / next ghost icons, hidden for one page; the page clamps rather than resets when a live list
+     shrinks. Worktrees list the default-branch worktree first, then recency (#125), so the baseline stays on page 1;
+     the sidebar keeps pure recency. Open requests show the newest 15 with no pager and keep `N more on <host> ↗`
+     (the forge holds the rest; the daemon still asks for 20); none open says so with a link.
+148. **Local branches without a worktree.** `GitRepositoryInfo.branches` (contracts, additive, optional;
+     `GitBranchInfoSchema`, `MAX_LISTED_BRANCHES` = 500, newest commit first, `localBranches` stays the full count).
+     git-core reads it from the `for-each-ref` it already ran (adds `upstream:track,nobracket` and
+     `contents:subject`; git ≥ 2.31 folds a multi-line subject into one line) plus one
+     `for-each-ref --merged=<default oid> refs/heads/`. The web drops branches some worktree has checked out and
+     shows branch (copy on hover), last commit, when it moved, upstream (`origin ↑a ↓b`, `gone`, `local only`) and
+     a state column (`merged`, `default`, the open request on that head branch from the already-loaded forge data).
+     Rows do not navigate (no worktree to open; octopus-diff never creates one). Daemon unchanged: it passes
+     `info` through.
+149. **No TanStack Table.** Four small fixed-column, fixed-order tables; the only shared need is paging, which is a
+     ten-line hook. TanStack Table is headless, so it would keep every cell renderer, wrap them in column
+     definitions and `flexRender`, and add a dependency and a credits entry to replace a `slice`. Revisit when a
+     table needs user sorting, column choice or filtering.
+150. **Mock and tests.** Mock repository info lists branches for every demo project (18 without a worktree on
+     octopus-api so the Branches tab pages; merged, gone and local-only kinds) and octopus-api has 16 more open
+     requests (27 in all, so the cap and `12 more` show). Tests: git-core `repository.test.ts` (subject folding,
+     upstream ahead/gone, merged); web `repository-info.test.tsx` (tabs and arrow keys, default row first with its
+     chip, Branches pages 15 + 3, requests capped at 15 with the forge link, worktree pager on a 20-worktree large
+     dataset), `model.test.ts` (helpers). e2e `14-ui-forge-details` opens the Pull requests tab first. New shot
+     states `project-branches` and `project-requests` in `apps/web/scripts/shots.ts`.
+151. **To review never lists reviewed files; counts follow the eye; All on branch first (2026-11-09).** With the eye
+     ("Show reviewed") on by default and the bookmark still at the merge-base (marking files one by one never moves
+     it), To review and All on branch listed the same files, and the select's counts disagreed with the list (To
+     review counted unreviewed files while listing all; All on branch counted all while the eye hid some). Now
+     `listsReviewed(showReviewed, scope)` is false in To review whatever the eye says (the eye shows "off",
+     `aria-disabled`, `h` is a no-op there), and a count that includes reviewed files reads `(5 of 12)` while the
+     eye hides them (All on branch, and the current scope's loaded list; summary-only counts stay totals). All on
+     branch, the default scope, is first in the scope select and in Settings → Default scope. Web only, no
+     contract change. User request.
+152. **No eye in All on branch or To review (2026-11-09).** Refines #151 at the user's request: All on branch always
+     lists every file (reviewed included) and To review never lists reviewed ones, so `eyeApplies(kind)` is false
+     for both and the "Show reviewed" button is not rendered there (`h` is a no-op); `listsReviewed` returns true
+     for `branch`, false for `review`, else the pref. The `(5 of 12)` count applies only to the current scope when
+     it has the eye. e2e: 12 (review policy) starts `n` from beta with nothing listed instead of a reviewed file
+     shown by the eye; 13 (prefs migration) checks the eye in Uncommitted; 15 drops the eye toggle in To review.
+
+## PR #2 review (Greptile), 2026-11-09
+
+153. **`activityAt` counts fully staged files; activity-only changes are not announced.** (a) Greptile: a file edited
+     and staged before the next refresh (`x` set, `y` = `.`) was not in `dirtyKeys`, so its mtime dropped out and the
+     worktree fell back to the reflog time. git-core now stats those paths too (`stagedOnlyKeys`), for `activityAt`
+     only; the `stateHash` is unchanged (git status already reports them). Test in `summary.test.ts`. (b) Greptile also
+     noted that a change to `activityAt` alone (e.g. `git reset --soft HEAD`) never reaches an open page, because the
+     daemon announces `worktree.changed` only on a new `stateHash` and the web drops events whose hash it already has.
+     Not changed: every real activity also changes the `stateHash` (a commit or checkout moves HEAD's oid and the
+     status, an edit or `git add` changes the status), so only no-op HEAD moves are missed, and the next event or
+     reconnect corrects the order. Announcing activity separately would need an additive event field plus daemon and
+     web changes for a cosmetic ordering signal; revisit if the order is seen going stale in practice.
+
 ## Diff context errors, first-run Continue and add feedback (session, 2026-11-09)
 
 Branch `fix/diff-context-and-onboarding`; report `docs/reports/diff-context-onboarding.md`. Web and e2e only: no
 contract, daemon or git-core change.
 
-112. **Highlight cache key = the view the patch was fetched with.** Root cause of "DiffHunksRenderer.processDiffResult:
+154. **Highlight cache key = the view the patch was fetched with.** Root cause of "DiffHunksRenderer.processDiffResult:
      deletionLine and additionLine are null, something is wrong": the diff query keeps the previous view's patch as
      placeholder data while a new context / whitespace view loads, but `DiffRenderer`'s `cacheKey` was built from the
      options *asked for* (`patchHash:w:context`). The old patch was parsed and highlighted under the new key; the
@@ -1553,7 +1864,7 @@ contract, daemon or git-core change.
      `params`), and the key is `patchHash:view:patch.length`. Reproduced deterministically in e2e
      (`17-diff-context`, diff responses delayed 250 ms): 98 console errors before, none after; the same test fails
      again if the key is built from the requested options. The whitespace toggle went through the same path.
-113. **Context is bounded and stops when there is nothing left to show.** "Expand all" set `context = 1_000_000`
+155. **Context is bounded and stops when there is nothing left to show.** "Expand all" set `context = 1_000_000`
      (= `DIFF_CONTEXT_MAX`, also git-core's limit) and "More context" / `e` added 20 to it, so the next request
      failed zod validation ("expected number to be <= 1000000"). Now `nextContext` clamps to `FULL_CONTEXT`
      (= `DIFF_CONTEXT_MAX`, imported from the contracts), and `patchShowsWholeFile` (one hunk per file section that
@@ -1561,20 +1872,20 @@ contract, daemon or git-core change.
      disables "More context" and turns "Expand all" into "Collapse" once the whole file is shown; "Expand all" is
      disabled when the default context already shows everything. A dedicated "full file" API flag was not added:
      `-U1000000` is exact for any realistic file and needs no contract change.
-114. **No stacked context requests.** "More context" is disabled (`aria-busy`) while the previous view is still the
+156. **No stacked context requests.** "More context" is disabled (`aria-busy`) while the previous view is still the
      placeholder, and the `e` command does nothing until the current view has loaded, then says "The whole file is
      already shown." at the end. "Expand all" / "Collapse" set absolute values, so rapid clicks converge on the
      last one (TanStack Query shows the latest key's data). Other diff controls checked: split/unified changes only
      render options (no refetch); "Load anyway" (`full`) is part of the view key now; scope changes keep their own
      `patchHash`.
-115. **First run: a main button that says "Continue".** The add form's main action used to be a small "Watch / Add
+157. **First run: a main button that says "Continue".** The add form's main action used to be a small "Watch / Add
      Enter" chip inside the text box, and a click on a folder row only opens that folder, so after picking a
      folder nothing visibly changed. Now the form ends with a selection line (icon + what the text points at) and a
      primary button: "Continue" on the first-run screen, "Watch this folder" / "Add this repository" / "Open it"
      elsewhere, disabled until the text points at something valid (including a folder that cannot be listed); the
      other action is a ghost button next to it. Enter still runs the main action. The test ids
      `addScanRootSubmit` / `addProjectSubmit` stay on whichever button runs that action.
-116. **Why the app did not leave the first-run screen.** Watching a folder returns at once and scans in the
+158. **Why the app did not leave the first-run screen.** Watching a folder returns at once and scans in the
      background; the UI learnt the outcome only from `scan.progress` / `project.added` events. With a healthy event
      stream that works (also through the Vite dev proxy, checked by hand), but when the stream is down or late (a
      reconnect, a proxy that buffers it, a LAN hiccup) the screen stayed until a reload — reproduced in e2e by
@@ -1582,7 +1893,7 @@ contract, daemon or git-core change.
      second while a folder job runs, refetches the projects as soon as the folder has some (the first-run screen
      gives way to the app at the first repository), and marks the job done when the root's `lastScannedAt` moves.
      Polling is local to a running add job; the global fetching / stale-time setup is untouched.
-117. **One add job, shown where the user is.** `UiState.addJob` holds the last add/watch (`state/addJob.ts`:
+159. **One add job, shown where the user is.** `UiState.addJob` holds the last add/watch (`state/addJob.ts`:
      `describeAddJob`, `folderJobOutcome`, pure and unit-tested): working (spinner; "120 folders checked, 2
      repositories found so far" from scan events), success (what was added, how many repositories, the first five
      names, then "Open <name>" / "Show folder"), empty ("No repositories found in …", "Choose another folder",
@@ -1591,7 +1902,6 @@ contract, daemon or git-core change.
      first-run screen unmounts at the first repository, and the dialog / palette may close mid-scan. A success toast
      hides after 10 s; the palette's "Watching … Scanning…" notice was replaced by the same toast. Typing a new
      path clears a finished job; Enter and the buttons do nothing while a job runs.
-118. **Known gap, not changed: folder listings can be stale for up to their cache life.** A folder created while the
+160. **Known gap, not changed: folder listings can be stale for up to their cache life.** A folder created while the
      picker lists its parent is "No folder named …" until the listing refetches (navigate away and back). Seen
      while writing the e2e; not part of this report's issues.
-

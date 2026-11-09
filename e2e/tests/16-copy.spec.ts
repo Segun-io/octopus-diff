@@ -219,10 +219,7 @@ async function dragLines(
 }
 
 async function setMode(app: import('../support/app.js').AppPage, mode: 'split' | 'unified') {
-  if ((await app.diffViewer.getAttribute('data-mode')) !== mode) {
-    await app.byTestId(TEST_IDS.diffModeToggle).click();
-  }
-  await expect(app.diffViewer).toHaveAttribute('data-mode', mode);
+  await app.setDiffMode(mode);
 }
 
 test.describe('copy selected diff lines', () => {

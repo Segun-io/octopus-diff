@@ -146,6 +146,53 @@ export class AppPage {
   }
 
   /** Sets an `aria-pressed` toggle to the wanted state. */
+  // --- sidebar filter dropdown (DECISIONS #112) ----------------------------------------------
+
+  /** Opens the sidebar filter dropdown (idempotent) and returns its search field. */
+  async openFilter(): Promise<Locator> {
+    const trigger = this.byTestId(TEST_IDS.sidebarFilter);
+    if ((await trigger.getAttribute('aria-expanded')) !== 'true') await trigger.click();
+    return this.byTestId(TEST_IDS.sidebarFilterSearch);
+  }
+
+  /** Closes the dropdown (Escape twice: the first clears the search). */
+  async closeFilter(): Promise<void> {
+    const search = this.byTestId(TEST_IDS.sidebarFilterSearch);
+    if ((await search.count()) === 0) return;
+    await search.fill('');
+    await search.press('Escape');
+    await expect(search).toHaveCount(0);
+  }
+
+  /** Sets a status option of the dropdown (`onlyDirtyToggle`, `onlyUnreviewedToggle`). */
+  async setFilterOption(testId: string, selected: boolean): Promise<void> {
+    await this.openFilter();
+    const option = this.byTestId(testId);
+    if ((await option.getAttribute('aria-selected')) !== String(selected)) await option.click();
+    await expect(option).toHaveAttribute('aria-selected', String(selected));
+    await this.closeFilter();
+  }
+
+  /** Picks one project in the dropdown (by id), after searching for `name`. */
+  async filterProject(projectId: string, name: string): Promise<void> {
+    const search = await this.openFilter();
+    await search.fill(name);
+    const option = this.page.locator(
+      `${tid(TEST_IDS.sidebarFilterOption)}[data-project-id="${cssValue(projectId)}"]`,
+    );
+    await option.click();
+    await expect(option).toHaveAttribute('aria-selected', 'true');
+    await this.closeFilter();
+  }
+
+  /** Clears every sidebar filter. */
+  async clearFilters(): Promise<void> {
+    await this.closeFilter();
+    const clear = this.byTestId(TEST_IDS.sidebarFilterClear);
+    if ((await clear.count()) > 0) await clear.click();
+    await expect(this.byTestId(TEST_IDS.sidebarFilter)).toHaveAttribute('data-filtering', 'false');
+  }
+
   async setToggle(testId: string, pressed: boolean): Promise<void> {
     const toggle = this.byTestId(testId);
     if ((await toggle.getAttribute('aria-pressed')) !== String(pressed)) await toggle.click();
@@ -256,7 +303,12 @@ export class AppPage {
 
   async setDiffMode(mode: 'split' | 'unified'): Promise<void> {
     const toggle = this.byTestId(TEST_IDS.diffModeToggle);
-    if ((await toggle.getAttribute('data-mode')) !== mode) await toggle.click();
+    if ((await toggle.getAttribute('data-mode')) !== mode) {
+      // A segmented pair has one button per mode; a single toggle flips on click.
+      const option = toggle.locator(`[data-mode-option="${mode}"]`);
+      if ((await option.count()) > 0) await option.click();
+      else await toggle.click();
+    }
     await expect(toggle).toHaveAttribute('data-mode', mode);
     await expect(this.diffViewer).toHaveAttribute('data-mode', mode);
   }

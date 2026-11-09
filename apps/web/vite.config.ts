@@ -7,6 +7,18 @@ import { octopusThemesPlugin } from './src/theme/vite-plugin.ts';
 // In dev, `/api` is proxied to a daemon (or WS3's mock server) on OCTOPUS_DIFF_API.
 const apiTarget = process.env.OCTOPUS_DIFF_API ?? 'http://127.0.0.1:7428';
 
+// `pnpm dev` (scripts/dev.mjs) sets these to serve the dev UI on the LAN; unset, Vite keeps its
+// defaults (host `localhost`, port 5173 moving up when taken, only localhost/IP Host headers).
+// An explicit port is strict: the dev banner prints it, so Vite must not drift to another one.
+const webHost = process.env.OCTOPUS_DIFF_WEB_HOST || undefined;
+const webPort = process.env.OCTOPUS_DIFF_WEB_PORT
+  ? Number(process.env.OCTOPUS_DIFF_WEB_PORT)
+  : null;
+const allowedHosts = (process.env.OCTOPUS_DIFF_ALLOWED_HOSTS ?? '')
+  .split(',')
+  .map((name) => name.trim())
+  .filter((name) => name !== '');
+
 export default defineConfig({
   plugins: [react(), tailwindcss(), octopusThemesPlugin()],
   resolve: {
@@ -14,8 +26,10 @@ export default defineConfig({
     conditions: ['@octopus-diff/source', ...defaultClientConditions],
   },
   server: {
-    port: 5173,
-    strictPort: false,
+    ...(webHost ? { host: webHost } : {}),
+    port: webPort ?? 5173,
+    strictPort: webPort !== null,
+    ...(allowedHosts.length > 0 ? { allowedHosts } : {}),
     proxy: {
       '/api': { target: apiTarget, changeOrigin: false },
     },

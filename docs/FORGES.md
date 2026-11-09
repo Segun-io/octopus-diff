@@ -10,7 +10,7 @@ conflicts and whether its head matches the worktree's HEAD. It uses the `gh` and
 already signed in to. It is **read-only**: octopus-diff never creates, edits, merges or comments, and never
 reads, stores or forwards a token.
 
-![PR chips in the sidebar and the PR link in the toolbar](screenshots/forges-dark.png)
+![PR chips in the sidebar and the PR link in the context bar](screenshots/forges-dark.png)
 
 The design follows T3 Code's source-control layer (`~/contrib/t3code/packages/source-control-*`, MIT;
 ideas and two small adapted parsers, attributed in comments), scaled down to what a read-only,
@@ -21,9 +21,9 @@ many-worktree tool needs.
 | Where | What |
 |---|---|
 | Sidebar row, Overview row | Chip after the branch: PR/MR glyph (open, draft, merged, closed), `#123` / `!123`, a CI dot (green passed, red failed, amber running). Tooltip: title, `head → base`, author, CI counts, review, conflicts, comments, "head differs from HEAD". |
-| Toolbar (selected worktree) | Link to the request on its forge: `PR #123 · open · changes requested · out of sync ↗`. For a worktree with a request, a `Changes | PR #123` segmented control switches to the Request tab. |
+| Context bar (selected worktree) | The `Changes \| PR #123` switch opens the Request tab; beside it, on the Changes tab, a link to the request on its forge with its state words (`open  changes requested  out of sync ↗`). |
 | Sidebar hover card | A request block from the batch data (no extra query): glyph, number, state, title, `head → base`, author, `N files +a −d`, `21/22 checks passed · 1 failing`, review, merge state, comments, updated, and the out-of-sync explanation. |
-| Project Overview | A **Pull request** column (chip, title, review word). **Repository information**: local facts (remotes with credentials removed, default branch with `↑a ↓b` against its upstream as of the last fetch, last commit, branch/tag/worktree counts, last activity) and forge facts (`host/owner/name ↗`, description, visibility, archived, fork of, license, language, topics, open request and issue counts linking to the forge, default-branch CI, pushed). **Open pull requests** below the worktree table (newest 20): rows checked out locally open that worktree's Request tab, the others open the forge. |
+| Project Overview | A **Pull request** column (chip, title, review word). **Repository information**: local facts (remotes with credentials removed, default branch with `↑a ↓b` against its upstream as of the last fetch, last commit, branch/tag/worktree counts, last activity) and forge facts (`host/owner/name ↗`, description, visibility, archived, fork of, license, language, topics, open request and issue counts linking to the forge, default-branch CI, pushed). **Open pull requests** in their own Overview tab (the newest 15 of the 20 the daemon asks for, then `N more on <host> ↗`; `docs/OVERVIEW-LISTS.md`): rows checked out locally open that worktree's Request tab, the others open the forge. |
 | Folder Overview | Columns `Default branch` (with ahead/behind), `Last commit`, `Forge` and `PRs`, and roll-ups `open pull requests` and `need attention` (failing CI, changes requested or conflicts). No forge query: local facts plus the batch data. |
 | Request tab | Header (repository ▸ `#123 ↗`, title, author · opened · updated, `base ← head` with copy, `N files +a −d`, out of sync). `Summary` (reviewers with `stale`, labels as ink chips with a colour swatch, assignees, merge state; Description in markdown; Checks grouped *Needs attention / Running / Passed*, open only when something needs attention; Conversation), `Timeline` (opened, commits, comments, reviews, threads, merged/closed; newest-first toggle) and `Files` (path, status letter, `+a −d`, `changed here` when the worktree also changes it: click to see the local diff). |
 | Settings → Forges | On/off switch, "Load images from the forges", `gh`/`glab` status (version, signed-in hosts, install/login hint), each repository's forge and status, host overrides, "Check again". |

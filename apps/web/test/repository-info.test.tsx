@@ -56,6 +56,115 @@ describe('repository information helpers', () => {
   });
 });
 
+async function overviewTab(id: string): Promise<HTMLElement> {
+  return waitFor(() => {
+    const tab = screen.getAllByTestId(TEST_IDS.overviewTab).find((t) => t.dataset.tab === id);
+    if (!tab) throw new Error(`no ${id} tab`);
+    return tab;
+  });
+}
+
+async function openProject(name: string) {
+  const ctx = setup();
+  await screen.findAllByTestId(TEST_IDS.worktreeItem);
+  const project = ctx.backend.listProjects().projects.find((p) => p.project.name === name);
+  if (!project) throw new Error(`no ${name}`);
+  ctx.store.setState({ view: { kind: 'project', projectId: project.project.id } });
+  await screen.findByTestId(TEST_IDS.repoInfoLocal);
+  return { ...ctx, project };
+}
+
+describe('project Overview lists (mock daemon)', () => {
+  it('tabs: Worktrees first with the default branch on top; arrows move between tabs', async () => {
+    await openProject('octopus-api');
+    const worktrees = await overviewTab('worktrees');
+    expect(worktrees.getAttribute('aria-selected')).toBe('true');
+    expect(worktrees.textContent).toBe('Worktrees4');
+    const rows = await screen.findAllByTestId('overview-worktree-row');
+    expect(rows[0]?.dataset.default).toBe('true');
+    expect(within(rows[0] as HTMLElement).getByTestId(TEST_IDS.defaultBranchChip)).toBeTruthy();
+    expect(rows.filter((r) => r.dataset.default === 'true')).toHaveLength(1);
+    // Roving tab stop: only the selected tab is in the Tab order; → selects the next one.
+    expect(worktrees.tabIndex).toBe(0);
+    expect((await overviewTab('branches')).tabIndex).toBe(-1);
+    worktrees.focus();
+    fireEvent.keyDown(worktrees, { key: 'ArrowRight' });
+    const branches = await overviewTab('branches');
+    await waitFor(() => expect(branches.getAttribute('aria-selected')).toBe('true'));
+    expect(document.activeElement).toBe(branches);
+    fireEvent.keyDown(branches, { key: 'End' });
+    await waitFor(() => expect(document.activeElement?.getAttribute('data-tab')).toBe('requests'));
+    expect(screen.getByRole('tabpanel').getAttribute('aria-labelledby')).toBe(
+      document.activeElement?.id,
+    );
+  });
+
+  it('Branches lists local branches without a worktree, 15 a page', async () => {
+    await openProject('octopus-api');
+    const tab = await overviewTab('branches');
+    await waitFor(() => expect(tab.textContent).toBe('Branches18'));
+    fireEvent.click(tab);
+    const rows = await screen.findAllByTestId(TEST_IDS.overviewBranchRow);
+    expect(rows).toHaveLength(15);
+    const names = rows.map((r) => r.dataset.branch);
+    expect(names).not.toContain('main');
+    expect(names).not.toContain('feat/auth');
+    const pager = screen.getByTestId(TEST_IDS.pager);
+    expect(pager.dataset.pages).toBe('2');
+    expect(pager.textContent).toContain('1–15 of 18');
+    fireEvent.click(within(pager).getByRole('button', { name: 'Next branches' }));
+    await waitFor(() => expect(screen.getAllByTestId(TEST_IDS.overviewBranchRow)).toHaveLength(3));
+    expect(screen.getByTestId(TEST_IDS.pager).textContent).toContain('16–18 of 18');
+    // An open request whose head is a local branch links to it; merged branches say so.
+    const all = screen.getAllByTestId(TEST_IDS.overviewBranchRow);
+    expect(all.some((r) => r.dataset.merged === 'true')).toBe(true);
+    expect(screen.getByText(/merged into/)).toBeTruthy();
+  });
+
+  it('Pull requests shows at most 15 and links to the rest on the forge', async () => {
+    await openProject('octopus-api');
+    const tab = await overviewTab('requests');
+    expect(tab.textContent).toBe('Pull requests27');
+    fireEvent.click(tab);
+    const rows = await screen.findAllByTestId(TEST_IDS.repoOpenRequest);
+    expect(rows).toHaveLength(15);
+    const more = screen.getByRole('link', { name: /12 more on github\.com/ });
+    expect(more.getAttribute('href')).toBe('https://github.com/octo-demo/octopus-api/pulls');
+    expect(screen.queryByTestId(TEST_IDS.pager)).toBeNull();
+  });
+
+  it('pages the worktree table at 15 rows', async () => {
+    const backend = new MockBackend({
+      dataset: 'large',
+      largeProjects: 1,
+      largeWorktreesPerProject: 20,
+      largeFilesPerWorktree: 1,
+    });
+    const api = createApiClient({ baseUrl: 'http://mock.local', fetch: createMockFetch(backend) });
+    const store = createUiStore({ confirmBulk: false }, false);
+    render(
+      <App api={api} queryClient={createQueryClient()} uiStore={store} eventSourceFactory={null} />,
+    );
+    await screen.findAllByTestId(TEST_IDS.worktreeItem);
+    const project = backend.listProjects().projects[0];
+    if (!project) throw new Error('no project');
+    store.setState({ view: { kind: 'project', projectId: project.project.id } });
+    await waitFor(() => expect(screen.getAllByTestId('overview-worktree-row')).toHaveLength(15));
+    const pager = screen.getByTestId(TEST_IDS.pager);
+    expect(pager.textContent).toContain(`1–15 of ${project.worktrees.length}`);
+    expect(within(pager).getByRole('button', { name: 'Previous worktrees' })).toHaveProperty(
+      'disabled',
+      true,
+    );
+    fireEvent.click(within(pager).getByRole('button', { name: 'Next worktrees' }));
+    await waitFor(() =>
+      expect(screen.getAllByTestId('overview-worktree-row')).toHaveLength(
+        project.worktrees.length - 15,
+      ),
+    );
+  });
+});
+
 describe('Overview repository information (mock daemon)', () => {
   it('the project Overview shows local facts, forge facts and the open requests', async () => {
     const { store, backend } = setup();
@@ -72,7 +181,8 @@ describe('Overview repository information (mock daemon)', () => {
     expect(forge.dataset.status).toBe('ok');
     await waitFor(() => expect(forge.textContent).toContain('pull requests'));
     expect(forge.textContent).toContain('github.com/octo-demo/octopus-api');
-    // Open requests: the local ones open the worktree's Request tab.
+    // Open requests (their tab): the local ones open the worktree's Request tab.
+    fireEvent.click(await overviewTab('requests'));
     const rows = await screen.findAllByTestId(TEST_IDS.repoOpenRequest);
     const mine = rows.find((r) => r.dataset.worktree);
     if (!mine) throw new Error('no local open request');

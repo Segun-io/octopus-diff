@@ -146,6 +146,14 @@ export const WorktreeSummarySchema = z.object({
   stateHash: z.string().min(1),
   updatedAt: TimestampSchema,
   /**
+   * When the worktree last saw activity: the newest of HEAD's reflog (commit, checkout, reset,
+   * pull), the HEAD commit's committer date when there is no reflog, and the mtime of any file
+   * with uncommitted changes. Unlike `updatedAt` (the poll time) it does not move when nothing
+   * happened. The sidebar sorts worktrees by it, newest first. Null when unknown (unborn
+   * branch without reflog); absent from older daemons.
+   */
+  activityAt: TimestampSchema.nullable().optional(),
+  /**
    * Review state (daemon app state, docs/STATUS-FLOW.md). Not part of `stateHash`, which stays a
    * hash of git state only. Absent from older daemons (clients fall back to the inbox).
    */
@@ -313,6 +321,29 @@ export type InboxEntry = z.infer<typeof InboxEntrySchema>;
 
 // --- repository information (Overview; docs/FORGES.md "Repository information") ------------
 
+/** Cap on `GitRepositoryInfo.branches`. */
+export const MAX_LISTED_BRANCHES = 500;
+
+/** One local branch (`refs/heads/*`) of `GitRepositoryInfo.branches`; local refs only. */
+export const GitBranchInfoSchema = z.object({
+  name: z.string().min(1),
+  /** The commit the branch points at. */
+  sha: CommitShaSchema,
+  subject: z.string(),
+  /** Committer date of that commit (when the branch last moved, as far as git records it). */
+  committerDate: TimestampSchema.nullable(),
+  /** Short upstream name (`origin/feat`), or null. */
+  upstream: z.string().nullable(),
+  /** The configured upstream ref no longer exists (deleted on the remote and pruned). */
+  upstreamGone: z.boolean(),
+  /** Against the upstream, as of the last fetch; null without an upstream or when it is gone. */
+  ahead: z.number().int().min(0).nullable(),
+  behind: z.number().int().min(0).nullable(),
+  /** Reachable from the default branch (merged into it); null when there is no default branch. */
+  merged: z.boolean().nullable(),
+});
+export type GitBranchInfo = z.infer<typeof GitBranchInfoSchema>;
+
 /** Local git facts about a project, from `GitCore.readRepositoryInfo` (local refs only). */
 export const GitRepositoryInfoSchema = z.object({
   defaultBranch: z
@@ -345,5 +376,11 @@ export const GitRepositoryInfoSchema = z.object({
   ),
   /** Latest committer date over local branches, or null. */
   lastActivityAt: TimestampSchema.nullable(),
+  /**
+   * Local branches, newest commit first, at most `MAX_LISTED_BRANCHES` (`localBranches` is the
+   * full count). The Overview lists the ones no worktree has checked out. Optional: older daemons
+   * and test doubles omit it.
+   */
+  branches: z.array(GitBranchInfoSchema).optional(),
 });
 export type GitRepositoryInfo = z.infer<typeof GitRepositoryInfoSchema>;

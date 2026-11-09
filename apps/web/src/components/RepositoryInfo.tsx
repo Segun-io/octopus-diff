@@ -1,6 +1,7 @@
 import {
   changeRequestNoun,
   type ForgeRepositoryInfo,
+  type GitBranchInfo,
   type GitRepositoryInfo,
   type ProjectForge,
   TEST_IDS,
@@ -14,8 +15,11 @@ import {
 } from '../api/forges.ts';
 import { CHECKS_STATE_WORD, projectStatusLine, REVIEW_WORD, remoteLabel } from '../lib/forge.ts';
 import { absoluteTime, relativeTime } from '../lib/time.ts';
+import { hasSuspicious } from '../lib/unicode.ts';
 import { actions, useUiStore } from '../state/ui.tsx';
 import { ChangeRequestGlyph } from './ChangeRequest.tsx';
+import { CopyButton } from './CopyButton.tsx';
+import { PAGE_SIZE, Pager, usePage } from './Pager.tsx';
 
 /**
  * Repository information on the project Overview (docs/FORGES.md "Repository information"):
@@ -279,22 +283,35 @@ export function ForgeRepositoryFacts({ projectId }: { projectId: string }) {
   );
 }
 
-/** "Open pull requests" below the worktree table (newest 20). */
+/**
+ * The open pull/merge requests tab of the project Overview: the newest `PAGE_SIZE` (15) the forge
+ * returned, then a link to the full list on the forge. No pager: the forge is where the rest lives.
+ */
 export function OpenRequests({ projectId }: { projectId: string }) {
   const query = useRepositoryForge(projectId);
   const store = useUiStore();
   const index = useForgeIndex();
   const info = query.data?.repository;
-  if (!info || info.requests.length === 0) return null;
+  if (!info) return null;
   const noun = changeRequestNoun(info.kind).long;
   const sigil = info.kind === 'github' ? '#' : '!';
-  const more = (info.openRequests ?? info.requests.length) - info.requests.length;
+  const shown = info.requests.slice(0, PAGE_SIZE);
+  const more = Math.max(0, (info.openRequests ?? info.requests.length) - shown.length);
+  if (shown.length === 0) {
+    return (
+      <p className="py-2 text-xs text-muted">
+        No open {noun}s.{' '}
+        <External href={listUrls(info).requests}>
+          All {noun}s on {info.host}
+        </External>
+      </p>
+    );
+  }
   return (
-    <section className="mt-6">
-      <h2 className="mb-1.5 text-xs font-medium">Open {noun}s</h2>
+    <section>
       <table className="w-full text-xs">
         <tbody>
-          {info.requests.map((r) => {
+          {shown.map((r) => {
             const local = r.worktreeId !== null && index.has(r.worktreeId);
             const open = () => {
               if (r.worktreeId && local) {
@@ -370,16 +387,175 @@ export function OpenRequests({ projectId }: { projectId: string }) {
         </tbody>
       </table>
       {(info.requestsTruncated || more > 0) && (
-        <p className="mt-1.5 text-[11px] text-muted">
-          <External
-            href={
-              info.kind === 'github' ? `${info.webUrl}/pulls` : `${info.webUrl}/-/merge_requests`
-            }
-          >
+        <p className="mt-2 text-right text-[11px] text-muted">
+          <External href={listUrls(info).requests}>
             {more > 0 ? `${more} more` : 'More'} on {info.host}
           </External>
         </p>
       )}
+    </section>
+  );
+}
+
+const BRANCH_CELL = 'py-1.5 pr-3';
+
+/**
+ * The upstream as shown in the Branches list: just the remote (`origin`) when the upstream has
+ * the branch's own name there (the usual case), else the whole short name.
+ */
+export function upstreamLabel(branch: string, upstream: string): string {
+  return upstream.endsWith(`/${branch}`) && upstream.length > branch.length + 1
+    ? upstream.slice(0, -branch.length - 1)
+    : upstream;
+}
+
+/**
+ * The Branches tab of the project Overview: local branches that no worktree has checked out,
+ * newest commit first, 15 a page. Local refs only (as of the last fetch); a branch whose name
+ * matches an open request's head branch (same repository) links to it.
+ */
+export function LocalBranches({
+  projectId,
+  branches,
+  total,
+  listed,
+  defaultBranch,
+  error,
+}: {
+  projectId: string;
+  /** Null while the repository is read. */
+  branches: readonly GitBranchInfo[] | null;
+  /** All local branches, and how many the daemon listed (it caps the list). */
+  total: number | null;
+  listed: number | null;
+  defaultBranch: string | null;
+  error: string | null;
+}) {
+  const forge = useRepositoryForge(projectId).data?.repository ?? null;
+  const requests = new Map(
+    (forge?.requests ?? []).filter((r) => !r.crossRepository).map((r) => [r.headBranch, r]),
+  );
+  const slice = usePage(branches ?? []);
+  if (error) return <p className="py-2 text-xs text-danger">{error}</p>;
+  if (!branches) return <p className="py-2 text-xs text-muted">Reading the branches…</p>;
+  const merged = defaultBranch ? branches.filter((b) => b.merged).length : 0;
+  const capped = total !== null && listed !== null && listed < total;
+  return (
+    <section>
+      <p className="mb-2 text-[11px] text-muted">
+        {branches.length === 0
+          ? 'Every local branch is checked out in a worktree.'
+          : 'Local branches no worktree has checked out, newest commit first.'}
+        {merged > 0 && defaultBranch && (
+          <>
+            {' '}
+            {merged} {merged === 1 ? 'is' : 'are'} merged into{' '}
+            <span className="font-mono">{defaultBranch}</span>.
+          </>
+        )}
+        {capped && ` Only the ${listed} newest of ${total} branches are read.`}
+      </p>
+      {branches.length > 0 && (
+        <table className="w-full text-xs">
+          <thead>
+            <tr>
+              <th className="od-th">Branch</th>
+              <th className="od-th">Last commit</th>
+              <th className="od-th">Updated</th>
+              <th className="od-th">Upstream</th>
+              <th className="od-th">State</th>
+            </tr>
+          </thead>
+          <tbody>
+            {slice.rows.map((b) => {
+              const request = requests.get(b.name);
+              return (
+                <tr
+                  key={b.name}
+                  data-testid={TEST_IDS.overviewBranchRow}
+                  data-branch={b.name}
+                  data-merged={b.merged === null ? '' : String(b.merged)}
+                  className="group/br hover:bg-hover"
+                >
+                  <td className={`${BRANCH_CELL} max-w-64`}>
+                    <span className="flex min-w-0 items-center gap-1">
+                      <span className="min-w-0 truncate font-mono font-medium" title={b.name}>
+                        {b.name}
+                      </span>
+                      <CopyButton
+                        text={b.name}
+                        label="Copy branch name"
+                        what="branch name"
+                        escaped={hasSuspicious(b.name)}
+                        className="opacity-0 group-hover/br:opacity-100 focus-visible:opacity-100"
+                      />
+                    </span>
+                  </td>
+                  <td className="w-full max-w-0 py-1.5 pr-3">
+                    <span className="flex min-w-0 gap-1.5" title={b.subject}>
+                      <span className="shrink-0 font-mono text-muted">{b.sha.slice(0, 7)}</span>
+                      <span className="truncate">{b.subject}</span>
+                    </span>
+                  </td>
+                  <td
+                    className={`${BRANCH_CELL} whitespace-nowrap text-muted`}
+                    title={absoluteTime(b.committerDate)}
+                  >
+                    {b.committerDate ? relativeTime(b.committerDate) : '–'}
+                  </td>
+                  <td className={`${BRANCH_CELL} whitespace-nowrap font-mono text-[11px]`}>
+                    {b.upstream === null ? (
+                      <span className="font-sans text-faint">local only</span>
+                    ) : (
+                      <span
+                        className="text-muted"
+                        title={`Against ${b.upstream}, as of the last fetch; octopus-diff never fetches`}
+                      >
+                        {upstreamLabel(b.name, b.upstream)}{' '}
+                        {b.upstreamGone ? (
+                          <span className="font-sans text-warn">gone</span>
+                        ) : (
+                          b.ahead !== null && b.behind !== null && `↑${b.ahead} ↓${b.behind}`
+                        )}
+                      </span>
+                    )}
+                  </td>
+                  <td className="py-1.5 whitespace-nowrap">
+                    <span className="flex items-center gap-1.5">
+                      {b.name === defaultBranch && (
+                        <span className="od-chip od-chip-default">default</span>
+                      )}
+                      {b.merged && b.name !== defaultBranch && (
+                        <span
+                          className="od-chip"
+                          title={`Merged into ${defaultBranch ?? 'the default branch'}`}
+                        >
+                          merged
+                        </span>
+                      )}
+                      {request && (
+                        <External href={request.url}>
+                          <span
+                            className={`inline-flex items-center gap-1 ${request.draft ? 'text-faint' : 'text-add'}`}
+                            title={request.title}
+                          >
+                            <ChangeRequestGlyph look={request.draft ? 'draft' : 'open'} />
+                            <span className="font-mono tabular-nums">
+                              {forge?.kind === 'gitlab' ? '!' : '#'}
+                              {request.number}
+                            </span>
+                          </span>
+                        </External>
+                      )}
+                    </span>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+      <Pager slice={slice} what="branches" />
     </section>
   );
 }

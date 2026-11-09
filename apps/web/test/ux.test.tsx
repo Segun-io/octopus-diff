@@ -8,6 +8,7 @@ import { createMockFetch } from '../mock/router.ts';
 import { App } from '../src/App.tsx';
 import type { EventSourceLike } from '../src/api/hooks.ts';
 import { createQueryClient } from '../src/api/queries.ts';
+import { scopeForPref } from '../src/state/prefs.ts';
 import { createUiStore, type UiStore } from '../src/state/ui.tsx';
 
 vi.mock('../src/components/diff/DiffRenderer.tsx', () => ({
@@ -70,7 +71,10 @@ function setup(
     },
   });
   // The Settled shelf is closed by default; most tests read settled rows, so open it.
-  const store = createUiStore({ confirmBulk: false, settledOpen: true, ...opts.store }, false);
+  const store = createUiStore(
+    { confirmBulk: false, settledOpen: true, scope: scopeForPref('review'), ...opts.store },
+    false,
+  );
   const factory = () => {
     const es = new FakeEventSource();
     backend.subscribe((e) => es.dispatch(e));
@@ -485,18 +489,18 @@ describe('folder tier, overview and palette', () => {
     const rowActions = (branch: string) =>
       within(worktreeItem(branch).parentElement as HTMLElement);
 
-    // under the projects, in folder order: docs-site (mid-rebase), octopus-api (main, the
-    // conflicted feat/auth, fix/cache), web-dashboard (main); the clean, review-off, failed and
-    // missing worktrees are settled and the shelf is closed
+    // under the projects, in folder order: docs-site (mid-rebase), octopus-api (most recent
+    // first: main, the conflicted feat/auth, fix/cache), web-dashboard (main); the clean,
+    // review-off, failed and missing worktrees are settled and the shelf is closed
     expect(section('folder')).toEqual(['', 'main', 'feat/auth', 'fix/cache', 'main']);
     expect(section('settled')).toEqual([]);
-    expect(within(sidebar).getByLabelText('Expand settled').textContent).toContain('5');
+    expect(within(sidebar).getByLabelText('Expand hidden').textContent).toContain('5');
     // a project whose worktrees all settled says so instead of listing them
-    expect(project('infra').textContent).toContain('settled');
-    expect(project('octopus-api').textContent).not.toContain('settled');
+    expect(project('infra').textContent).toContain('hidden');
+    expect(project('octopus-api').textContent).not.toContain('hidden');
 
     // opening the shelf lists them, one word each, folder order; the pref persists
-    fireEvent.click(within(sidebar).getByLabelText('Expand settled'));
+    fireEvent.click(within(sidebar).getByLabelText('Expand hidden'));
     expect(section('settled')).toEqual([
       '',
       'agent/codex-123',
@@ -513,12 +517,12 @@ describe('folder tier, overview and palette', () => {
 
     // a closed shelf still shows the selected worktree
     const trunkId = worktreeItem('trunk').dataset.worktreeId as string;
-    fireEvent.click(within(sidebar).getByLabelText('Collapse settled'));
+    fireEvent.click(within(sidebar).getByLabelText('Collapse hidden'));
     expect(section('settled')).toEqual([]);
     store.setState({ view: { kind: 'worktree', worktreeId: trunkId } });
     await waitFor(() => expect(section('settled')).toEqual(['trunk']));
     expect(store.getState().settledOpen).toBe(false);
-    fireEvent.click(within(sidebar).getByLabelText('Expand settled'));
+    fireEvent.click(within(sidebar).getByLabelText('Expand hidden'));
 
     // hide until it changes: the row leaves its project for the shelf, pinned to the state hash
     fireEvent.click(rowActions('fix/cache').getByLabelText('Hide until it changes'));
@@ -605,6 +609,69 @@ describe('folder tier, overview and palette', () => {
     expect(bodyOf<{ paths?: unknown }>(bulk).paths).toBeUndefined();
     await waitFor(() => expect(worktreeItem('fix/cache').dataset.commits).toBe('0'));
     await waitFor(() => expect(worktreeItem('fix/cache').dataset.stage).toBe('reviewed'));
+  });
+
+  it('All on branch lists everything, To review what is left, neither has the eye; counts follow the eye elsewhere', async () => {
+    const { user, store } = setup('demo', {
+      statusFlow: true,
+      store: { scope: { kind: 'review' }, showReviewed: false },
+    });
+    await waitFor(() => expect(app().getAttribute('data-ready')).toBe('true'));
+    const select = screen.getByTestId(TEST_IDS.scopeSelect) as HTMLSelectElement;
+    expect(Array.from(select.options).map((o) => o.value)).toEqual([
+      'branch',
+      'review',
+      'working',
+      'staged',
+      'unstaged',
+      'commit',
+    ]);
+    fireEvent.click(worktreeItem('fix/cache'));
+    await ready();
+    const paths = () => screen.queryAllByTestId(TEST_IDS.fileItem).map((el) => el.dataset.path);
+    const reviewed = () =>
+      screen.queryAllByTestId(TEST_IDS.fileItem).filter((el) => el.dataset.reviewed === 'true');
+    const eye = () => screen.queryByTestId(TEST_IDS.showReviewedToggle);
+    const option = (kind: string) => select.querySelector(`option[value="${kind}"]`)?.textContent;
+
+    // To review: no eye, `h` does nothing, a file marked reviewed leaves the list.
+    expect(eye()).toBeNull();
+    const before = paths();
+    expect(before.length).toBeGreaterThan(1);
+    const first = viewer().dataset.path ?? before[0];
+    await press(user, 'r');
+    await waitFor(() => expect(paths()).not.toContain(first));
+    await press(user, 'h');
+    expect(store.getState().showReviewed).toBe(false);
+
+    // All on branch: no eye, and reviewed files are listed even though the eye pref is off.
+    fireEvent.change(select, { target: { value: 'branch' } });
+    await waitFor(() => expect(select.dataset.scope?.startsWith('branch')).toBe(true));
+    await ready();
+    expect(eye()).toBeNull();
+    await press(user, 'r');
+    await waitFor(() => expect(reviewed().length).toBeGreaterThan(0));
+    const branchTotal = paths().length;
+    expect(option('branch')).toBe(`All on branch (${branchTotal})`);
+
+    // Uncommitted has the eye: with it off, a reviewed file leaves and the count says "x of y".
+    fireEvent.change(select, { target: { value: 'working' } });
+    await waitFor(() => expect(eye()).not.toBeNull());
+    await ready();
+    expect(eye()?.getAttribute('aria-pressed')).toBe('false');
+    fireEvent.click(eye() as HTMLElement);
+    await waitFor(() => expect(eye()?.getAttribute('aria-pressed')).toBe('true'));
+    await waitFor(() => expect(paths().length).toBeGreaterThan(1));
+    const total = paths().length;
+    if (reviewed().length === 0) {
+      await press(user, 'r');
+      await waitFor(() => expect(reviewed().length).toBe(1));
+    }
+    const left = total - reviewed().length;
+    expect(option('working')).toBe(`Uncommitted (${total})`);
+    fireEvent.click(eye() as HTMLElement);
+    await waitFor(() => expect(paths()).toHaveLength(left));
+    await waitFor(() => expect(option('working')).toBe(`Uncommitted (${left} of ${total})`));
   });
 
   it('switching the toolbar scope never moves a sidebar row (status flow v2)', async () => {
@@ -875,5 +942,60 @@ describe('Escape closes overlays even when focus left them (ux-e2e seam fix)', (
     await press(user, '{Escape}');
     await waitFor(() => expect(screen.queryByTestId(TEST_IDS.reviewPolicyMenu)).toBeNull());
     expect(document.activeElement).toBe(screen.getByTestId(TEST_IDS.reviewPolicyChip));
+  });
+});
+
+describe('chrome hierarchy (docs/TOOLBAR.md)', () => {
+  it('the context bar says where you are; list and diff controls sit over their own panes', async () => {
+    setup();
+    await ready();
+    const bar = () => screen.getByTestId('context-bar');
+    const listOptions = () => screen.getByRole('toolbar', { name: 'File list options' });
+    expect(bar().textContent).toMatch(/^Inbox\d+ worktrees\d+ files/);
+    // In the Inbox the list mixes worktrees, so the diff header names the file's.
+    expect(within(viewer()).getByTestId('diff-header-worktree')).toBeTruthy();
+    // List controls over the list, diff controls over the diff.
+    expect(within(listOptions()).getByTestId(TEST_IDS.scopeSelect)).toBeTruthy();
+    expect(within(listOptions()).getByTestId(TEST_IDS.showReviewedToggle)).toBeTruthy();
+    expect(within(listOptions()).queryByTestId('tree-view-toggle')).toBeNull();
+    expect(within(viewer()).getByTestId(TEST_IDS.diffModeToggle)).toBeTruthy();
+    expect(within(viewer()).getByTestId(TEST_IDS.whitespaceToggle)).toBeTruthy();
+
+    const row = worktreeItem('feat/auth');
+    fireEvent.click(row);
+    await waitFor(() =>
+      expect(viewer().getAttribute('data-worktree-id')).toBe(row.dataset.worktreeId),
+    );
+    expect(within(bar()).getByTestId('context-bar-worktree').textContent).toBe(
+      'octopus-apifeat/auth',
+    );
+    expect(within(viewer()).queryByTestId('diff-header-worktree')).toBeNull();
+    expect(within(bar()).getByTestId(TEST_IDS.worktreeTabs)).toBeTruthy();
+    // The forge link says the state; the tab beside it has the number.
+    const badge = await within(bar()).findByTestId(TEST_IDS.changeRequestBadge);
+    expect(badge.textContent).not.toMatch(/#/);
+    expect(badge.textContent).toMatch(/open/);
+    await within(bar()).findByTestId(TEST_IDS.reviewPolicyChip);
+    expect(within(listOptions()).getByTestId('tree-view-toggle')).toBeTruthy();
+
+    // The layout control is a segmented pair: the group carries the mode, a button per mode.
+    const modes = () => within(viewer()).getByTestId(TEST_IDS.diffModeToggle);
+    expect(modes().getAttribute('data-mode')).toBe('split');
+    fireEvent.click(within(modes()).getByRole('button', { name: 'Unified' }));
+    expect(modes().getAttribute('data-mode')).toBe('unified');
+    expect(viewer().getAttribute('data-mode')).toBe('unified');
+    fireEvent.click(within(modes()).getByRole('button', { name: 'Unified' }));
+    expect(modes().getAttribute('data-mode')).toBe('unified');
+
+    // The Request tab keeps the bar (identity, tabs) and drops the pane headers below it.
+    fireEvent.click(within(bar()).getAllByTestId(TEST_IDS.worktreeTab)[1] as HTMLElement);
+    await screen.findByTestId(TEST_IDS.requestView);
+    expect(within(bar()).getByTestId('context-bar-worktree').textContent).toBe(
+      'octopus-apifeat/auth',
+    );
+    expect(within(bar()).getByTestId(TEST_IDS.worktreeTabs)).toBeTruthy();
+    expect(within(bar()).queryByTestId(TEST_IDS.changeRequestBadge)).toBeNull();
+    expect(screen.queryByTestId(TEST_IDS.scopeSelect)).toBeNull();
+    expect(screen.queryByTestId(TEST_IDS.diffModeToggle)).toBeNull();
   });
 });

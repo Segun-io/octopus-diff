@@ -13,8 +13,11 @@ import {
   buildSidebar,
   type FileGroup,
   flattenGroups,
+  hasSidebarFilters,
+  listsReviewed,
   type NavEntry,
   rowVisible,
+  type SidebarFilters,
   type SidebarModel,
   sortFiles,
   sortFilesTreeOrder,
@@ -42,6 +45,8 @@ export interface AppModel {
   /** Files across all worktrees for `n` (current scope; commit scope: current list only). */
   globalEntries: NavEntry[];
   visible: VisiblePredicate;
+  /** The list shows reviewed files (`listsReviewed`: All on branch always, To review never, else the eye). */
+  showsReviewed: boolean;
   /** True when the current view's file data is loaded for the current scope. */
   viewReady: boolean;
   selectedKey: string | null;
@@ -77,10 +82,16 @@ export function AppModelProvider({ children }: { children: ReactNode }) {
 function useBuildAppModel(): AppModel {
   const view = useUi((s) => s.view);
   const scope = useUi((s) => s.scope);
-  const filterText = useUi((s) => s.filterText);
+  const filterProjects = useUi((s) => s.filterProjects);
+  const filterWorktrees = useUi((s) => s.filterWorktrees);
   const onlyDirty = useUi((s) => s.onlyDirty);
   const onlyUnreviewed = useUi((s) => s.onlyUnreviewed);
+  const filters = useMemo<SidebarFilters>(
+    () => ({ projects: filterProjects, worktrees: filterWorktrees, onlyDirty, onlyUnreviewed }),
+    [filterProjects, filterWorktrees, onlyDirty, onlyUnreviewed],
+  );
   const showReviewed = useUi((s) => s.showReviewed);
+  const showsReviewed = listsReviewed(showReviewed, scope.kind);
   const selected = useUi((s) => s.selected);
   const pinned = useUi((s) => s.pinned);
   const settle = useUi((s) => s.settle);
@@ -112,23 +123,13 @@ function useBuildAppModel(): AppModel {
       buildSidebar(
         projectList ?? [],
         statusData?.entries,
-        { text: filterText, onlyDirty, onlyUnreviewed },
+        filters,
         scanRootList,
         pinned,
         settle,
         forgeByWorktree,
       ),
-    [
-      forgeByWorktree,
-      projectList,
-      statusData,
-      filterText,
-      onlyDirty,
-      onlyUnreviewed,
-      scanRootList,
-      pinned,
-      settle,
-    ],
+    [forgeByWorktree, projectList, statusData, filters, scanRootList, pinned, settle],
   );
 
   const inboxEntries = useMemo(() => sortInboxEntries(inboxData?.entries ?? []), [inboxData]);
@@ -150,7 +151,6 @@ function useBuildAppModel(): AppModel {
   const filesData = files.data;
   const groups = useMemo<FileGroup[]>(() => {
     if (view.kind === 'inbox') {
-      const filters = { text: filterText, onlyDirty, onlyUnreviewed };
       const out: FileGroup[] = [];
       for (const entry of inboxEntries) {
         const row = sidebar.byId.get(entry.worktree.id);
@@ -175,9 +175,7 @@ function useBuildAppModel(): AppModel {
     sortedInboxFiles,
     sidebar,
     filesData,
-    filterText,
-    onlyDirty,
-    onlyUnreviewed,
+    filters,
     reviewOffDisplay,
     fileListLayout,
   ]);
@@ -208,10 +206,8 @@ function useBuildAppModel(): AppModel {
 
   const inboxUnfiltered =
     view.kind === 'inbox' &&
-    filterText.trim() === '' &&
-    !onlyDirty &&
-    !onlyUnreviewed &&
-    showReviewed &&
+    !hasSidebarFilters(filters) &&
+    showsReviewed &&
     groups.length === inboxEntries.length;
 
   const viewPolicy =
@@ -235,7 +231,7 @@ function useBuildAppModel(): AppModel {
     return flattenGroups(all);
   }, [scope.kind, entries, inboxEntries, sortedInboxFiles, view, groups]);
 
-  const visible = useMemo(() => visibleIf(showReviewed), [showReviewed]);
+  const visible = useMemo(() => visibleIf(showsReviewed), [showsReviewed]);
 
   const viewReady =
     view.kind === 'inbox'
@@ -280,6 +276,7 @@ function useBuildAppModel(): AppModel {
     entries,
     globalEntries,
     visible,
+    showsReviewed,
     viewReady,
     selectedKey,
     selectedEntry,

@@ -1,5 +1,5 @@
 /**
- * README screenshots: inbox, diff in split and unified mode, each in light and dark themes, from
+ * README screenshots: inbox, diff in split and unified mode, the sidebar filter, each in light and dark themes, from
  * the acceptance fixtures. Writes PNGs to docs/screenshots/ (override with --out <dir>).
  *
  * Usage (after `pnpm build`): pnpm --filter @octopus-diff/fixtures screenshots
@@ -90,6 +90,20 @@ async function main() {
       await page.keyboard.press('ArrowDown');
       await shot('palette-browse');
       await page.keyboard.press('Escape');
+
+      // The sidebar filter: `/` opens the dropdown; one project picked, searching worktrees.
+      const alphaProject = findWorktree(fixtures.manifest, 'alpha').project;
+      await page.keyboard.press('/');
+      await app.byTestId(TEST_IDS.sidebarFilterSearch).waitFor();
+      await app.byTestId(TEST_IDS.onlyDirtyToggle).click();
+      await app
+        .byTestId(TEST_IDS.sidebarFilterOption)
+        .and(page.locator(`[data-project-id="${alphaProject.id}"]`))
+        .click();
+      await shot('sidebar-filter');
+      await page.keyboard.press('Escape');
+      await app.byTestId(TEST_IDS.sidebarFilterClear).click();
+      await app.focusApp();
 
       await page.keyboard.press('?');
       if (await app.byTestId(TEST_IDS.helpDialog).isVisible()) {

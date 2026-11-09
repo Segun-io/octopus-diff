@@ -59,6 +59,17 @@ const STATES: Record<string, Step> = {
     await page.keyboard.press('Control+k');
     await page.waitForTimeout(300);
   },
+  'commit-scope': async (page) => {
+    await page.locator('[data-testid="worktree-item"][data-branch="feat/auth"]').click();
+    // The commit option stays disabled until the commit list has loaded, and selectOption does
+    // not wait for an option to become enabled: the select would revert to the default scope.
+    const scope = page.locator('[data-testid="scope-select"]');
+    await scope.locator('option[value="commit"]:not([disabled])').waitFor({ state: 'attached' });
+    await scope.selectOption('commit');
+    const value = await scope.inputValue();
+    if (value !== 'commit') throw new Error(`commit-scope: the scope is "${value}", not "commit"`);
+    await page.waitForTimeout(400);
+  },
   'policy-menu': async (page) => {
     await page.locator('[data-testid="worktree-item"][data-branch="feat/auth"]').click();
     await page.locator('[data-testid="review-policy-chip"]').click();
@@ -74,6 +85,16 @@ const STATES: Record<string, Step> = {
       .first()
       .click();
     await page.waitForTimeout(400);
+  },
+  'project-branches': async (page) => {
+    await STATES.project?.(page);
+    await page.locator('[data-testid="overview-tab"][data-tab="branches"]').click();
+    await page.waitForTimeout(300);
+  },
+  'project-requests': async (page) => {
+    await STATES.project?.(page);
+    await page.locator('[data-testid="overview-tab"][data-tab="requests"]').click();
+    await page.waitForTimeout(300);
   },
   'context-menu': async (page) => {
     await page

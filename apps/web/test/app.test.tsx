@@ -8,6 +8,7 @@ import { createMockFetch } from '../mock/router.ts';
 import { App } from '../src/App.tsx';
 import type { EventSourceLike } from '../src/api/hooks.ts';
 import { createQueryClient } from '../src/api/queries.ts';
+import { scopeForPref } from '../src/state/prefs.ts';
 import { createUiStore, type UiStore } from '../src/state/ui.tsx';
 
 // @pierre/diffs needs a real browser (web components, workers); stub the renderer.
@@ -56,7 +57,7 @@ function setup(dataset: MockDataset = 'demo', opts: { token?: string } = {}): Ha
     },
   });
   // The Settled shelf is closed by default; these tests read settled rows, so open it.
-  const store = createUiStore({ settledOpen: true }, false);
+  const store = createUiStore({ settledOpen: true, scope: scopeForPref('review') }, false);
   const factory = () => {
     const es = new FakeEventSource();
     backend.subscribe((e) => es.dispatch(e));
@@ -444,18 +445,32 @@ describe('keyboard', () => {
     expect(modeToggle.getAttribute('data-mode')).toBe('unified');
     expect(viewer().getAttribute('data-mode')).toBe('unified');
 
+    // `/` opens the filter dropdown with its search focused; typing searches the options.
     await press(user, '/');
-    const filter = screen.getByTestId(TEST_IDS.sidebarFilter) as HTMLInputElement;
-    expect(document.activeElement).toBe(filter);
+    const search = screen.getByTestId(TEST_IDS.sidebarFilterSearch) as HTMLInputElement;
+    expect(document.activeElement).toBe(search);
     await press(user, 'cache');
-    expect(filter.value).toBe('cache');
+    expect(search.value).toBe('cache');
     expect(viewer().getAttribute('data-mode')).toBe('unified'); // 's' was typed, not a shortcut
     expect(viewerPath()).toBe('content/intro.md'); // 'c','a','h','e' did nothing either
+    const worktreeOptions = screen
+      .getAllByTestId(TEST_IDS.sidebarFilterOption)
+      .filter((o) => o.dataset.kind === 'worktree');
+    expect(worktreeOptions[0]?.textContent).toContain('fix/cache');
+    // Enter picks the best match (status options do not match "cache"): one worktree shows.
+    await press(user, '{Enter}');
+    expect(worktreeOptions[0]?.getAttribute('aria-selected')).toBe('true');
     expect(screen.getAllByTestId(TEST_IDS.worktreeItem)).toHaveLength(1);
     await press(user, '{Escape}');
-    expect(filter.value).toBe('');
+    expect(search.value).toBe('');
     await press(user, '{Escape}');
-    expect(document.activeElement).not.toBe(filter);
+    expect(screen.queryByTestId(TEST_IDS.sidebarFilterSearch)).toBeNull();
+    const trigger = screen.getByTestId(TEST_IDS.sidebarFilter);
+    expect(document.activeElement).toBe(trigger);
+    expect(trigger.dataset.filtering).toBe('true');
+    expect(trigger.textContent).toContain('fix/cache');
+    fireEvent.click(screen.getByTestId(TEST_IDS.sidebarFilterClear));
+    expect(screen.getAllByTestId(TEST_IDS.worktreeItem).length).toBeGreaterThan(1);
 
     await press(user, '?');
     expect(screen.getByTestId(TEST_IDS.helpDialog)).toBeTruthy();
