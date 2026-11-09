@@ -89,9 +89,12 @@ from other devices). Without it, `odino:5173` works on the machine itself but ti
 To keep it running in the background like the LAN server, use a user unit (run this from the checkout):
 
 ```sh
+# systemd does not create the log directory; the logs hold the token URLs, so keep them private
+mkdir -p -m 700 "$HOME/.cache/octopus-diff-dev"
 systemd-run --user --unit=octopus-diff-dev --working-directory="$PWD" \
-  --property=StandardOutput=append:$HOME/.cache/octopus-diff-dev/dev.out \
-  --property=StandardError=append:$HOME/.cache/octopus-diff-dev/dev.err \
+  --property=UMask=0077 \
+  --property=StandardOutput="append:$HOME/.cache/octopus-diff-dev/dev.out" \
+  --property=StandardError="append:$HOME/.cache/octopus-diff-dev/dev.err" \
   "$(command -v node)" scripts/dev.mjs
 # logs and the token URLs: dev.out (as lan-serve.out holds the LAN server's); stop:
 systemctl --user stop octopus-diff-dev
