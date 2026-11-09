@@ -1623,7 +1623,9 @@ entries (#123) while this was written, so #123–#129 are left to it.
      default on a 4-core CI runner that tests the other packages at the same time. It failed on every CI run
      (Node 24 and 26). It now has 30 s, and git-core's `vitest.config.ts` sets `testTimeout: 20_000`: every
      git-core test spawns git, and several others already take 3–4 s on CI (`review-fixes` sha1/sha256,
-     `diff-working` "getFileDiff agrees …").
+     `diff-working` "getFileDiff agrees …") The same for `apps/web` (`testTimeout: 20_000`): its jsdom UI tests
+     take 2–4.6 s each on CI, and `request.test.tsx` "appears only for worktrees with a request" went over 5 s on
+     Node 24 in this PR's first CI run (5.26 s).
 134. **Two e2e races fixed in the specs.** (a) `07-readonly` read the diff of every listed file while the agent
      simulator edits `live-agent`, so a file could be clean or gone by then (`ApiClientError` `not_found`
      "file is not changed in this scope"). That is the test racing the agent, not a write. `not_found` from
