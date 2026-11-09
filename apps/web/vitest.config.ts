@@ -14,5 +14,6 @@ export default defineConfig({
     // jsdom UI tests: many take 3-4.6 s on a 4-core CI runner testing other packages in parallel
     // (one passed the 5 s default there, PR #3's first run). DECISIONS #133.
     testTimeout: 20_000,
+    setupFiles: ['test/setup.ts'],
   },
 });

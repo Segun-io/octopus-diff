@@ -58,7 +58,9 @@ bursts of `Interrupted system call`.
 CI on PR #3: the first run (head 2e4fa25) failed Node 24 only, on `apps/web` `request.test.tsx` "appears only for
 worktrees with a request" timing out at 5 s (5.26 s; same class as git-core), fixed in cb48b9d (web `testTimeout`). The
 second run (cb48b9d) passed all checks: lint/typecheck/test/build on Node 24 and 26, package, and e2e (83 passed in
-5.0 min, 0 watcher errors in the log).
+5.0 min, 0 watcher errors in the log). The run on the report commit (be7b6b0) failed Node 24 on two `apps/web` settings tests
+(`findByTestId(settings-dialog)` after Testing Library's 1 s default while the lazy chunk loaded); `apps/web/test/setup.ts`
+raises `asyncUtilTimeout` to 5 s.
 
 ## Decisions
 
