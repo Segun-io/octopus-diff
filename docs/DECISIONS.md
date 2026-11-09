@@ -1928,3 +1928,13 @@ contract, daemon or git-core change.
      shared 2-core runner). The spec now takes the best of up to three fresh daemons (each cold: new store,
      empty caches) and records every sample (`bulkAllColdSamples`); the 2 s budget and the warm check are
      unchanged. Test timeout 240 → 360 s for the extra daemons.
+163. **The bulk bench's cold budget follows the machine (supersedes #162 (b)).** Best of three did not hold: the
+     next CI run measured 4327, 3977 and 3930 ms. Not a regression: locally `main` and this branch give the same
+     numbers (07-readonly 10.3 vs 10.3–10.5 s, cold bulk 676–708 vs 702–724 ms), and across six CI runs the cold
+     bulk tracks the read-only spec's time (972 ms ↔ 15.2 s … 3930 ms ↔ 30.9 s), i.e. the runner's speed. A cold
+     `all` is the inbox's aggregation plus one SQLite transaction (ux-daemon report: equal within noise; here 534
+     vs 532 ms), so the spec now also times a cold inbox on another fresh daemon and the budget is
+     `max(2 s, inbox cold × 1.25 + 200 ms)`: still 2 s on a normal machine, and git per file (360 extra spawns)
+     would still blow it. Best of up to three attempts, each on fresh daemons; samples and the budget are
+     recorded in `bulk-review-bench.json`. Warm `all` (the UI flow) keeps its fixed 2 s. Checked under a
+     simulated slow runner (one core shared with three busy loops): inbox 1777 ms, bulk 1677 ms, budget 2421 ms.

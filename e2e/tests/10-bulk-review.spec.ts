@@ -270,16 +270,37 @@ test.describe('UX-1 bulk review with undo (API)', () => {
       bench: { repos: 30, worktreesPerRepo: 3 },
       prefix: 'octopus-diff-bulkbench-',
     });
-    // A cold call is one sample of 90 `git status` runs: on a shared 2-core CI runner it varied
-    // from 0.97 to 2.08 s across runs of the same commit range (DECISIONS #162). Best of up to
-    // three fresh daemons (each one cold: new store, empty caches), same 2 s budget.
-    const startCold = async () => {
+    // A cold `all` runs the inbox's aggregation (one `git status` per worktree, 90 here) and then
+    // one SQLite transaction, never git per file (docs/COORDINATION.md §2.2). Its wall time
+    // follows the machine: on shared CI runners the same commit range measured 0.97–4.3 s, and the
+    // read-only spec's time moved with it (15–31 s), so a fixed 2 s says more about the runner than
+    // the daemon (DECISIONS #163). The budget is 2 s, or the cold inbox on this machine (another
+    // fresh daemon, same work) × 1.25 + 200 ms when that alone is slower. Best of up to three
+    // attempts, each on fresh daemons (new store, empty caches).
+    const fresh = async () => {
       const daemon = await TestDaemon.start({ manifest: bench.manifest, webRoot: null });
       try {
         await daemon.waitForProjects(
           registeredProjects(bench.manifest).map((p) => p.name),
           120_000,
         );
+        return daemon;
+      } catch (error) {
+        await daemon.close();
+        throw error;
+      }
+    };
+    const coldInbox = async () => {
+      const daemon = await fresh();
+      try {
+        return (await timed(() => daemon.client.inbox())).ms;
+      } finally {
+        await daemon.close();
+      }
+    };
+    const coldBulk = async () => {
+      const daemon = await fresh();
+      try {
         // Cold: file lists are not cached yet, so this is the same work the inbox does.
         const cold = await timed(() => daemon.client.bulkReview({ target: { kind: 'all' } }));
         return { daemon, cold };
@@ -288,12 +309,16 @@ test.describe('UX-1 bulk review with undo (API)', () => {
         throw error;
       }
     };
+    const budgetFor = (inboxMs: number) => Math.max(2000, inboxMs * 1.25 + 200);
     try {
-      let run = await startCold();
+      const inboxColdSamples = [Math.round(await coldInbox())];
+      let run = await coldBulk();
       const coldSamples = [Math.round(run.cold.ms)];
-      while (run.cold.ms >= 2000 && coldSamples.length < 3) {
+      const budget = () => budgetFor(Math.min(...inboxColdSamples));
+      while (run.cold.ms >= budget() && coldSamples.length < 3) {
         await run.daemon.close();
-        run = await startCold();
+        inboxColdSamples.push(Math.round(await coldInbox()));
+        run = await coldBulk();
         coldSamples.push(Math.round(run.cold.ms));
       }
       const { daemon, cold } = run;
@@ -319,6 +344,8 @@ test.describe('UX-1 bulk review with undo (API)', () => {
             listProjectsMedian: Math.round(median(projectsMs)),
             bulkAllCold: Math.round(cold.ms),
             bulkAllColdSamples: coldSamples,
+            inboxColdFreshSamples: inboxColdSamples,
+            coldBudget: Math.round(budget()),
             undo: Math.round(undo.ms),
             inboxCold: Math.round(inboxCold.ms),
             inboxWarmMedian: Math.round(median(inboxWarm)),
@@ -334,7 +361,8 @@ test.describe('UX-1 bulk review with undo (API)', () => {
           .annotations.push({ type: 'bulk-bench', description: JSON.stringify(result.ms) });
         expect(cold.value.worktrees).toBe(worktrees);
         expect(cold.value.changed).toBe(warm.value.changed);
-        expect(cold.ms).toBeLessThan(2000);
+        expect(cold.ms).toBeLessThan(budget());
+        // Warm (the UI flow: the inbox is already loaded) is only SQLite: always under 2 s.
         expect(warm.ms).toBeLessThan(2000);
       } finally {
         await daemon.close();
