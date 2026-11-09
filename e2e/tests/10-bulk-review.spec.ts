@@ -1,5 +1,5 @@
 /**
- * UX round 1 (COORDINATION §2.2, acceptance UX-1 and UX-8): "Mark all as verified" with undo,
+ * UX round 1 (COORDINATION §2.2, acceptance UX-1 and UX-8): "Review all" (bulk marks) with undo,
  * driven over the API against the real daemon. Covers the state guard (`stale`), `paths`,
  * per-project counting, review-disabled worktrees, a self-contained read-only proof, and the
  * bulk `all` latency on the 30 × 3 bench layout (reported, with a < 2 s assertion).

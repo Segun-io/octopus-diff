@@ -174,10 +174,10 @@ export class UiPage extends AppPage {
     await expect(this.chip).toHaveAttribute('data-source', source);
   }
 
-  /** Confirms the "Mark N files as verified/unreviewed?" dialog. */
+  /** Confirms the "Mark N files reviewed/unreviewed?" dialog. */
   async confirmBulk(): Promise<void> {
     await expect(this.confirmDialog).toBeVisible();
-    await this.confirmDialog.getByRole('button', { name: /^Mark (verified|unreviewed)$/ }).click();
+    await this.confirmDialog.getByRole('button', { name: /^Mark (reviewed|unreviewed)$/ }).click();
     await expect(this.confirmDialog).toBeHidden();
   }
 
