@@ -1621,3 +1621,28 @@ Web only, plus two e2e helper lines; no daemon, contract or preference change.
 123. **Default scope is now "All on branch" (2026-11-09).** `DEFAULT_PREFS.defaultScope` changes from `review` to
      `branch` (working tree vs merge-base, `includeWorking`), per the user's request. A stored `defaultScope` keeps its
      value. Web unit tests that rely on To review pin it via `scopeForPref('review')`; e2e seeds prefs explicitly.
+
+## Worktrees ordered by recent activity (lead, 2026-11-09)
+
+The user asked for worktree/branch rows in recency order. This reverses "rows stay in project and worktree order"
+(#40, #46), which held only because `summary.updatedAt` is the poll time; #46 proposed a daemon timestamp, built here.
+
+124. **`WorktreeSummary.activityAt` (contracts, additive, optional and nullable).** git-core sets it to the newest of:
+     the mtime of HEAD's reflog (`<gitDir>/logs/HEAD`, appended on every commit, checkout, reset, merge or pull in
+     that worktree), the mtime of every file with uncommitted changes and of every untracked file (both already
+     `lstat`ed for the `stateHash`, so no extra I/O), clamped to now so a file stamped in the future cannot pin a row
+     to the top. Without a reflog (disabled, or bare repositories) the HEAD commit's committer date
+     (`git log -1 --format=%ct`); null on an unborn branch without one. Not part of `stateHash`. Deleted files have
+     no mtime and do not count (the reflog or the other files usually do). Reason: no new process in the common case,
+     and it answers "where did something last happen" for both agents that commit and agents that only edit.
+125. **Order.** Inside each project the sidebar lists worktrees by `activityAt`, newest first; worktrees without one
+     (loading, older daemon, unknown) after them; ties fall back to the previous order (main first, then branch name,
+     detached last). Pinned and Hidden shelves, the keyboard order (`J`/`K`, `n`), the command palette and the Inbox
+     (project name, then recency) follow it; the filter dropdown lists its worktrees by recency across projects.
+     Folders and projects keep their static order (not asked for, and a moving project header is more disorienting
+     than a moving row). No pref toggle and no "2 h ago" label yet: both are small follow-ups if wanted.
+126. **Mock and tests.** The mock gives demo worktrees an explicit `activeMinutesAgo` (octopus-api keeps main,
+     feat/auth, fix/cache; in web-dashboard `agent/codex-123` now sits above `main`) and every other worktree a stable
+     3–10-day stagger from its id, not from the seeded PRNG, so the rest of the dataset is unchanged; a simulated edit
+     makes a worktree the newest. Unit tests: git-core `summary.test.ts` (reflog time, newest file, clamp, commit-date
+     fallback, unborn, `stateHash` unchanged), web `model.test.ts` (order per project, nulls last, tie-break).
