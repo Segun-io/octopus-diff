@@ -10,13 +10,12 @@ import {
   lookOf,
   MERGE_WORD,
   REVIEW_WORD,
-  shortRef,
   sizeSummary,
 } from '../lib/forge.ts';
 import { absoluteTime, relativeTime } from '../lib/time.ts';
 
 /**
- * Pull/merge request glyphs, chip (sidebar rows) and badge (toolbar link). Shapes after T3 Code's
+ * Pull/merge request glyphs, chip (sidebar rows) and badge (context-bar link). Shapes after T3 Code's
  * PR icons (open / draft / merged / closed); drawn here as inline SVG like the other icons.
  */
 function GlyphSvg({ children }: { children: ReactNode }) {
@@ -109,16 +108,20 @@ export function ChangeRequestChip({ worktreeId }: { worktreeId: string }) {
   );
 }
 
-function badgeText(wf: WorktreeForge, cr: ChangeRequest): string {
-  const parts = [shortRef(cr), LOOK_WORD[lookOf(cr)]];
+/** The request's state words for the context bar: look, review or conflicts, sync. */
+function badgeFacts(wf: WorktreeForge, cr: ChangeRequest): string[] {
+  const parts = [LOOK_WORD[lookOf(cr)]];
   if (cr.conflicts) parts.push('conflicts');
   else if (cr.review === 'changes_requested') parts.push('changes requested');
   else if (cr.review === 'approved') parts.push('approved');
   if (wf.sync === 'differs' && cr.state === 'open') parts.push('out of sync');
-  return parts.join(' · ');
+  return parts;
 }
 
-/** Toolbar link to the selected worktree's request on its forge. */
+/**
+ * Context-bar link to the selected worktree's request on its forge: its state words set apart by
+ * space (IDENTITY.md §5), the CI dot and an arrow. The view switch beside it carries the number.
+ */
 export function ChangeRequestBadge({ worktreeId }: { worktreeId: string }) {
   const entry = useForgeIndex().get(worktreeId);
   const cr = entry?.worktree.changeRequest;
@@ -132,12 +135,16 @@ export function ChangeRequestBadge({ worktreeId }: { worktreeId: string }) {
       target="_blank"
       rel="noopener noreferrer"
       title={`${changeRequestTitle(entry.worktree, cr)}\n\nOpen on ${cr.kind === 'github' ? 'GitHub' : 'GitLab'}`}
-      className="od-btn inline-flex max-w-80 items-center gap-1.5"
+      className="od-btn od-btn-ghost inline-flex max-w-80 items-center gap-1.5"
     >
       <span className={`inline-flex ${LOOK_TONE[look]}`}>
         <ChangeRequestGlyph look={look} />
       </span>
-      <span className="truncate tabular-nums">{badgeText(entry.worktree, cr)}</span>
+      {badgeFacts(entry.worktree, cr).map((fact) => (
+        <span key={fact} className="truncate">
+          {fact}
+        </span>
+      ))}
       <ChecksDot cr={cr} />
       <span aria-hidden="true" className="text-faint">
         ↗

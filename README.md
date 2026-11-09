@@ -141,8 +141,8 @@ Settings → Folders → **Start browsing in** sets where the picker opens (defa
   clear it again ("Mark all as unreviewed"). A toast offers **Undo** (also `Ctrl/Cmd+Z`) for ten minutes.
   A worktree that changed after you last looked is skipped and reported, so you never verify a diff you
   did not see.
-- **Review on or off, per level.** The chip in the toolbar shows whether review is on for the selected
-  worktree and where that comes from. You can turn it on or off for the worktree, its branch, its
+- **Review on or off, per level.** `Review on` in the bar above the panes shows whether review is on for the
+  selected worktree and where that comes from. You can turn it on or off for the worktree, its branch, its
   project, or the folder (scan root) it was discovered in; the most specific setting wins (worktree,
   then branch, project, folder, then the default). **Review is on by default**, which is what every new
   repository, worktree and branch gets; switch the default off in Settings to make review opt-in. A
@@ -165,15 +165,15 @@ Settings → Folders → **Start browsing in** sets where the picker opens (defa
 - **Pull and merge requests.** If the GitHub CLI (`gh`) or GitLab CLI (`glab`) is installed and signed in,
   each worktree on a feature branch shows its PR/MR next to the branch: number, open / draft / merged /
   closed, and a CI dot; the tooltip adds the review decision, conflicts and whether the request's head
-  matches your HEAD, and the toolbar links to it. Forges are found from your remotes (github.com, GitHub
+  matches your HEAD, and the bar above the panes links to it. Forges are found from your remotes (github.com, GitHub
   Enterprise, gitlab.com, self-managed GitLab, ssh aliases, forks through `upstream`) with no setup;
   Settings → Forges shows what was found, turns the feature off, or names a host by hand. Read-only:
   octopus-diff only runs the CLIs' query commands and never sees a token. Details:
   [`docs/FORGES.md`](docs/FORGES.md).
 
-  ![Pull request chips in the sidebar and the PR link in the toolbar](docs/screenshots/forges-dark.png)
+  ![Pull request chips in the sidebar and the PR link in the bar above the panes](docs/screenshots/forges-dark.png)
 - **The Request tab.** A worktree whose branch has a PR/MR gets a `Changes | PR #12` switch in the
-  toolbar. The Request tab shows, read-only: reviewers (with `stale` verdicts), labels and mergeability;
+  bar above the panes. The Request tab shows, read-only: reviewers (with `stale` verdicts), labels and mergeability;
   the description (markdown, no raw HTML); the checks grouped as *needs attention*, *running* and
   *passed*, refreshed while they run; the conversation (comments, reviews, review threads, with filters
   and paging); a timeline; and the changed files, marking the ones also changed in your worktree (click
@@ -183,11 +183,16 @@ Settings → Folders → **Start browsing in** sets where the picker opens (defa
   ![The Request tab: summary, reviewers, description and checks](docs/screenshots/request-dark.png)
 - **Repository information on the Overviews.** A project's Overview shows its remotes, default branch
   (with ahead/behind as of the last fetch), last commit, branch and tag counts, and, from the forge, the
-  description, visibility, open PR and issue counts, default-branch CI and the newest open requests,
-  each linked to its worktree when you have it checked out. A folder's Overview adds the default branch,
-  last commit, forge and open requests per repository without asking any forge.
+  description, visibility, open PR and issue counts and default-branch CI. Below, three tabs with
+  counts, 15 rows a page: **Worktrees** (the one on the default branch first, marked `default`, as in
+  the sidebar), **Branches** (local branches no worktree has checked out, with upstream state, whether
+  they are merged and their open PR) and **Pull requests** (the newest 15, each linked to its worktree
+  when you have it checked out, then a link to the rest on the forge). A folder's Overview adds the
+  default branch, last commit, forge and open requests per repository without asking any forge.
 
-  ![The project Overview with local and forge facts and open pull requests](docs/screenshots/overview-project-dark.png)
+  ![The project Overview with local and forge facts and its worktrees](docs/screenshots/overview-project-dark.png)
+
+  ![The Branches tab: local branches without a worktree](docs/screenshots/overview-branches-dark.png)
 - **Themes.** Octopus Dark, Octopus Light and a high-contrast theme; "System" follows the OS. Themes
   are plain data files, so adding one is a one-file change: see [`docs/design/THEMING.md`](docs/design/THEMING.md).
   The identity and palette are described in [`docs/design/IDENTITY.md`](docs/design/IDENTITY.md).

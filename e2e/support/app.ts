@@ -303,7 +303,12 @@ export class AppPage {
 
   async setDiffMode(mode: 'split' | 'unified'): Promise<void> {
     const toggle = this.byTestId(TEST_IDS.diffModeToggle);
-    if ((await toggle.getAttribute('data-mode')) !== mode) await toggle.click();
+    if ((await toggle.getAttribute('data-mode')) !== mode) {
+      // A segmented pair has one button per mode; a single toggle flips on click.
+      const option = toggle.locator(`[data-mode-option="${mode}"]`);
+      if ((await option.count()) > 0) await option.click();
+      else await toggle.click();
+    }
     await expect(toggle).toHaveAttribute('data-mode', mode);
     await expect(this.diffViewer).toHaveAttribute('data-mode', mode);
   }

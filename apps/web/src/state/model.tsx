@@ -14,6 +14,7 @@ import {
   type FileGroup,
   flattenGroups,
   hasSidebarFilters,
+  listsReviewed,
   type NavEntry,
   rowVisible,
   type SidebarFilters,
@@ -44,6 +45,8 @@ export interface AppModel {
   /** Files across all worktrees for `n` (current scope; commit scope: current list only). */
   globalEntries: NavEntry[];
   visible: VisiblePredicate;
+  /** The list shows reviewed files (`listsReviewed`: All on branch always, To review never, else the eye). */
+  showsReviewed: boolean;
   /** True when the current view's file data is loaded for the current scope. */
   viewReady: boolean;
   selectedKey: string | null;
@@ -88,6 +91,7 @@ function useBuildAppModel(): AppModel {
     [filterProjects, filterWorktrees, onlyDirty, onlyUnreviewed],
   );
   const showReviewed = useUi((s) => s.showReviewed);
+  const showsReviewed = listsReviewed(showReviewed, scope.kind);
   const selected = useUi((s) => s.selected);
   const pinned = useUi((s) => s.pinned);
   const settle = useUi((s) => s.settle);
@@ -203,7 +207,7 @@ function useBuildAppModel(): AppModel {
   const inboxUnfiltered =
     view.kind === 'inbox' &&
     !hasSidebarFilters(filters) &&
-    showReviewed &&
+    showsReviewed &&
     groups.length === inboxEntries.length;
 
   const viewPolicy =
@@ -227,7 +231,7 @@ function useBuildAppModel(): AppModel {
     return flattenGroups(all);
   }, [scope.kind, entries, inboxEntries, sortedInboxFiles, view, groups]);
 
-  const visible = useMemo(() => visibleIf(showReviewed), [showReviewed]);
+  const visible = useMemo(() => visibleIf(showsReviewed), [showsReviewed]);
 
   const viewReady =
     view.kind === 'inbox'
@@ -272,6 +276,7 @@ function useBuildAppModel(): AppModel {
     entries,
     globalEntries,
     visible,
+    showsReviewed,
     viewReady,
     selectedKey,
     selectedEntry,

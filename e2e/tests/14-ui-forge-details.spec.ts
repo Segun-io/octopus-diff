@@ -177,6 +177,7 @@ test.describe('forge details (UI)', () => {
       const forge = ui.byTestId(TEST_IDS.repoInfoForge);
       await expect(forge).toHaveAttribute('data-status', 'ok');
       await expect(forge).toContainText('The demo app');
+      await ui.byTestId(TEST_IDS.overviewTab).and(ui.page.locator('[data-tab="requests"]')).click();
       const mine = ui.byTestId(TEST_IDS.repoOpenRequest).and(ui.page.locator('[data-number="42"]'));
       await expect(mine).toHaveAttribute('data-worktree', login);
       await mine.click();

@@ -8,6 +8,7 @@ import { createMockFetch } from '../mock/router.ts';
 import { App } from '../src/App.tsx';
 import type { EventSourceLike } from '../src/api/hooks.ts';
 import { createQueryClient } from '../src/api/queries.ts';
+import { scopeForPref } from '../src/state/prefs.ts';
 import { createUiStore, type UiStore } from '../src/state/ui.tsx';
 
 // @pierre/diffs needs a real browser (web components, workers); stub the renderer.
@@ -56,7 +57,7 @@ function setup(dataset: MockDataset = 'demo', opts: { token?: string } = {}): Ha
     },
   });
   // The Settled shelf is closed by default; these tests read settled rows, so open it.
-  const store = createUiStore({ settledOpen: true }, false);
+  const store = createUiStore({ settledOpen: true, scope: scopeForPref('review') }, false);
   const factory = () => {
     const es = new FakeEventSource();
     backend.subscribe((e) => es.dispatch(e));

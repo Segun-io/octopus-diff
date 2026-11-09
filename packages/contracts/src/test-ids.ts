@@ -181,6 +181,14 @@ export const TEST_IDS = {
   repoInfoForge: 'repo-info-forge',
   /** Overview: one open pull/merge request row; `data-number`, `data-worktree`. */
   repoOpenRequest: 'repo-open-request',
+  /** Project Overview: one section tab (`data-tab`: worktrees, branches, requests). */
+  overviewTab: 'overview-tab',
+  /** Project Overview: one local branch without a worktree; `data-branch`, `data-merged`. */
+  overviewBranchRow: 'overview-branch-row',
+  /** A list pager; `data-page`, `data-pages`. */
+  pager: 'pager',
+  /** The default-branch marker on a worktree (sidebar, context bar, Overview). */
+  defaultBranchChip: 'default-branch-chip',
 } as const;
 
 export type TestId = (typeof TEST_IDS)[keyof typeof TEST_IDS];

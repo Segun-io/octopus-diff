@@ -116,19 +116,29 @@ Three-pane layout, dark and light themes:
    bottom, closed by default. A commit or a merge moves work into a bookmark range; it never settles it. Status
    comes from `WorktreeSummary.review` (status flow v2), never from the toolbar scope. Folder and project headers
    collapse, open their Overview on click, and show what they hide while closed. "Hide until it changes" / "Show"
-   on hover and in the row menu; it holds until the worktree's state hash changes. No activity pulse. Rows keep a
-   static folder, project and worktree order. Filters: text filter, "only dirty", "only unreviewed" (chips).
+   on hover and in the row menu; it holds until the worktree's state hash changes. No activity pulse. Folders and
+   projects keep a static order; inside a project, worktrees are listed by recent activity, newest first
+   (`WorktreeSummary.activityAt`, DECISIONS #124). Filters: text filter, "only dirty", "only unreviewed" (chips).
 2. **File list** (`@pierre/trees`): changed files for the selected worktree (or, in Inbox mode, grouped by
    project → worktree). Status icons, +/− counts, reviewed checkmark.
 3. **Diff viewer** (`@pierre/diffs`): split / unified toggle, hide-whitespace toggle, collapsed unchanged
    regions, lazy rendering with virtualization for huge diffs, binary / too-large placeholders,
    rename display (`old → new`), submodule and symlink diffs shown sanely.
 
-Toolbar: scope filter with counts (`To review (5) · All on branch (12) · Uncommitted (3) · Staged · Unstaged ·
-Commit…`), one verb "Reviewed" (`r` per file, **Review all** `⇧R`, undo restores the bookmark too), split/unified, whitespace, "show reviewed" toggle, refresh indicator. For a worktree whose
-branch has a matched pull/merge request, a `Changes | PR #n` switch opens the **Request** tab (read-only: summary,
-checks, conversation, timeline, files; `docs/FORGES.md`). Folder and project Overviews show repository information
-(local git facts; the project Overview also the forge's facts and open requests).
+Chrome (`docs/TOOLBAR.md`, DECISIONS #116–#122): three tiers, one row each. A **context bar** above both panes says
+where you are (the Inbox with its counts, or the worktree's project and branch with its chips and `↑a ↓b`), holds the
+`Changes | PR #n` switch for a worktree whose branch has a matched pull/merge request (the **Request** tab, read-only:
+summary, checks, conversation, timeline, files; `docs/FORGES.md`), the forge link, the review policy and, at the
+right, the refresh indicator, theme and help. The **file pane header** holds the scope select with counts
+(`To review (5)`, `All on branch (12)`, `Uncommitted (3)`, `Staged`, `Unstaged`, `Commit…`), the show-reviewed and
+tree-view toggles and **Review N** (`⇧R`; undo restores the bookmark too). The **diff header** holds the file's
+identity and, at the right, unified / split and whitespace, `More context` / `Expand all`, the `⋯` menu and the one
+verb **Reviewed** (`r`). A control sits over what it changes. Folder and project Overviews show repository
+information (local git facts; the project Overview also the forge's facts). The project Overview's lists sit behind
+`Worktrees | Branches | Pull requests` tabs with counts, 15 rows a page: worktrees (the default-branch one first),
+local branches no worktree has checked out, and the newest 15 open requests with a link to the rest on the forge
+(`docs/OVERVIEW-LISTS.md`). The worktree with the default branch checked out carries a `default` chip wherever
+worktrees are listed.
 
 Copy (`docs/COPY-TOOLS.md`, web only): a "Copy" group in the worktree menus (sidebar, Overview, Inbox group
 headers: branch name, worktree path, commit id), a file menu on list and tree rows (path, old path, name, absolute

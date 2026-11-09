@@ -1,3 +1,4 @@
+import { lstat } from 'node:fs/promises';
 import path from 'node:path';
 import {
   type InProgressOperation,
@@ -113,6 +114,50 @@ async function trackedNumstat(
   }
 }
 
+/** Milliseconds from the mtime field of an `lstatSignature` / untracked `statSig` (`size:mtimeNs:…`). */
+function sigMtimeMs(sig: string): number | null {
+  const field = sig.split(':', 2)[1];
+  if (!field || !/^\d+$/.test(field)) return null;
+  return Number(BigInt(field) / 1_000_000n);
+}
+
+/**
+ * When HEAD last moved in this worktree: the mtime of its reflog (`<gitDir>/logs/HEAD`, appended
+ * on every commit, checkout, reset, merge or pull). Without a reflog (disabled, bare repos), the
+ * HEAD commit's committer date. Null on an unborn branch without a reflog.
+ */
+async function headActivityMs(
+  ctx: GitContext,
+  repo: RepoInfo,
+  headSha: string | null,
+): Promise<number | null> {
+  try {
+    return (await lstat(path.join(repo.gitDir, 'logs', 'HEAD'))).mtimeMs;
+  } catch {
+    // No reflog: fall back to the commit date below.
+  }
+  if (!headSha) return null;
+  try {
+    const out = await ctx.git(repo, ['log', '-1', '--format=%ct', headSha, '--']);
+    const seconds = Number(out.stdout.toString('utf8').trim());
+    return Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : null;
+  } catch (error) {
+    if (isGitCoreError(error, 'git_failed')) return null;
+    throw error;
+  }
+}
+
+/**
+ * `WorktreeSummary.activityAt`: the newest of HEAD's activity and the given file mtimes,
+ * clamped to now (a file stamped in the future must not pin a worktree to the top).
+ */
+function activityAt(headMs: number | null, fileMtimes: readonly (number | null)[]): string | null {
+  let newest = headMs;
+  for (const ms of fileMtimes) if (ms !== null && (newest === null || ms > newest)) newest = ms;
+  if (newest === null) return null;
+  return new Date(Math.min(newest, Date.now())).toISOString();
+}
+
 async function bareSummary(
   ctx: GitContext,
   repo: RepoInfo,
@@ -142,6 +187,7 @@ async function bareSummary(
     inProgress: null,
     stateHash: hashParts(['bare-v1', headSha, branch], STATE_HASH_LENGTH),
     updatedAt: new Date().toISOString(),
+    activityAt: activityAt(await headActivityMs(ctx, repo, headSha), []),
   };
 }
 
@@ -176,6 +222,12 @@ export async function getSummary(
   const dirtyKeys: string[] = [];
   /** dirtyKeys entries that are submodules (gitlinks) in the worktree. */
   const gitlinkKeys = new Set<string>();
+  /**
+   * Fully staged paths (index changed, worktree matches it). Not in the stateHash (git status
+   * already reports them); only their mtimes feed `activityAt`, so staging an edit before the next
+   * refresh does not drop it from the activity time.
+   */
+  const stagedOnlyKeys: string[] = [];
   /** Paths git status reports as changed (incl. rename sources). */
   const statusPaths = new Set<string>();
   let tracked = 0;
@@ -191,6 +243,8 @@ export async function getSummary(
           unstaged += 1;
           dirtyKeys.push(entry.path);
           if (entry.modeWorktree === '160000') gitlinkKeys.add(entry.path);
+        } else if (entry.x !== '.') {
+          stagedOnlyKeys.push(entry.path);
         }
         break;
       case 'unmerged':
@@ -255,15 +309,18 @@ export async function getSummary(
       ),
     }),
   );
-  const [numstatResult, aheadBehind, inProgress, signatures, untracked] = await Promise.all([
-    numstatPromise,
-    aheadBehindPromise,
-    detectInProgress(repo.gitDir),
-    mapLimit(dirtyKeys, STAT_CONCURRENCY, (key) =>
-      dirtySignature(repo.cwd, key, gitlinkKeys.has(key)),
-    ),
-    untrackedPromise,
-  ]);
+  const [numstatResult, aheadBehind, inProgress, signatures, untracked, headMs, stagedSigs] =
+    await Promise.all([
+      numstatPromise,
+      aheadBehindPromise,
+      detectInProgress(repo.gitDir),
+      mapLimit(dirtyKeys, STAT_CONCURRENCY, (key) =>
+        dirtySignature(repo.cwd, key, gitlinkKeys.has(key)),
+      ),
+      untrackedPromise,
+      headActivityMs(ctx, repo, headSha),
+      mapLimit(stagedOnlyKeys, STAT_CONCURRENCY, (key) => lstatSignature(repo.cwd, key)),
+    ]);
   const untrackedInfos = untracked.infos;
 
   let additions = 0;
@@ -338,5 +395,10 @@ export async function getSummary(
     inProgress,
     stateHash,
     updatedAt: new Date().toISOString(),
+    activityAt: activityAt(headMs, [
+      ...signatures.map(sigMtimeMs),
+      ...stagedSigs.map(sigMtimeMs),
+      ...untrackedInfos.map((info) => sigMtimeMs(info.statSig)),
+    ]),
   };
 }

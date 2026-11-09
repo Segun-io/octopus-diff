@@ -127,6 +127,8 @@ interface MockWorktree {
   /** Summary failed to compute (exercises error display). */
   error: string | null;
   updatedAt: string;
+  /** `WorktreeSummary.activityAt`: a stable stagger per worktree id, then the last simulated edit. */
+  activityAt: string;
   revision: number;
   /** Status flow mock: the bookmark reached HEAD (the branch's commits are reviewed). */
   commitsReviewed?: boolean;
@@ -249,6 +251,8 @@ export class MockBackend {
       error?: string | null;
       missing?: boolean;
       locked?: boolean;
+      /** Minutes before the mock clock's start of the last activity (`activityAt`). */
+      activeMinutesAgo?: number;
     },
   ): MockWorktree {
     const isMain = opts.isMain ?? false;
@@ -288,6 +292,13 @@ export class MockBackend {
       inProgress: opts.inProgress ?? null,
       error: opts.error ?? null,
       updatedAt: now(),
+      // The sidebar sorts worktrees by it. Unless given, 3 to 10 days back, from the id (not the
+      // seeded PRNG, so the rest of the dataset does not change).
+      activityAt: isoAt(
+        opts.activeMinutesAgo !== undefined
+          ? -opts.activeMinutesAgo * 60_000
+          : -(259_200_000 + (Number.parseInt(hash16(worktree.id).slice(0, 8), 16) % 604_800_000)),
+      ),
       revision: 0,
     };
     mw.commits = this.makeCommits(mw, 25);
@@ -391,13 +402,19 @@ export class MockBackend {
       upstream: 'origin/main',
       ahead: 1,
       behind: 3,
+      activeMinutesAgo: 2,
     });
     apiMain.files = [
       this.file('src/server/router.ts', 'modified', { staged: true, unstaged: true }),
       this.file('README.md', 'modified'),
     ];
 
-    const auth = this.makeWorktree(api, { branch: 'feat/auth', ahead: 4, behind: 0 });
+    const auth = this.makeWorktree(api, {
+      branch: 'feat/auth',
+      ahead: 4,
+      behind: 0,
+      activeMinutesAgo: 15,
+    });
     const nonUtf8Bytes = new Uint8Array([
       0x64, 0x6f, 0x63, 0x73, 0x2f, 0x72, 0xe9, 0x73, 0x75, 0x6d, 0xe9, 0x2e, 0x6d, 0x64,
     ]);
@@ -439,6 +456,7 @@ export class MockBackend {
       path: '/home/dev/code/octopus-api/.claude/worktrees/fix-cache',
       ahead: 2,
       behind: 1,
+      activeMinutesAgo: 180,
     });
     cache.files = [
       this.file('src/lib/cache.ts', 'modified', { staged: true, unstaged: false }),
@@ -449,6 +467,7 @@ export class MockBackend {
     const detached = this.makeWorktree(api, {
       branch: null,
       path: '/home/dev/.t3/worktrees/octopus-api/bisect',
+      activeMinutesAgo: 2 * 24 * 60,
     });
     detached.files = [];
 
@@ -459,6 +478,7 @@ export class MockBackend {
       upstream: 'origin/main',
       ahead: 2,
       behind: 1,
+      activeMinutesAgo: 25,
     });
     webMain.files = [
       this.file('src/components/Chart.tsx', 'modified', { lines: 120 }),
@@ -469,7 +489,13 @@ export class MockBackend {
       this.file('src/lib/access.ts', 'modified', { kind: 'trojan', lines: 12 }),
       this.file('src/lib/a\u202Eevil.txt', 'untracked', { lines: 4 }),
     ];
-    this.makeWorktree(web, { branch: 'agent/codex-123', ahead: 0, behind: 5 });
+    this.makeWorktree(web, {
+      branch: 'agent/codex-123',
+      ahead: 0,
+      behind: 5,
+      // An agent just committed here: listed before the main checkout.
+      activeMinutesAgo: 8,
+    });
 
     const infra = this.makeProject('infra', { defaultBranch: null });
     this.makeWorktree(infra, { branch: 'trunk', isMain: true });
@@ -657,6 +683,7 @@ export class MockBackend {
       inProgress: mw.inProgress,
       stateHash,
       updatedAt: mw.updatedAt,
+      activityAt: mw.activityAt,
       ...(this.options.statusFlow ? { review: this.reviewOf(mp, mw) } : {}),
     };
   }
@@ -1353,6 +1380,7 @@ export class MockBackend {
     }
     mw.revision += 1;
     mw.updatedAt = now();
+    mw.activityAt = mw.updatedAt;
     const summary = this.summary(mp, mw);
     this.emit({
       type: 'worktree.changed',

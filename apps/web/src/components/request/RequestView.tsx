@@ -7,6 +7,7 @@ import { LOOK_TONE, LOOK_WORD, lookOf } from '../../lib/forge.ts';
 import { checksTone, describeChecks } from '../../lib/request.ts';
 import { absoluteTime, relativeTime } from '../../lib/time.ts';
 import { ChangeRequestGlyph } from '../ChangeRequest.tsx';
+import { SegmentedTabs, tabPanelProps } from '../Tabs.tsx';
 import { Files } from './Files.tsx';
 import { Banner, ExternalLink, FileDiffGlyph, StatusDot } from './parts.tsx';
 import { Summary } from './Summary.tsx';
@@ -145,24 +146,17 @@ export function RequestView({ worktreeId }: { worktreeId: string }) {
         aria-label={`${noun.long} tabs`}
         className="flex min-w-0 flex-wrap items-center gap-2 border-t border-line px-4 py-2"
       >
-        <span className="od-seg" role="tablist">
-          {TABS.map((t) => (
-            <button
-              key={t.id}
-              type="button"
-              role="tab"
-              data-testid={TEST_IDS.requestTab}
-              data-tab={t.id}
-              aria-selected={tab === t.id}
-              onClick={() => setTab(t.id)}
-            >
-              {t.label}
-              {t.id === 'files' && files !== null && (
-                <span className="text-faint tabular-nums">{files}</span>
-              )}
-            </button>
-          ))}
-        </span>
+        <SegmentedTabs
+          tabs={TABS.map((t) => ({
+            ...t,
+            ...(t.id === 'files' && files !== null ? { count: files } : {}),
+          }))}
+          value={tab}
+          onChange={setTab}
+          label={`${noun.long} sections`}
+          idPrefix={`request-${worktreeId}`}
+          testId={TEST_IDS.requestTab}
+        />
         {tab === 'summary' && detail && (
           <span className="ml-auto flex items-center gap-1.5 text-xs text-muted">
             <StatusDot status={checksTone(detail.checkList)} />
@@ -178,19 +172,21 @@ export function RequestView({ worktreeId }: { worktreeId: string }) {
       )}
 
       {detail ? (
-        tab === 'summary' ? (
-          <Summary
-            worktreeId={worktreeId}
-            batch={batch}
-            detail={detail}
-            webUrl={webUrl}
-            imageHosts={response?.imageHosts ?? []}
-          />
-        ) : tab === 'timeline' ? (
-          <Timeline worktreeId={worktreeId} batch={batch} detail={detail} webUrl={webUrl} />
-        ) : (
-          <Files worktreeId={worktreeId} detail={detail} />
-        )
+        <div {...tabPanelProps(`request-${worktreeId}`, tab)} className="contents">
+          {tab === 'summary' ? (
+            <Summary
+              worktreeId={worktreeId}
+              batch={batch}
+              detail={detail}
+              webUrl={webUrl}
+              imageHosts={response?.imageHosts ?? []}
+            />
+          ) : tab === 'timeline' ? (
+            <Timeline worktreeId={worktreeId} batch={batch} detail={detail} webUrl={webUrl} />
+          ) : (
+            <Files worktreeId={worktreeId} detail={detail} />
+          )}
+        </div>
       ) : status === 'loading' ? (
         <div role="status" aria-label={`Loading the ${noun.long}`} className="px-4 py-3">
           {[70, 45, 60].map((w) => (

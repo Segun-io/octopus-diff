@@ -1570,6 +1570,83 @@ request, git call or contract change.
 115. **Screenshots.** `e2e/scripts/screenshots.ts` adds `sidebar-filter-{light,dark}.png` (dropdown open, Only
      dirty and `alpha` ticked); every README screenshot was regenerated since the sidebar header changed.
 
+## Chrome hierarchy: the context bar and the pane headers (lead, 2026-11-09)
+
+Design record: `docs/TOOLBAR.md`. Brief from the user: the controls above the file list and the diff are too dense,
+with little context and no hierarchy of what belongs to what; rearrange them, taking the Request tab into account.
+Web only, plus two e2e helper lines; no daemon, contract or preference change.
+
+116. **Three tiers, one row each.** The toolbar that spanned both panes is gone. A **context bar**
+     (`components/ContextBar.tsx`) above both panes says where you are (the Inbox with its worktree and file counts,
+     or the worktree's project and branch with its chips and `↑a ↓b`, the path in the tooltip), holds the
+     `Changes | PR #n` switch, the forge link, the review policy and, at the right, the app chrome (Live, theme,
+     help). Each pane then has one header: the **file pane header** (`components/FilePaneHeader.tsx`, moved out of
+     `App.tsx`) with the scope select, the two list toggles and `Review N`; the **diff header** with the file's
+     identity and, at the right, the rendering options, the per-file actions and `Reviewed`. A control sits over
+     what it changes. Reason: the one-row toolbar mixed app, worktree, list and diff concerns in identical bordered
+     buttons, and nothing named the worktree.
+117. **The context bar is the same on both tabs**; the tabs switch what sits below it. The forge link
+     (`ChangeRequestBadge`) shows on the Changes tab only: the Request header already carries `#n ↗` and the state
+     word. The link now says the state words set apart by space (`open  changes requested  out of sync`) instead of
+     `PR #100 · open · …`: the tab beside it has the number, and IDENTITY §5 bans the middle dot between facts.
+118. **Toggles are ghost icons; the primary verb keeps the border.** Show reviewed (an eye, pressed while reviewed
+     files are listed), tree view, whitespace (a pilcrow) and the `⋯` menu are icon-only ghost buttons with a `title`
+     and an `aria-label`; a pressed ghost keeps the soft fill (new rules in `styles.css`: `.od-btn-ghost[aria-pressed]`,
+     `.od-btn-icon`, `.od-sep`). Unified / split is a segmented pair of icons, after T3 Code's layout group: the group
+     carries `data-testid="diff-mode-toggle"` and `data-mode` for the tests, each button `data-mode-option`, and
+     `AppPage.setDiffMode` (e2e) clicks the wanted half. `More context` and `Expand all` are ghost text. `Review N`
+     and `Reviewed` stay bordered: one filled control per row. `Review on` is ghost when on and raised when off, so
+     the exception is the loud one.
+119. **Dropped as redundant.** The `N files  N unreviewed` line over the list (the select carries the total,
+     `Review N` the unreviewed count; the Inbox's `N worktrees` moved into the bar); the worktree name in the diff
+     header outside the Inbox (the bar names it; in the Inbox the list mixes worktrees, so the header keeps it); the
+     `Show` label before the scope select (its place over the list says it; `aria-label` and `title` keep the words);
+     `PR #n` repeated in the link.
+120. **The diff header is always rendered in the Changes view**, so the rendering options have a fixed home with no
+     file open (and the e2e theme spec, which reads `data-mode` right after load, keeps working); the per-file
+     actions appear with a selection.
+121. **Not changed.** The Overview keeps its own heading and no bar (the app chrome is absent there, as before; a
+     follow-up if it is missed). The Request view's header and its `Summary | Timeline | Files` control are
+     untouched. The scope select stays a native `<select>` (the unit and e2e tests drive it with `change` /
+     `selectOption`; T3's dropdown menu would need a custom listbox). Both pane headers are 36 px so their hairlines
+     meet; the two-row wrap in the commit scope (commit list and copy button under the select) is accepted.
+122. **Files.** New `ContextBar.tsx`, `FilePaneHeader.tsx`, `ScopeSelect.tsx` (the scope logic from the old
+     toolbar), `WorktreeChips.tsx` (`RowChips`, shared with the sidebar); `Toolbar.tsx` deleted; `ALL_ON_BRANCH`
+     moved to `lib/scopeLabels.ts`; five stroke icons in `bits.tsx`; `scripts/shots.ts` gains `commit-scope`.
+     Outside `apps/web`: `e2e/support/app.ts` `setDiffMode` and `e2e/tests/16-copy.spec.ts` `setMode` (the segmented
+     control), and `e2e/tests/04-live-updates.spec.ts` "sidebar counts follow external edits in the inbox view": it
+     asserted a row of the virtualized Inbox list with `toBeVisible`, and the 6 px taller file pane header (30 → 36)
+     left that row outside the mounted window; it now scans the list with the existing `allFileItems()` helper. PLAN §4.2 "Toolbar" paragraph rewritten; IDENTITY §6 gains the chrome rule; README and `FORGES.md` say
+     "the bar above the panes".
+123. **Default scope is now "All on branch" (2026-11-09).** `DEFAULT_PREFS.defaultScope` changes from `review` to
+     `branch` (working tree vs merge-base, `includeWorking`), per the user's request. A stored `defaultScope` keeps its
+     value. Web unit tests that rely on To review pin it via `scopeForPref('review')`; e2e seeds prefs explicitly.
+
+## Worktrees ordered by recent activity (lead, 2026-11-09)
+
+The user asked for worktree/branch rows in recency order. This reverses "rows stay in project and worktree order"
+(#40, #46), which held only because `summary.updatedAt` is the poll time; #46 proposed a daemon timestamp, built here.
+
+124. **`WorktreeSummary.activityAt` (contracts, additive, optional and nullable).** git-core sets it to the newest of:
+     the mtime of HEAD's reflog (`<gitDir>/logs/HEAD`, appended on every commit, checkout, reset, merge or pull in
+     that worktree), the mtime of every file with uncommitted changes and of every untracked file (both already
+     `lstat`ed for the `stateHash`, so no extra I/O), clamped to now so a file stamped in the future cannot pin a row
+     to the top. Without a reflog (disabled, or bare repositories) the HEAD commit's committer date
+     (`git log -1 --format=%ct`); null on an unborn branch without one. Not part of `stateHash`. Deleted files have
+     no mtime and do not count (the reflog or the other files usually do). Reason: no new process in the common case,
+     and it answers "where did something last happen" for both agents that commit and agents that only edit.
+125. **Order.** Inside each project the sidebar lists worktrees by `activityAt`, newest first; worktrees without one
+     (loading, older daemon, unknown) after them; ties fall back to the previous order (main first, then branch name,
+     detached last). Pinned and Hidden shelves, the keyboard order (`J`/`K`, `n`), the command palette and the Inbox
+     (project name, then recency) follow it; the filter dropdown lists its worktrees by recency across projects.
+     Folders and projects keep their static order (not asked for, and a moving project header is more disorienting
+     than a moving row). No pref toggle and no "2 h ago" label yet: both are small follow-ups if wanted.
+126. **Mock and tests.** The mock gives demo worktrees an explicit `activeMinutesAgo` (octopus-api keeps main,
+     feat/auth, fix/cache; in web-dashboard `agent/codex-123` now sits above `main`) and every other worktree a stable
+     3–10-day stagger from its id, not from the seeded PRNG, so the rest of the dataset is unchanged; a simulated edit
+     makes a worktree the newest. Unit tests: git-core `summary.test.ts` (reflog time, newest file, clamp, commit-date
+     fallback, unborn, `stateHash` unchanged), web `model.test.ts` (order per project, nulls last, tie-break).
+
 ## CI flakes: the watch host, test timeouts and two e2e races (lead session, 2026-11-09)
 
 Numbering starts at #130: `main` ends at #115, PR #2 (`ux/toolbar-hierarchy`) uses #116 onwards and was still adding
@@ -1694,3 +1771,81 @@ the production LAN server (`octopus-diff-lan` unit, :7428). Report: `docs/report
      `pnpm dev` exited. An unexpected child exit now SIGTERMs its group (once; during a stop the daemon already
      had its SIGTERM), and `pnpm dev` exits only when every group is gone, SIGKILLing leftovers after 8 s.
      Verified live: `kill -9` of the tsx process → the orphaned daemon logged a clean shutdown, both ports freed.
+
+## Project Overview lists and the default-branch marker (lead, 2026-11-09)
+
+Numbered #144–#150: written as #127–#133 on `ux/toolbar-hierarchy`, renumbered when that branch merged
+`main`, whose #130–#143 (CI flakes, `pnpm dev`) landed first. #127–#129 are unused.
+
+Design record: `docs/OVERVIEW-LISTS.md`. Brief from the user: highlight the default branch where worktrees are
+listed; in the project Overview limit worktrees to 15 with pagination, limit open pull requests to 15 (keep the link
+to the forge), list local branches without a worktree, judge whether tabs would be better, and use TanStack Table
+only if it makes the code easier to maintain.
+
+144. **`default` chip.** The worktree that has the project's default branch checked out carries an outlined ink chip
+     (`.od-chip-default`) after its branch name in the sidebar row (inline, no extra line), the context bar and the
+     Overview worktree table. Not a hue (the frame is achromatic) and not an icon (it would need a legend); outlined
+     so it reads as a label, unlike the filled grey fact chips. The Overview's faint `main` word moves to the Source
+     column as `main checkout`, so the default row no longer reads `main main`.
+145. **Tabs on the project Overview.** Facts and figures stay on top; the lists move behind a segmented tab list
+     `Worktrees N | Branches N | Pull requests N` (Merge requests on GitLab; the requests tab only with forge
+     repository data, Branches hidden only when the daemon sends no branch list). Reason: three lists of up to 15
+     rows (two lines each for requests) put the last one three screens down, and they answer separate questions; the
+     counts keep the at-a-glance summary. Worktrees is the default tab; the chosen tab is component state that
+     survives switching projects, and each list's page starts over per project. The folder Overview is unchanged.
+146. **`SegmentedTabs` (`components/Tabs.tsx`) with the WAI-ARIA keyboard model**: one Tab stop (roving
+     `tabIndex`), `←`/`→` select, `Home`/`End`, `aria-controls` → `tabpanel`. The Request view's
+     `Summary | Timeline | Files` switches to it (it had `role="tab"` without the keys; ids and test ids unchanged).
+147. **Pagination, 15 rows (`components/Pager.tsx`).** Client-side `usePage` over the loaded list; `16–30 of 42`
+     with previous / next ghost icons, hidden for one page; the page clamps rather than resets when a live list
+     shrinks. Worktrees list the default-branch worktree first, then recency (#125), so the baseline stays on page 1;
+     the sidebar keeps pure recency. Open requests show the newest 15 with no pager and keep `N more on <host> ↗`
+     (the forge holds the rest; the daemon still asks for 20); none open says so with a link.
+148. **Local branches without a worktree.** `GitRepositoryInfo.branches` (contracts, additive, optional;
+     `GitBranchInfoSchema`, `MAX_LISTED_BRANCHES` = 500, newest commit first, `localBranches` stays the full count).
+     git-core reads it from the `for-each-ref` it already ran (adds `upstream:track,nobracket` and
+     `contents:subject`; git ≥ 2.31 folds a multi-line subject into one line) plus one
+     `for-each-ref --merged=<default oid> refs/heads/`. The web drops branches some worktree has checked out and
+     shows branch (copy on hover), last commit, when it moved, upstream (`origin ↑a ↓b`, `gone`, `local only`) and
+     a state column (`merged`, `default`, the open request on that head branch from the already-loaded forge data).
+     Rows do not navigate (no worktree to open; octopus-diff never creates one). Daemon unchanged: it passes
+     `info` through.
+149. **No TanStack Table.** Four small fixed-column, fixed-order tables; the only shared need is paging, which is a
+     ten-line hook. TanStack Table is headless, so it would keep every cell renderer, wrap them in column
+     definitions and `flexRender`, and add a dependency and a credits entry to replace a `slice`. Revisit when a
+     table needs user sorting, column choice or filtering.
+150. **Mock and tests.** Mock repository info lists branches for every demo project (18 without a worktree on
+     octopus-api so the Branches tab pages; merged, gone and local-only kinds) and octopus-api has 16 more open
+     requests (27 in all, so the cap and `12 more` show). Tests: git-core `repository.test.ts` (subject folding,
+     upstream ahead/gone, merged); web `repository-info.test.tsx` (tabs and arrow keys, default row first with its
+     chip, Branches pages 15 + 3, requests capped at 15 with the forge link, worktree pager on a 20-worktree large
+     dataset), `model.test.ts` (helpers). e2e `14-ui-forge-details` opens the Pull requests tab first. New shot
+     states `project-branches` and `project-requests` in `apps/web/scripts/shots.ts`.
+151. **To review never lists reviewed files; counts follow the eye; All on branch first (2026-11-09).** With the eye
+     ("Show reviewed") on by default and the bookmark still at the merge-base (marking files one by one never moves
+     it), To review and All on branch listed the same files, and the select's counts disagreed with the list (To
+     review counted unreviewed files while listing all; All on branch counted all while the eye hid some). Now
+     `listsReviewed(showReviewed, scope)` is false in To review whatever the eye says (the eye shows "off",
+     `aria-disabled`, `h` is a no-op there), and a count that includes reviewed files reads `(5 of 12)` while the
+     eye hides them (All on branch, and the current scope's loaded list; summary-only counts stay totals). All on
+     branch, the default scope, is first in the scope select and in Settings → Default scope. Web only, no
+     contract change. User request.
+152. **No eye in All on branch or To review (2026-11-09).** Refines #151 at the user's request: All on branch always
+     lists every file (reviewed included) and To review never lists reviewed ones, so `eyeApplies(kind)` is false
+     for both and the "Show reviewed" button is not rendered there (`h` is a no-op); `listsReviewed` returns true
+     for `branch`, false for `review`, else the pref. The `(5 of 12)` count applies only to the current scope when
+     it has the eye. e2e: 12 (review policy) starts `n` from beta with nothing listed instead of a reviewed file
+     shown by the eye; 13 (prefs migration) checks the eye in Uncommitted; 15 drops the eye toggle in To review.
+
+## PR #2 review (Greptile), 2026-11-09
+
+153. **`activityAt` counts fully staged files; activity-only changes are not announced.** (a) Greptile: a file edited
+     and staged before the next refresh (`x` set, `y` = `.`) was not in `dirtyKeys`, so its mtime dropped out and the
+     worktree fell back to the reflog time. git-core now stats those paths too (`stagedOnlyKeys`), for `activityAt`
+     only; the `stateHash` is unchanged (git status already reports them). Test in `summary.test.ts`. (b) Greptile also
+     noted that a change to `activityAt` alone (e.g. `git reset --soft HEAD`) never reaches an open page, because the
+     daemon announces `worktree.changed` only on a new `stateHash` and the web drops events whose hash it already has.
+     Not changed: every real activity also changes the `stateHash` (a commit or checkout moves HEAD's oid and the
+     status, an edit or `git add` changes the status), so only no-op HEAD moves are missed, and the next event or
+     reconnect corrects the order. Announcing activity separately would need an additive event field plus daemon and
+     web changes for a cosmetic ordering signal; revisit if the order is seen going stale in practice.

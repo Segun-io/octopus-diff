@@ -78,6 +78,52 @@ describe('readRepositoryInfo', () => {
     expect(JSON.stringify(info)).not.toContain('tok@');
   });
 
+  it('lists local branches with subject, upstream tracking and merged state', async () => {
+    const seed = fx.repo('branches-seed');
+    const bare = path.join(fx.root, 'branches-remote.git');
+    fx.git(fx.root, ['clone', '-q', '--bare', seed, bare]);
+    const clone = path.join(fx.root, 'branches-clone');
+    fx.git(fx.root, ['clone', '-q', bare, clone]);
+    // merged: points into main's history; tracking: ahead of its upstream; gone: upstream pruned.
+    fx.git(clone, ['branch', 'merged']);
+    fx.git(clone, ['checkout', '-q', '-b', 'tracking']);
+    fx.git(clone, ['push', '-q', '-u', 'origin', 'tracking']);
+    fx.commitAll(clone, 'on tracking\nsecond line of the subject paragraph');
+    fx.git(clone, ['checkout', '-q', '-b', 'gone', 'main']);
+    fx.git(clone, ['push', '-q', '-u', 'origin', 'gone']);
+    fx.git(clone, ['push', '-q', 'origin', '--delete', 'gone']);
+    fx.git(clone, ['checkout', '-q', 'main']);
+
+    const info = await core.readRepositoryInfo?.(await locate(clone), { defaultBranch: 'main' });
+    const byName = new Map((info?.branches ?? []).map((b) => [b.name, b]));
+    expect([...byName.keys()].sort()).toEqual(['gone', 'main', 'merged', 'tracking']);
+    expect(info?.localBranches).toBe(4);
+    expect(byName.get('merged')).toMatchObject({
+      subject: 'initial',
+      upstream: null,
+      upstreamGone: false,
+      ahead: null,
+      behind: null,
+      merged: true,
+    });
+    expect(byName.get('tracking')).toMatchObject({
+      subject: 'on tracking second line of the subject paragraph',
+      upstream: 'origin/tracking',
+      upstreamGone: false,
+      ahead: 1,
+      behind: 0,
+      merged: false,
+    });
+    expect(byName.get('gone')).toMatchObject({
+      upstream: 'origin/gone',
+      upstreamGone: true,
+      ahead: null,
+      merged: true,
+    });
+    expect(byName.get('main')?.committerDate).toBe('2026-01-01T00:00:00.000Z');
+    expect(byName.get('main')?.sha).toMatch(/^[0-9a-f]{40}$/);
+  });
+
   it('detects the default branch when none is given; no upstream means null ahead/behind', async () => {
     const repo = fx.repo('info-plain');
     const info = await core.readRepositoryInfo?.(await locate(repo));
@@ -99,6 +145,7 @@ describe('readRepositoryInfo', () => {
       tags: 0,
       remotes: [],
       lastActivityAt: null,
+      branches: [],
     });
     const seed = fx.repo('info-bare-seed');
     const bare = path.join(fx.root, 'info-bare.git');

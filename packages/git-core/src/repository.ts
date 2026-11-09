@@ -1,5 +1,7 @@
 import {
+  type GitBranchInfo,
   type GitRepositoryInfo,
+  MAX_LISTED_BRANCHES,
   type ProjectLocator,
   RefNameSchema,
 } from '@octopus-diff/contracts';
@@ -11,9 +13,11 @@ import { readRemoteConfig } from './remotes.js';
 
 /**
  * Local facts for the Overview (docs/FORGES.md "Repository information"). Read-only and cheap:
- * one `for-each-ref` over branches and tags, one `log -1` for the default branch's head, one
- * `rev-list --left-right --count` against its upstream (local refs only: as of the last fetch),
- * and the remote config read the forge integration already does. Nothing is fetched.
+ * one `for-each-ref` over branches and tags (which also lists the branches with their upstream
+ * tracking), one `for-each-ref --merged` for the branches merged into the default branch, one
+ * `log -1` for the default branch's head, one `rev-list --left-right --count` against its
+ * upstream (local refs only: as of the last fetch), and the remote config read the forge
+ * integration already does. Nothing is fetched.
  */
 
 const SCP_LIKE = /^[^/@:]+@[^/:]+:/;
@@ -50,6 +54,25 @@ function isoOrNull(value: string | undefined): string | null {
 
 const HEAD_FORMAT = '%H%x00%s%x00%an%x00%aI';
 
+/**
+ * Parses `%(upstream:track,nobracket)`: `ahead 2, behind 1`, `ahead 2`, `behind 1`, `gone`, or
+ * empty when in sync (or without an upstream).
+ */
+export function parseUpstreamTrack(track: string): {
+  gone: boolean;
+  ahead: number;
+  behind: number;
+} {
+  if (track.trim() === 'gone') return { gone: true, ahead: 0, behind: 0 };
+  const ahead = /ahead (\d+)/.exec(track);
+  const behind = /behind (\d+)/.exec(track);
+  return { gone: false, ahead: Number(ahead?.[1] ?? 0), behind: Number(behind?.[1] ?? 0) };
+}
+
+function shortUpstream(ref: string): string {
+  return ref.replace(/^refs\/remotes\//, '').replace(/^refs\/heads\//, '');
+}
+
 export async function readRepositoryInfo(
   ctx: GitContext,
   project: ProjectLocator,
@@ -58,23 +81,47 @@ export async function readRepositoryInfo(
   const repo = await projectRepoFor(ctx, project);
   const refs = await ctx.git(repo, [
     'for-each-ref',
-    `--format=${forEachRefFormat(['refname', 'objectname', 'committerdate:iso-strict', 'upstream'])}`,
+    `--format=${forEachRefFormat([
+      'refname',
+      'objectname',
+      'committerdate:iso-strict',
+      'upstream',
+      'upstream:track,nobracket',
+      'contents:subject',
+    ])}`,
     'refs/heads/',
     'refs/tags/',
   ]);
-  const rows = parseForEachRef(bstrToUtf8(bstrFromBuffer(refs.stdout)), 4);
+  const rows = parseForEachRef(bstrToUtf8(bstrFromBuffer(refs.stdout)), 6);
   const heads = new Map<string, { oid: string; upstream: string | null }>();
+  const branches: Array<GitBranchInfo & { time: number }> = [];
   let tags = 0;
   let last: number | null = null;
-  for (const [refname = '', oid = '', date = '', upstream = ''] of rows) {
+  for (const [refname = '', oid = '', date = '', upstream = '', track = '', subject = ''] of rows) {
     if (refname.startsWith('refs/tags/')) {
       tags += 1;
       continue;
     }
     if (!refname.startsWith('refs/heads/')) continue;
-    heads.set(refname.slice('refs/heads/'.length), { oid, upstream: upstream || null });
+    const branch = refname.slice('refs/heads/'.length);
+    heads.set(branch, { oid, upstream: upstream || null });
     const time = Date.parse(date);
     if (!Number.isNaN(time) && (last === null || time > last)) last = time;
+    if (!/^[0-9a-f]{40,64}$/.test(oid)) continue;
+    const tracking = parseUpstreamTrack(track);
+    const known = upstream !== '' && !tracking.gone;
+    branches.push({
+      name: branch,
+      sha: oid,
+      subject,
+      committerDate: Number.isNaN(time) ? null : new Date(time).toISOString(),
+      upstream: upstream ? shortUpstream(upstream) : null,
+      upstreamGone: upstream !== '' && tracking.gone,
+      ahead: known ? tracking.ahead : null,
+      behind: known ? tracking.behind : null,
+      merged: null,
+      time: Number.isNaN(time) ? Number.NEGATIVE_INFINITY : time,
+    });
   }
 
   // The effective default branch: the project's (override or detected), else detect now.
@@ -131,13 +178,28 @@ export async function readRepositoryInfo(
     defaultBranch = {
       name,
       head,
-      upstream: upstreamRef
-        ? upstreamRef.replace(/^refs\/remotes\//, '').replace(/^refs\/heads\//, '')
-        : null,
+      upstream: upstreamRef ? shortUpstream(upstreamRef) : null,
       ahead,
       behind,
     };
+    if (oid !== null) {
+      // Branches whose tip is reachable from the default branch's commit: merged into it.
+      const merged = await ctx.git(repo, [
+        'for-each-ref',
+        '--format=%(refname)',
+        `--merged=${oid}`,
+        'refs/heads/',
+      ]);
+      const names = new Set(
+        bstrToUtf8(bstrFromBuffer(merged.stdout))
+          .split('\n')
+          .filter((line) => line.startsWith('refs/heads/'))
+          .map((line) => line.slice('refs/heads/'.length)),
+      );
+      for (const b of branches) b.merged = names.has(b.name);
+    }
   }
+  branches.sort((a, b) => b.time - a.time || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
 
   const config = await readRemoteConfig(ctx, project);
   return {
@@ -150,5 +212,6 @@ export async function readRepositoryInfo(
       pushUrl: r.pushUrl === null ? null : stripUrlCredentials(r.pushUrl),
     })),
     lastActivityAt: last === null ? null : new Date(last).toISOString(),
+    branches: branches.slice(0, MAX_LISTED_BRANCHES).map(({ time: _time, ...b }) => b),
   };
 }

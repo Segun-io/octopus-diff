@@ -6,7 +6,7 @@ import { queryKeys, useApi } from '../api/queries.ts';
 import { type BulkPlan, planBulk, planBulkForTarget } from '../lib/bulk.ts';
 import { branchCopyText, fileCopyTexts } from '../lib/copyFormat.ts';
 import { fileRefKey, toFileRef } from '../lib/fileRef.ts';
-import { type NavEntry, nextUnreviewed, stepFile, stepWorktree } from '../lib/model.ts';
+import { eyeApplies, type NavEntry, nextUnreviewed, stepFile, stepWorktree } from '../lib/model.ts';
 import { escapeSuspicious, hasSuspicious } from '../lib/unicode.ts';
 import type { SettingsSectionId } from '../settings/registry.ts';
 import { type BulkActions, hasUndoableToast, useBulkActions } from './bulk.ts';
@@ -206,6 +206,8 @@ export function useCommands(model: AppModel, resolvedTheme: 'light' | 'dark'): C
         store.setState((s) => ({ ignoreWhitespace: !s.ignoreWhitespace }));
       },
       toggleShowReviewed() {
+        // All on branch and To review have no eye (`eyeApplies`): nothing to toggle there.
+        if (!eyeApplies(store.getState().scope.kind)) return;
         store.setState((s) => ({ showReviewed: !s.showReviewed }));
       },
       toggleTheme() {
