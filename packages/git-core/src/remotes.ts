@@ -85,7 +85,8 @@ export function parseRemoteConfig(output: string): GitRemoteConfig {
       else if (variable === 'pushurl') entry.pushUrl ??= value;
       else if (variable === 'gh-resolved') entry.gh = value || null;
     } else if (section === 'branch' && sub !== null) {
-      const branch = (branches[sub] ??= { remote: null, merge: null, pushRemote: null });
+      const branch = branches[sub] ?? { remote: null, merge: null, pushRemote: null };
+      branches[sub] = branch;
       if (variable === 'remote') branch.remote = value || null;
       else if (variable === 'merge') branch.merge = value || null;
       else if (variable === 'pushremote') branch.pushRemote = value || null;
