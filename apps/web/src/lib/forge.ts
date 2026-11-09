@@ -173,3 +173,24 @@ export function projectStatusLine(state: ProjectForgeState): string {
       return state.message ?? state.status;
   }
 }
+
+/**
+ * `host/path` of a remote URL for display (`https://github.com/o/r.git`, `git@github.com:o/r`,
+ * `ssh://git@host:22/g/p.git` -> `github.com/o/r`, `host/g/p`); null for local paths.
+ */
+export function remoteLabel(url: string): string | null {
+  const scp = /^[^/@:\s]+@([^/:\s]+):(.+)$/.exec(url);
+  let host: string;
+  let path: string;
+  if (scp) {
+    host = scp[1] ?? '';
+    path = scp[2] ?? '';
+  } else {
+    const match = /^[a-z][a-z0-9+.-]*:\/\/(?:[^/@]*@)?([^/:]+)(?::\d+)?\/(.+)$/i.exec(url);
+    if (!match || /^file:/i.test(url)) return null;
+    host = match[1] ?? '';
+    path = match[2] ?? '';
+  }
+  path = path.replace(/\.git\/?$/, '').replace(/\/+$/, '');
+  return host && path ? `${host.toLowerCase()}/${path}` : null;
+}

@@ -1,13 +1,18 @@
 import { type ReviewPolicyTarget, reviewTargetKey } from '@octopus-diff/contracts';
 import type { ReactNode } from 'react';
-import { useForgeIndex } from '../api/forges.ts';
+import {
+  type RepositoryEntry,
+  useForgeIndex,
+  useForgesQuery,
+  useRepositories,
+} from '../api/forges.ts';
 import {
   useRescanScanRoot,
   useSetReviewPolicy,
   useSettingsQuery,
   useSettingsSupport,
 } from '../api/settings.ts';
-import { REVIEW_WORD } from '../lib/forge.ts';
+import { type ForgeIndexEntry, needsAttention, REVIEW_WORD, remoteLabel } from '../lib/forge.ts';
 import {
   DIRECT_FOLDER_ID,
   type FolderNode,
@@ -19,11 +24,13 @@ import {
 } from '../lib/model.ts';
 import { SOURCE_LABELS, shortenHome } from '../lib/policy.ts';
 import { worktreeSource } from '../lib/source.ts';
+import { absoluteTime, relativeTime } from '../lib/time.ts';
 import { useCommandsContext } from '../state/commandsContext.tsx';
 import { useAppModel } from '../state/model.tsx';
 import { actions, useUiStore, type View } from '../state/ui.tsx';
 import { ChangeRequestChip } from './ChangeRequest.tsx';
 import { Mark } from './Mark.tsx';
+import { ForgeRepositoryFacts, LocalRepositoryFacts, OpenRequests } from './RepositoryInfo.tsx';
 /**
  * Overview for a folder or a project (views/registry.ts): figures, the worktrees or projects
  * inside, bulk actions and the review policy of the node. Future read-only views (Files, History)
@@ -60,7 +67,15 @@ function Stat({ label, value, tone }: { label: string; value: ReactNode; tone?: 
   );
 }
 
-function StatsRow({ stats, repos }: { stats: NodeStats; repos: boolean }) {
+function StatsRow({
+  stats,
+  repos,
+  children,
+}: {
+  stats: NodeStats;
+  repos: boolean;
+  children?: ReactNode;
+}) {
   return (
     <dl className="flex flex-wrap gap-x-8 gap-y-3 border-y border-line py-3">
       {repos && <Stat label="repositories" value={stats.projects} />}
@@ -76,6 +91,7 @@ function StatsRow({ stats, repos }: { stats: NodeStats; repos: boolean }) {
           </>
         }
       />
+      {children}
     </dl>
   );
 }
@@ -170,6 +186,109 @@ function Figures({ additions, deletions }: { additions: number; deletions: numbe
 
 const CELL = 'py-1.5 pr-3';
 
+/** Open requests and those needing attention among the given worktrees (batch data only). */
+function rollupRequests(worktreeIds: readonly string[], index: Map<string, ForgeIndexEntry>) {
+  let open = 0;
+  let attention = 0;
+  let known = false;
+  let github = 0;
+  let gitlab = 0;
+  for (const id of worktreeIds) {
+    const entry = index.get(id);
+    if (!entry) continue;
+    known = true;
+    const cr = entry.worktree.changeRequest;
+    if (cr?.state !== 'open') continue;
+    open += 1;
+    if (cr.kind === 'github') github += 1;
+    else gitlab += 1;
+    if (needsAttention(cr)) attention += 1;
+  }
+  const noun = gitlab > github ? 'merge request' : 'pull request';
+  return { open, attention, known, noun };
+}
+
+/** Folder Overview cells from `/api/repositories` and the cached `/api/forges`. */
+function FolderRepoCells({
+  entry,
+  state,
+  worktreeIds,
+}: {
+  entry: RepositoryEntry | undefined;
+  state: { forge: { host: string; repository: string; webUrl: string } | null } | undefined;
+  worktreeIds: readonly string[];
+}) {
+  const index = useForgeIndex();
+  const info = entry?.info;
+  const branch = info?.defaultBranch;
+  const forge = state?.forge ?? null;
+  const roll = rollupRequests(worktreeIds, index);
+  const origin = info?.remotes.find((r) => r.name === 'origin') ?? info?.remotes[0];
+  const label = forge
+    ? `${forge.host}/${forge.repository}`
+    : origin?.url
+      ? remoteLabel(origin.url)
+      : null;
+  return (
+    <>
+      <td className={`${CELL} font-mono text-[11px]`}>
+        {branch ? (
+          <>
+            {branch.name}
+            {branch.ahead !== null && branch.behind !== null && (
+              <span
+                className="ml-1.5 text-muted"
+                title={`Against ${branch.upstream}, as of the last fetch; octopus-diff never fetches`}
+              >
+                ↑{branch.ahead} ↓{branch.behind}
+              </span>
+            )}
+          </>
+        ) : (
+          <span className="text-faint">–</span>
+        )}
+      </td>
+      <td
+        className={`${CELL} whitespace-nowrap text-[11px] text-muted`}
+        title={absoluteTime(branch?.head?.authorDate)}
+      >
+        {branch?.head ? relativeTime(branch.head.authorDate) : '–'}
+      </td>
+      <td className={`${CELL} max-w-48 truncate font-mono text-[11px] text-muted`}>
+        {label === null ? (
+          <span className="text-faint">–</span>
+        ) : forge?.webUrl.startsWith('https://') ? (
+          <a
+            href={forge.webUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="hover:underline"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {label} <span className="text-faint">↗</span>
+          </a>
+        ) : (
+          label
+        )}
+      </td>
+      <td className={`${CELL} font-mono tabular-nums`}>
+        {roll.open > 0 ? (
+          <span title={`${roll.attention} need attention`}>
+            {roll.open}
+            {roll.attention > 0 && (
+              <span className="ml-1.5 font-sans text-[11px] text-danger">
+                {roll.attention} need attention
+              </span>
+            )}
+          </span>
+        ) : (
+          <span className="text-faint">–</span>
+        )}
+      </td>
+    </>
+  );
+}
+
 /** The Pull request column: chip, truncated title, review word (batch data, no query). */
 function RequestCell({ worktreeId }: { worktreeId: string }) {
   const entry = useForgeIndex().get(worktreeId);
@@ -193,6 +312,13 @@ function FolderOverview({ node }: { node: FolderNode }) {
   const rescan = useRescanScanRoot();
   const root = node.root;
   const ids = node.groups.flatMap((g) => g.allRows.map((r) => r.worktree.id));
+  // Local facts for the listed projects (git only) and already-known forge data: the folder
+  // Overview runs no forge query of its own (DECISIONS #76).
+  const repositories = useRepositories(node.groups.map((g) => g.project.id));
+  const forges = useForgesQuery();
+  const forgeIndex = useForgeIndex();
+  const forgeStates = new Map((forges.data?.projects ?? []).map((p) => [p.projectId, p]));
+  const forgeRollup = rollupRequests(ids, forgeIndex);
   const target = root
     ? ({ kind: 'folder', scanRootId: root.id } as const)
     : ({ kind: 'all' } as const);
@@ -244,7 +370,18 @@ function FolderOverview({ node }: { node: FolderNode }) {
           </div>
         </div>
       </header>
-      <StatsRow stats={node.stats} repos />
+      <StatsRow stats={node.stats} repos>
+        {forgeRollup.known && (
+          <>
+            <Stat label={`open ${forgeRollup.noun}s`} value={forgeRollup.open} />
+            <Stat
+              label="need attention"
+              value={forgeRollup.attention}
+              {...(forgeRollup.attention > 0 ? { tone: 'text-danger' } : {})}
+            />
+          </>
+        )}
+      </StatsRow>
       <table className="mt-4 w-full text-xs">
         <thead>
           <tr>
@@ -253,6 +390,10 @@ function FolderOverview({ node }: { node: FolderNode }) {
             <th className="od-th">With changes</th>
             <th className="od-th">Lines</th>
             <th className="od-th">Unreviewed</th>
+            <th className="od-th">Default branch</th>
+            <th className="od-th">Last commit</th>
+            <th className="od-th">Forge</th>
+            <th className="od-th">PRs</th>
             <th className="od-th">Path</th>
           </tr>
         </thead>
@@ -277,6 +418,11 @@ function FolderOverview({ node }: { node: FolderNode }) {
                 <td className={NUM}>
                   {s.unreviewed > 0 ? <span className="font-semibold">{s.unreviewed}</span> : '–'}
                 </td>
+                <FolderRepoCells
+                  entry={repositories.data?.get(g.project.id)}
+                  state={forgeStates.get(g.project.id)}
+                  worktreeIds={g.allRows.map((r) => r.worktree.id)}
+                />
                 <td className="truncate py-1.5 font-mono text-[11px] text-faint">
                   {shortenHome(g.project.mainWorktreePath ?? g.project.commonDir)}
                 </td>
@@ -293,6 +439,8 @@ function ProjectOverview({ group }: { group: ProjectGroup }) {
   const store = useUiStore();
   const commands = useCommandsContext();
   const { project } = group;
+  const repositories = useRepositories([project.id]);
+  const forgeState = useForgesQuery().data?.projects.find((p) => p.projectId === project.id);
   const ids = group.allRows.map((r) => r.worktree.id);
   const stats = statsOfRows(group.allRows);
   return (
@@ -321,6 +469,14 @@ function ProjectOverview({ group }: { group: ProjectGroup }) {
           <PolicyControl target={{ kind: 'project', projectId: project.id }} label="this project" />
         </div>
       </header>
+      <div className="mb-4 grid gap-x-8 gap-y-4 border-t border-line pt-3 lg:grid-cols-2">
+        <LocalRepositoryFacts
+          entry={repositories.data?.get(project.id)}
+          forge={forgeState?.forge ?? null}
+          worktrees={group.allRows.length}
+        />
+        <ForgeRepositoryFacts projectId={project.id} />
+      </div>
       <StatsRow stats={stats} repos={false} />
       <table className="mt-4 w-full text-xs">
         <thead>
@@ -402,6 +558,7 @@ function ProjectOverview({ group }: { group: ProjectGroup }) {
           })}
         </tbody>
       </table>
+      <OpenRequests projectId={project.id} />
     </div>
   );
 }

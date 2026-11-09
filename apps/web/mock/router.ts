@@ -14,8 +14,10 @@ import {
   DirsQuerySchema,
   FilesQuerySchema,
   FocusRequestSchema,
+  IdSchema,
   InboxQuerySchema,
   RefreshForgesRequestSchema,
+  RepositoriesQuerySchema,
   ReviewRequestSchema,
   SetReviewPolicyRequestSchema,
   UndoReviewRequestSchema,
@@ -179,6 +181,30 @@ export function createMockRouter(backend: MockBackend, options: MockRouterOption
       if (path === '/api/forges/refresh' && method === 'POST') {
         parse(RefreshForgesRequestSchema, await body());
         return json(200, backend.forges());
+      }
+      const requestMatch = path.match(
+        /^\/api\/forges\/worktrees\/([^/]+)\/request(\/conversation|\/refresh)?$/,
+      );
+      if (requestMatch) {
+        const worktreeId = decodeURIComponent(requestMatch[1] ?? '');
+        if (!IdSchema.safeParse(worktreeId).success)
+          throw new MockApiError(400, 'bad_request', 'invalid worktreeId');
+        const sub = requestMatch[2];
+        if (sub === undefined && method === 'GET')
+          return json(200, backend.changeRequest(worktreeId));
+        if (sub === '/conversation' && method === 'GET') {
+          return json(200, backend.changeRequestConversation(worktreeId));
+        }
+        if (sub === '/refresh' && method === 'POST')
+          return json(200, backend.changeRequest(worktreeId));
+      }
+      const repoMatch = path.match(/^\/api\/forges\/projects\/([^/]+)\/repository(\/refresh)?$/);
+      if (repoMatch && (method === 'GET' || (repoMatch[2] && method === 'POST'))) {
+        return json(200, backend.repositoryForge(decodeURIComponent(repoMatch[1] ?? '')));
+      }
+      if (path === '/api/repositories' && method === 'GET') {
+        const q = parse(RepositoriesQuerySchema, queryObject(url));
+        return json(200, backend.repositories(q.projectIds));
       }
       // Mock-only control endpoint: simulate an agent edit right now.
       if (path === '/api/__mock/mutate' && method === 'POST') {

@@ -1266,3 +1266,21 @@ hover card, repository information on the Overviews). Design: `docs/FORGES.md`. 
     GitLab. Every GitHub query now asks for `rateLimit { cost remaining }`; `ForgeClient({ onCost })` reports it
     (the opt-in live test asserts `cost <= 1`). The Overview's chip moved from the worktree cell to a new
     **Pull request** column (chip, title, review word); the worktree cell otherwise is unchanged.
+73. **The forge allowlist is a registry of query kinds, and GitHub PR numbers are inlined.** `cli.ts`
+    `QUERY_REGISTRY` has four kinds (`batch`, `repository`, `detail`, `conversation`); each knows its fixed
+    variable names and rebuilds every query string it allows, and the caller's query must equal one byte for byte.
+    `gh api graphql --raw-field number=1` fails for `$number: Int!` and `-F` stays banned (it reads files), so
+    the GitHub detail and conversation builders take a validated safe integer and inline it; the registry
+    extracts it with a regex, rebuilds the query and compares. GitLab's `iid` is a `String!`, so it stays a
+    `--raw-field` (digits only). Every other rule is unchanged (`--raw-field` only, `--hostname` first, value
+    limits, neutral cwd, host-scoped tokens, signed-in hosts only). Measured: each new GitHub query costs 1 point.
+75. **Repository information: two routes, two sources.** `GET /api/repositories?projectIds=a,b` (max 200) returns
+    local git facts only (`GitCore.readRepositoryInfo`: one `for-each-ref`, `log -1`, `rev-list --left-right
+    --count`, the remote config read; no allowlist change), cached 30 s and dropped on any event naming the
+    project. `GET /api/forges/projects/:projectId/repository` returns the forge facts (one query, cached 10 min,
+    "Refresh" forces it at most every 15 s) with open requests joined to local worktrees by the daemon. Remote
+    URLs lose their userinfo for http(s)/git URLs (a token is often the user name) and their password for ssh.
+76. **The folder Overview runs no forge query.** It shows `/api/repositories` facts plus what the 2-minute batch
+    already knows (forge `host/path`, open requests among the worktrees, how many need attention: failing CI,
+    changes requested or conflicts). Only the project Overview asks the forge, once per project, lazily.
+    Asserted in the daemon test (forge call count unchanged) and the web test (no `/api/forges/projects/` call).

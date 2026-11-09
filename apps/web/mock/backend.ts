@@ -12,6 +12,8 @@ import {
   type BulkReviewRequestParsed,
   type BulkReviewResponse,
   type ChangedFile,
+  type ChangeRequestConversationResponse,
+  type ChangeRequestDetailResponse,
   type CommitInfo,
   type CommitsResponse,
   DEFAULT_APP_SETTINGS,
@@ -28,6 +30,8 @@ import {
   type ProjectListItem,
   type ProjectsResponse,
   type RefreshResponse,
+  type RepositoriesResponse,
+  type RepositoryForgeResponse,
   type RescanResponse,
   type ReviewOverride,
   type ReviewPolicyTarget,
@@ -47,6 +51,13 @@ import {
   type WorktreeSummary,
 } from '@octopus-diff/contracts';
 import { buildPatch, countLines, fileSides, type MockFile, type MockFileKind } from './content.js';
+import {
+  mockConversation,
+  mockDetail,
+  mockImageHosts,
+  mockRepositoryForgeInfo,
+  mockRepositoryInfo,
+} from './forge-details.js';
 import { mockForges } from './forges.js';
 import {
   byteLength,
@@ -738,6 +749,109 @@ export class MockBackend {
   /** Mock forge data (mock/forges.ts). */
   forges(): ForgesResponse {
     return mockForges(this.listProjects(), this.settings, new Date().toISOString());
+  }
+
+  // --- request detail and repository information (mock/forge-details.ts) -------------------
+
+  private imageHosts(): string[] {
+    const forges = this.settings.forges;
+    return mockImageHosts(forges?.images !== false, forges?.enabled ?? true);
+  }
+
+  /** The worktree's matched request and its rotation index; 404 for an unknown worktree. */
+  private forgeEntry(worktreeId: string) {
+    this.findWorktree(worktreeId);
+    const forges = this.forges();
+    const all = forges.projects.flatMap((p) => p.worktrees.map((w) => ({ p, w })));
+    const index = all.findIndex((e) => e.w.worktreeId === worktreeId);
+    const entry = all[index];
+    return entry?.w.changeRequest ? { ...entry, n: index } : null;
+  }
+
+  changeRequest(worktreeId: string): ChangeRequestDetailResponse {
+    const entry = this.forgeEntry(worktreeId);
+    const imageHosts = this.imageHosts();
+    if (!entry) {
+      return {
+        worktreeId,
+        status: 'no-request',
+        message: null,
+        request: null,
+        fetchedAt: null,
+        imageHosts,
+      };
+    }
+    const { mw } = this.findWorktree(worktreeId);
+    const local = this.filesForScope(mw, { kind: 'working' }).map((f) => f.path);
+    return {
+      worktreeId,
+      status: 'ok',
+      message: null,
+      request: mockDetail(entry.w, entry.n, local),
+      fetchedAt: new Date().toISOString(),
+      imageHosts,
+    };
+  }
+
+  changeRequestConversation(worktreeId: string): ChangeRequestConversationResponse {
+    const entry = this.forgeEntry(worktreeId);
+    const imageHosts = this.imageHosts();
+    if (!entry) {
+      return {
+        worktreeId,
+        status: 'no-request',
+        message: null,
+        conversation: null,
+        fetchedAt: null,
+        imageHosts,
+      };
+    }
+    return {
+      worktreeId,
+      status: 'ok',
+      message: null,
+      conversation: mockConversation(entry.w, entry.n),
+      fetchedAt: new Date().toISOString(),
+      imageHosts,
+    };
+  }
+
+  repositoryForge(projectId: string): RepositoryForgeResponse {
+    const index = this.projects.findIndex((p) => p.project.id === projectId);
+    if (index === -1) throw new MockApiError(404, 'not_found', `unknown project ${projectId}`);
+    const state = this.forges().projects.find((p) => p.projectId === projectId);
+    if (!state || state.status === 'disabled') {
+      return {
+        projectId,
+        status: 'disabled',
+        message: 'Forge integration is turned off in Settings.',
+        forge: null,
+        repository: null,
+        fetchedAt: null,
+      };
+    }
+    return {
+      projectId,
+      status: 'ok',
+      message: null,
+      forge: state.forge,
+      repository: mockRepositoryForgeInfo(state, index),
+      fetchedAt: new Date().toISOString(),
+    };
+  }
+
+  repositories(projectIds: readonly string[]): RepositoriesResponse {
+    const items = this.listProjects().projects;
+    return {
+      repositories: projectIds.map((projectId) => {
+        const index = items.findIndex((i) => i.project.id === projectId);
+        const item = items[index];
+        return item
+          ? { projectId, info: mockRepositoryInfo(item, index), error: null }
+          : { projectId, info: null, error: 'unknown project' };
+      }),
+      generatedAt: new Date().toISOString(),
+    };
   }
 
   private assertTargetExists(target: ReviewPolicyTarget): void {

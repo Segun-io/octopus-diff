@@ -29,7 +29,9 @@ export type View =
   | { kind: 'inbox' }
   | { kind: 'folder'; scanRootId: string }
   | { kind: 'project'; projectId: string }
-  | { kind: 'worktree'; worktreeId: string };
+  | { kind: 'worktree'; worktreeId: string; tab?: WorktreeTab };
+/** Main-pane tab of a worktree (views/registry.ts): its changes, or its pull/merge request. */
+export type WorktreeTab = 'changes' | 'request';
 export type ConnectionState = 'connecting' | 'open' | 'offline';
 
 /** Per-file view options that change the diff request (reset when the file changes). */
