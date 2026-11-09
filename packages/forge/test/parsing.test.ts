@@ -144,6 +144,11 @@ describe('auth status', () => {
   it('never surfaces a token line', () => {
     expect(firstSafeLine('  ✓ Token: gho_abc\n  x not logged in')).toBe('not logged in');
     expect(parseAuthStatus('You are not logged into any GitHub hosts.')).toEqual([]);
+    expect(
+      firstSafeLine(
+        'gitlab.com\n  x gitlab.com: API call failed: GET https://gitlab.com/api/v4/user: 401',
+      ),
+    ).toBe('gitlab.com: API call failed: GET https://gitlab.com/api/v4/user: 401');
   });
 });
 

@@ -56,6 +56,8 @@ export function firstSafeLine(text: string): string | null {
   for (const raw of stripControl(text).split(/\r?\n/)) {
     const line = raw.trim().replace(/^[✓✗xX!-]\s+/, '');
     if (line.length === 0 || /token/i.test(line)) continue;
+    // A bare host header (`gitlab.com`) says nothing on its own.
+    if (HOST_LINE.test(line)) continue;
     return line.length > 200 ? `${line.slice(0, 197)}...` : line;
   }
   return null;
