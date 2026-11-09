@@ -1193,3 +1193,50 @@ Branch `web/credits`, on top of `main` at `3617d3c`. Brief from the user: the cr
 59. **License texts ship with the code.** The web bundle now carries every shipped package's license and NOTICE text,
     which covers the redistribution gap noted in #56 for the web UI; the CLI tarball still ships `CREDITS.md`. One
     shipped package publishes no license file in its tarball (`lru_map`, MIT); the app says so next to its license.
+
+## Forges: pull and merge requests via gh / glab (lead, 2026-11-09)
+
+The user asked to "check how gh cli and gitlab can be implemented (again use t3 code as base), it should auto
+discover them correctly and get valid information about PRs/MRs", then to build it. Full design: `docs/FORGES.md`.
+
+61. **PLAN change: read-only forge status is in scope.** §1 listed "PR hosting or forge features" and "auth against
+    remotes" as non-goals and §4.4 had "PR/CI status via `gh` (read-only)" in the backlog. Showing a worktree's
+    PR/MR is now built; everything that writes to a forge (create, merge, approve, comment, checkout) stays a
+    non-goal, and octopus-diff still holds no credential: it uses the logins `gh`/`glab` already have.
+62. **On by default, with a switch and per-host overrides.** `AppSettings.forges { enabled: true, hosts }`
+    (daemon-side, additive). Default on because nothing is contacted unless a CLI is installed **and** signed in
+    to the remote's host, and only for non-default branches checked out in worktrees. `hosts` maps a hostname to
+    `github`, `gitlab` or `none`: per host rather than per project, because a host is one forge for every project.
+63. **CLIs, not tokens; GraphQL through the CLIs.** T3 Code reads `gh auth token` and calls GitHub's API itself
+    (with an app sign-in and a rate-limit manager). We only run `gh api graphql` / `glab api graphql`: no token
+    ever enters octopus-diff, and one aliased query per repository asks about every worktree branch at once
+    (1 GitHub rate-limit point measured), instead of `gh pr list` per branch or a 100-PR list per repository.
+64. **The forge runner is a second read-only runner** (`packages/forge/src/cli.ts`): argv only, an exact allowlist
+    in which the GraphQL query must equal a built-in query for the given variable count, neutral cwd (the state
+    dir, never a repository), hardened env. **Token scoping**: `gh` sends `GH_ENTERPRISE_TOKEN` to any
+    non-github.com host and `glab` sends `GITLAB_TOKEN` to any host, so env tokens are dropped unless they belong
+    to the queried host, and only hosts the CLI reports as signed in are queried. A crafted remote cannot
+    collect a token.
+65. **Discovery order** (T3 Code's rules, adapted): setting override, then hostname (`github.com`, `*.ghe.com`,
+    a `github`/`gitlab` label, `gitlab.com`), then the CLI's logins for that exact host (self-managed GitLab or
+    GHES on a neutral name). ssh aliases resolve through literal `Host`/`HostName` pairs in `~/.ssh/config`.
+    Base repository in `gh`'s order: `gh-resolved` mark, `upstream`, `github`/`gitlab`, `origin`, others.
+66. **Matching rejects strangers' forks.** Head branch from `branch.<b>.merge` when pushing to the tracked remote;
+    push repository from `pushRemote` > `remote.pushDefault` > `branch.remote` > `origin`; a request matches only
+    from that repository (or same-repo when unknown). Measured on `cli/cli`: `headRefName: main` returns five
+    fork PRs, none of which may match. The default branch is never looked up.
+67. **git-core gets `readRemoteConfig`** (optional on the `GitCore` interface so test doubles need not change): one
+    `git config --null --get-regexp` with `insteadOf`/`pushInsteadOf` applied; no new subcommand. Written by the
+    lead in this session (WS1 path) because it is the only git access the feature needs.
+68. **Text, not `--json`, for auth status.** `gh auth status --json` needs gh ≥ 2.81; the dev machine (Ubuntu) has
+    2.46. Both CLIs' text forms are parsed (T3 Code's glab parser, MIT, adapted with attribution). glab < 1.79
+    rejects `--all`: retried without it. GitLab queries fall back to a basic field set on "field doesn't exist".
+69. **UI colour stays within the identity.** T3 Code's glyph shapes (open, draft, merged, closed), but only open
+    (`add`) and the CI dot (add / danger / warn) are coloured; merged is not violet and closed is not red
+    (IDENTITY.md §4: hues belong to the diff). No new theme token.
+70. **Test and tooling edits outside the usual owners.** `e2e/support/env.ts`: the web-UI preflight looked for
+    `data-ready` and `worktree-item` in the same chunk; Rollup moved `TEST_IDS` into a shared chunk, so it now
+    checks across chunks. e2e 09/13 expect the `forges` settings default and the seventh settings section.
+    `03-scopes` "the scope selector switches the file list" is flaky on `main` too (1 of 4 runs on an untouched
+    `main` build, "element is not attached to the DOM"): not caused by this change, left for its owner.
+

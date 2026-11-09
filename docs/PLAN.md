@@ -2,7 +2,8 @@
 
 > Status: MVP complete (Phases 0–2, 2026-11-08): see `docs/reports/mvp.md`. Phase 3 needs the user. UX rounds 1–4
 > (identity, themes, settings, bulk review; two unslop passes; the sidebar: folders, settle, a closed shelf) are done:
-> `docs/reports/ux-*.md`.
+> `docs/reports/ux-*.md`. Forges (read-only PR/MR status through `gh`/`glab`, 2026-11-09) are done: `docs/FORGES.md`,
+> `docs/reports/forges.md`.
 > This file is the source of truth for every session working on the project. If reality disagrees
 > with it, fix the code or update this file and log why in `docs/DECISIONS.md`. Never leave them out of sync.
 
@@ -34,7 +35,9 @@ speaks git, so it works with any tool that edits files or creates worktrees.
 ### Non-goals (MVP and near term)
 
 History graph, rebase / merge / conflict editors, staging / committing / pushing / discarding, PR hosting
-or forge features, embedded editor or terminal, agent orchestration, auth against remotes. Other tools do
+or forge write features (create / merge / approve / comment), embedded editor or terminal, agent orchestration,
+holding credentials for remotes. (Read-only PR/MR status through the user's own `gh`/`glab` logins is in scope
+since 2026-11-09: `docs/FORGES.md`, DECISIONS #61.) Other tools do
 these well (lazygit, GitButler, forges). A read-only product also removes the riskiest class of bugs.
 
 ## 2. Locked decisions (from the user, 2026-11-08)
@@ -128,7 +131,7 @@ file's patch changed, show a subtle "updated" banner and keep reading position w
 
 Interdiff "since I last reviewed" (store the reviewed patch, show the delta), comments that export as an
 agent prompt (difit-style), open-in-editor deep links, commit browser, desktop shell, remote access (Tailscale),
-multiple machines, fetch-on-demand (opt-in write-ish), PR/CI status via `gh` (read-only).
+multiple machines, fetch-on-demand (opt-in write-ish). (PR/CI status via `gh`/`glab` is built: `docs/FORGES.md`.)
 
 ## 5. Architecture
 
@@ -137,7 +140,8 @@ multiple machines, fetch-on-demand (opt-in write-ish), PR/CI status via `gh` (re
    (React, @pierre/*)            ├─ project registry + scan roots (SQLite, XDG state dir)
                                  ├─ watcher service (@parcel/watcher) → debounced refresh → SSE
                                  ├─ change aggregation (status + numstat per worktree)
-                                 └─ review-state store (SQLite)
+                                 ├─ review-state store (SQLite)
+                                 └─ forge service ──spawn──▶ gh / glab (read-only GraphQL, docs/FORGES.md)
 ```
 
 ### 5.1 Tech stack (default; deviate only with a logged reason)
@@ -161,6 +165,7 @@ octopus-diff/
   packages/
     contracts/   shared zod schemas, types, API route + SSE event definitions   [owner: lead]
     git-core/    git runner, parsers, discovery, diff retrieval                  [owner: WS1]
+    forge/       gh/glab runner, remote classification, PR/MR queries           [owner: lead]
   apps/
     daemon/      HTTP + SSE server, registry, watcher, review store              [owner: WS2]
     web/         React UI                                                        [owner: WS3]

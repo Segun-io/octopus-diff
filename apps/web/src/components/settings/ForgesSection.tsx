@@ -118,7 +118,12 @@ export function ForgesSection() {
               >
                 <span className="font-mono">{cli.executable}</span>{' '}
                 {cli.available ? (
-                  <span className="text-muted">{cli.version ?? 'installed'}</span>
+                  <span className="text-muted">
+                    {(cli.version ?? 'installed').replace(
+                      new RegExp(`^${cli.executable}\\s+(version\\s+)?`),
+                      '',
+                    )}
+                  </span>
                 ) : (
                   <span className="text-warn">not installed</span>
                 )}

@@ -14,11 +14,12 @@ deviate from it, log why in `docs/DECISIONS.md`.
 | `pnpm typecheck` | `tsc` in every package (resolves workspace deps to their sources, no build needed) |
 | `pnpm test` | vitest unit tests in every package (no build needed) |
 | `pnpm credits` | Regenerate the open-source credits (Settings → About and `CREDITS.md`); run after any dependency change |
-| `pnpm build` | Topological build: contracts → git-core → daemon → cli, plus web (Vite) |
+| `pnpm build` | Topological build: contracts → git-core, forge → daemon → cli, plus web (Vite) |
 | `pnpm test:e2e` | Playwright e2e (`e2e/`) |
 | `pnpm check` | lint + typecheck + build + test (build first so the CLI test can run the built bin) |
 
 Per package: `pnpm --filter <name> <script>` (names: `@octopus-diff/contracts`, `@octopus-diff/git-core`,
+`@octopus-diff/forge`,
 `@octopus-diff/daemon`, `@octopus-diff/web`, `octopus-diff` (the CLI), `@octopus-diff/fixtures`,
 `@octopus-diff/e2e`). Every package has `build`, `typecheck`, `test` and `lint` scripts.
 
@@ -29,6 +30,7 @@ Run TypeScript sources directly in dev: `pnpm exec tsx --conditions=@octopus-dif
 ```
 packages/contracts/   zod schemas, types, routes, SSE events, API client, GitCore + daemon interfaces  [lead]
 packages/git-core/    read-only git runner, parsers, discovery, diff retrieval                         [WS1]
+packages/forge/       read-only gh/glab runner, remote classification, PR/MR queries (docs/FORGES.md)  [lead]
 apps/daemon/          HTTP + SSE server, registry, watcher, review store                               [WS2]
 apps/web/             React UI                                                                         [WS3]
 tools/fixtures/       scratch-repo generator, agent simulator, perf bench, read-only proof harness    [WS4]
@@ -73,6 +75,9 @@ New packages must follow the same pattern.
 
 - All git access goes through the single runner in `packages/git-core`. No other package spawns `git`
   against user repositories (test fixture setup is the only exception; see below).
+- `gh` / `glab` run only through `packages/forge`'s runner: its allowlist (built-in read-only GraphQL
+  queries only), a neutral cwd (never a repository), and env tokens scoped to their own host
+  (`docs/FORGES.md` "Safety").
 - Subcommand allowlist; `--no-optional-locks` + `GIT_OPTIONAL_LOCKS=0`; `GIT_TERMINAL_PROMPT=0`,
   `GIT_PAGER=cat`, `LC_ALL=C`; `--no-ext-diff --no-textconv` on diffs; `-z` formats; argv arrays only.
 - **Never use `shell: true`** or build command strings. Never pass user input where git could read it as

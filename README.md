@@ -143,10 +143,20 @@ Settings → Folders → **Start browsing in** sets where the picker opens (defa
   worktree with review off stays visible and diffable, but it has no unreviewed badges, `n` skips it and
   bulk actions leave it alone.
 - **Settings** (`,` or the gear in the sidebar): General, Review (the default and every override),
-  Appearance, Folders (scan roots and projects), Keyboard and About. Review settings are stored by the
+  Appearance, Folders (scan roots and projects), Forges, Keyboard and About. Review settings are stored by the
   daemon and shared by every browser that opens it; appearance and layout preferences are stored in the
   browser, per device. The **command palette** (`Ctrl/Cmd+K`) jumps to any worktree, project or folder
   and runs any command.
+- **Pull and merge requests.** If the GitHub CLI (`gh`) or GitLab CLI (`glab`) is installed and signed in,
+  each worktree on a feature branch shows its PR/MR next to the branch: number, open / draft / merged /
+  closed, and a CI dot; the tooltip adds the review decision, conflicts and whether the request's head
+  matches your HEAD, and the toolbar links to it. Forges are found from your remotes (github.com, GitHub
+  Enterprise, gitlab.com, self-managed GitLab, ssh aliases, forks through `upstream`) with no setup;
+  Settings → Forges shows what was found, turns the feature off, or names a host by hand. Read-only:
+  octopus-diff only runs the CLIs' query commands and never sees a token. Details:
+  [`docs/FORGES.md`](docs/FORGES.md).
+
+  ![Pull request chips in the sidebar and the PR link in the toolbar](docs/screenshots/forges-dark.png)
 - **Themes.** Octopus Dark, Octopus Light and a high-contrast theme; "System" follows the OS. Themes
   are plain data files, so adding one is a one-file change: see [`docs/design/THEMING.md`](docs/design/THEMING.md).
   The identity and palette are described in [`docs/design/IDENTITY.md`](docs/design/IDENTITY.md).
@@ -255,6 +265,10 @@ The daemon serves the contents of your repositories over HTTP, so it is locked d
 - **Host and Origin checks.** The `Host` header must be a loopback name or address (or one listed in
   `--allowed-host`), which defeats DNS-rebinding attacks. A request with an `Origin` header must come
   from the daemon's own origin, so other websites open in your browser cannot read your diffs.
+- **Forge CLIs are sandboxed like git.** `gh` and `glab` run only with built-in read-only GraphQL
+  queries (an exact allowlist), outside your repositories, and only against hosts they are already
+  signed in to; `GH_ENTERPRISE_TOKEN` / `GITLAB_TOKEN` from the environment are passed only for their own
+  host, so a crafted remote URL cannot collect them. Turn the feature off in Settings → Forges.
 - **No write endpoints toward repositories.** The only writes are octopus-diff's own state (project
   list, review marks, focus) in the state directory.
 
@@ -289,7 +303,8 @@ printf 'fs.inotify.max_user_watches=524288\nfs.inotify.max_user_instances=512\n'
 
 - **Read-only by design**: no staging, committing, discarding, pushing or conflict resolution. Use
   your agent, editor, lazygit or the git CLI for that.
-- No history graph, no forge/PR features, no fetching: ahead/behind counts use local refs only.
+- No history graph and no fetching: ahead/behind counts use local refs only. Forge support is read-only
+  status for GitHub and GitLab (no creating, merging or commenting; no Bitbucket, Azure DevOps or Gitea).
 - Very large diffs are capped and shown as "too large" placeholders (you can load them on demand);
   binary files are shown as binary.
 - One machine: the browser and the repositories must be on the machine running the daemon (or reach
