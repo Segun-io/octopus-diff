@@ -15,6 +15,7 @@ import {
   FilesQuerySchema,
   FocusRequestSchema,
   InboxQuerySchema,
+  RefreshForgesRequestSchema,
   ReviewRequestSchema,
   SetReviewPolicyRequestSchema,
   UndoReviewRequestSchema,
@@ -172,6 +173,12 @@ export function createMockRouter(backend: MockBackend, options: MockRouterOption
       if (path === '/api/review/undo' && method === 'POST') {
         const req = parse(UndoReviewRequestSchema, await body());
         return json(200, backend.undoReview(req.undoToken));
+      }
+      // --- forges ---
+      if (path === '/api/forges' && method === 'GET') return json(200, backend.forges());
+      if (path === '/api/forges/refresh' && method === 'POST') {
+        parse(RefreshForgesRequestSchema, await body());
+        return json(200, backend.forges());
       }
       // Mock-only control endpoint: simulate an agent edit right now.
       if (path === '/api/__mock/mutate' && method === 'POST') {

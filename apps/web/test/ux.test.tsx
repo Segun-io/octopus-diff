@@ -158,7 +158,7 @@ afterEach(() => {
 });
 
 describe('settings screen', () => {
-  it('opens with , and the gear, has six sections, toggles the daemon default and closes with Esc', async () => {
+  it('opens with , and the gear, has seven sections, toggles the daemon default and closes with Esc', async () => {
     const { user, requests, backend } = setup();
     await ready();
     await press(user, ',');
@@ -169,6 +169,7 @@ describe('settings screen', () => {
       'review',
       'appearance',
       'folders',
+      'forges',
       'keyboard',
       'about',
     ]);

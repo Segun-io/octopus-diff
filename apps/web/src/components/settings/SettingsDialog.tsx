@@ -18,6 +18,7 @@ import { CloseIcon } from '../bits.tsx';
 import { Mark, Wordmark } from '../Mark.tsx';
 import { Select, SettingRow, Switch, Where } from './controls.tsx';
 import { FoldersSection } from './FoldersSection.tsx';
+import { ForgesSection } from './ForgesSection.tsx';
 import { ReviewSection } from './ReviewSection.tsx';
 
 // Lazy: the credits carry every license text (~200 KB of JSON), only needed when About is open.
@@ -154,6 +155,7 @@ export function SettingsDialog() {
           {section === 'review' && <ReviewSection />}
           {section === 'appearance' && <AppearancePanel />}
           {section === 'folders' && <FoldersSection />}
+          {section === 'forges' && <ForgesSection />}
           {section === 'keyboard' && <KeyboardPanel />}
           {section === 'about' && <AboutPanel />}
         </div>

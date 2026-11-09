@@ -15,11 +15,13 @@ import {
   type CommitInfo,
   type CommitsResponse,
   DEFAULT_APP_SETTINGS,
+  DEFAULT_FORGE_SETTINGS,
   type DiffQuery,
   type DiffResponse,
   type DiffScope,
   type EffectiveReviewPolicy,
   type FilesResponse,
+  type ForgesResponse,
   type HealthResponse,
   type InboxResponse,
   type Project,
@@ -45,6 +47,7 @@ import {
   type WorktreeSummary,
 } from '@octopus-diff/contracts';
 import { buildPatch, countLines, fileSides, type MockFile, type MockFileKind } from './content.js';
+import { mockForges } from './forges.js';
 import {
   byteLength,
   bytesToBase64,
@@ -720,7 +723,21 @@ export class MockBackend {
       };
       this.bumpSettings(); // a PATCH that changes nothing keeps the revision and emits nothing
     }
+    if (patch.forges) {
+      const current = this.settings.forges ?? DEFAULT_FORGE_SETTINGS;
+      const forges = { ...current, ...patch.forges };
+      if (JSON.stringify(forges) !== JSON.stringify(current)) {
+        this.settings = { ...this.settings, forges };
+        this.bumpSettings();
+        this.emit({ type: 'forge.updated', projectIds: this.projects.map((p) => p.project.id) });
+      }
+    }
     return this.settingsResponse();
+  }
+
+  /** Mock forge data (mock/forges.ts). */
+  forges(): ForgesResponse {
+    return mockForges(this.listProjects(), this.settings, new Date().toISOString());
   }
 
   private assertTargetExists(target: ReviewPolicyTarget): void {

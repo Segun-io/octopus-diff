@@ -10,6 +10,7 @@ export type SettingsSectionId =
   | 'review'
   | 'appearance'
   | 'folders'
+  | 'forges'
   | 'keyboard'
   | 'about';
 
@@ -28,6 +29,11 @@ export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   },
   { id: 'appearance', label: 'Appearance', description: 'Theme, density and diff defaults.' },
   { id: 'folders', label: 'Folders', description: 'Watched folders and repositories.' },
+  {
+    id: 'forges',
+    label: 'Forges',
+    description: 'Pull and merge requests from GitHub (gh) and GitLab (glab).',
+  },
   { id: 'keyboard', label: 'Keyboard', description: 'Every shortcut, from the command registry.' },
   { id: 'about', label: 'About', description: 'Versions, the daemon and open-source credits.' },
 ];

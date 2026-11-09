@@ -28,6 +28,7 @@ import { useCommandsContext } from '../state/commandsContext.tsx';
 import { useAppModel } from '../state/model.tsx';
 import { actions, useUi, useUiStore, type View } from '../state/ui.tsx';
 import { CheckIcon, ToggleButton } from './bits.tsx';
+import { ChangeRequestChip } from './ChangeRequest.tsx';
 import { ContextMenu, type MenuItem, useContextMenu } from './ContextMenu.tsx';
 import { useFolderStart } from './FolderBrowser.tsx';
 import { Wordmark } from './Mark.tsx';
@@ -109,7 +110,7 @@ function rowAttributes(row: WorktreeRow, selected: boolean, active: boolean) {
   };
 }
 
-/** `main` (off the default branch), the worktree source, an in-progress operation. */
+/** `main` (off the default branch), the worktree source, an in-progress operation, its PR/MR. */
 function RowChips({ row }: { row: WorktreeRow }) {
   const { worktree, summary, project } = row;
   const source = worktree.isMain ? null : worktreeSource(worktree.path);
@@ -133,6 +134,7 @@ function RowChips({ row }: { row: WorktreeRow }) {
           {summary.inProgress}
         </span>
       )}
+      <ChangeRequestChip worktreeId={worktree.id} />
     </>
   );
 }

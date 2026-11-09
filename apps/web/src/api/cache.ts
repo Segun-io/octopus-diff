@@ -131,6 +131,8 @@ export interface EventEffects {
   scanRoots: boolean;
   /** `settings.changed`: refetch settings (effective policies may have moved). */
   settings: boolean;
+  /** `forge.updated`: refetch pull/merge requests (api/forges.ts). */
+  forges: boolean;
   everything: boolean;
 }
 
@@ -142,6 +144,7 @@ export function emptyEffects(): EventEffects {
     inboxFull: false,
     scanRoots: false,
     settings: false,
+    forges: false,
     everything: false,
   };
 }
@@ -209,6 +212,9 @@ export function collectEventEffects(
       effects.inbox = true;
       break;
     }
+    case 'forge.updated':
+      effects.forges = true;
+      break;
   }
   return effects;
 }
@@ -324,6 +330,7 @@ export async function flushEffects(
   }
   const tasks: Promise<void>[] = [];
   if (effects.settings) tasks.push(queryClient.invalidateQueries({ queryKey: ['settings'] }));
+  if (effects.forges) tasks.push(queryClient.invalidateQueries({ queryKey: ['forges'] }));
   const projectsRefetch = effects.projects
     ? queryClient.invalidateQueries({ queryKey: queryKeys.projects() })
     : Promise.resolve();

@@ -20,8 +20,8 @@ import { worktreeSource } from '../lib/source.ts';
 import { useCommandsContext } from '../state/commandsContext.tsx';
 import { useAppModel } from '../state/model.tsx';
 import { actions, useUiStore, type View } from '../state/ui.tsx';
+import { ChangeRequestChip } from './ChangeRequest.tsx';
 import { Mark } from './Mark.tsx';
-
 /**
  * Overview for a folder or a project (views/registry.ts): figures, the worktrees or projects
  * inside, bulk actions and the review policy of the node. Future read-only views (Files, History)
@@ -342,6 +342,9 @@ function ProjectOverview({ group }: { group: ProjectGroup }) {
                   {s?.inProgress && (
                     <span className="ml-1.5 text-[11px] text-warn">{s.inProgress}</span>
                   )}
+                  <span className="ml-1.5 inline-flex align-middle text-[11px]">
+                    <ChangeRequestChip worktreeId={row.worktree.id} />
+                  </span>
                   {row.worktree.missing && (
                     <span className="ml-1.5 text-[11px] text-danger">missing</span>
                   )}

@@ -8,6 +8,7 @@ import { useCommandsContext } from '../state/commandsContext.tsx';
 import { useAppModel } from '../state/model.tsx';
 import { useUi, useUiStore } from '../state/ui.tsx';
 import { MoonIcon, SunIcon, ToggleButton } from './bits.tsx';
+import { ChangeRequestBadge } from './ChangeRequest.tsx';
 import { ReviewPolicyChip } from './ReviewPolicyChip.tsx';
 
 const SCOPE_LABELS: Record<ScopeKind, string> = {
@@ -159,6 +160,7 @@ export function Toolbar() {
       {row && model.viewPolicy && (
         <ReviewPolicyChip row={row} policy={model.viewPolicy} folderPath={folderPath} />
       )}
+      {worktreeId && <ChangeRequestBadge worktreeId={worktreeId} />}
       {model.view.kind === 'worktree' && (
         <button
           type="button"
