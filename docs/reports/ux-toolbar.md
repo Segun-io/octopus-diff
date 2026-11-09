@@ -1,6 +1,6 @@
 # ux-toolbar report (chrome hierarchy: context bar and pane headers)
 
-2026-11-09. Branch `ux/toolbar-hierarchy` on `main` at `90c7cff`, worktree `~/.t3/worktrees/octopus-diff/ux-toolbar`.
+2026-11-09. Branch `ux/toolbar-hierarchy`, started on `main` at `90c7cff` and rebased onto `421bdc4`, worktree `~/.t3/worktrees/octopus-diff/ux-toolbar`.
 Brief from the user: the controls above the file list and the diff are "too dense, there is little context and
 hierarchy into which belongs to which"; rearrange them, taking the Request (PR) tab into account; plan in a worktree,
 open a PR. Design record: `docs/TOOLBAR.md`. Decisions #116–#122.
@@ -36,6 +36,8 @@ layout buttons.
 | `pnpm test:e2e`, first run | 82 passed, **1 failed**: `04-live-updates` "sidebar counts follow external edits in the inbox view" asserted a row of the virtualized Inbox list with `toBeVisible`; the 6 px taller file pane header left that row outside the mounted window (deterministic, reproduced alone). Fixed with the suite's own `allFileItems()` helper (#122); the spec then passes 5/5 |
 | `pnpm test:e2e`, runs 2, 3 and 4 | **hung** after 82, 64 and 50 passed tests (zero failures), each time at a daemon shutdown: the `@parcel/watcher` `EINTR` deadlock recorded in `docs/BLOCKERS.md` (Open, 2); killed after 12 to 23 minutes. Not the UI: one hang followed an API-only test, and the page closes before the daemon fixture does |
 | `pnpm test:e2e` on an untouched `main` checkout (control, same machine) | run 1: 82 passed, 1 failed (`11-ui-bulk-review` "stale: … skipped", `stateHash … did not change`: a timing failure unrelated to this branch); run 2: 82 passed, 1 failed (`16-copy` "select two lines → Copy bar", the bar not visible in time: another timing failure). Neither control run hung; 1 of 4 branch runs completed. The branch does not touch the daemon or its dependencies |
+| after the rebase onto `main` (PR #1 merged meanwhile): `pnpm check` | lint, typecheck and build green; the test step stopped on the known flaky git-core `readonly.test.ts` timeout (#111), so every package was rerun: contracts 83, forge 94, fixtures 48, web 210, daemon 187, cli 139, and git-core alone **170 passed**; all green |
+| after the rebase: `pnpm test:e2e` | **83 passed (3.4 m)**, read-only proof 0 violations, no hang this time |
 | `pnpm --filter @octopus-diff/web shots` (mock, `inbox`, `worktree`, `request`, `commit-scope`, `policy-menu`; both brand themes, 1440 and 960) | inspected: the bar fits one line at 960; the diff header wraps its controls under the path at 960; the commit picker takes its own row |
 | `pnpm --filter @octopus-diff/e2e screenshots`, `copy-screenshots.ts` | README screenshots regenerated from the fixtures (inbox, diff split / unified, folder picker, palette, help, copy selection; light and dark) |
 
@@ -69,7 +71,9 @@ None added or removed; `pnpm credits:check` passes unchanged.
 
 ## Notes for integration
 
+Rebased onto `main` at `421bdc4` (PR #1, sidebar filter dropdown and the Hidden shelf); PR #1 had taken decision
+numbers #112–#115, so this round's are #116–#122, and every screenshot was regenerated from the rebased build.
 Pure `apps/web` + `docs` + three e2e lines (`support/app.ts` `setDiffMode` learns the segmented pair; `16-copy`
-`setMode` delegates to it; `04-live-updates` scans the virtualized list). Fast-forwards onto `main` at `90c7cff`. No
+`setMode` delegates to it; `04-live-updates` scans the virtualized list). Fast-forwards onto `main` at `421bdc4`. No
 preference migration: `diffMode`, `ignoreWhitespace`, `showReviewed`, `fileListLayout` keep their keys. The LAN daemon
 (`octopus-diff-lan`) needs a rebuild and restart to show the new chrome.

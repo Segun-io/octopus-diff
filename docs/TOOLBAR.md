@@ -1,6 +1,7 @@
 # Chrome hierarchy: the context bar and the pane headers (design)
 
-> Lead, 2026-11-09, branch `ux/toolbar-hierarchy`, on `main` at `90c7cff`. Brief from the user: the controls
+> Lead, 2026-11-09, branch `ux/toolbar-hierarchy`, started on `main` at `90c7cff` and rebased onto `421bdc4`
+> (PR #1). Brief from the user: the controls
 > above the file list and the diff are "too dense, there is little context and hierarchy into which belongs to
 > which"; rearrange them, taking the Request (PR) tab into account. Decisions #116–#122 in `docs/DECISIONS.md`.
 
