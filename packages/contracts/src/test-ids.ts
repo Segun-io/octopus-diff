@@ -14,12 +14,24 @@ export const TEST_IDS = {
 
   // --- sidebar ---------------------------------------------------------------------------
   sidebar: 'sidebar',
-  /** Text filter input (focused by `/`). */
+  /**
+   * The sidebar filter (focused by `/`). Since the filter dropdown (DECISIONS #112): the dropdown's
+   * trigger button, `aria-expanded`, `data-filtering`; its search field is `sidebarFilterSearch`.
+   */
   sidebarFilter: 'sidebar-filter',
-  /** `aria-pressed`. */
+  /** Status option in the filter dropdown, `aria-selected` (was a chip with `aria-pressed`). */
   onlyDirtyToggle: 'only-dirty-toggle',
-  /** `aria-pressed`. */
+  /** Status option in the filter dropdown, `aria-selected` (was a chip with `aria-pressed`). */
   onlyUnreviewedToggle: 'only-unreviewed-toggle',
+  /** The filter dropdown's search field (`/` focuses it). */
+  sidebarFilterSearch: 'sidebar-filter-search',
+  /**
+   * A project or worktree option in the filter dropdown: `aria-selected`, `data-kind`
+   * (`project` | `worktree`), `data-project-id` or `data-worktree-id`.
+   */
+  sidebarFilterOption: 'sidebar-filter-option',
+  /** Clears every sidebar filter (shown while filtering). */
+  sidebarFilterClear: 'sidebar-filter-clear',
   /** The Inbox entry. `data-count` = number of dirty worktrees; `aria-current="true"` if selected. */
   inboxItem: 'inbox-item',
   /** `data-project-id`, `data-project-name`. */
