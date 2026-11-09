@@ -86,6 +86,16 @@ const STATES: Record<string, Step> = {
       .click();
     await page.waitForTimeout(400);
   },
+  'project-branches': async (page) => {
+    await STATES.project?.(page);
+    await page.locator('[data-testid="overview-tab"][data-tab="branches"]').click();
+    await page.waitForTimeout(300);
+  },
+  'project-requests': async (page) => {
+    await STATES.project?.(page);
+    await page.locator('[data-testid="overview-tab"][data-tab="requests"]').click();
+    await page.waitForTimeout(300);
+  },
   'context-menu': async (page) => {
     await page
       .locator('[data-testid="worktree-item"][data-branch="feat/auth"]')

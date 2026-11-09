@@ -673,3 +673,27 @@ export function worktreeLabel(worktree: Worktree): string {
   if (worktree.headSha) return `detached @ ${worktree.headSha.slice(0, 7)}`;
   return 'detached';
 }
+
+/** The worktree has the project's default branch checked out (the baseline of the others). */
+export function isDefaultBranch(worktree: Worktree, project: Project): boolean {
+  return worktree.branch !== null && worktree.branch === project.defaultBranch;
+}
+
+/**
+ * Overview order: the default-branch worktree first (the reference every other row compares
+ * with, so pagination never hides it), then the given (recency) order.
+ */
+export function defaultBranchFirst(rows: readonly WorktreeRow[]): WorktreeRow[] {
+  const index = rows.findIndex((r) => isDefaultBranch(r.worktree, r.project));
+  if (index <= 0) return [...rows];
+  return [rows[index] as WorktreeRow, ...rows.slice(0, index), ...rows.slice(index + 1)];
+}
+
+/** Local branches that no worktree of the project has checked out, in the given order. */
+export function branchesWithoutWorktree<B extends { name: string }>(
+  branches: readonly B[],
+  rows: readonly WorktreeRow[],
+): B[] {
+  const checkedOut = new Set(rows.map((r) => r.worktree.branch).filter((b) => b !== null));
+  return branches.filter((b) => !checkedOut.has(b.name));
+}

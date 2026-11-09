@@ -1,4 +1,5 @@
-import type { WorktreeRow } from '../lib/model.ts';
+import { TEST_IDS } from '@octopus-diff/contracts';
+import { isDefaultBranch, type WorktreeRow } from '../lib/model.ts';
 import { worktreeSource } from '../lib/source.ts';
 import { ChangeRequestChip } from './ChangeRequest.tsx';
 
@@ -31,5 +32,22 @@ export function RowChips({ row, request = true }: { row: WorktreeRow; request?: 
       )}
       {request && <ChangeRequestChip worktreeId={worktree.id} />}
     </>
+  );
+}
+
+/**
+ * `default` beside the branch name of the worktree that has the project's default branch checked
+ * out: an outlined ink chip (`.od-chip-default`), the one chip that is not a grey fact.
+ */
+export function DefaultBranchChip({ row }: { row: WorktreeRow }) {
+  if (!isDefaultBranch(row.worktree, row.project)) return null;
+  return (
+    <span
+      data-testid={TEST_IDS.defaultBranchChip}
+      className="od-chip od-chip-default shrink-0 font-sans"
+      title={`${row.worktree.branch} is the default branch of ${row.project.name}: the baseline the other branches are compared with`}
+    >
+      default
+    </span>
   );
 }

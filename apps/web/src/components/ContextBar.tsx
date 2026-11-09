@@ -12,7 +12,7 @@ import { activeView } from '../views/registry.ts';
 import { MoonIcon, SunIcon } from './bits.tsx';
 import { ChangeRequestBadge, ChangeRequestGlyph } from './ChangeRequest.tsx';
 import { ReviewPolicyChip } from './ReviewPolicyChip.tsx';
-import { RowChips } from './WorktreeChips.tsx';
+import { DefaultBranchChip, RowChips } from './WorktreeChips.tsx';
 
 export const CONTEXT_BAR_TEST_ID = 'context-bar';
 
@@ -100,6 +100,7 @@ export function ContextBar() {
             </span>
           </span>
           <span className="flex items-center gap-1.5 text-[11px] text-muted">
+            <DefaultBranchChip row={row} />
             <RowChips row={row} request={false} />
             {aheadBehind && (aheadBehind.ahead > 0 || aheadBehind.behind > 0) && (
               <span

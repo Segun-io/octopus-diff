@@ -34,7 +34,7 @@ import { separated, worktreeCopyItems } from './copyMenu.ts';
 import { useFolderStart } from './FolderBrowser.tsx';
 import { Wordmark } from './Mark.tsx';
 import { SidebarFilter } from './SidebarFilter.tsx';
-import { RowChips } from './WorktreeChips.tsx';
+import { DefaultBranchChip, RowChips } from './WorktreeChips.tsx';
 
 /**
  * The sidebar (DECISIONS "UX round 4", status flow v2 in docs/STATUS-FLOW.md): the Inbox;
@@ -407,6 +407,7 @@ const WorktreeItem = memo(function WorktreeItem({
           >
             {worktreeLabel(worktree)}
           </span>
+          <DefaultBranchChip row={row} />
           {inFolder && <RowStatus row={row} />}
         </span>
         <RowMeta row={row} />

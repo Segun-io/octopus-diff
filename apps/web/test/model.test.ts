@@ -3,10 +3,13 @@ import { describe, expect, it } from 'vitest';
 import { MockBackend } from '../mock/backend.ts';
 import {
   activityMs,
+  branchesWithoutWorktree,
   buildSidebar,
   compareByActivity,
+  defaultBranchFirst,
   type FileGroup,
   flattenGroups,
+  isDefaultBranch,
   NO_SIDEBAR_FILTERS,
   nextUnreviewed,
   placeOf,
@@ -138,6 +141,35 @@ describe('sidebar model', () => {
       onlyUnreviewed: true,
     });
     expect(unreviewed.order).toHaveLength(inbox.entries.length - 1);
+  });
+});
+
+describe('Overview helpers', () => {
+  it('puts the default-branch worktree first and keeps the rest in order', () => {
+    const { projects, inbox } = demo();
+    const model = buildSidebar(projects, inbox.entries, NO_SIDEBAR_FILTERS);
+    const web = model.groups.find((g) => g.project.name === 'web-dashboard');
+    if (!web) throw new Error('no web-dashboard');
+    expect(web.allRows.map((r) => r.worktree.branch)).toEqual(['agent/codex-123', 'main']);
+    expect(defaultBranchFirst(web.allRows).map((r) => r.worktree.branch)).toEqual([
+      'main',
+      'agent/codex-123',
+    ]);
+    expect(web.allRows.filter((r) => isDefaultBranch(r.worktree, r.project))).toHaveLength(1);
+    // Detached worktrees are never the default branch.
+    const api = model.groups.find((g) => g.project.name === 'octopus-api');
+    const detached = api?.allRows.find((r) => r.worktree.branch === null);
+    if (!detached) throw new Error('no detached worktree');
+    expect(isDefaultBranch(detached.worktree, detached.project)).toBe(false);
+  });
+
+  it('lists the branches no worktree has checked out', () => {
+    const { projects, inbox } = demo();
+    const model = buildSidebar(projects, inbox.entries, NO_SIDEBAR_FILTERS);
+    const web = model.groups.find((g) => g.project.name === 'web-dashboard');
+    if (!web) throw new Error('no web-dashboard');
+    const branches = [{ name: 'main' }, { name: 'old/x' }, { name: 'agent/codex-123' }];
+    expect(branchesWithoutWorktree(branches, web.allRows)).toEqual([{ name: 'old/x' }]);
   });
 });
 

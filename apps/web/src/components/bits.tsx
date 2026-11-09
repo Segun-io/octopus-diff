@@ -280,6 +280,22 @@ export function RepoIcon(props: IconProps) {
   );
 }
 
+export function ChevronLeftIcon(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M10 3.5 5.5 8l4.5 4.5" />
+    </Svg>
+  );
+}
+
+export function ChevronRightIcon(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M6 3.5 10.5 8 6 12.5" />
+    </Svg>
+  );
+}
+
 /** Up one folder (the `..` row). */
 export function CornerLeftUpIcon(props: IconProps) {
   return (

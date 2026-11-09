@@ -7,6 +7,7 @@ import type {
   ChangeRequestThread,
   ForgeActor,
   ForgeRepositoryInfo,
+  GitBranchInfo,
   GitRepositoryInfo,
   ProjectForgeState,
   ProjectListItem,
@@ -58,10 +59,89 @@ export function mockImageHosts(images: boolean, enabled: boolean): string[] {
 
 // --- local repository facts -----------------------------------------------------------------
 
+/** A sha whose short form depends on the whole seed (`hash40`'s first chunk sees one char). */
+function branchSha(seed: string): string {
+  let h = 2166136261;
+  for (let i = 0; i < seed.length; i++) h = Math.imul(h ^ seed.charCodeAt(i), 16777619) >>> 0;
+  return h.toString(16).padStart(8, '0') + hash40(seed).slice(8);
+}
+
+/** Branch names the demo keeps without a worktree; the first project gets all of them. */
+const LOOSE_BRANCHES = [
+  'chore/update-0',
+  'chore/update-1',
+  'chore/update-2',
+  'feat/rate-limit',
+  'fix/login-redirect',
+  'spike/grpc',
+  'release/0.4',
+  'agent/claude-412',
+  'agent/codex-388',
+  'docs/readme-badges',
+  'feat/webhooks',
+  'fix/flaky-cache-test',
+  'refactor/config-loader',
+  'wip/metrics',
+  'feat/sso',
+  'fix/timezone-parse',
+  'chore/ci-node-26',
+  'old/prototype',
+];
+
+/**
+ * Local branches of a mock project: one per worktree branch, then branches no worktree has
+ * checked out (18 for the first project, so the Branches tab pages; 3 for the others). Some are
+ * merged, some have a gone upstream, some are local only; newest first.
+ */
+function mockBranches(item: ProjectListItem, index: number, name: string): GitBranchInfo[] {
+  const checkedOut = item.worktrees
+    .map((w) => w.worktree)
+    .filter((w) => w.branch !== null)
+    .map((w, i) => ({
+      name: w.branch as string,
+      sha: w.headSha ?? hash40(`wt:${w.id}`),
+      subject:
+        w.branch === name
+          ? 'Merge pull request #96 from octo-demo/fix/cache'
+          : `${w.branch}: work in progress`,
+      committerDate: at(20 + i * 45 + index * 7),
+      upstream: `origin/${w.branch}`,
+      upstreamGone: false,
+      ahead: i % 3,
+      behind: i % 2,
+      merged: w.branch === name,
+    }));
+  const loose = LOOSE_BRANCHES.slice(0, index === 0 ? LOOSE_BRANCHES.length : 3).map(
+    (branch, i): GitBranchInfo => {
+      const kind = i % 4;
+      return {
+        name: branch,
+        sha: branchSha(`${item.project.id}:${branch}`),
+        subject: [
+          'Bump dependencies',
+          'Docs: clarify the setup steps',
+          'Faster startup on Windows',
+          'Rate limit the public endpoints',
+        ][i % 4] as string,
+        committerDate: at(300 + i * 1440 + index * 60),
+        upstream: kind === 3 ? null : `origin/${branch}`,
+        upstreamGone: kind === 2,
+        ahead: kind === 0 ? i % 4 : kind === 1 ? 0 : null,
+        behind: kind === 0 ? 0 : kind === 1 ? 2 : null,
+        merged: kind === 2 || branch.startsWith('old/'),
+      };
+    },
+  );
+  return [...checkedOut, ...loose].sort(
+    (a, b) => Date.parse(b.committerDate ?? '') - Date.parse(a.committerDate ?? ''),
+  );
+}
+
 export function mockRepositoryInfo(item: ProjectListItem, index: number): GitRepositoryInfo {
   const name = item.project.defaultBranch ?? 'main';
   const main = item.worktrees.find((w) => w.worktree.isMain) ?? item.worktrees[0];
   const host = index % 2 === 0 ? 'github.com' : 'gitlab.com';
+  const branches = mockBranches(item, index, name);
   return {
     defaultBranch: {
       name,
@@ -79,7 +159,7 @@ export function mockRepositoryInfo(item: ProjectListItem, index: number): GitRep
       ahead: index % 3 === 1 ? 2 : 0,
       behind: index % 2,
     },
-    localBranches: item.worktrees.length + 3,
+    localBranches: branches.length,
     tags: 4 + index * 3,
     remotes: [
       {
@@ -98,6 +178,7 @@ export function mockRepositoryInfo(item: ProjectListItem, index: number): GitRep
         : []),
     ],
     lastActivityAt: at(5 + index * 11),
+    branches,
   };
 }
 
@@ -112,15 +193,16 @@ export function mockRepositoryForgeInfo(
   const mine = state.worktrees
     .filter((w) => w.changeRequest?.state === 'open')
     .map((w) => ({ w, cr: w.changeRequest as NonNullable<WorktreeForge['changeRequest']> }));
-  const others = [0, 1, 2].map((i) => ({
+  // The first project has more open requests than the Overview shows (15), so the cap is visible.
+  const others = Array.from({ length: index === 0 ? 16 : 3 }, (_, i) => i).map((i) => ({
     number: 300 + index * 10 + i,
-    title: ['Bump dependencies', 'Docs: clarify the setup steps', 'Faster startup on Windows'][
-      i
-    ] as string,
-    author: ['renovate[bot]', 'ken', 'grace'][i] as string,
-    draft: i === 1,
-    checks: (['success', 'pending', 'failure'] as const)[i] ?? null,
-    review: (['approved', null, 'changes_requested'] as const)[i] ?? null,
+    title: (i < 3
+      ? ['Bump dependencies', 'Docs: clarify the setup steps', 'Faster startup on Windows'][i]
+      : `${['Rate limit', 'Webhooks for', 'Tracing for', 'Retry policy for'][i % 4]} ${['the public endpoints', 'the session store', 'the job queue', 'the billing API'][(i >> 2) % 4]}`) as string,
+    author: ['renovate[bot]', 'ken', 'grace'][i % 3] as string,
+    draft: i % 3 === 1,
+    checks: (['success', 'pending', 'failure'] as const)[i % 3] ?? null,
+    review: (['approved', null, 'changes_requested'] as const)[i % 3] ?? null,
   }));
   const path = forge.kind === 'github' ? 'pull' : '-/merge_requests';
   const requests = [
@@ -144,7 +226,7 @@ export function mockRepositoryForgeInfo(
       url: `${forge.webUrl}/${path}/${o.number}`,
       draft: o.draft,
       author: o.author,
-      headBranch: `chore/update-${i}`,
+      headBranch: i < 3 ? `chore/update-${i}` : `feat/demo-${i}`,
       baseBranch: 'main',
       crossRepository: i === 2,
       updatedAt: at(30 + i * 240),
