@@ -146,6 +146,14 @@ export const WorktreeSummarySchema = z.object({
   stateHash: z.string().min(1),
   updatedAt: TimestampSchema,
   /**
+   * When the worktree last saw activity: the newest of HEAD's reflog (commit, checkout, reset,
+   * pull), the HEAD commit's committer date when there is no reflog, and the mtime of any file
+   * with uncommitted changes. Unlike `updatedAt` (the poll time) it does not move when nothing
+   * happened. The sidebar sorts worktrees by it, newest first. Null when unknown (unborn
+   * branch without reflog); absent from older daemons.
+   */
+  activityAt: TimestampSchema.nullable().optional(),
+  /**
    * Review state (daemon app state, docs/STATUS-FLOW.md). Not part of `stateHash`, which stays a
    * hash of git state only. Absent from older daemons (clients fall back to the inbox).
    */
