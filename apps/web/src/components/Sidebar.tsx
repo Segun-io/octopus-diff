@@ -4,7 +4,7 @@ import {
   reviewTargetKey,
   TEST_IDS,
 } from '@octopus-diff/contracts';
-import { memo, type ReactNode, useEffect, useState } from 'react';
+import { memo, type ReactNode, useEffect, useRef, useState } from 'react';
 import {
   useRemoveProject,
   useRemoveScanRoot,
@@ -109,29 +109,7 @@ function rowAttributes(row: WorktreeRow, selected: boolean, active: boolean) {
   };
 }
 
-/** The tooltip carries the facts the row no longer shows: path, files, lines, ahead/behind. */
-function rowTitle(row: WorktreeRow): string {
-  const { summary, error } = row;
-  const lines = [row.worktree.path];
-  if (summary) {
-    const facts: string[] = [];
-    if (isDirtySummary(summary)) facts.push(plural(summary.changedFiles, 'file'));
-    if (summary.additions > 0 || summary.deletions > 0) {
-      facts.push(`+${summary.additions} −${summary.deletions}`);
-    }
-    if (summary.ahead !== null && summary.behind !== null && summary.aheadBehindRef) {
-      facts.push(`↑${summary.ahead} ↓${summary.behind} vs ${summary.aheadBehindRef}`);
-    }
-    if (facts.length > 0) lines.push(facts.join(' · '));
-  }
-  if (error) lines.push(error.message);
-  if (row.settledBy === 'user') {
-    lines.push(row.state === 'settled' ? 'Settled by hand' : 'Un-settled by hand');
-  }
-  return lines.join('\n');
-}
-
-/** `main`, the worktree source, an in-progress operation: the chips after the name. */
+/** `main` (off the default branch), the worktree source, an in-progress operation. */
 function RowChips({ row }: { row: WorktreeRow }) {
   const { worktree, summary, project } = row;
   const source = worktree.isMain ? null : worktreeSource(worktree.path);
@@ -173,15 +151,16 @@ function ReviewOffBadge({ row }: { row: WorktreeRow }) {
 }
 
 /**
- * The status slot at the right of a row: the unreviewed pill (the one filled shape), `N
- * conflicts` for blocked work, or one word for a settled or un-settled row.
+ * The status slot at the top right of a card: the unreviewed pill (the one filled shape), `N
+ * conflicts` for blocked work, or one word for a settled or un-settled row. Hover swaps it for
+ * the actions, as T3 Code swaps the time for "Settle".
  */
 function RowStatus({ row }: { row: WorktreeRow }) {
   const counts = row.summary?.counts;
   const word = settledWord(row);
   const quiet = row.state === 'settled' || row.state === 'active';
   return (
-    <span className="flex shrink-0 items-center gap-1.5 text-[11px]">
+    <span className="ml-auto flex shrink-0 items-center gap-1.5 text-[11px] group-focus-within/wt:invisible group-hover/wt:invisible">
       {!row.review.enabled && <ReviewOffBadge row={row} />}
       {counts && counts.conflicted > 0 && (
         <span className="text-danger">{plural(counts.conflicted, 'conflict')}</span>
@@ -192,10 +171,7 @@ function RowStatus({ row }: { row: WorktreeRow }) {
         </span>
       )}
       {quiet && word !== 'review off' && (
-        <span
-          className={word === 'missing' || word === 'error' ? 'text-danger' : 'text-faint'}
-          title={word === 'error' && row.error ? row.error.message : undefined}
-        >
+        <span className={word === 'missing' || word === 'error' ? 'text-danger' : 'text-faint'}>
           {word === 'loading' ? '…' : word}
         </span>
       )}
@@ -203,16 +179,165 @@ function RowStatus({ row }: { row: WorktreeRow }) {
   );
 }
 
+/** The facts of the meta line (and the hover card): files, lines, ahead/behind. */
+function rowFacts(row: WorktreeRow): { files?: string; lines?: [number, number]; sync?: string } {
+  const s = row.summary;
+  if (!s) return {};
+  return {
+    ...(isDirtySummary(s) ? { files: plural(s.changedFiles, 'file') } : {}),
+    ...(s.additions > 0 || s.deletions > 0
+      ? { lines: [s.additions, s.deletions] as [number, number] }
+      : {}),
+    ...(s.ahead !== null && s.behind !== null && s.ahead + s.behind > 0
+      ? { sync: `↑${s.ahead} ↓${s.behind}` }
+      : {}),
+  };
+}
+
+/** The meta line under the branch: chips, then the facts in mono. Omitted when it would be empty. */
+function RowMeta({ row }: { row: WorktreeRow }) {
+  const { worktree, summary, project } = row;
+  const facts = rowFacts(row);
+  const hasChip =
+    (worktree.isMain && worktree.branch !== project.defaultBranch) ||
+    (!worktree.isMain && worktreeSource(worktree.path) !== null) ||
+    summary?.inProgress;
+  if (!hasChip && !facts.files && !facts.lines && !facts.sync) return null;
+  return (
+    <span className="flex min-w-0 items-center gap-1.5 overflow-hidden font-mono text-[11px] whitespace-nowrap text-muted">
+      <RowChips row={row} />
+      {facts.files && <span>{facts.files}</span>}
+      {facts.lines && (
+        <span>
+          <span className="text-add">+{facts.lines[0]}</span>{' '}
+          <span className="text-del">−{facts.lines[1]}</span>
+        </span>
+      )}
+      {facts.sync && (
+        <span title={summary?.aheadBehindRef ? `vs ${summary.aheadBehindRef}` : undefined}>
+          {facts.sync}
+        </span>
+      )}
+    </span>
+  );
+}
+
+/** Shows a card after a short hover, anchored to the right of the row (T3 Code's row tooltip). */
+function useHoverCard(delayMs = 450) {
+  const [at, setAt] = useState<{ x: number; y: number } | null>(null);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const clear = () => {
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = null;
+  };
+  const hide = () => {
+    clear();
+    setAt(null);
+  };
+  // Unmount while a timer is pending (a row that settles mid-hover): drop it.
+  useEffect(() => {
+    const pending = timer;
+    return () => {
+      if (pending.current) clearTimeout(pending.current);
+    };
+  }, []);
+  const onPointerEnter = (e: React.PointerEvent<HTMLElement>) => {
+    if (e.pointerType !== 'mouse') return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    clear();
+    timer.current = setTimeout(() => {
+      setAt({ x: rect.right + 8, y: Math.max(8, Math.min(rect.top, window.innerHeight - 240)) });
+    }, delayMs);
+  };
+  return { at, onPointerEnter, onPointerLeave: hide, onPointerDown: hide };
+}
+
+/**
+ * The details a row does not show: branch, project, path, source, facts, review policy and the
+ * manual settle. Fixed-positioned so the sidebar's scroll clip cannot cut it off.
+ */
+function RowHoverCard({ row, at }: { row: WorktreeRow; at: { x: number; y: number } }) {
+  const { worktree, summary, error, project, review } = row;
+  const source = worktree.isMain ? null : worktreeSource(worktree.path);
+  const facts = rowFacts(row);
+  const word = settledWord(row);
+  const line = (label: string, value: ReactNode) => (
+    <div className="flex gap-2">
+      <dt className="w-14 shrink-0 text-faint">{label}</dt>
+      <dd className="min-w-0 flex-1 break-all">{value}</dd>
+    </div>
+  );
+  return (
+    <div
+      role="tooltip"
+      className="od-overlay od-fade-in pointer-events-none fixed z-50 w-[320px] rounded-md p-2.5 text-xs text-fg"
+      style={{ left: at.x, top: at.y }}
+    >
+      <div className="mb-1.5 flex items-baseline gap-1.5">
+        <span className="min-w-0 truncate font-medium">{worktreeLabel(worktree)}</span>
+        <span className="ml-auto shrink-0 text-[11px] text-muted">
+          {row.state === 'blocked'
+            ? 'blocked'
+            : row.state === 'attention'
+              ? `${row.unreviewed} unreviewed`
+              : word}
+        </span>
+      </div>
+      <dl className="flex flex-col gap-0.5">
+        {line('Project', project.name)}
+        {line('Path', <span className="font-mono text-[11px]">{worktree.path}</span>)}
+        {source && line('Source', source.title)}
+        {worktree.isMain && line('Checkout', 'main checkout')}
+        {summary?.inProgress && line('Operation', `${summary.inProgress} in progress`)}
+        {summary &&
+          (facts.files || facts.lines) &&
+          line(
+            'Changes',
+            <span className="font-mono text-[11px]">
+              {facts.files ?? 'no files'}
+              {facts.lines && (
+                <>
+                  {' '}
+                  <span className="text-add">+{facts.lines[0]}</span>{' '}
+                  <span className="text-del">−{facts.lines[1]}</span>
+                </>
+              )}
+            </span>,
+          )}
+        {summary &&
+          summary.ahead !== null &&
+          summary.behind !== null &&
+          line(
+            'Sync',
+            <span className="font-mono text-[11px]">
+              ↑{summary.ahead} ↓{summary.behind}
+              {summary.aheadBehindRef ? ` vs ${summary.aheadBehindRef}` : ''}
+            </span>,
+          )}
+        {line('Review', review.enabled ? 'on' : `off (from ${review.source})`)}
+        {row.settledBy === 'user' &&
+          line(
+            'Settled',
+            row.state === 'settled' ? 'by hand, until it changes' : 'un-settled by hand',
+          )}
+        {error && line('Error', <span className="text-danger">{error.message}</span>)}
+      </dl>
+    </div>
+  );
+}
+
+// Room at the left for the activity pulse (14 px before the branch) in every variant.
 const ROW_INDENT: Record<RowVariant, string> = {
-  pinned: 'pl-2',
+  pinned: 'pl-6',
   folder: 'pl-9',
-  settled: 'pl-2',
+  settled: 'pl-6',
 };
 
 /**
- * One worktree. Under a project it says only its branch; pinned and settled rows, which sit
- * outside their project, say project then branch. Hover (or focus) reveals the settle check and
- * the `⋯` menu at the right; the status slot stays where it is.
+ * One worktree as a card (T3 Code's row anatomy). Under a project: the branch with the status
+ * slot, then the meta line. Pinned and settled rows sit outside their project, so they start
+ * with a project line (repo glyph and name). Hover or focus swaps the status slot for the
+ * actions (`Settle` / `Un-settle`, `⋯`) and, after a moment, shows the hover card.
  */
 const WorktreeItem = memo(function WorktreeItem({
   row,
@@ -229,46 +354,57 @@ const WorktreeItem = memo(function WorktreeItem({
   const blocked = row.state === 'blocked';
   const canSettle = summary !== null && !blocked;
   const settleLabel = settled ? 'Un-settle worktree' : 'Settle worktree';
+  const inFolder = variant === 'folder';
+  const hover = useHoverCard();
   return (
-    <li className="group/wt relative" data-section={variant}>
+    <li
+      className="group/wt relative"
+      data-section={variant}
+      onPointerEnter={hover.onPointerEnter}
+      onPointerLeave={hover.onPointerLeave}
+      onPointerDown={hover.onPointerDown}
+    >
       <button
         type="button"
         {...rowAttributes(row, selected, active)}
-        title={rowTitle(row)}
         onClick={() => onSelect(worktree.id)}
         onContextMenu={(e) => onMenu(e, row)}
-        className={`flex h-[var(--od-row)] w-full items-center gap-1.5 rounded-sm pr-[52px] text-left ${
+        className={`flex w-full flex-col gap-0.5 rounded-md py-1.5 pr-2 text-left ${
           ROW_INDENT[variant]
         } ${selected ? 'bg-selected text-fg' : 'hover:bg-hover'} ${
           settled && !selected ? 'text-muted hover:text-fg' : ''
         }`}
       >
-        <span className="relative flex min-w-0 flex-1 items-baseline gap-1.5 overflow-hidden">
+        {!inFolder && (
+          <span className="flex w-full items-center gap-1.5 text-[11px] text-muted">
+            <RepoIcon />
+            <span className="min-w-0 truncate">{row.project.name}</span>
+            <RowStatus row={row} />
+          </span>
+        )}
+        <span className="relative flex w-full items-center gap-1.5">
           {active && <span className="od-pulse" aria-hidden="true" />}
-          {variant !== 'folder' && (
-            <span className="min-w-0 shrink truncate font-medium">{row.project.name}</span>
-          )}
           <span
-            className={`min-w-[3rem] truncate ${
-              variant === 'folder' ? 'shrink text-fg' : 'shrink-[2] text-muted'
-            } ${worktree.branch ? '' : 'italic'}`}
+            className={`min-w-0 truncate ${inFolder ? 'font-medium' : ''} ${
+              worktree.branch ? '' : 'italic'
+            }`}
           >
             {worktreeLabel(worktree)}
           </span>
-          <RowChips row={row} />
+          {inFolder && <RowStatus row={row} />}
         </span>
-        <RowStatus row={row} />
+        <RowMeta row={row} />
       </button>
-      <span className="absolute top-1/2 right-1 flex -translate-y-1/2 items-center gap-0.5 opacity-0 focus-within:opacity-100 group-hover/wt:opacity-100">
+      <span className="absolute top-1.5 right-1.5 flex h-4 items-center gap-0.5 opacity-0 focus-within:opacity-100 group-hover/wt:opacity-100">
         {canSettle && (
           <button
             type="button"
             aria-label={settleLabel}
-            title={settleLabel}
             onClick={() => onSettle(row)}
-            className="flex h-5 w-5 items-center justify-center rounded-sm text-faint hover:bg-raised hover:text-fg"
+            className="flex h-5 items-center gap-1 rounded-sm px-1 text-[11px] text-muted hover:bg-raised hover:text-fg"
           >
             {settled ? <UndoIcon /> : <CheckIcon />}
+            {settled ? 'Un-settle' : 'Settle'}
           </button>
         )}
         <MoreButton
@@ -276,6 +412,7 @@ const WorktreeItem = memo(function WorktreeItem({
           onOpen={(e) => onMenu(e, row)}
         />
       </span>
+      {hover.at && <RowHoverCard row={row} at={hover.at} />}
     </li>
   );
 });

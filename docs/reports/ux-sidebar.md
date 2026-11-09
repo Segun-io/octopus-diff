@@ -110,7 +110,8 @@ drag to settle.
 | Inbox → **To review** cards (project + branch repeated on every card, a facts line) → **Settled** tail (open by default) → **Projects** index | Inbox → **Pinned** → folders (collapsible headers) → projects (collapsible headers, repo glyph) → one-line rows with only the branch → **Settled** shelf, closed by default, showing the selected row while closed |
 | Settling only through review marks | A check on hover / focus settles a row by hand; an undo arrow un-settles; `Settle` / `Un-settle` in the row menu; blocked rows have neither (disabled `Settle (blocked)`). Held by `stateHash`; the next change to the worktree drops it |
 | Footer button "Watch a folder or add a repository"; two `od-btn` toggles under the filter | `+` icon in the header next to Settings (same test id); the two filters as chips (`ToggleButton variant="chip"`) |
-| Project rows in an index with a count and the pill | Project headers show the hidden count and pill while closed, the word `settled` when every worktree settled; files, `+a −d` and ahead/behind moved to the row tooltip |
+| Project rows in an index with a count and the pill | Project headers show the hidden count and pill while closed, the word `settled` when every worktree settled |
+| One-line rows (after the first pass of this round: project, branch, chips, word and two hover buttons on 260 px) | Cards with T3 Code's anatomy (#53): branch line with the status slot, meta line (chips, files, `+a −d`, `↑x ↓y`), a project line on pinned and settled cards; hover swaps the status for `✓ Settle` / `↶ Un-settle` and `⋯`; a hover card lists the details |
 
 Model: `RowState = blocked | attention | active | settled`, `rowState()` takes a `SettleOverride`, `WorktreeRow.settledBy`,
 `ProjectGroup.active`, `SidebarModel.pinned`/`settled`/`order` (folder order). Prefs: `settle: SettleOverride[]`,

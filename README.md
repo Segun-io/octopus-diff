@@ -127,7 +127,8 @@ Settings → Folders → **Start browsing in** sets where the picker opens (defa
   project whose worktrees all settled just says `settled`. Hover a row for the check that settles it by hand
   (or the arrow that brings it back); the next change to that worktree un-settles it automatically, as does a
   new patch after you verified everything. Blocked work never settles. Click a folder or repository for its
-  Overview, right-click (or `⋯`) for the actions, and pin a worktree to keep it at the top.
+  Overview, right-click (or `⋯`) for the actions, and pin a worktree to keep it at the top. Each worktree is a
+  small card: the branch, then its files, `+adds −dels` and ahead/behind; hover a moment for the full details.
 - **Mark all as verified.** The button above the file list marks every file you can see (respecting the
   sidebar filters); in the Inbox it marks everything. `Shift+R` does the same from the keyboard, and the
   context menu of a worktree, project or folder (and the folder Overview) can mark that whole level, or

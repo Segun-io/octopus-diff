@@ -1119,6 +1119,20 @@ look off, worktrees cannot be settled and the settled ones still show; follow th
     reorder. No auto-settle after N days (needs the daemon's change timestamp, #46). No project favicons (T3 Code
     reads a favicon per project; we draw one repo glyph). No "Working" shelf: the activity pulse already marks a
     worktree an agent is writing to, and rows do not reorder.
+53. **Rows are cards with T3 Code's anatomy, plus a hover card.** The user's screenshot of a settled row
+    (`octopu… feat/fol… t3 clean ↶ ⋯`) against T3 Code's card (project line, title line, meta line, a popup with the
+    details) made the one-line row untenable: at 260 px, project, branch, chips, word and two hover buttons fought for
+    one line and everything truncated. Now every worktree is a card: under a project, the branch (500) with the
+    status slot at its right, then a meta line in mono 11 px (`main` / source / in-progress chips, `N files`,
+    `+a −d`, `↑x ↓y`), omitted when empty (T3's `metaLineEmpty`); pinned and settled rows, which sit outside their
+    project, start with a project line (repo glyph, name, the status slot). Hover or focus swaps the status slot for
+    the actions (`✓ Settle` / `↶ Un-settle` and `⋯`), as T3 swaps the time for "Settle", so nothing is pushed off the
+    row. After 450 ms of mouse hover a fixed-positioned card to the right of the row (`role="tooltip"`, `.od-overlay`)
+    lists branch, state, project, path, source, checkout, operation, changes, sync vs the ahead/behind ref, review
+    policy, the manual settle and any error (T3's `SidebarThreadTooltip`); it never takes pointer events and goes on
+    pointer-down, so it cannot get in the way of a click. The native `title` on rows is gone (the card replaced it;
+    folder and project headers keep theirs for the e2e suite). The facts that round 4 had moved to the tooltip are
+    visible again on the meta line.
 
 
 ## Credits for open-source software (lead, 2026-11-08)
