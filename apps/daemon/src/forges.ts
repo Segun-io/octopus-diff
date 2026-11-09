@@ -4,12 +4,21 @@ import path from 'node:path';
 import {
   type AppSettings,
   type ChangeRequest,
+  type ChangeRequestConversation,
+  type ChangeRequestConversationResponse,
+  type ChangeRequestDetail,
+  type ChangeRequestDetailResponse,
   DEFAULT_FORGE_SETTINGS,
+  FORGE_DETAIL_CLOSED_TTL_MS,
+  FORGE_DETAIL_TTL_MS,
   FORGE_KINDS,
   FORGE_MIN_REFETCH_MS,
   FORGE_POLL_INTERVAL_MS,
+  FORGE_REPOSITORY_TTL_MS,
   type ForgeCliStatus,
+  ForgeHostSchema,
   type ForgeKind,
+  type ForgeRepositoryInfo,
   type ForgeSettings,
   type ForgesResponse,
   type GitCore,
@@ -19,6 +28,7 @@ import {
   type ProjectForgeState,
   type ProjectForgeStatus,
   type ProjectListItem,
+  type RepositoryForgeResponse,
   type ServerEvent,
   type WorktreeForge,
 } from '@octopus-diff/contracts';
@@ -33,6 +43,7 @@ import {
   resolveBranchHead,
   resolveProjectForge,
 } from '@octopus-diff/forge';
+import { ApiError } from './errors.js';
 
 /**
  * Forge integration service (docs/FORGES.md): which forge repository each project's pull/merge
@@ -46,13 +57,88 @@ import {
  * CLI reports as signed in are ever queried.
  */
 
-/** What the service needs from the CLI layer (tests pass a fake). */
+/** A forge repository a single-object query is about. */
+export type ForgeTargetLike = Pick<ProjectForge, 'kind' | 'host' | 'repository' | 'webUrl'>;
+
+/**
+ * What the service needs from the CLI layer (tests pass a fake). The detail methods are optional
+ * so older fakes still compile; without them the detail routes answer `unavailable`.
+ */
 export interface ForgeClientLike {
   probe(kind: ForgeKind): Promise<ForgeCliStatus>;
   fetchChangeRequests(
     forge: Pick<ProjectForge, 'kind' | 'host' | 'repository'>,
     branches: readonly string[],
   ): Promise<Map<string, ChangeRequest[]>>;
+  fetchRepository?(forge: ForgeTargetLike): Promise<ForgeRepositoryInfo>;
+  fetchDetail?(forge: ForgeTargetLike, number: number): Promise<ChangeRequestDetail | null>;
+  fetchConversation?(
+    forge: ForgeTargetLike,
+    number: number,
+  ): Promise<ChangeRequestConversation | null>;
+}
+
+/**
+ * Image sources the UI may load (DECISIONS #74): per host a forge CLI is signed in to, the forge
+ * itself and where it serves avatars and attachments. Host patterns without a scheme; the CSP
+ * builder prefixes `https://`. Hosts are validated (`ForgeHostSchema`), so no wildcard or CSP
+ * syntax can come from user input.
+ */
+export function forgeImageHosts(settings: ForgeSettings, clis: Iterable<ForgeCliStatus>): string[] {
+  if (!settings.enabled || settings.images === false) return [];
+  const out = new Set<string>();
+  for (const cli of clis) {
+    if (!cli.available) continue;
+    for (const { host } of cli.accounts) {
+      if (!ForgeHostSchema.safeParse(host).success) continue;
+      if (settings.hosts[host] === 'none') continue;
+      if (cli.kind === 'github') {
+        if (host === 'github.com') {
+          out.add('github.com');
+          out.add('*.githubusercontent.com');
+        } else {
+          out.add(host);
+          out.add(`*.${host}`);
+        }
+      } else {
+        out.add(host);
+        out.add('secure.gravatar.com');
+      }
+    }
+  }
+  return [...out].sort();
+}
+
+/** A cached single-object fetch: value, when, in-flight dedupe, last error. */
+interface Entry<T> {
+  value: T | null;
+  /** `value` exists but the forge says the object is gone. */
+  missing: boolean;
+  fetchedAt: number;
+  /** ISO time of `fetchedAt`. */
+  fetchedIso: string | null;
+  lastAttempt: number;
+  error: string | null;
+  /** Batch fingerprint the value was fetched for (`updatedAt|headSha|checks`). */
+  fingerprint: string;
+  inflight: Promise<void> | null;
+}
+
+function emptyEntry<T>(): Entry<T> {
+  return {
+    value: null,
+    missing: false,
+    fetchedAt: 0,
+    fetchedIso: null,
+    lastAttempt: 0,
+    error: null,
+    fingerprint: '',
+    inflight: null,
+  };
+}
+
+function fingerprintOf(cr: ChangeRequest): string {
+  return [cr.updatedAt ?? '', cr.headSha ?? '', cr.checks?.state ?? '', cr.state].join('|');
 }
 
 export interface ForgeServiceOptions {
@@ -461,6 +547,313 @@ export class ForgeService {
       requests: [...cache.requests],
       heads: [...cache.heads],
     });
+  }
+
+  // --- request detail, conversation and repository information (DECISIONS #73-#76) ---------
+
+  readonly #details = new Map<string, Entry<ChangeRequestDetail>>();
+  readonly #conversations = new Map<string, Entry<ChangeRequestConversation>>();
+  readonly #repositories = new Map<string, Entry<ForgeRepositoryInfo>>();
+
+  /** Image hosts for the CSP and the responses (empty when forges or images are off). */
+  imageHosts(): string[] {
+    return forgeImageHosts(this.#forgeSettings(), this.#clis.values());
+  }
+
+  /**
+   * The worktree's matched request, or why there is none. Throws `not_found` for an unknown
+   * worktree id. Never runs a forge query (only cached data and the project list).
+   */
+  async #matchWorktree(
+    worktreeId: string,
+  ): Promise<
+    | { ok: true; forge: ProjectForge; changeRequest: ChangeRequest }
+    | { ok: false; status: 'no-request' | 'unavailable'; message: string | null }
+  > {
+    const items = await this.#o.core.listProjects();
+    const item = items.find((i) => i.worktrees.some((w) => w.worktree.id === worktreeId));
+    if (!item) throw new ApiError('not_found', `unknown worktree: ${worktreeId}`);
+    if (!this.enabled) {
+      return {
+        ok: false,
+        status: 'no-request',
+        message: 'Forge integration is turned off in Settings.',
+      };
+    }
+    const cache = this.#projects.get(item.project.id);
+    if (!cache?.forge) {
+      return { ok: false, status: 'no-request', message: cache?.message ?? null };
+    }
+    if (cache.status === 'cli-missing' || cache.status === 'unauthenticated') {
+      return { ok: false, status: 'unavailable', message: cache.message };
+    }
+    const candidate = candidatesOf(item).find((c) => c.worktreeId === worktreeId);
+    const head = candidate ? cache.heads.get(candidate.branch) : undefined;
+    const changeRequest = head
+      ? pickChangeRequest(cache.requests.get(head.headBranch) ?? [], head, cache.forge.repository)
+      : null;
+    if (!changeRequest) return { ok: false, status: 'no-request', message: null };
+    return { ok: true, forge: cache.forge, changeRequest };
+  }
+
+  /**
+   * Serves `entry` from cache when fresh, else fetches (deduped). A failed fetch keeps the old
+   * value (stale-while-error). `force` refetches unless the last attempt is under
+   * `minRefetchMs` old.
+   */
+  async #load<T>(
+    entry: Entry<T>,
+    ttl: number,
+    fingerprint: string,
+    force: boolean,
+    fetch: () => Promise<T | null>,
+  ): Promise<void> {
+    const now = this.#o.now().getTime();
+    const spaced = now - entry.lastAttempt >= this.#o.minRefetchMs;
+    const fresh =
+      (entry.value !== null || entry.missing) &&
+      now - entry.fetchedAt < ttl &&
+      entry.fingerprint === fingerprint;
+    if (entry.inflight) return entry.inflight;
+    if (fresh && !force) return;
+    if (!spaced && (entry.value !== null || entry.missing || entry.error !== null)) return;
+    entry.lastAttempt = now;
+    entry.inflight = (async () => {
+      try {
+        const value = await fetch();
+        entry.value = value;
+        entry.missing = value === null;
+        entry.fetchedAt = this.#o.now().getTime();
+        entry.fetchedIso = this.#o.now().toISOString();
+        entry.fingerprint = fingerprint;
+        entry.error = null;
+      } catch (error) {
+        entry.error = error instanceof Error ? error.message : String(error);
+        this.#o.logger.debug('forge detail fetch failed', { error });
+      }
+    })().finally(() => {
+      entry.inflight = null;
+    });
+    return entry.inflight;
+  }
+
+  #requestKey(forge: ProjectForge, number: number): string {
+    return `${forge.kind}\u0000${forge.host}\u0000${forge.repository}\u0000${number}`;
+  }
+
+  #ttlFor(cr: ChangeRequest): number {
+    return cr.state === 'open' ? FORGE_DETAIL_TTL_MS : FORGE_DETAIL_CLOSED_TTL_MS;
+  }
+
+  /** `GET /api/forges/worktrees/:worktreeId/request`. */
+  async detail(worktreeId: string, options: { force?: boolean } = {}) {
+    const imageHosts = this.imageHosts();
+    const base = { worktreeId, imageHosts };
+    const match = await this.#matchWorktree(worktreeId);
+    if (!match.ok) {
+      return {
+        ...base,
+        status: match.status,
+        message: match.message,
+        request: null,
+        fetchedAt: null,
+      } satisfies ChangeRequestDetailResponse;
+    }
+    const { forge, changeRequest } = match;
+    const fetchDetail = this.#o.client.fetchDetail?.bind(this.#o.client);
+    if (!fetchDetail) {
+      return {
+        ...base,
+        status: 'unavailable',
+        message: 'This forge client cannot read request details.',
+        request: null,
+        fetchedAt: null,
+      } satisfies ChangeRequestDetailResponse;
+    }
+    const key = this.#requestKey(forge, changeRequest.number);
+    let entry = this.#details.get(key);
+    if (!entry) {
+      entry = emptyEntry();
+      this.#details.set(key, entry);
+    }
+    await this.#load(
+      entry,
+      this.#ttlFor(changeRequest),
+      fingerprintOf(changeRequest),
+      options.force ?? false,
+      () => fetchDetail(forge, changeRequest.number),
+    );
+    if (entry.value === null) {
+      return {
+        ...base,
+        status: entry.missing ? 'no-request' : 'unavailable',
+        message: entry.missing
+          ? `${changeRequest.kind === 'github' ? 'Pull request' : 'Merge request'} ${changeRequest.number} was not found.`
+          : (entry.error ?? 'Not loaded yet.'),
+        request: null,
+        fetchedAt: null,
+      } satisfies ChangeRequestDetailResponse;
+    }
+    return {
+      ...base,
+      status: 'ok',
+      message: entry.error,
+      request: entry.value,
+      fetchedAt: entry.fetchedIso,
+    } satisfies ChangeRequestDetailResponse;
+  }
+
+  /** `GET /api/forges/worktrees/:worktreeId/request/conversation`. */
+  async conversation(worktreeId: string, options: { force?: boolean } = {}) {
+    const imageHosts = this.imageHosts();
+    const base = { worktreeId, imageHosts };
+    const match = await this.#matchWorktree(worktreeId);
+    if (!match.ok) {
+      return {
+        ...base,
+        status: match.status,
+        message: match.message,
+        conversation: null,
+        fetchedAt: null,
+      } satisfies ChangeRequestConversationResponse;
+    }
+    const { forge, changeRequest } = match;
+    const fetchConversation = this.#o.client.fetchConversation?.bind(this.#o.client);
+    if (!fetchConversation) {
+      return {
+        ...base,
+        status: 'unavailable',
+        message: 'This forge client cannot read conversations.',
+        conversation: null,
+        fetchedAt: null,
+      } satisfies ChangeRequestConversationResponse;
+    }
+    const key = this.#requestKey(forge, changeRequest.number);
+    let entry = this.#conversations.get(key);
+    if (!entry) {
+      entry = emptyEntry();
+      this.#conversations.set(key, entry);
+    }
+    // The conversation does not change with CI: only the request's update time and head count.
+    const fingerprint = `${changeRequest.updatedAt ?? ''}|${changeRequest.headSha ?? ''}`;
+    await this.#load(entry, this.#ttlFor(changeRequest), fingerprint, options.force ?? false, () =>
+      fetchConversation(forge, changeRequest.number),
+    );
+    if (entry.value === null) {
+      return {
+        ...base,
+        status: entry.missing ? 'no-request' : 'unavailable',
+        message: entry.missing ? 'The request was not found.' : (entry.error ?? 'Not loaded yet.'),
+        conversation: null,
+        fetchedAt: null,
+      } satisfies ChangeRequestConversationResponse;
+    }
+    return {
+      ...base,
+      status: 'ok',
+      message: entry.error,
+      conversation: entry.value,
+      fetchedAt: entry.fetchedIso,
+    } satisfies ChangeRequestConversationResponse;
+  }
+
+  /** `POST /api/forges/worktrees/:worktreeId/request/refresh`: both caches, 15 s spacing. */
+  async refreshRequest(worktreeId: string): Promise<ChangeRequestDetailResponse> {
+    const detail = await this.detail(worktreeId, { force: true });
+    if (detail.status === 'ok') {
+      await this.conversation(worktreeId, { force: true }).catch(() => undefined);
+    }
+    return detail;
+  }
+
+  /**
+   * `GET /api/forges/projects/:projectId/repository`: forge facts, fetched lazily (when the
+   * project Overview opens) and cached 10 minutes. Open requests are joined to the worktrees
+   * whose matched request they are. Throws `not_found` for an unknown project.
+   */
+  async repository(
+    projectId: string,
+    options: { force?: boolean } = {},
+  ): Promise<RepositoryForgeResponse> {
+    const items = await this.#o.core.listProjects();
+    const item = items.find((i) => i.project.id === projectId);
+    if (!item) throw new ApiError('not_found', `unknown project: ${projectId}`);
+    const empty = (
+      status: ProjectForgeStatus,
+      message: string | null,
+      forge: ProjectForge | null,
+    ): RepositoryForgeResponse => ({
+      projectId,
+      status,
+      message,
+      forge,
+      repository: null,
+      fetchedAt: null,
+    });
+    if (!this.enabled)
+      return empty('disabled', 'Forge integration is turned off in Settings.', null);
+    let cache = this.#projects.get(projectId);
+    if (!cache || cache.status === 'pending') {
+      await this.refresh([projectId]);
+      cache = this.#projects.get(projectId);
+    }
+    if (!cache) return empty('pending', null, null);
+    const forge = cache.forge;
+    if (!forge) return empty(cache.status, cache.message, null);
+    const clis = await this.#ensureClis(false);
+    const cli = clis.get(forge.kind);
+    if (!cli?.available) {
+      return empty('cli-missing', cli?.hint ?? 'The forge CLI is not installed.', forge);
+    }
+    if (!cli.accounts.some((a) => a.host === forge.host)) {
+      return empty('unauthenticated', loginHint(forge.kind, forge.host), forge);
+    }
+    const fetchRepository = this.#o.client.fetchRepository?.bind(this.#o.client);
+    if (!fetchRepository) {
+      return empty('error', 'This forge client cannot read repositories.', forge);
+    }
+    const key = `${projectId}\u0000${JSON.stringify(forge)}`;
+    let entry = this.#repositories.get(key);
+    if (!entry) {
+      for (const k of this.#repositories.keys()) {
+        if (k.startsWith(`${projectId}\u0000`)) this.#repositories.delete(k);
+      }
+      entry = emptyEntry();
+      this.#repositories.set(key, entry);
+    }
+    await this.#load(entry, FORGE_REPOSITORY_TTL_MS, '', options.force ?? false, () =>
+      fetchRepository(forge),
+    );
+    if (entry.value === null) {
+      return empty('error', entry.error ?? 'Not loaded yet.', forge);
+    }
+    // Join open requests to local worktrees (cached batch data, no query).
+    const byNumber = new Map<number, string>();
+    for (const candidate of candidatesOf(item)) {
+      const head = cache.heads.get(candidate.branch);
+      if (!head) continue;
+      const cr = pickChangeRequest(
+        cache.requests.get(head.headBranch) ?? [],
+        head,
+        forge.repository,
+      );
+      if (cr) byNumber.set(cr.number, candidate.worktreeId);
+    }
+    const repository: ForgeRepositoryInfo = {
+      ...entry.value,
+      requests: entry.value.requests.map((r) => ({
+        ...r,
+        worktreeId: byNumber.get(r.number) ?? null,
+      })),
+    };
+    return {
+      projectId,
+      status: entry.error ? 'error' : 'ok',
+      message: entry.error,
+      forge,
+      repository,
+      fetchedAt: entry.fetchedIso,
+    };
   }
 
   /** `GET /api/forges`: cached data joined with the live worktree list (no network). */

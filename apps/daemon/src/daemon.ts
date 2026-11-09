@@ -22,6 +22,7 @@ import { EventHub } from './events.js';
 import { type ForgeClientLike, ForgeService } from './forges.js';
 import { createLogger } from './logger.js';
 import { ensurePrivateDir, resolveDirs } from './paths.js';
+import { RepositoryInfoService } from './repositories.js';
 import { ReviewControls } from './review-controls.js';
 import { hostForUrl, isLoopbackHost, isWildcardHost } from './security.js';
 import { SettingsService } from './settings.js';
@@ -216,8 +217,17 @@ export const startDaemon = (async (options: DaemonOptions = {}): Promise<Daemon>
           ...(internal.now ? { now: internal.now } : {}),
         });
 
+  const repositories = new RepositoryInfoService({
+    core,
+    gitCore,
+    hub,
+    logger,
+    ...(internal.now ? { now: internal.now } : {}),
+  });
+
   let server: Server | undefined;
   const cleanup = async () => {
+    repositories.close();
     await forges?.close().catch(() => {});
     await core.close().catch(() => {});
     hub.close();
@@ -290,6 +300,7 @@ export const startDaemon = (async (options: DaemonOptions = {}): Promise<Daemon>
       settings,
       reviewControls,
       ...(forges ? { forges } : {}),
+      repositories,
     });
 
     // Do not replace the global Request/Response: the daemon runs inside the CLI process.
@@ -325,6 +336,7 @@ export const startDaemon = (async (options: DaemonOptions = {}): Promise<Daemon>
     let closing: Promise<void> | undefined;
     const close = (): Promise<void> => {
       closing ??= (async () => {
+        repositories.close();
         await forges?.close().catch(() => {});
         await core
           .close()
