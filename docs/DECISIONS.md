@@ -1538,3 +1538,60 @@ request, git call or contract change.
      Measured on 2026-11-09: `main` (`1561c3c`, a temporary worktree) failed 1 of 3 `pnpm test` runs, this branch 1
      of 3; `pnpm check` on this branch failed 5 of 9 runs, always this one test. git-core is WS1's; proposal for its
      owner: give that test an explicit timeout (e.g. 30 s). Not changed here (AGENTS: edit only owned paths).
+
+## Diff context errors, first-run Continue and add feedback (session, 2026-11-09)
+
+Branch `fix/diff-context-and-onboarding`; report `docs/reports/diff-context-onboarding.md`. Web and e2e only: no
+contract, daemon or git-core change.
+
+112. **Highlight cache key = the view the patch was fetched with.** Root cause of "DiffHunksRenderer.processDiffResult:
+     deletionLine and additionLine are null, something is wrong": the diff query keeps the previous view's patch as
+     placeholder data while a new context / whitespace view loads, but `DiffRenderer`'s `cacheKey` was built from the
+     options *asked for* (`patchHash:w:context`). The old patch was parsed and highlighted under the new key; the
+     worker pool cached that highlight; the real patch then arrived under the same key and got the shorter patch's
+     lines. Fix: `useDiffQuery` returns `DiffQueryData` (the response plus `view` = `diffViewKey(params)` and
+     `params`), and the key is `patchHash:view:patch.length`. Reproduced deterministically in e2e
+     (`17-diff-context`, diff responses delayed 250 ms): 98 console errors before, none after; the same test fails
+     again if the key is built from the requested options. The whitespace toggle went through the same path.
+113. **Context is bounded and stops when there is nothing left to show.** "Expand all" set `context = 1_000_000`
+     (= `DIFF_CONTEXT_MAX`, also git-core's limit) and "More context" / `e` added 20 to it, so the next request
+     failed zod validation ("expected number to be <= 1000000"). Now `nextContext` clamps to `FULL_CONTEXT`
+     (= `DIFF_CONTEXT_MAX`, imported from the contracts), and `patchShowsWholeFile` (one hunk per file section that
+     starts at line 1 and ends with fewer trailing context lines than asked for; added/deleted files are whole)
+     disables "More context" and turns "Expand all" into "Collapse" once the whole file is shown; "Expand all" is
+     disabled when the default context already shows everything. A dedicated "full file" API flag was not added:
+     `-U1000000` is exact for any realistic file and needs no contract change.
+114. **No stacked context requests.** "More context" is disabled (`aria-busy`) while the previous view is still the
+     placeholder, and the `e` command does nothing until the current view has loaded, then says "The whole file is
+     already shown." at the end. "Expand all" / "Collapse" set absolute values, so rapid clicks converge on the
+     last one (TanStack Query shows the latest key's data). Other diff controls checked: split/unified changes only
+     render options (no refetch); "Load anyway" (`full`) is part of the view key now; scope changes keep their own
+     `patchHash`.
+115. **First run: a main button that says "Continue".** The add form's main action used to be a small "Watch / Add
+     Enter" chip inside the text box, and a click on a folder row only opens that folder, so after picking a
+     folder nothing visibly changed. Now the form ends with a selection line (icon + what the text points at) and a
+     primary button: "Continue" on the first-run screen, "Watch this folder" / "Add this repository" / "Open it"
+     elsewhere, disabled until the text points at something valid (including a folder that cannot be listed); the
+     other action is a ghost button next to it. Enter still runs the main action. The test ids
+     `addScanRootSubmit` / `addProjectSubmit` stay on whichever button runs that action.
+116. **Why the app did not leave the first-run screen.** Watching a folder returns at once and scans in the
+     background; the UI learnt the outcome only from `scan.progress` / `project.added` events. With a healthy event
+     stream that works (also through the Vite dev proxy, checked by hand), but when the stream is down or late (a
+     reconnect, a proxy that buffers it, a LAN hiccup) the screen stayed until a reload — reproduced in e2e by
+     aborting `/api/events`. Fix: `useAddJobWatcher` (mounted once in the shell) polls `GET /api/scan-roots` every
+     second while a folder job runs, refetches the projects as soon as the folder has some (the first-run screen
+     gives way to the app at the first repository), and marks the job done when the root's `lastScannedAt` moves.
+     Polling is local to a running add job; the global fetching / stale-time setup is untouched.
+117. **One add job, shown where the user is.** `UiState.addJob` holds the last add/watch (`state/addJob.ts`:
+     `describeAddJob`, `folderJobOutcome`, pure and unit-tested): working (spinner; "120 folders checked, 2
+     repositories found so far" from scan events), success (what was added, how many repositories, the first five
+     names, then "Open <name>" / "Show folder"), empty ("No repositories found in …", "Choose another folder",
+     "Stop watching") and error (the daemon's message). It shows as a panel inside the add form (first run, Add
+     dialog, Settings → Folders) and as a toast once no add form is on screen (`addFormsOpen` counter): the
+     first-run screen unmounts at the first repository, and the dialog / palette may close mid-scan. A success toast
+     hides after 10 s; the palette's "Watching … Scanning…" notice was replaced by the same toast. Typing a new
+     path clears a finished job; Enter and the buttons do nothing while a job runs.
+118. **Known gap, not changed: folder listings can be stale for up to their cache life.** A folder created while the
+     picker lists its parent is "No folder named …" until the listing refetches (navigate away and back). Seen
+     while writing the e2e; not part of this report's issues.
+

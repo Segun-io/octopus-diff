@@ -88,6 +88,7 @@ test.describe('first run', () => {
       const input = app.byTestId(TEST_IDS.folderPickerInput);
       const main = app.byTestId(TEST_IDS.folderPicker).locator(IDS.main);
       await input.fill(empty);
+      await expect(main).toHaveAttribute('data-action', 'watch');
       await main.click();
 
       const panel = app.byTestId(IDS.panel);
@@ -127,7 +128,9 @@ test.describe('first run', () => {
       const [scan] = manifest.scanRoots;
       if (!scan) throw new Error('manifest has no scan root');
       await app.byTestId(TEST_IDS.folderPickerInput).fill(scan.path);
-      await app.byTestId(TEST_IDS.folderPicker).locator(IDS.main).click();
+      const main = app.byTestId(TEST_IDS.folderPicker).locator(IDS.main);
+      await expect(main).toHaveAttribute('data-action', 'watch');
+      await main.click();
       for (const name of scan.expectedProjects) {
         await expect(app.projectItem(name)).toBeVisible({ timeout: 20_000 });
       }
@@ -157,6 +160,7 @@ test.describe('add repositories (in the app)', () => {
       const main = form.locator(IDS.main);
       await expect(main).toContainText('Watch this folder');
       await app.byTestId(TEST_IDS.folderPickerInput).fill(parent);
+      await expect(main).toHaveAttribute('data-action', 'watch');
       await main.click();
 
       const panel = form.getByTestId(IDS.panel);
@@ -187,7 +191,12 @@ test.describe('add repositories (in the app)', () => {
       await app.open(daemon.authUrl);
       await app.byTestId(TEST_IDS.addProjectButton).click();
       await app.byTestId(TEST_IDS.folderPickerInput).fill(plain);
-      // The folder's main action is Watch; "Add as one repository" is the other one.
+      // The folder's main action is Watch; "Add as one repository" is the other one. Wait for
+      // the listing: until it arrives the path's kind is unknown and Add is the main action.
+      await expect(app.byTestId(TEST_IDS.folderPicker).locator(IDS.main)).toHaveAttribute(
+        'data-action',
+        'watch',
+      );
       await app.byTestId(TEST_IDS.addProjectSubmit).click();
       const panel = app.byTestId(IDS.panel);
       await expect(panel).toHaveAttribute('data-tone', 'error');
