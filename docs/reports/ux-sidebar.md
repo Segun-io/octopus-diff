@@ -118,7 +118,14 @@ Model: `RowState = blocked | attention | active | settled`, `rowState()` takes a
 
 ## Verification
 
-See the table at the end of this section (filled after the runs).
+| Command | Result |
+|---|---|
+| `pnpm check` (lint, typecheck, build, unit tests) | exit 0: Biome 311 files clean; contracts 71, git-core 126, web 107, fixtures 48, daemon 155, e2e-vitest 5, cli 139 passed |
+| `pnpm test:e2e` | 68 passed (2.2 m); read-only proof 12 control repos, 3209 lock polls, 0 violations; no spec changed |
+| `pnpm --filter @octopus-diff/e2e screenshots` | 10 PNGs regenerated in `docs/screenshots/` with real defaults (shelf closed) |
+
+Rendering checked on the fixture screenshots: folder and project headers, one-line rows, the `settled` word on a quiet
+project, the closed shelf with its count, the header `+`, the filter chips.
 
 ## Contract changes
 

@@ -133,11 +133,14 @@ function rowTitle(row: WorktreeRow): string {
 
 /** `main`, the worktree source, an in-progress operation: the chips after the name. */
 function RowChips({ row }: { row: WorktreeRow }) {
-  const { worktree, summary } = row;
+  const { worktree, summary, project } = row;
   const source = worktree.isMain ? null : worktreeSource(worktree.path);
+  // The main checkout on the default branch is the expected case; the chip speaks only when the
+  // main checkout sits elsewhere, or when the project has no default branch to compare with.
+  const mainChip = worktree.isMain && worktree.branch !== project.defaultBranch;
   return (
     <>
-      {worktree.isMain && (
+      {mainChip && (
         <span className="od-chip" title="Main checkout">
           main
         </span>
@@ -240,13 +243,13 @@ const WorktreeItem = memo(function WorktreeItem({
           settled && !selected ? 'text-muted hover:text-fg' : ''
         }`}
       >
-        <span className="relative flex min-w-0 flex-1 items-baseline gap-1.5">
+        <span className="relative flex min-w-0 flex-1 items-baseline gap-1.5 overflow-hidden">
           {active && <span className="od-pulse" aria-hidden="true" />}
           {variant !== 'folder' && (
             <span className="min-w-0 shrink truncate font-medium">{row.project.name}</span>
           )}
           <span
-            className={`min-w-0 truncate ${
+            className={`min-w-[3rem] truncate ${
               variant === 'folder' ? 'shrink text-fg' : 'shrink-[2] text-muted'
             } ${worktree.branch ? '' : 'italic'}`}
           >
