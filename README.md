@@ -261,6 +261,52 @@ bundled UI; omit it normally.
 | `~/.local/state/octopus-diff/open-*.html` | short-lived page `--open` hands to the browser opener (mode 0600, deleted after a minute) |
 | `~/.local/state/octopus-diff/` | project registry and review marks (SQLite) |
 
+## Start at login (Linux, WSL2 with systemd)
+
+To have octopus-diff running whenever the machine is up, with no terminal open, install the tarball
+(see [Install](#install)) and run it as a systemd user service:
+
+```sh
+mkdir -p ~/.config/systemd/user
+cat > ~/.config/systemd/user/octopus-diff.service <<EOF
+[Unit]
+Description=octopus-diff
+After=network.target
+
+[Service]
+Environment=PATH=$PATH
+ExecStart=$(command -v octopus-diff) serve --no-open
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
+EOF
+
+systemctl --user daemon-reload
+systemctl --user enable --now octopus-diff
+loginctl enable-linger "$USER"    # start at boot, before you open a shell
+```
+
+The heredoc is unquoted on purpose: your shell fills in the full path of `octopus-diff` and your
+`PATH`, which a node version manager (mise, nvm, fnm) needs, because systemd starts services with a
+minimal environment. Open `http://127.0.0.1:7428`. The first time, get the URL with the token from
+`octopus-diff status` (or `journalctl --user -u octopus-diff`); the browser remembers it afterwards.
+
+- **Logs and control:** `journalctl --user -u octopus-diff -f`, `systemctl --user restart octopus-diff`.
+- **Updating:** reinstall the tarball, then `systemctl --user restart octopus-diff`.
+- **Running next to a dev copy.** Daemons that share a state directory are one daemon: a second
+  `serve` attaches to the first instead of starting. To keep an installed copy and a checkout (or
+  `pnpm dev`) apart, give each its own state directory, config directory and port. Add this to the
+  service's `ExecStart`:
+
+  ```
+  serve --no-open --state-dir %h/.local/state/octopus-diff-prod --config-dir %h/.config/octopus-diff-prod --port 7428
+  ```
+
+  Each copy then has its own token, project list and review marks. Use the same flags on `status`,
+  `add` and `token` so they talk to the right daemon. systemd does not expand `~` in `ExecStart`,
+  hence `%h` (the home directory).
+
 ## Security model
 
 The daemon serves the contents of your repositories over HTTP, so it is locked down by default:
