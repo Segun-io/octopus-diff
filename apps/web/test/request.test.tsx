@@ -31,6 +31,7 @@ import {
   initials,
   pageItems,
 } from '../src/lib/request.ts';
+import { scopeForPref } from '../src/state/prefs.ts';
 import { createUiStore } from '../src/state/ui.tsx';
 import { activeView } from '../src/views/registry.ts';
 
@@ -285,7 +286,10 @@ describe('request presentation logic', () => {
 function setup() {
   const backend = new MockBackend({ dataset: 'demo' });
   const api = createApiClient({ baseUrl: 'http://mock.local', fetch: createMockFetch(backend) });
-  const store = createUiStore({ confirmBulk: false, settledOpen: true }, false);
+  const store = createUiStore(
+    { confirmBulk: false, settledOpen: true, scope: scopeForPref('review') },
+    false,
+  );
   render(
     <App api={api} queryClient={createQueryClient()} uiStore={store} eventSourceFactory={null} />,
   );

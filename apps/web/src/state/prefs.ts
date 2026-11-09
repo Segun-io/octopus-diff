@@ -56,7 +56,7 @@ export const DEFAULT_PREFS: Prefs = {
   theme: normalizeThemePrefs(undefined),
   fileListLayout: 'list',
   density: 'compact',
-  defaultScope: 'review',
+  defaultScope: 'branch',
   autoAdvance: false,
   reviewOffDisplay: 'dim',
   titleCount: true,

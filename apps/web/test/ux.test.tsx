@@ -8,6 +8,7 @@ import { createMockFetch } from '../mock/router.ts';
 import { App } from '../src/App.tsx';
 import type { EventSourceLike } from '../src/api/hooks.ts';
 import { createQueryClient } from '../src/api/queries.ts';
+import { scopeForPref } from '../src/state/prefs.ts';
 import { createUiStore, type UiStore } from '../src/state/ui.tsx';
 
 vi.mock('../src/components/diff/DiffRenderer.tsx', () => ({
@@ -70,7 +71,10 @@ function setup(
     },
   });
   // The Settled shelf is closed by default; most tests read settled rows, so open it.
-  const store = createUiStore({ confirmBulk: false, settledOpen: true, ...opts.store }, false);
+  const store = createUiStore(
+    { confirmBulk: false, settledOpen: true, scope: scopeForPref('review'), ...opts.store },
+    false,
+  );
   const factory = () => {
     const es = new FakeEventSource();
     backend.subscribe((e) => es.dispatch(e));
