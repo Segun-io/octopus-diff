@@ -1,0 +1,8 @@
+github.com
+  ✓ Logged in to github.com as octo (/home/u/.config/gh/hosts.yml)
+  ✓ Git operations for github.com configured to use https protocol.
+  ✓ Token: *******************
+
+ghe.corp.example
+  X ghe.corp.example: authentication failed
+  - The ghe.corp.example token in /home/u/.config/gh/hosts.yml is no longer valid.

@@ -1,0 +1,104 @@
+{
+  "data": {
+    "project": {
+      "b0": {
+        "nodes": [
+          {
+            "iid": "4242",
+            "title": "fix(auth): stop resending a dead OAuth refresh token",
+            "webUrl": "https://gitlab.com/gitlab-org/cli/-/merge_requests/4242",
+            "state": "opened",
+            "draft": false,
+            "updatedAt": "2026-11-09T05:37:57Z",
+            "targetBranch": "main",
+            "sourceBranch": "theoretick/oauth-forget-dead-refresh-token",
+            "diffHeadSha": "3b4cfbfd61e3dbf127fea1e0e690e0e770afabfe",
+            "author": {
+              "username": "theoretick"
+            },
+            "sourceProject": {
+              "fullPath": "gitlab-org/cli"
+            },
+            "targetProject": {
+              "fullPath": "gitlab-org/cli"
+            },
+            "userNotesCount": 29,
+            "headPipeline": {
+              "status": "FAILED"
+            },
+            "conflicts": false,
+            "approved": true,
+            "approvedBy": {
+              "nodes": [
+                {
+                  "username": "jay_mccure"
+                }
+              ]
+            },
+            "detailedMergeStatus": "REQUESTED_CHANGES"
+          }
+        ]
+      },
+      "b1": {
+        "nodes": [
+          {
+            "iid": "4138",
+            "title": "Draft: Add new directory",
+            "webUrl": "https://gitlab.com/gitlab-org/cli/-/merge_requests/4138",
+            "state": "closed",
+            "draft": true,
+            "updatedAt": "2026-10-30T09:11:16Z",
+            "targetBranch": "main",
+            "sourceBranch": "main",
+            "diffHeadSha": "5474509c5c89f323d44b0ee3524021dc9e6b1694",
+            "author": {
+              "username": "wmhcarter1"
+            },
+            "sourceProject": null,
+            "targetProject": {
+              "fullPath": "gitlab-org/cli"
+            },
+            "userNotesCount": 5,
+            "headPipeline": null,
+            "conflicts": false,
+            "approved": false,
+            "approvedBy": {
+              "nodes": []
+            },
+            "detailedMergeStatus": "NOT_OPEN"
+          },
+          {
+            "iid": "3476",
+            "title": "feat: Allow per-host info to optionally be saved to a separate file",
+            "webUrl": "https://gitlab.com/gitlab-org/cli/-/merge_requests/3476",
+            "state": "closed",
+            "draft": false,
+            "updatedAt": "2026-08-02T00:17:29Z",
+            "targetBranch": "main",
+            "sourceBranch": "main",
+            "diffHeadSha": "0f33f8c93c6339171029185e1cc9053f99bac071",
+            "author": {
+              "username": "physics-enthusiast"
+            },
+            "sourceProject": {
+              "fullPath": "physics-enthusiast/cli"
+            },
+            "targetProject": {
+              "fullPath": "gitlab-org/cli"
+            },
+            "userNotesCount": 7,
+            "headPipeline": {
+              "status": "SUCCESS"
+            },
+            "conflicts": false,
+            "approved": true,
+            "approvedBy": {
+              "nodes": []
+            },
+            "detailedMergeStatus": "NOT_OPEN"
+          }
+        ]
+      }
+    }
+  }
+}

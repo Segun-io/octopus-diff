@@ -1,0 +1,474 @@
+{
+  "data": {
+    "repository": {
+      "b0": {
+        "nodes": [
+          {
+            "number": 33201,
+            "title": "fix(server): watched PRs tell the agent when they merge",
+            "url": "https://github.com/pingdotgg/t3code/pull/33201",
+            "state": "OPEN",
+            "isDraft": false,
+            "updatedAt": "2026-11-09T05:31:00Z",
+            "baseRefName": "main",
+            "headRefName": "fix/pr-watch-merge-wake",
+            "headRefOid": "b7063c4d8b82a56cb6d220f8f51977d483bd098a",
+            "isCrossRepository": true,
+            "author": {
+              "login": "soorria"
+            },
+            "headRepository": {
+              "nameWithOwner": "soorria/t3code"
+            },
+            "reviewDecision": null,
+            "mergeable": "MERGEABLE",
+            "totalCommentsCount": 2,
+            "commits": {
+              "nodes": [
+                {
+                  "commit": {
+                    "statusCheckRollup": {
+                      "state": "FAILURE",
+                      "contexts": {
+                        "totalCount": 31,
+                        "checkRunCountsByState": [
+                          {
+                            "state": "ACTION_REQUIRED",
+                            "count": 0
+                          },
+                          {
+                            "state": "CANCELLED",
+                            "count": 0
+                          },
+                          {
+                            "state": "COMPLETED",
+                            "count": 0
+                          },
+                          {
+                            "state": "FAILURE",
+                            "count": 1
+                          },
+                          {
+                            "state": "IN_PROGRESS",
+                            "count": 0
+                          },
+                          {
+                            "state": "NEUTRAL",
+                            "count": 0
+                          },
+                          {
+                            "state": "PENDING",
+                            "count": 0
+                          },
+                          {
+                            "state": "QUEUED",
+                            "count": 0
+                          },
+                          {
+                            "state": "SKIPPED",
+                            "count": 8
+                          },
+                          {
+                            "state": "STALE",
+                            "count": 0
+                          },
+                          {
+                            "state": "STARTUP_FAILURE",
+                            "count": 0
+                          },
+                          {
+                            "state": "SUCCESS",
+                            "count": 22
+                          },
+                          {
+                            "state": "TIMED_OUT",
+                            "count": 0
+                          },
+                          {
+                            "state": "WAITING",
+                            "count": 0
+                          }
+                        ],
+                        "statusContextCountsByState": [
+                          {
+                            "state": "EXPECTED",
+                            "count": 0
+                          },
+                          {
+                            "state": "ERROR",
+                            "count": 0
+                          },
+                          {
+                            "state": "FAILURE",
+                            "count": 0
+                          },
+                          {
+                            "state": "PENDING",
+                            "count": 0
+                          },
+                          {
+                            "state": "SUCCESS",
+                            "count": 0
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "number": 32881,
+            "title": "fix(server): a merged pull request wakes the agent that watched it",
+            "url": "https://github.com/pingdotgg/t3code/pull/32881",
+            "state": "OPEN",
+            "isDraft": false,
+            "updatedAt": "2026-11-08T08:42:47Z",
+            "baseRefName": "main",
+            "headRefName": "fix/pr-watch-merge-wake",
+            "headRefOid": "d4e2ee5a83e6ac145062179e5d1cb66be32a7735",
+            "isCrossRepository": true,
+            "author": {
+              "login": "j3beg"
+            },
+            "headRepository": {
+              "nameWithOwner": "j3beg/t3code"
+            },
+            "reviewDecision": null,
+            "mergeable": "MERGEABLE",
+            "totalCommentsCount": 2,
+            "commits": {
+              "nodes": [
+                {
+                  "commit": {
+                    "statusCheckRollup": {
+                      "state": "SUCCESS",
+                      "contexts": {
+                        "totalCount": 30,
+                        "checkRunCountsByState": [
+                          {
+                            "state": "ACTION_REQUIRED",
+                            "count": 0
+                          },
+                          {
+                            "state": "CANCELLED",
+                            "count": 0
+                          },
+                          {
+                            "state": "COMPLETED",
+                            "count": 0
+                          },
+                          {
+                            "state": "FAILURE",
+                            "count": 0
+                          },
+                          {
+                            "state": "IN_PROGRESS",
+                            "count": 0
+                          },
+                          {
+                            "state": "NEUTRAL",
+                            "count": 0
+                          },
+                          {
+                            "state": "PENDING",
+                            "count": 0
+                          },
+                          {
+                            "state": "QUEUED",
+                            "count": 0
+                          },
+                          {
+                            "state": "SKIPPED",
+                            "count": 8
+                          },
+                          {
+                            "state": "STALE",
+                            "count": 0
+                          },
+                          {
+                            "state": "STARTUP_FAILURE",
+                            "count": 0
+                          },
+                          {
+                            "state": "SUCCESS",
+                            "count": 22
+                          },
+                          {
+                            "state": "TIMED_OUT",
+                            "count": 0
+                          },
+                          {
+                            "state": "WAITING",
+                            "count": 0
+                          }
+                        ],
+                        "statusContextCountsByState": [
+                          {
+                            "state": "EXPECTED",
+                            "count": 0
+                          },
+                          {
+                            "state": "ERROR",
+                            "count": 0
+                          },
+                          {
+                            "state": "FAILURE",
+                            "count": 0
+                          },
+                          {
+                            "state": "PENDING",
+                            "count": 0
+                          },
+                          {
+                            "state": "SUCCESS",
+                            "count": 0
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "b1": {
+        "nodes": [
+          {
+            "number": 31793,
+            "title": "feat(web): configure the native folder picker for local projects",
+            "url": "https://github.com/pingdotgg/t3code/pull/31793",
+            "state": "OPEN",
+            "isDraft": false,
+            "updatedAt": "2026-11-08T23:44:50Z",
+            "baseRefName": "main",
+            "headRefName": "main",
+            "headRefOid": "e7f1f3c89fe29b060a24596fa0ad01d9ac59a81d",
+            "isCrossRepository": true,
+            "author": {
+              "login": "dazbot-ooh"
+            },
+            "headRepository": {
+              "nameWithOwner": "dazbot-ooh/t3code-contributions"
+            },
+            "reviewDecision": null,
+            "mergeable": "MERGEABLE",
+            "totalCommentsCount": 3,
+            "commits": {
+              "nodes": [
+                {
+                  "commit": {
+                    "statusCheckRollup": {
+                      "state": "SUCCESS",
+                      "contexts": {
+                        "totalCount": 31,
+                        "checkRunCountsByState": [
+                          {
+                            "state": "ACTION_REQUIRED",
+                            "count": 0
+                          },
+                          {
+                            "state": "CANCELLED",
+                            "count": 0
+                          },
+                          {
+                            "state": "COMPLETED",
+                            "count": 0
+                          },
+                          {
+                            "state": "FAILURE",
+                            "count": 0
+                          },
+                          {
+                            "state": "IN_PROGRESS",
+                            "count": 0
+                          },
+                          {
+                            "state": "NEUTRAL",
+                            "count": 0
+                          },
+                          {
+                            "state": "PENDING",
+                            "count": 0
+                          },
+                          {
+                            "state": "QUEUED",
+                            "count": 0
+                          },
+                          {
+                            "state": "SKIPPED",
+                            "count": 7
+                          },
+                          {
+                            "state": "STALE",
+                            "count": 0
+                          },
+                          {
+                            "state": "STARTUP_FAILURE",
+                            "count": 0
+                          },
+                          {
+                            "state": "SUCCESS",
+                            "count": 24
+                          },
+                          {
+                            "state": "TIMED_OUT",
+                            "count": 0
+                          },
+                          {
+                            "state": "WAITING",
+                            "count": 0
+                          }
+                        ],
+                        "statusContextCountsByState": [
+                          {
+                            "state": "EXPECTED",
+                            "count": 0
+                          },
+                          {
+                            "state": "ERROR",
+                            "count": 0
+                          },
+                          {
+                            "state": "FAILURE",
+                            "count": 0
+                          },
+                          {
+                            "state": "PENDING",
+                            "count": 0
+                          },
+                          {
+                            "state": "SUCCESS",
+                            "count": 0
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "number": 29498,
+            "title": "Fix #29433: Restore Codex MCP apps after thread unload",
+            "url": "https://github.com/pingdotgg/t3code/pull/29498",
+            "state": "OPEN",
+            "isDraft": false,
+            "updatedAt": "2026-11-08T09:10:17Z",
+            "baseRefName": "main",
+            "headRefName": "main",
+            "headRefOid": "234fecbe8dee698412cf4db07c7a458696c6789d",
+            "isCrossRepository": true,
+            "author": {
+              "login": "amr807"
+            },
+            "headRepository": {
+              "nameWithOwner": "amr807/t3code"
+            },
+            "reviewDecision": null,
+            "mergeable": "MERGEABLE",
+            "totalCommentsCount": 5,
+            "commits": {
+              "nodes": [
+                {
+                  "commit": {
+                    "statusCheckRollup": {
+                      "state": "FAILURE",
+                      "contexts": {
+                        "totalCount": 29,
+                        "checkRunCountsByState": [
+                          {
+                            "state": "ACTION_REQUIRED",
+                            "count": 0
+                          },
+                          {
+                            "state": "CANCELLED",
+                            "count": 0
+                          },
+                          {
+                            "state": "COMPLETED",
+                            "count": 0
+                          },
+                          {
+                            "state": "FAILURE",
+                            "count": 4
+                          },
+                          {
+                            "state": "IN_PROGRESS",
+                            "count": 0
+                          },
+                          {
+                            "state": "NEUTRAL",
+                            "count": 0
+                          },
+                          {
+                            "state": "PENDING",
+                            "count": 0
+                          },
+                          {
+                            "state": "QUEUED",
+                            "count": 0
+                          },
+                          {
+                            "state": "SKIPPED",
+                            "count": 8
+                          },
+                          {
+                            "state": "STALE",
+                            "count": 0
+                          },
+                          {
+                            "state": "STARTUP_FAILURE",
+                            "count": 0
+                          },
+                          {
+                            "state": "SUCCESS",
+                            "count": 16
+                          },
+                          {
+                            "state": "TIMED_OUT",
+                            "count": 0
+                          },
+                          {
+                            "state": "WAITING",
+                            "count": 0
+                          }
+                        ],
+                        "statusContextCountsByState": [
+                          {
+                            "state": "EXPECTED",
+                            "count": 0
+                          },
+                          {
+                            "state": "ERROR",
+                            "count": 0
+                          },
+                          {
+                            "state": "FAILURE",
+                            "count": 0
+                          },
+                          {
+                            "state": "PENDING",
+                            "count": 0
+                          },
+                          {
+                            "state": "SUCCESS",
+                            "count": 1
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  }
+}

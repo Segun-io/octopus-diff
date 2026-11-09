@@ -1,0 +1,12 @@
+gitlab.com
+  ✓ Logged in to gitlab.com as octo (/home/u/.config/glab-cli/config.yml)
+  ✓ Git operations for gitlab.com configured to use ssh protocol.
+  ✓ API calls for gitlab.com are made over https protocol.
+  ✓ REST API Endpoint: https://gitlab.com/api/v4/
+  ✓ GraphQL Endpoint: https://gitlab.com/api/graphql/
+  ✓ Token: **************************
+git.corp.example
+  ✓ Logged in to git.corp.example as jdoe (/home/u/.config/glab-cli/config.yml)
+  ✓ Token: **************************
+gitlab.old.example:8443
+  x gitlab.old.example:8443: API call failed: GET https://gitlab.old.example:8443/api/v4/user: 401 {message: 401 Unauthorized}
