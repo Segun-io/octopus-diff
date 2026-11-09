@@ -1618,3 +1618,6 @@ Web only, plus two e2e helper lines; no daemon, contract or preference change.
      asserted a row of the virtualized Inbox list with `toBeVisible`, and the 6 px taller file pane header (30 → 36)
      left that row outside the mounted window; it now scans the list with the existing `allFileItems()` helper. PLAN §4.2 "Toolbar" paragraph rewritten; IDENTITY §6 gains the chrome rule; README and `FORGES.md` say
      "the bar above the panes".
+123. **Default scope is now "All on branch" (2026-11-09).** `DEFAULT_PREFS.defaultScope` changes from `review` to
+     `branch` (working tree vs merge-base, `includeWorking`), per the user's request. A stored `defaultScope` keeps its
+     value. Web unit tests that rely on To review pin it via `scopeForPref('review')`; e2e seeds prefs explicitly.
