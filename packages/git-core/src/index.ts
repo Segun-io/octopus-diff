@@ -30,6 +30,11 @@ export { forEachRefFormat, parseForEachRef } from './parse/refs.js';
 export { parseStatusV2, type StatusBranch, type StatusEntry } from './parse/status.js';
 export { parseWorktreeList, type WorktreeRecord } from './parse/worktrees.js';
 export {
+  parseCommitPaths,
+  parsePatchIds,
+  REVIEW_RANGE_MAX_COMMITS_DEFAULT,
+} from './review.js';
+export {
   ALLOWED_SUBCOMMANDS,
   assertAllowedGitArgs,
   assertStdinAllowed,

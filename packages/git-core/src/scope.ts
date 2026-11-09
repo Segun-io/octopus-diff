@@ -40,8 +40,14 @@ export interface ScopePlan {
   revArgs: string[];
   /** working / staged / unstaged: file flags and conflicts come from `git status`. */
   statusBased: boolean;
-  /** working: untracked files are part of the scope. */
+  /** working, review, branch with includeWorking: untracked files are part of the scope. */
   includeUntracked: boolean;
+  /**
+   * The working tree (index and untracked files included) against one commit: `working`,
+   * `review` and `branch` with `includeWorking`. File flags (staged/unstaged) come from
+   * `git status` (relative to HEAD) exactly as in `working`.
+   */
+  vsWorktree: boolean;
   /** Nothing can differ (e.g. branch scope on an unborn HEAD, or a bare repository). */
   empty: boolean;
   /** Revision args use `HEAD`, which fails on an unborn branch (retry with the empty tree). */
@@ -91,6 +97,19 @@ export async function resolveHead(ctx: GitContext, repo: RepoInfo): Promise<stri
   return result.exitCode === 0 && sha ? sha : null;
 }
 
+/** Full id of the commit `rev` names (`rev-parse --verify <rev>^{commit}`); `not_found` if none. */
+export async function resolveCommit(ctx: GitContext, repo: RepoInfo, rev: string): Promise<string> {
+  const result = await ctx.git(
+    repo,
+    ['rev-parse', '--quiet', '--verify', '--end-of-options', `${rev}^{commit}`],
+    { okExitCodes: [0, 1, 128] },
+  );
+  const sha = result.stdout.toString('utf8').trim();
+  if (result.exitCode !== 0 || !sha)
+    throw new GitCoreError('not_found', `commit not found: ${rev}`);
+  return sha;
+}
+
 export async function planScope(
   ctx: GitContext,
   repo: RepoInfo,
@@ -100,22 +119,30 @@ export async function planScope(
   const base: Omit<ScopePlan, 'kind' | 'revArgs'> = {
     statusBased: false,
     includeUntracked: false,
+    vsWorktree: false,
     empty: false,
     usesHead: false,
     findCopies: true,
   };
+  /** The working tree against `commit` (`HEAD`: with the unborn-branch fallback). */
+  const worktreeAgainst = (kind: 'working' | 'review' | 'branch', commit: string): ScopePlan => ({
+    ...base,
+    kind,
+    revArgs: [commit],
+    statusBased: true,
+    includeUntracked: true,
+    vsWorktree: true,
+    usesHead: commit === 'HEAD',
+    empty: repo.bare,
+    findCopies: false,
+  });
   switch (scope.kind) {
     case 'working':
-      return {
-        ...base,
-        kind: 'working',
-        revArgs: ['HEAD'],
-        statusBased: true,
-        includeUntracked: true,
-        usesHead: true,
-        empty: repo.bare,
-        findCopies: false,
-      };
+      return worktreeAgainst('working', 'HEAD');
+    case 'review': {
+      if (scope.base === undefined || repo.bare) return worktreeAgainst('review', 'HEAD');
+      return worktreeAgainst('review', await resolveCommit(ctx, repo, scope.base));
+    }
     case 'staged':
       return {
         ...base,
@@ -150,7 +177,12 @@ export async function planScope(
               'branch scope needs a base: no default branch was given or detected',
             );
       }
-      if (!head) return { ...base, kind: 'branch', revArgs: [], empty: true };
+      if (!head) {
+        // Unborn: nothing is committed, so "All on branch" is the working tree.
+        return scope.includeWorking && !repo.bare
+          ? worktreeAgainst('branch', 'HEAD')
+          : { ...base, kind: 'branch', revArgs: [], empty: true };
+      }
       const mergeBase = await ctx.git(repo, ['merge-base', head, baseRef.oid], {
         okExitCodes: [0, 1],
       });
@@ -158,6 +190,8 @@ export async function planScope(
       if (mergeBase.exitCode !== 0 || !mb) {
         throw new GitCoreError('not_found', `no merge base between HEAD and ${baseRef.name}`);
       }
+      // A bare repository has no working tree: "All on branch" is the committed part.
+      if (scope.includeWorking && !repo.bare) return worktreeAgainst('branch', mb);
       return { ...base, kind: 'branch', revArgs: [mb, head] };
     }
     case 'commit': {

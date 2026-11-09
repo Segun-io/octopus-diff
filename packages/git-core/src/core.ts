@@ -18,6 +18,13 @@ import { detectDefaultBranch, listWorktrees, resolveProject, scan } from './disc
 import { LOG_FORMAT, parseLog } from './parse/log.js';
 import { readRemoteConfig } from './remotes.js';
 import { readRepositoryInfo } from './repository.js';
+import {
+  createCommitDetailsCache,
+  describeCommits,
+  type ReviewDeps,
+  rangePatchId,
+  readReviewRange,
+} from './review.js';
 import { defaultBigFileThreshold, GitRunner } from './runner/runner.js';
 import { getSummary } from './summary.js';
 import { createUntrackedCache } from './untracked.js';
@@ -138,6 +145,7 @@ export const createGitCore: CreateGitCore = (options: GitCoreOptions = {}): GitC
     untrackedCache: createUntrackedCache(),
     attributeCache: createAttributeCache(),
   };
+  const reviewDeps: ReviewDeps = { ctx, commitCache: createCommitDetailsCache() };
   let disposed = false;
 
   /** Rejects after dispose, and maps unexpected errors to `GitCoreError`. */
@@ -192,8 +200,14 @@ export const createGitCore: CreateGitCore = (options: GitCoreOptions = {}): GitC
       await ctx.ensureSupported();
       return readRepositoryInfo(ctx, project, infoOptions);
     }),
+    readReviewRange: guard((worktree, rangeOptions) =>
+      readReviewRange(reviewDeps, worktree, rangeOptions),
+    ),
+    describeCommits: guard((worktree, shas) => describeCommits(reviewDeps, worktree, shas)),
+    rangePatchId: guard((worktree, from, to) => rangePatchId(reviewDeps, worktree, from, to)),
     dispose: async () => {
       disposed = true;
+      reviewDeps.commitCache.clear();
       deps.untrackedCache.clear();
       deps.attributeCache.clear();
       await runner.dispose();
