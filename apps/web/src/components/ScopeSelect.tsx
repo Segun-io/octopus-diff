@@ -7,6 +7,7 @@ import {
 } from '@octopus-diff/contracts';
 import { useEffect } from 'react';
 import { useCommitsQuery, useFilesQuery } from '../api/queries.ts';
+import { listsReviewed } from '../lib/model.ts';
 import { ALL_ON_BRANCH, SCOPE_LABELS } from '../lib/scopeLabels.ts';
 import { useAppModel } from '../state/model.tsx';
 import { useUi, useUiStore } from '../state/ui.tsx';
@@ -25,12 +26,12 @@ function countFiles(files: readonly { reviewed: boolean }[]): ScopeCount {
 
 /**
  * Files per scope for the open worktree: from its summary, else from a loaded file list. To review
- * counts only what is left (it never lists reviewed files); a loaded list (All on branch, and the
- * current scope) also carries its unreviewed count.
+ * counts only what is left (it never lists reviewed files), All on branch everything; the current
+ * scope's loaded list also carries its unreviewed count, for the eye.
  */
 function scopeCounts(
   summary: WorktreeSummary | null | undefined,
-  branchFiles: readonly { reviewed: boolean }[] | undefined,
+  branchFiles: readonly unknown[] | undefined,
   current: { kind: ScopeKind; files: readonly { reviewed: boolean }[] } | undefined,
 ): Partial<Record<ScopeKind, ScopeCount>> {
   if (!summary) return {};
@@ -40,7 +41,7 @@ function scopeCounts(
     working: { total: summary.changedFiles },
     staged: { total: c.staged + c.conflicted },
     unstaged: { total: c.unstaged + c.untracked + c.conflicted },
-    ...(branchFiles !== undefined ? { branch: countFiles(branchFiles) } : {}),
+    ...(branchFiles !== undefined ? { branch: { total: branchFiles.length } } : {}),
   };
   if (current && current.kind !== 'review' && current.kind !== 'commit') {
     out[current.kind] = countFiles(current.files);
@@ -48,7 +49,7 @@ function scopeCounts(
   return out;
 }
 
-/** ` (12)`, or ` (5 of 12)` while reviewed files are hidden and some of the 12 are reviewed. */
+/** ` (12)`, or ` (5 of 12)` while the eye hides reviewed files and some of the 12 are reviewed. */
 function countLabel(count: ScopeCount | undefined, showReviewed: boolean): string {
   if (count === undefined) return '';
   const { total, unreviewed } = count;
@@ -140,7 +141,7 @@ export function ScopeSelect() {
             }
           >
             {SCOPE_LABELS[kind]}
-            {worktreeId !== null ? countLabel(counts[kind], showReviewed) : ''}
+            {worktreeId !== null ? countLabel(counts[kind], listsReviewed(showReviewed, kind)) : ''}
             {kind === 'commit' && worktreeId === null ? ' (select a worktree)' : ''}
           </option>
         ))}

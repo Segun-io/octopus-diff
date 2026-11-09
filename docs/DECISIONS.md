@@ -1830,3 +1830,9 @@ only if it makes the code easier to maintain.
      eye hides them (All on branch, and the current scope's loaded list; summary-only counts stay totals). All on
      branch, the default scope, is first in the scope select and in Settings → Default scope. Web only, no
      contract change. User request.
+152. **No eye in All on branch or To review (2026-11-09).** Refines #151 at the user's request: All on branch always
+     lists every file (reviewed included) and To review never lists reviewed ones, so `eyeApplies(kind)` is false
+     for both and the "Show reviewed" button is not rendered there (`h` is a no-op); `listsReviewed` returns true
+     for `branch`, false for `review`, else the pref. The `(5 of 12)` count applies only to the current scope when
+     it has the eye. e2e: 12 (review policy) starts `n` from beta with nothing listed instead of a reviewed file
+     shown by the eye; 13 (prefs migration) checks the eye in Uncommitted; 15 drops the eye toggle in To review.

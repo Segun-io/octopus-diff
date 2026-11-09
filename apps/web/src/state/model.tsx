@@ -45,7 +45,7 @@ export interface AppModel {
   /** Files across all worktrees for `n` (current scope; commit scope: current list only). */
   globalEntries: NavEntry[];
   visible: VisiblePredicate;
-  /** The list shows reviewed files: the eye is on and the scope is not To review (`listsReviewed`). */
+  /** The list shows reviewed files (`listsReviewed`: All on branch always, To review never, else the eye). */
   showsReviewed: boolean;
   /** True when the current view's file data is loaded for the current scope. */
   viewReady: boolean;
@@ -91,7 +91,7 @@ function useBuildAppModel(): AppModel {
     [filterProjects, filterWorktrees, onlyDirty, onlyUnreviewed],
   );
   const showReviewed = useUi((s) => s.showReviewed);
-  const showsReviewed = listsReviewed(showReviewed, scope);
+  const showsReviewed = listsReviewed(showReviewed, scope.kind);
   const selected = useUi((s) => s.selected);
   const pinned = useUi((s) => s.pinned);
   const settle = useUi((s) => s.settle);

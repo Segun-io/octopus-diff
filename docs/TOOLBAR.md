@@ -73,12 +73,13 @@ what is *below* it.
 One 36 px row over the list. Left: the scope `<select>` (`All on branch (12)` first, the default scope, then
 `To review`, `Uncommitted`, `Staged`, `Unstaged`, `Commit…`; counts per scope; the commit list and its copy button
 follow when the commit scope is chosen and wrap under it). Right: `Show reviewed` (eye, pressed = reviewed files are
-listed), `Tree view` (worktree view only), then `✓ Review 17`, the one bordered control.
+listed; only in Uncommitted, Staged, Unstaged and Commit), `Tree view` (worktree view only), then `✓ Review 17`, the
+one bordered control.
 
-To review lists what is left to review, so it never lists reviewed files: there the eye reads "off", is
-`aria-disabled` and `h` does nothing. In the other scopes the eye decides, and while it hides reviewed files a
-count that includes some says so: `All on branch (5 of 12)` (5 listed, 12 on the branch). Counts known per file
-(All on branch, and the current scope's loaded list) follow the eye; summary-only counts stay totals.
+The two main scopes say what they show, so neither has the eye: **All on branch** always lists every file on the
+branch, reviewed or not, and **To review** never lists reviewed files (what is left). There `h` does nothing. In the
+scopes with the eye, while it hides reviewed files the current scope's count says so: `Uncommitted (5 of 12)` (5
+listed, 12 changed); counts known only from the summary stay totals.
 
 The `17 files  17 unreviewed` line is gone: the select carries the total, the button carries the unreviewed count.
 

@@ -1,4 +1,5 @@
 import { TEST_IDS } from '@octopus-diff/contracts';
+import { eyeApplies } from '../lib/model.ts';
 import { useCommandsContext } from '../state/commandsContext.tsx';
 import { useAppModel } from '../state/model.tsx';
 import { useUi } from '../state/ui.tsx';
@@ -19,8 +20,8 @@ export function FilePaneHeader() {
   const commands = useCommandsContext();
   const layout = useUi((s) => s.fileListLayout);
   const inbox = model.view.kind === 'inbox';
-  // To review lists what is left, never reviewed files: the eye shows "off" and does nothing.
-  const inReview = model.scope.kind === 'review';
+  // All on branch lists everything and To review what is left: the eye is only for the others.
+  const eye = eyeApplies(model.scope.kind);
   return (
     <div
       role="toolbar"
@@ -29,18 +30,19 @@ export function FilePaneHeader() {
     >
       <ScopeSelect />
       <span className="ml-auto flex items-center gap-1">
-        <button
-          type="button"
-          data-testid={TEST_IDS.showReviewedToggle}
-          aria-pressed={model.showsReviewed}
-          aria-disabled={inReview}
-          onClick={commands.toggleShowReviewed}
-          title={inReview ? 'To review lists unreviewed files only' : 'Show reviewed files (h)'}
-          aria-label="Show reviewed files"
-          className="od-btn od-btn-ghost od-btn-icon"
-        >
-          <EyeIcon />
-        </button>
+        {eye && (
+          <button
+            type="button"
+            data-testid={TEST_IDS.showReviewedToggle}
+            aria-pressed={model.showsReviewed}
+            onClick={commands.toggleShowReviewed}
+            title="Show reviewed files (h)"
+            aria-label="Show reviewed files"
+            className="od-btn od-btn-ghost od-btn-icon"
+          >
+            <EyeIcon />
+          </button>
+        )}
         {!inbox && (
           <button
             type="button"

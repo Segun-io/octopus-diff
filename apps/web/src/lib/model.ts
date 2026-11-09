@@ -5,12 +5,12 @@
 import type {
   ChangedFile,
   ChangeRequest,
-  DiffScope,
   EffectiveReviewPolicy,
   InboxEntry,
   Project,
   ProjectListItem,
   ScanRoot,
+  ScopeKind,
   Worktree,
   WorktreeForge,
   WorktreeListItem,
@@ -577,11 +577,18 @@ export function flattenGroups(groups: readonly FileGroup[]): NavEntry[] {
 export type VisiblePredicate = (entry: NavEntry) => boolean;
 
 /**
- * Whether the list shows reviewed files: the eye ("Show reviewed") is on and the scope is not To
- * review, which lists what is left to review and so never shows reviewed files.
+ * Whether the eye ("Show reviewed") applies to a scope. All on branch lists everything on the
+ * branch and To review only what is left, so neither has the eye: their names say what they show.
  */
-export function listsReviewed(showReviewed: boolean, scope: DiffScope): boolean {
-  return showReviewed && scope.kind !== 'review';
+export function eyeApplies(kind: ScopeKind): boolean {
+  return kind !== 'branch' && kind !== 'review';
+}
+
+/** Whether the list shows reviewed files: All on branch always, To review never, else the eye. */
+export function listsReviewed(showReviewed: boolean, kind: ScopeKind): boolean {
+  if (kind === 'branch') return true;
+  if (kind === 'review') return false;
+  return showReviewed;
 }
 
 export function visibleIf(showReviewed: boolean): VisiblePredicate {

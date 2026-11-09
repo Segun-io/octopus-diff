@@ -611,10 +611,10 @@ describe('folder tier, overview and palette', () => {
     await waitFor(() => expect(worktreeItem('fix/cache').dataset.stage).toBe('reviewed'));
   });
 
-  it('To review never lists reviewed files; the scope counts follow the eye; All on branch is first', async () => {
+  it('All on branch lists everything, To review what is left, neither has the eye; counts follow the eye elsewhere', async () => {
     const { user, store } = setup('demo', {
       statusFlow: true,
-      store: { scope: { kind: 'review' }, showReviewed: true },
+      store: { scope: { kind: 'review' }, showReviewed: false },
     });
     await waitFor(() => expect(app().getAttribute('data-ready')).toBe('true'));
     const select = screen.getByTestId(TEST_IDS.scopeSelect) as HTMLSelectElement;
@@ -629,39 +629,49 @@ describe('folder tier, overview and palette', () => {
     fireEvent.click(worktreeItem('fix/cache'));
     await ready();
     const paths = () => screen.queryAllByTestId(TEST_IDS.fileItem).map((el) => el.dataset.path);
+    const reviewed = () =>
+      screen.queryAllByTestId(TEST_IDS.fileItem).filter((el) => el.dataset.reviewed === 'true');
+    const eye = () => screen.queryByTestId(TEST_IDS.showReviewedToggle);
+    const option = (kind: string) => select.querySelector(`option[value="${kind}"]`)?.textContent;
+
+    // To review: no eye, `h` does nothing, a file marked reviewed leaves the list.
+    expect(eye()).toBeNull();
     const before = paths();
     expect(before.length).toBeGreaterThan(1);
-    const eye = screen.getByTestId(TEST_IDS.showReviewedToggle);
-    // The eye is on, but To review lists what is left: it reads "off" and does nothing.
-    expect(eye.getAttribute('aria-disabled')).toBe('true');
-    expect(eye.getAttribute('aria-pressed')).toBe('false');
     const first = viewer().dataset.path ?? before[0];
     await press(user, 'r');
     await waitFor(() => expect(paths()).not.toContain(first));
     await press(user, 'h');
-    expect(store.getState().showReviewed).toBe(true);
-    expect(paths()).not.toContain(first);
+    expect(store.getState().showReviewed).toBe(false);
 
-    // All on branch lists reviewed files while the eye is on; with it off, the count says so.
+    // All on branch: no eye, and reviewed files are listed even though the eye pref is off.
     fireEvent.change(select, { target: { value: 'branch' } });
-    await waitFor(() => expect(eye.getAttribute('aria-disabled')).toBe('false'));
-    expect(eye.getAttribute('aria-pressed')).toBe('true');
-    await waitFor(() => expect(viewer().getAttribute('data-state')).toBe('ready'));
-    const reviewedCount = () =>
-      screen.queryAllByTestId(TEST_IDS.fileItem).filter((el) => el.dataset.reviewed === 'true')
-        .length;
+    await waitFor(() => expect(select.dataset.scope?.startsWith('branch')).toBe(true));
+    await ready();
+    expect(eye()).toBeNull();
+    await press(user, 'r');
+    await waitFor(() => expect(reviewed().length).toBeGreaterThan(0));
+    const branchTotal = paths().length;
+    expect(option('branch')).toBe(`All on branch (${branchTotal})`);
+
+    // Uncommitted has the eye: with it off, a reviewed file leaves and the count says "x of y".
+    fireEvent.change(select, { target: { value: 'working' } });
+    await waitFor(() => expect(eye()).not.toBeNull());
+    await ready();
+    expect(eye()?.getAttribute('aria-pressed')).toBe('false');
+    fireEvent.click(eye() as HTMLElement);
+    await waitFor(() => expect(eye()?.getAttribute('aria-pressed')).toBe('true'));
+    await waitFor(() => expect(paths().length).toBeGreaterThan(1));
     const total = paths().length;
-    const branchOption = () => select.querySelector('option[value="branch"]')?.textContent;
-    expect(branchOption()).toBe(`All on branch (${total})`);
-    const already = reviewedCount();
-    if (already === 0) {
+    if (reviewed().length === 0) {
       await press(user, 'r');
-      await waitFor(() => expect(reviewedCount()).toBe(1));
+      await waitFor(() => expect(reviewed().length).toBe(1));
     }
-    const left = total - reviewedCount();
-    fireEvent.click(eye);
+    const left = total - reviewed().length;
+    expect(option('working')).toBe(`Uncommitted (${total})`);
+    fireEvent.click(eye() as HTMLElement);
     await waitFor(() => expect(paths()).toHaveLength(left));
-    await waitFor(() => expect(branchOption()).toBe(`All on branch (${left} of ${total})`));
+    await waitFor(() => expect(option('working')).toBe(`Uncommitted (${left} of ${total})`));
   });
 
   it('switching the toolbar scope never moves a sidebar row (status flow v2)', async () => {

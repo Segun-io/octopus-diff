@@ -138,6 +138,8 @@ test.describe('UX-4/5/6 settings, themes and assets (UI)', () => {
     });
     await ui.expectTheme('octopus-light', false);
     await expect(ui.byTestId(TEST_IDS.diffModeToggle)).toHaveAttribute('data-mode', 'unified');
+    // The eye lives only in scopes that can hide reviewed files (not All on branch or To review).
+    await ui.setScope('working');
     await expect(ui.byTestId(TEST_IDS.showReviewedToggle)).toHaveAttribute('aria-pressed', 'false');
     const migrated = await page.evaluate(() =>
       JSON.parse(localStorage.getItem('octopus-diff:prefs') ?? '{}'),

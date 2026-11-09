@@ -70,12 +70,10 @@ test.describe('UX-2/3 review policy (UI)', () => {
     const unreviewed = await daemon.client.inbox({ onlyUnreviewed: true, scope: review });
     expect(unreviewed.entries.map((e) => e.worktree.id)).toEqual([alpha.worktree.id]);
 
-    // `n` never lands in the disabled worktree: from a reviewed file in beta it goes to alpha
-    // and then has nowhere else to go.
+    // `n` never lands in the disabled worktree: from beta (all reviewed, so To review lists
+    // nothing there; it has no "show reviewed" eye) it goes to alpha and then has nowhere else to go.
     const beta = findWorktree(manifest, 'beta').worktree;
     await ui.selectWorktree(beta.id);
-    await ui.setToggle(TEST_IDS.showReviewedToggle, true);
-    await ui.openFile((await ui.fileItems())[0]?.path ?? '');
     await ui.focusApp();
     for (let i = 0; i < 3; i++) {
       await ui.press('n');
