@@ -321,6 +321,29 @@ export type InboxEntry = z.infer<typeof InboxEntrySchema>;
 
 // --- repository information (Overview; docs/FORGES.md "Repository information") ------------
 
+/** Cap on `GitRepositoryInfo.branches`. */
+export const MAX_LISTED_BRANCHES = 500;
+
+/** One local branch (`refs/heads/*`) of `GitRepositoryInfo.branches`; local refs only. */
+export const GitBranchInfoSchema = z.object({
+  name: z.string().min(1),
+  /** The commit the branch points at. */
+  sha: CommitShaSchema,
+  subject: z.string(),
+  /** Committer date of that commit (when the branch last moved, as far as git records it). */
+  committerDate: TimestampSchema.nullable(),
+  /** Short upstream name (`origin/feat`), or null. */
+  upstream: z.string().nullable(),
+  /** The configured upstream ref no longer exists (deleted on the remote and pruned). */
+  upstreamGone: z.boolean(),
+  /** Against the upstream, as of the last fetch; null without an upstream or when it is gone. */
+  ahead: z.number().int().min(0).nullable(),
+  behind: z.number().int().min(0).nullable(),
+  /** Reachable from the default branch (merged into it); null when there is no default branch. */
+  merged: z.boolean().nullable(),
+});
+export type GitBranchInfo = z.infer<typeof GitBranchInfoSchema>;
+
 /** Local git facts about a project, from `GitCore.readRepositoryInfo` (local refs only). */
 export const GitRepositoryInfoSchema = z.object({
   defaultBranch: z
@@ -353,5 +376,11 @@ export const GitRepositoryInfoSchema = z.object({
   ),
   /** Latest committer date over local branches, or null. */
   lastActivityAt: TimestampSchema.nullable(),
+  /**
+   * Local branches, newest commit first, at most `MAX_LISTED_BRANCHES` (`localBranches` is the
+   * full count). The Overview lists the ones no worktree has checked out. Optional: older daemons
+   * and test doubles omit it.
+   */
+  branches: z.array(GitBranchInfoSchema).optional(),
 });
 export type GitRepositoryInfo = z.infer<typeof GitRepositoryInfoSchema>;
