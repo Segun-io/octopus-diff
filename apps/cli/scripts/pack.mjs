@@ -80,13 +80,14 @@ const manifest = {
   license: cliPkg.license,
   type: 'module',
   bin: { 'octopus-diff': './dist/index.js' },
-  files: ['dist', 'README.md', 'LICENSE'],
+  files: ['dist', 'README.md', 'LICENSE', 'CREDITS.md'],
   engines: cliPkg.engines,
   dependencies,
 };
 await writeFile(path.join(stage, 'package.json'), `${JSON.stringify(manifest, null, 2)}\n`);
 await cp(path.join(repoRoot, 'README.md'), path.join(stage, 'README.md'));
 await cp(path.join(repoRoot, 'LICENSE'), path.join(stage, 'LICENSE'));
+await cp(path.join(repoRoot, 'CREDITS.md'), path.join(stage, 'CREDITS.md'));
 
 // `npm pack` only writes a local file; it never contacts the registry.
 const output = execFileSync('npm', ['pack', '--pack-destination', outDir, '--json'], {

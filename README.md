@@ -310,6 +310,11 @@ pnpm test:e2e   # Playwright end-to-end tests
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the layout, conventions and the read-only rules, and
 [AGENTS.md](AGENTS.md) for the rules that coding agents working on this repository follow.
 
+## Credits
+
+octopus-diff is built on open-source software: [CREDITS.md](CREDITS.md) lists every package it
+uses, with its license, and the code adapted from other projects (notably [T3 Code](https://github.com/pingdotgg/t3code), MIT).
+
 ## License
 
 MIT

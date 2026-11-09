@@ -10,7 +10,7 @@ deviate from it, log why in `docs/DECISIONS.md`.
 | Command | What it does |
 |---|---|
 | `pnpm install` | Install dependencies (pnpm 12, Node ≥ 24; the dev machine has Node 26) |
-| `pnpm lint` | Biome lint + format check for the whole repo (`pnpm lint:fix` to apply fixes) |
+| `pnpm lint` | Biome lint + format check for the whole repo (`pnpm lint:fix` to apply fixes), then the `CREDITS.md` check |
 | `pnpm typecheck` | `tsc` in every package (resolves workspace deps to their sources, no build needed) |
 | `pnpm test` | vitest unit tests in every package (no build needed) |
 | `pnpm build` | Topological build: contracts → git-core → daemon → cli, plus web (Vite) |
@@ -34,9 +34,10 @@ tools/fixtures/       scratch-repo generator, agent simulator, perf bench, read-
 e2e/                  Playwright tests                                                                 [WS4]
 apps/cli/             `octopus-diff` bin, config, packaging; README.md, CONTRIBUTING.md, .github/      [WS5]
 docs/                 everyone (PLAN.md changes need a DECISIONS.md entry)
+CREDITS.md            everyone (update it with every dependency change; see Dependencies)
 ```
 
-Edit only paths you own, plus `docs/`. If another stream's code needs a change, describe it in your
+Edit only paths you own, plus `docs/` and `CREDITS.md`. If another stream's code needs a change, describe it in your
 report or in `docs/DECISIONS.md`; don't make it.
 
 ## How packages resolve each other
@@ -113,6 +114,18 @@ resolves `pnpm-lock.yaml` conflicts at merge time by re-running `pnpm install`.
 License hygiene (PLAN §3): reuse ideas from anything; copy code only from MIT / Apache-2.0 sources, with
 attribution in a comment. Never copy from GitButler (FSL), Zed or Detached (GPL-3).
 
+**Credit what you add: [`CREDITS.md`](CREDITS.md).** Every change that adds, removes or replaces a
+third-party package (any `package.json`, any dependency field, dev tools included) updates `CREDITS.md`
+in the same commit: one table row per direct dependency (package, which workspace packages use it,
+license, project URL), in "Shipped with octopus-diff" if it runs or is bundled at runtime, otherwise in
+"Development tools". Also update the row when a version bump changes the license, and review the
+"Pulled in by those packages" list when a shipped dependency changes. Copying or adapting code from
+another project adds an entry under "Code adapted from other projects" (project, license, copyright,
+the files) next to the attribution comment in the code. `pnpm lint` runs `scripts/check-credits.mjs`
+(also `pnpm credits`) and fails on a missing, stale or wrong-license row, so `pnpm check` stays red
+until `CREDITS.md` is right. A stream that may not edit the root still updates `CREDITS.md`: it is a
+shared file, like `docs/`.
+
 ## Rules for autonomous sessions (PLAN §7)
 
 These apply to the lead and to every delegated session.
@@ -121,7 +134,7 @@ These apply to the lead and to every delegated session.
    plan is silent, choose the simplest reversible option and log it in `docs/DECISIONS.md` (date,
    decision, reason). If something is truly blocked, record it in `docs/BLOCKERS.md`, then continue with
    other work.
-2. **Stay in scope.** Edit only paths you own plus `docs/`. Don't refactor other streams' code.
+2. **Stay in scope.** Edit only paths you own plus `docs/` and `CREDITS.md`. Don't refactor other streams' code.
 3. **Outward-facing actions are out of bounds:** no `git push`, no remotes, no npm publish, no posting
    anywhere, no use of the user's secrets, credentials or Bitwarden. Network: npm registry installs and
    public docs only.
@@ -144,6 +157,7 @@ Each stream finishes by committing `docs/reports/<stream>.md`:
 ## Verification   exact commands run and their real results (pass/fail counts, timings)
 ## Decisions      choices made (also logged in docs/DECISIONS.md)
 ## Contract changes   additive changes to packages/contracts, if any
+## Dependencies   packages added or removed (and confirm CREDITS.md was updated), if any
 ## Known gaps     what is missing, flaky or deferred, and why
 ## Notes for integration   what the lead needs to know to merge and wire this up
 ```

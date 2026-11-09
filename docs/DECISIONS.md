@@ -1120,3 +1120,24 @@ look off, worktrees cannot be settled and the settled ones still show; follow th
     reads a favicon per project; we draw one repo glyph). No "Working" shelf: the activity pulse already marks a
     worktree an agent is writing to, and rows do not reorder.
 
+
+## Credits for open-source software (lead, 2026-11-08)
+
+Branch `docs/credits`, on top of `main` at `1a07fd9`. Brief from the user: a section that credits all open-source
+software we use, and every agent must know to update it whenever a package is added.
+
+53. **`CREDITS.md` at the repository root, linked from the README's new "Credits" section.** Tables of direct
+    dependencies (shipped vs development tools: package, users, license, project URL), a prose list of the
+    transitive packages the shipped ones pull in (shiki, the unified utilities, preact, the `@parcel/watcher`
+    binaries…), git as an external program (GPL-2.0, run, not bundled), the code adapted from T3 Code (MIT,
+    Copyright (c) 2026 T3 Tools Inc.: `DiffWorkerPool.tsx`, `folderPath.ts`, the ported `folderPath.test.ts` cases)
+    and the projects from PLAN §3 that inspired ideas only. It is a shared file, like `docs/`: every stream may edit it.
+54. **Enforced, not just documented.** `scripts/check-credits.mjs` (run by `pnpm lint`, so by `pnpm check`; also
+    `pnpm credits`) reads every workspace `package.json` and fails on a direct dependency without a table row, a row
+    for a package that is no longer a dependency, or a row whose license differs from the installed package's
+    `license` field. Transitive packages are not checked (the list would churn with every lockfile update); the
+    rule asks for a review of that list when a shipped dependency changes. AGENTS.md § Dependencies, rule 2, the
+    layout table, the stream report template and CONTRIBUTING.md now say so.
+55. **The CLI tarball ships `CREDITS.md`** next to `LICENSE` (`apps/cli/scripts/pack.mjs`). Not done: a generated
+    `THIRD_PARTY_LICENSES` with the full license texts of the code bundled into the web UI, which MIT / Apache-2.0
+    ask for when redistributing. Do it before the first npm publish (e.g. from the Vite build's module list).
