@@ -106,7 +106,8 @@ export class AppPage {
 
   async selectWorktree(worktreeId: string): Promise<void> {
     const item = this.worktreeItem(worktreeId);
-    await item.scrollIntoViewIfNeeded();
+    // No explicit scrollIntoViewIfNeeded: click scrolls itself and retries when the row remounts
+    // (a card moving between its project and the Settled shelf as a new scope's inbox lands).
     await item.click();
     await expect(item).toHaveAttribute('aria-current', 'true');
   }

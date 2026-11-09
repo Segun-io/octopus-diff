@@ -1156,6 +1156,16 @@ row cards took #53 on `main` in parallel. #54–#56 are superseded by #57–#59 
 56. **The CLI tarball ships `CREDITS.md`** next to `LICENSE` (`apps/cli/scripts/pack.mjs`). Not done: a generated
     `THIRD_PARTY_LICENSES` with the full license texts of the code bundled into the web UI, which MIT / Apache-2.0
     ask for when redistributing. Do it before the first npm publish (e.g. from the Vite build's module list).
+60. **No `⋯` buttons; right-click is the menu.** (2026-11-09, user request; numbered after the credits entries #54–#59, written in parallel.) The hover-revealed `⋯` on cards, project
+    headers and folder headers is gone; the context menu opens on right-click anywhere on the row or header (the
+    chevron included), and from the keyboard with the menu key or `Shift+F10`, which browsers deliver as the same
+    `contextmenu` event (`useContextMenu` already anchors a keyboard-opened menu to the element). The one visible
+    action left on a card is the hover `Settle` / `Un-settle`. Rows gain the 20 px the `⋯` reserved. The web tests
+    open menus with `fireEvent.contextMenu`; the e2e helper already right-clicked. Also here: `AppPage.selectWorktree` no
+    longer calls `scrollIntoViewIfNeeded` before clicking; the click scrolls and retries by itself when the row remounts
+    (a card that settles or wakes while the inbox for a new scope lands moves between its project and the shelf, which
+    the folder hierarchy makes a remount again; the scopes spec hit that race once).
+
 
 ## Credits in the app (lead, 2026-11-09)
 

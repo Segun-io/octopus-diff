@@ -543,7 +543,7 @@ describe('folder tier, overview and palette', () => {
 
     // blocked work never settles: no check on the row, the menu item is disabled
     expect(rowActions('').queryByLabelText('Settle worktree')).toBeNull();
-    fireEvent.click(rowActions('').getByLabelText(/^Actions for docs-site/));
+    fireEvent.contextMenu(worktreeItem(''));
     const blockedItem = await screen.findByRole('menuitem', { name: 'Settle (blocked)' });
     expect(blockedItem.getAttribute('aria-disabled')).toBe('true');
     fireEvent.keyDown(blockedItem, { key: 'Escape' });
@@ -563,7 +563,7 @@ describe('folder tier, overview and palette', () => {
     expect(worktreeItem('fix/cache').textContent).toContain('verified');
 
     // pin it: listed first under "Pinned", whatever its state
-    fireEvent.click(rowActions('fix/cache').getByLabelText(/^Actions for/));
+    fireEvent.contextMenu(worktreeItem('fix/cache'));
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Pin to the top' }));
     await waitFor(() => expect(section('pinned')).toEqual(['fix/cache']));
     expect(store.getState().pinned).toEqual([cacheId]);
@@ -642,7 +642,7 @@ describe('folder tier, overview and palette', () => {
     const project = screen
       .getAllByTestId(TEST_IDS.projectItem)
       .find((p) => p.dataset.projectName === 'web-dashboard') as HTMLElement;
-    fireEvent.click(within(project).getByLabelText('Actions for web-dashboard'));
+    fireEvent.contextMenu(within(project).getByText('web-dashboard'));
     const menu = await screen.findByRole('menu');
     const off = within(menu)
       .getAllByTestId(TEST_IDS.reviewPolicyItem)

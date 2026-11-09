@@ -27,7 +27,7 @@ import { isRecentlyActive, worktreeSource } from '../lib/source.ts';
 import { useCommandsContext } from '../state/commandsContext.tsx';
 import { useAppModel } from '../state/model.tsx';
 import { actions, useUi, useUiStore, type View } from '../state/ui.tsx';
-import { CheckIcon, MoreIcon, ToggleButton } from './bits.tsx';
+import { CheckIcon, ToggleButton } from './bits.tsx';
 import { ContextMenu, type MenuItem, useContextMenu } from './ContextMenu.tsx';
 import { useFolderStart } from './FolderBrowser.tsx';
 import { Wordmark } from './Mark.tsx';
@@ -337,7 +337,8 @@ const ROW_INDENT: Record<RowVariant, string> = {
  * One worktree as a card (T3 Code's row anatomy). Under a project: the branch with the status
  * slot, then the meta line. Pinned and settled rows sit outside their project, so they start
  * with a project line (repo glyph and name). Hover or focus swaps the status slot for the
- * actions (`Settle` / `Un-settle`, `⋯`) and, after a moment, shows the hover card.
+ * settle action and, after a moment, shows the hover card. Right-click (or the keyboard's menu
+ * key) opens the actions, as on folder and project headers; there is no `⋯`.
  */
 const WorktreeItem = memo(function WorktreeItem({
   row,
@@ -407,43 +408,11 @@ const WorktreeItem = memo(function WorktreeItem({
             {settled ? 'Un-settle' : 'Settle'}
           </button>
         )}
-        <MoreButton
-          label={`Actions for ${row.project.name} ${worktreeLabel(worktree)}`}
-          onOpen={(e) => onMenu(e, row)}
-        />
       </span>
       {hover.at && <RowHoverCard row={row} at={hover.at} />}
     </li>
   );
 });
-
-/** Keyboard-reachable "⋯" that opens the same menu as right-click. */
-function MoreButton({ label, onOpen }: { label: string; onOpen: (event: RowEvent) => void }) {
-  return (
-    <button
-      type="button"
-      aria-label={label}
-      aria-haspopup="menu"
-      onClick={onOpen}
-      className="flex h-5 w-5 items-center justify-center rounded-sm text-faint hover:bg-raised hover:text-fg"
-    >
-      <MoreIcon size={12} />
-    </button>
-  );
-}
-
-/** The hover slot of folder and project headers: only the `⋯` menu. */
-function HeaderActions({ group, children }: { group: 'folder' | 'proj'; children: ReactNode }) {
-  const reveal =
-    group === 'folder' ? 'group-hover/folder:opacity-100' : 'group-hover/proj:opacity-100';
-  return (
-    <span
-      className={`absolute top-0 right-1 flex h-[var(--od-row)] items-center opacity-0 focus-within:opacity-100 ${reveal}`}
-    >
-      {children}
-    </span>
-  );
-}
 
 function Chevron({ open }: { open: boolean }) {
   return (
@@ -463,10 +432,13 @@ function ChevronButton({
   open,
   what,
   onToggle,
+  onContextMenu,
 }: {
   open: boolean;
   what: string;
   onToggle: () => void;
+  /** The header's menu, so a right-click on the chevron opens it like the rest of the header. */
+  onContextMenu?: (event: React.MouseEvent) => void;
 }) {
   return (
     <button
@@ -474,6 +446,7 @@ function ChevronButton({
       aria-label={`${open ? 'Collapse' : 'Expand'} ${what}`}
       aria-expanded={open}
       onClick={onToggle}
+      onContextMenu={onContextMenu}
       className="flex h-5 w-5 shrink-0 items-center justify-center rounded-sm hover:bg-raised"
     >
       <Chevron open={open} />
@@ -852,9 +825,9 @@ export function Sidebar() {
               const current = view.kind === 'folder' && view.scanRootId === node.id;
               const visibleRows = node.groups.flatMap((g) => g.rows);
               return (
-                <li key={node.id} data-folder-id={node.id} className="group/folder relative mt-2">
+                <li key={node.id} data-folder-id={node.id} className="relative mt-2">
                   <div
-                    className={`flex h-[var(--od-row)] items-center gap-0.5 rounded-sm pr-7 ${
+                    className={`flex h-[var(--od-row)] items-center gap-0.5 rounded-sm pr-2 ${
                       current ? 'bg-selected' : 'hover:bg-hover'
                     }`}
                   >
@@ -862,6 +835,7 @@ export function Sidebar() {
                       open={open}
                       what="folder"
                       onToggle={() => actions.toggleCollapsed(store, node.id)}
+                      onContextMenu={(e) => menu.open(e, { kind: 'folder', node })}
                     />
                     <button
                       type="button"
@@ -887,12 +861,6 @@ export function Sidebar() {
                       )}
                     </button>
                   </div>
-                  <HeaderActions group="folder">
-                    <MoreButton
-                      label={`Actions for ${node.label}`}
-                      onOpen={(e) => menu.open(e, { kind: 'folder', node })}
-                    />
-                  </HeaderActions>
                   {open && (
                     <ul className="flex flex-col">
                       {node.groups.map((group) => (
@@ -981,14 +949,14 @@ function ProjectFolder({
       data-testid={TEST_IDS.projectItem}
       data-project-id={project.id}
       data-project-name={project.name}
-      className="group/proj relative"
+      className="relative"
     >
       <div
-        className={`flex h-[var(--od-row)] items-center gap-0.5 rounded-sm pr-7 pl-4 ${
+        className={`flex h-[var(--od-row)] items-center gap-0.5 rounded-sm pr-2 pl-4 ${
           current ? 'bg-selected' : 'hover:bg-hover'
         }`}
       >
-        <ChevronButton open={open} what="project" onToggle={onToggle} />
+        <ChevronButton open={open} what="project" onToggle={onToggle} onContextMenu={onMenu} />
         <button
           type="button"
           aria-current={current ? 'true' : undefined}
@@ -1011,9 +979,6 @@ function ProjectFolder({
           ) : null}
         </button>
       </div>
-      <HeaderActions group="proj">
-        <MoreButton label={`Actions for ${project.name}`} onOpen={onMenu} />
-      </HeaderActions>
       {open && active.length > 0 && <ul className="flex flex-col">{children}</ul>}
     </li>
   );

@@ -23,7 +23,7 @@ export interface MenuPosition {
 }
 
 /**
- * Right-click / "⋯" menu. Keyboard: arrows move, Enter/Space select, Escape closes, focus
+ * Right-click (or menu-key) menu. Keyboard: arrows move, Enter/Space select, Escape closes, focus
  * returns to the opener. Positioned at the pointer, kept inside the viewport.
  */
 export function ContextMenu({
