@@ -1569,3 +1569,52 @@ request, git call or contract change.
      and the e2e `data-state` values keep working.
 115. **Screenshots.** `e2e/scripts/screenshots.ts` adds `sidebar-filter-{light,dark}.png` (dropdown open, Only
      dirty and `alpha` ticked); every README screenshot was regenerated since the sidebar header changed.
+
+## Chrome hierarchy: the context bar and the pane headers (lead, 2026-11-09)
+
+Design record: `docs/TOOLBAR.md`. Brief from the user: the controls above the file list and the diff are too dense,
+with little context and no hierarchy of what belongs to what; rearrange them, taking the Request tab into account.
+Web only, plus two e2e helper lines; no daemon, contract or preference change.
+
+116. **Three tiers, one row each.** The toolbar that spanned both panes is gone. A **context bar**
+     (`components/ContextBar.tsx`) above both panes says where you are (the Inbox with its worktree and file counts,
+     or the worktree's project and branch with its chips and `↑a ↓b`, the path in the tooltip), holds the
+     `Changes | PR #n` switch, the forge link, the review policy and, at the right, the app chrome (Live, theme,
+     help). Each pane then has one header: the **file pane header** (`components/FilePaneHeader.tsx`, moved out of
+     `App.tsx`) with the scope select, the two list toggles and `Review N`; the **diff header** with the file's
+     identity and, at the right, the rendering options, the per-file actions and `Reviewed`. A control sits over
+     what it changes. Reason: the one-row toolbar mixed app, worktree, list and diff concerns in identical bordered
+     buttons, and nothing named the worktree.
+117. **The context bar is the same on both tabs**; the tabs switch what sits below it. The forge link
+     (`ChangeRequestBadge`) shows on the Changes tab only: the Request header already carries `#n ↗` and the state
+     word. The link now says the state words set apart by space (`open  changes requested  out of sync`) instead of
+     `PR #100 · open · …`: the tab beside it has the number, and IDENTITY §5 bans the middle dot between facts.
+118. **Toggles are ghost icons; the primary verb keeps the border.** Show reviewed (an eye, pressed while reviewed
+     files are listed), tree view, whitespace (a pilcrow) and the `⋯` menu are icon-only ghost buttons with a `title`
+     and an `aria-label`; a pressed ghost keeps the soft fill (new rules in `styles.css`: `.od-btn-ghost[aria-pressed]`,
+     `.od-btn-icon`, `.od-sep`). Unified / split is a segmented pair of icons, after T3 Code's layout group: the group
+     carries `data-testid="diff-mode-toggle"` and `data-mode` for the tests, each button `data-mode-option`, and
+     `AppPage.setDiffMode` (e2e) clicks the wanted half. `More context` and `Expand all` are ghost text. `Review N`
+     and `Reviewed` stay bordered: one filled control per row. `Review on` is ghost when on and raised when off, so
+     the exception is the loud one.
+119. **Dropped as redundant.** The `N files  N unreviewed` line over the list (the select carries the total,
+     `Review N` the unreviewed count; the Inbox's `N worktrees` moved into the bar); the worktree name in the diff
+     header outside the Inbox (the bar names it; in the Inbox the list mixes worktrees, so the header keeps it); the
+     `Show` label before the scope select (its place over the list says it; `aria-label` and `title` keep the words);
+     `PR #n` repeated in the link.
+120. **The diff header is always rendered in the Changes view**, so the rendering options have a fixed home with no
+     file open (and the e2e theme spec, which reads `data-mode` right after load, keeps working); the per-file
+     actions appear with a selection.
+121. **Not changed.** The Overview keeps its own heading and no bar (the app chrome is absent there, as before; a
+     follow-up if it is missed). The Request view's header and its `Summary | Timeline | Files` control are
+     untouched. The scope select stays a native `<select>` (the unit and e2e tests drive it with `change` /
+     `selectOption`; T3's dropdown menu would need a custom listbox). Both pane headers are 36 px so their hairlines
+     meet; the two-row wrap in the commit scope (commit list and copy button under the select) is accepted.
+122. **Files.** New `ContextBar.tsx`, `FilePaneHeader.tsx`, `ScopeSelect.tsx` (the scope logic from the old
+     toolbar), `WorktreeChips.tsx` (`RowChips`, shared with the sidebar); `Toolbar.tsx` deleted; `ALL_ON_BRANCH`
+     moved to `lib/scopeLabels.ts`; five stroke icons in `bits.tsx`; `scripts/shots.ts` gains `commit-scope`.
+     Outside `apps/web`: `e2e/support/app.ts` `setDiffMode` and `e2e/tests/16-copy.spec.ts` `setMode` (the segmented
+     control), and `e2e/tests/04-live-updates.spec.ts` "sidebar counts follow external edits in the inbox view": it
+     asserted a row of the virtualized Inbox list with `toBeVisible`, and the 6 px taller file pane header (30 → 36)
+     left that row outside the mounted window; it now scans the list with the existing `allFileItems()` helper. PLAN §4.2 "Toolbar" paragraph rewritten; IDENTITY §6 gains the chrome rule; README and `FORGES.md` say
+     "the bar above the panes".

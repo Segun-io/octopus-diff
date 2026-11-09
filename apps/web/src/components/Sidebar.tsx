@@ -33,8 +33,8 @@ import { ContextMenu, type MenuItem, useContextMenu } from './ContextMenu.tsx';
 import { separated, worktreeCopyItems } from './copyMenu.ts';
 import { useFolderStart } from './FolderBrowser.tsx';
 import { Wordmark } from './Mark.tsx';
-import { RowChips } from './WorktreeChips.tsx';
 import { SidebarFilter } from './SidebarFilter.tsx';
+import { RowChips } from './WorktreeChips.tsx';
 
 /**
  * The sidebar (DECISIONS "UX round 4", status flow v2 in docs/STATUS-FLOW.md): the Inbox;
