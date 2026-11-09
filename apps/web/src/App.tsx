@@ -2,6 +2,7 @@ import './zod-config.ts';
 import { type ApiClient, TEST_IDS } from '@octopus-diff/contracts';
 import { type QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useForgeIndex } from './api/forges.ts';
 import {
   type EventSourceFactory,
   useFocusReporting,
@@ -49,6 +50,10 @@ const CommandPalette = lazy(() =>
 );
 const Overview = lazy(() =>
   import('./components/Overview.tsx').then((m) => ({ default: m.Overview })),
+);
+// The Request tab (and its markdown renderer) loads when first opened.
+const RequestView = lazy(() =>
+  import('./components/request/RequestView.tsx').then((m) => ({ default: m.RequestView })),
 );
 
 export interface AppProps {
@@ -290,6 +295,11 @@ function AppShell({ eventSourceFactory }: { eventSourceFactory?: EventSourceFact
   useKeyboardShortcuts(commands, ready && hasProjects);
 
   const onSelectEntry = useCallback((entry: NavEntry) => commands.selectEntry(entry), [commands]);
+  const forgeIndex = useForgeIndex();
+  const viewWorktreeId = model.view.kind === 'worktree' ? model.view.worktreeId : null;
+  const hasRequest =
+    viewWorktreeId !== null && !!forgeIndex.get(viewWorktreeId)?.worktree.changeRequest;
+  const viewId = activeView(model.view, { hasRequest }).id;
 
   let body: React.ReactNode;
   if (model.projects.isError && !projectsData) {
@@ -300,8 +310,24 @@ function AppShell({ eventSourceFactory }: { eventSourceFactory?: EventSourceFact
     body = <LoadingSkeleton />;
   } else if (!hasProjects) {
     body = <EmptyState />;
+  } else if (viewId === 'request' && viewWorktreeId !== null) {
+    body = (
+      <div className="grid h-full min-h-0 grid-cols-[minmax(200px,260px)_1fr] grid-rows-[auto_1fr]">
+        <div className="row-span-2 min-h-0">
+          <Sidebar />
+        </div>
+        <div>
+          <Toolbar />
+        </div>
+        <div className="min-h-0 min-w-0 bg-canvas">
+          <Suspense fallback={<p className="p-5 text-xs text-muted">Loading…</p>}>
+            <RequestView key={viewWorktreeId} worktreeId={viewWorktreeId} />
+          </Suspense>
+        </div>
+      </div>
+    );
   } else if (
-    activeView(model.view).id === 'overview' &&
+    viewId === 'overview' &&
     model.view.kind !== 'inbox' &&
     model.view.kind !== 'worktree'
   ) {

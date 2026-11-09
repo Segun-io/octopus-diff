@@ -81,6 +81,34 @@ const STATES: Record<string, Step> = {
       .click({ button: 'right' });
     await page.waitForTimeout(300);
   },
+  request: async (page) => {
+    await page.locator('[data-testid="worktree-item"][data-branch="feat/auth"]').click();
+    await page.locator('[data-testid="worktree-tab"][data-tab="request"]').click();
+    await page.locator('[data-testid="request-view"][data-status="ok"]').waitFor();
+    await page.waitForTimeout(500);
+  },
+  'request-conversation': async (page) => {
+    await STATES.request?.(page);
+    await page.getByRole('button', { name: 'Description' }).click();
+    await page.locator('[data-testid="request-conversation-item"]').first().waitFor();
+    await page.waitForTimeout(400);
+  },
+  'request-timeline': async (page) => {
+    await STATES.request?.(page);
+    await page.locator('[data-testid="request-tab"][data-tab="timeline"]').click();
+    await page.locator('[data-testid="request-timeline-item"]').first().waitFor();
+    await page.waitForTimeout(400);
+  },
+  'request-files': async (page) => {
+    await STATES.request?.(page);
+    await page.locator('[data-testid="request-tab"][data-tab="files"]').click();
+    await page.waitForTimeout(300);
+  },
+  'hover-card': async (page) => {
+    await page.locator('[data-testid="worktree-item"][data-branch="feat/auth"]').hover();
+    await page.locator('[data-testid="change-request-hover-block"]').waitFor();
+    await page.waitForTimeout(300);
+  },
   help: async (page) => {
     await page.keyboard.press('?');
     await page.waitForTimeout(300);

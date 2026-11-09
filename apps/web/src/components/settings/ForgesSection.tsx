@@ -88,6 +88,20 @@ export function ForgesSection() {
           onChange={(next) => update.mutate({ forges: { enabled: next } })}
         />
       </SettingRow>
+      <SettingRow
+        label="Load images from the forges"
+        description="Avatars and pictures in descriptions and comments load from the forge hosts gh and glab are signed in to (the page's Content-Security-Policy allows those hosts only, without a referrer). Off: images show as links and the policy stays strict. Applies after a reload."
+        htmlFor={`${switchId}-images`}
+      >
+        <Switch
+          id={`${switchId}-images`}
+          label="Load images from the forges"
+          testId={TEST_IDS.settingsForgesImages}
+          checked={forgeSettings.enabled && forgeSettings.images !== false}
+          disabled={update.isPending || !forgeSettings.enabled}
+          onChange={(next) => update.mutate({ forges: { images: next } })}
+        />
+      </SettingRow>
 
       <div className="border-b border-line py-2.5">
         <div className="flex items-center gap-2">

@@ -403,3 +403,118 @@ kbd {
     transform: none;
   }
 }
+
+/* Request tab (docs/FORGES.md "Request tab"): segmented controls and forge markdown. Tokens only. */
+@layer components {
+  .od-seg {
+    display: inline-flex;
+    align-items: stretch;
+    height: var(--od-control);
+    border: 1px solid var(--od-line);
+    border-radius: var(--od-radius-md);
+    background: var(--od-surface);
+    overflow: hidden;
+  }
+  .od-seg > button {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--od-space-1);
+    padding: 0 var(--od-space-2);
+    color: var(--od-muted);
+    font-size: 12px;
+    white-space: nowrap;
+  }
+  .od-seg > button + button {
+    border-left: 1px solid var(--od-line);
+  }
+  .od-seg > button:hover {
+    background: var(--od-hover);
+    color: var(--od-fg);
+  }
+  .od-seg > button[aria-pressed="true"],
+  .od-seg > button[aria-selected="true"] {
+    background: var(--od-accent-soft);
+    color: var(--od-fg);
+  }
+  .od-markdown {
+    font-size: 13px;
+    line-height: 1.55;
+    overflow-wrap: anywhere;
+  }
+  .od-markdown > * + * {
+    margin-top: 0.6em;
+  }
+  .od-markdown h1,
+  .od-markdown h2,
+  .od-markdown h3,
+  .od-markdown h4 {
+    font-weight: 600;
+    margin-top: 1em;
+  }
+  .od-markdown h1 {
+    font-size: 16px;
+  }
+  .od-markdown h2 {
+    font-size: 14px;
+  }
+  .od-markdown h3,
+  .od-markdown h4 {
+    font-size: 13px;
+  }
+  .od-markdown ul {
+    list-style: disc;
+    padding-left: 1.4em;
+  }
+  .od-markdown ol {
+    list-style: decimal;
+    padding-left: 1.4em;
+  }
+  .od-markdown li.task-list-item {
+    list-style: none;
+    margin-left: -1.2em;
+  }
+  .od-markdown code {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    background: var(--od-raised);
+    border-radius: var(--od-radius-sm);
+    padding: 0 3px;
+  }
+  .od-markdown pre {
+    background: var(--od-raised);
+    border-radius: var(--od-radius-md);
+    padding: var(--od-space-2);
+    overflow-x: auto;
+  }
+  .od-markdown pre code {
+    background: none;
+    padding: 0;
+  }
+  .od-markdown blockquote {
+    border-left: 2px solid var(--od-line-strong);
+    padding-left: var(--od-space-2);
+    color: var(--od-muted);
+  }
+  .od-markdown table {
+    border-collapse: collapse;
+    font-size: 12px;
+  }
+  .od-markdown th,
+  .od-markdown td {
+    border: 1px solid var(--od-line);
+    padding: 2px 6px;
+    text-align: left;
+  }
+  .od-markdown hr {
+    border-color: var(--od-line);
+  }
+  .od-md-link,
+  .od-markdown a {
+    text-decoration: underline;
+    text-decoration-color: var(--od-line-strong);
+    text-underline-offset: 2px;
+  }
+  .od-markdown a:hover {
+    text-decoration-color: currentColor;
+  }
+}

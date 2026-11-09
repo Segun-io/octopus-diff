@@ -1,12 +1,13 @@
 /**
  * Main-pane view registry (COORDINATION §3.1.9, docs/design/FOLDERS.md). A view declares what it
  * applies to; the shell asks the registry which views fit the current selection and renders the
- * active one. `Changes` is the only real view for a worktree; folders and projects get the
- * `Overview`. Future read-only views (Files, History, Search) register here without shell edits.
+ * active one. A worktree has `Changes` and, when its branch has a matched pull/merge request, a
+ * `Request` tab (`View.tab` chooses); folders and projects get the `Overview`. Future read-only
+ * views (Files, History, Search) register here without shell edits.
  */
 import type { View } from '../state/ui.tsx';
 
-export type ViewId = 'changes' | 'overview';
+export type ViewId = 'changes' | 'overview' | 'request';
 
 /** What the user selected, as a path through the hierarchy. */
 export interface Selection {
@@ -14,6 +15,8 @@ export interface Selection {
   project?: string | undefined;
   worktree?: string | undefined;
   inbox: boolean;
+  /** The selected worktree has a matched pull/merge request (docs/FORGES.md). */
+  hasRequest?: boolean;
 }
 
 export interface ViewDefinition {
@@ -37,9 +40,15 @@ export const VIEWS: readonly ViewDefinition[] = [
     icon: '▦',
     appliesTo: (s) => !s.inbox && s.worktree === undefined,
   },
+  {
+    id: 'request',
+    label: 'Request',
+    icon: '⇄',
+    appliesTo: (s) => s.worktree !== undefined && s.hasRequest === true,
+  },
 ];
 
-export function selectionOf(view: View): Selection {
+export function selectionOf(view: View, context: { hasRequest?: boolean } = {}): Selection {
   switch (view.kind) {
     case 'inbox':
       return { inbox: true };
@@ -48,7 +57,11 @@ export function selectionOf(view: View): Selection {
     case 'project':
       return { inbox: false, project: view.projectId };
     case 'worktree':
-      return { inbox: false, worktree: view.worktreeId };
+      return {
+        inbox: false,
+        worktree: view.worktreeId,
+        ...(context.hasRequest ? { hasRequest: true } : {}),
+      };
   }
 }
 
@@ -56,9 +69,17 @@ export function viewsFor(selection: Selection): ViewDefinition[] {
   return VIEWS.filter((v) => v.appliesTo(selection));
 }
 
-/** The view to render for a selection: the first that applies (never empty by construction). */
-export function activeView(view: View): ViewDefinition {
-  const fit = viewsFor(selectionOf(view))[0];
+/**
+ * The view to render: for a worktree, its chosen tab when that view applies (the Request tab only
+ * with a matched request), else the first view that applies (never empty by construction).
+ */
+export function activeView(view: View, context: { hasRequest?: boolean } = {}): ViewDefinition {
+  const fits = viewsFor(selectionOf(view, context));
+  if (view.kind === 'worktree' && view.tab) {
+    const chosen = fits.find((v) => v.id === view.tab);
+    if (chosen) return chosen;
+  }
+  const fit = fits.find((v) => v.id !== 'request') ?? fits[0];
   if (!fit) throw new Error('no view applies to the selection');
   return fit;
 }

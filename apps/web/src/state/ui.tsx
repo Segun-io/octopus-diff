@@ -168,7 +168,17 @@ export const actions = {
     const state = store.getState();
     const scope =
       view.kind !== 'worktree' && state.scope.kind === 'commit' ? DEFAULT_SCOPE : state.scope;
-    store.setState({ view, scope });
+    // Moving to another worktree keeps the chosen tab (the registry falls back to Changes when
+    // the new worktree has no request).
+    const current = state.view;
+    const next =
+      view.kind === 'worktree' &&
+      view.tab === undefined &&
+      current.kind === 'worktree' &&
+      current.tab
+        ? { ...view, tab: current.tab }
+        : view;
+    store.setState({ view: next, scope });
   },
   setFileOptions(store: UiStore, key: string, options: FileViewOptions) {
     store.setState((s) => ({ fileOptions: { ...s.fileOptions, [key]: options } }));

@@ -297,8 +297,20 @@ export function mockDetail(
     authorName: 'Agent',
     authorLogin: 'agent-bot',
   }));
+  const filesTotal = files.length + (n % 5 === 0 ? 140 : 0);
   return {
     ...cr,
+    changedFiles: filesTotal,
+    additions: files.reduce((sum, f) => sum + f.additions, 0) + (n % 5 === 0 ? 1200 : 0),
+    deletions: files.reduce((sum, f) => sum + f.deletions, 0) + (n % 5 === 0 ? 300 : 0),
+    mergeState:
+      cr.state === 'open'
+        ? cr.draft
+          ? 'draft'
+          : checks.some((c) => c.status === 'failure')
+            ? 'unstable'
+            : (cr.mergeState ?? null)
+        : null,
     body: n % 4 === 3 ? '' : n % 2 === 1 ? IMAGE_BODY : BODY,
     bodyTruncated: false,
     mergedAt: cr.state === 'merged' ? at(60) : null,
@@ -317,7 +329,7 @@ export function mockDetail(
     commits,
     commitsTotal: commits.length + (n % 5 === 0 ? 120 : 0),
     files,
-    filesTotal: files.length + (n % 5 === 0 ? 140 : 0),
+    filesTotal,
   };
 }
 

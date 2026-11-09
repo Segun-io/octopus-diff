@@ -1284,3 +1284,46 @@ hover card, repository information on the Overviews). Design: `docs/FORGES.md`. 
     already knows (forge `host/path`, open requests among the worktrees, how many need attention: failing CI,
     changes requested or conflicts). Only the project Overview asks the forge, once per project, lazily.
     Asserted in the daemon test (forge call count unchanged) and the web test (no `/api/forges/projects/` call).
+74. **The UI's CSP allows images from signed-in forge hosts (user's choice), with a switch.** `UI_CSP` became
+    `uiCsp(imageHosts)`: `img-src 'self' data: blob:` plus `https://<host>` per pattern, where the patterns come
+    from `forgeImageHosts(settings, clis)`: for each host a CLI is signed in to and that passes `ForgeHostSchema`
+    (and is not overridden to `none`), GitHub.com adds `github.com` and `*.githubusercontent.com`, GitHub
+    Enterprise `H` adds `H` and `*.H`, GitLab `H` adds `H` and `secure.gravatar.com`. The builder drops any
+    entry that is not a plain host pattern, so nothing can inject a directive. `forges.images: false` or forges
+    off gives exactly the old policy; API responses keep `API_CSP`. The policy is computed per page load, so a
+    newly signed-in host applies after a reload. The UI renders an `<img>` only for https URLs on
+    `imageHosts` (sent with every detail/conversation response), with `referrerPolicy="no-referrer"`,
+    `loading="lazy"`, `decoding="async"` and a fixed max size; anything else, or a failed load (private-repo
+    attachments need cookies), becomes a plain `image: <alt> ↗` link. Avatars fall back to initials.
+77. **Markdown: react-markdown + remark-gfm (MIT), no raw HTML.** `skipHtml`, no rehype-raw, no
+    `dangerouslySetInnerHTML`; HTML comments (bot markers) are stripped first (T3's `visibleBody`), so
+    `<details>` templates render flattened. Links: `https:`, `mailto:` and `#fragment` only, relative ones
+    resolved against the forge repository, `target=_blank rel="noopener noreferrer"`; anything else renders as
+    text. Task-list boxes are disabled. `#123` (GitHub, GitLab issues) and `!123` (GitLab MRs) autolink through
+    a small remark plugin. The chunk is lazy (Request tab only). The dependency pulls the unified/micromark
+    family (shipped packages 71 → 142, all MIT/ISC-compatible; the credits license gate passed).
+78. **The Request tab is a registry view; live refresh is bounded.** `ViewId` gains `request`, `Selection` gains
+    `hasRequest`, the worktree `View` gains `tab`; `activeView(view, { hasRequest })` picks the chosen tab when it
+    applies and falls back to Changes. `actions.setView` carries the tab to the next worktree. The Toolbar shows
+    a `Changes | PR #12` segmented control only for worktrees with a matched request (the forge link badge and
+    its test id stay); the Request layout is the Overview's two columns with the Toolbar on top. Inside:
+    `Summary | Timeline | Files`. The detail query key holds the batch entry's `updatedAt`, `headSha` and
+    checks state (no new SSE event). Checks refresh every 45 s only while a check is running, the tab is
+    shown, the browser tab is in the foreground (react-query pauses intervals in the background) and the user
+    gave input in the last 20 minutes (risk 3 in the brief: caps the cost at about 80 points per hour per open
+    tab while CI runs, and to zero for a forgotten tab). The daemon caches detail/conversation 60 s (10 min for
+    merged/closed), dedupes in-flight fetches, spaces forced refreshes 15 s and keeps stale data on errors.
+    Routes are keyed by worktree id, so the browser cannot make the daemon query an arbitrary request.
+79. **GitLab gets the same UI from GraphQL only; missing data hides.** Detail: description, labels, assignees,
+    reviewers with `mergeRequestInteraction.reviewState` (full variant), approvers, commits (newest 100, shown
+    oldest first), `diffStats` (change kind unknown: `changed`, shown as `·`), and pipeline jobs grouped by stage
+    as checks (`MANUAL` is neutral). Conversation: discussions; diff notes become threads, other notes become
+    comments, system notes are dropped, and there are no review objects. GitLab cannot be verified with a
+    signed-in `glab` here (none on this machine): field names were checked against gitlab.com's public GraphQL
+    with the recorded fixtures; the `basic` variants (older self-managed versions) are untested live.
+80. **Request tab and Overview implementation notes.** The Files tab marks `changed here` from the worktree's
+    own changed files in the current scope; clicking such a row switches to Changes with that file selected
+    (no patch from the forge). The Conversation shows 10 items per page ("Show N older"), filters for bots and
+    for resolved/dismissed items (both shown by default), and collapses resolved threads and dismissed reviews
+    to one line. Phases C and D landed in one web commit because the Summary embeds the Conversation; the
+    daemon routes for both landed with Phase B's daemon commit.

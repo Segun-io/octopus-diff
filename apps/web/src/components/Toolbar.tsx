@@ -1,14 +1,23 @@
-import { type DiffScope, type ScopeKind, scopeKey, TEST_IDS } from '@octopus-diff/contracts';
+import {
+  changeRequestNoun,
+  type DiffScope,
+  type ScopeKind,
+  scopeKey,
+  TEST_IDS,
+} from '@octopus-diff/contracts';
 import { useIsFetching, useQueryClient } from '@tanstack/react-query';
 import { useEffect } from 'react';
+import { useForgeIndex } from '../api/forges.ts';
 import { useResolvedTheme } from '../api/hooks.ts';
 import { queryKeys, useApi, useCommitsQuery } from '../api/queries.ts';
 import { useScanRootsQuery, useSettingsSupport } from '../api/settings.ts';
+import { LOOK_TONE, lookOf } from '../lib/forge.ts';
 import { useCommandsContext } from '../state/commandsContext.tsx';
 import { useAppModel } from '../state/model.tsx';
-import { useUi, useUiStore } from '../state/ui.tsx';
+import { actions, useUi, useUiStore } from '../state/ui.tsx';
+import { activeView } from '../views/registry.ts';
 import { MoonIcon, SunIcon, ToggleButton } from './bits.tsx';
-import { ChangeRequestBadge } from './ChangeRequest.tsx';
+import { ChangeRequestBadge, ChangeRequestGlyph } from './ChangeRequest.tsx';
 import { ReviewPolicyChip } from './ReviewPolicyChip.tsx';
 
 const SCOPE_LABELS: Record<ScopeKind, string> = {
@@ -41,6 +50,14 @@ export function Toolbar() {
   const folderPath = row?.project.scanRootId
     ? scanRoots.data?.scanRoots.find((r) => r.id === row.project.scanRootId)?.path
     : undefined;
+
+  const forgeEntry = useForgeIndex().get(worktreeId ?? '');
+  const request = forgeEntry?.worktree.changeRequest ?? null;
+  const tab = activeView(model.view, { hasRequest: request !== null }).id;
+  const onRequest = tab === 'request';
+  const setTab = (next: 'changes' | 'request') => {
+    if (worktreeId) actions.setView(store, { kind: 'worktree', worktreeId, tab: next });
+  };
 
   const commitList = commits.data?.commits;
   // A commit scope always needs a sha: when entering commit scope, default to HEAD.
@@ -87,81 +104,122 @@ export function Toolbar() {
   return (
     <div
       role="toolbar"
-      aria-label="Diff options"
+      aria-label={onRequest ? 'Request options' : 'Diff options'}
       className="flex flex-wrap items-center gap-2 border-b border-line bg-surface px-2 py-1.5"
     >
-      <label className="flex items-center gap-1 text-xs text-muted">
-        <span>Scope</span>
-        <select
-          data-testid={TEST_IDS.scopeSelect}
-          data-scope={scopeKey(scope)}
-          value={scope.kind}
-          onChange={(e) => setScopeKind(e.target.value as ScopeKind)}
-          className="od-input"
-        >
-          {(Object.keys(SCOPE_LABELS) as ScopeKind[]).map((kind) => (
-            <option
-              key={kind}
-              value={kind}
-              disabled={kind === 'commit' && (worktreeId === null || !commitList?.length)}
+      {worktreeId && request && (
+        <>
+          <fieldset
+            data-testid={TEST_IDS.worktreeTabs}
+            className="od-seg m-0 p-0"
+            aria-label="Worktree view"
+          >
+            <button
+              type="button"
+              data-testid={TEST_IDS.worktreeTab}
+              data-tab="changes"
+              aria-pressed={!onRequest}
+              onClick={() => setTab('changes')}
+              title="The worktree's changes"
             >
-              {SCOPE_LABELS[kind]}
-              {kind === 'commit' && worktreeId === null ? ' (select a worktree)' : ''}
-            </option>
-          ))}
-        </select>
-      </label>
-      {scope.kind === 'commit' && commitList && (
-        <select
-          aria-label="Commit"
-          value={
-            commitList.find((c) => c.sha.toLowerCase().startsWith(scope.sha.toLowerCase()))?.sha ??
-            ''
-          }
-          onChange={(e) => store.setState({ scope: { kind: 'commit', sha: e.target.value } })}
-          className="od-input max-w-72 font-mono"
-        >
-          {commitList.map((c) => (
-            <option key={c.sha} value={c.sha}>
-              {c.shortSha} {c.subject.slice(0, 60)}
-            </option>
-          ))}
-        </select>
+              Changes
+            </button>
+            <button
+              type="button"
+              data-testid={TEST_IDS.worktreeTab}
+              data-tab="request"
+              aria-pressed={onRequest}
+              onClick={() => setTab('request')}
+              title={`The ${changeRequestNoun(request.kind).long} of this branch`}
+            >
+              <span className={`inline-flex ${LOOK_TONE[lookOf(request)]}`}>
+                <ChangeRequestGlyph look={lookOf(request)} />
+              </span>
+              <span className="tabular-nums">
+                {request.kind === 'github' ? 'PR #' : 'MR !'}
+                {request.number}
+              </span>
+            </button>
+          </fieldset>
+          <span className="mx-1 h-4 w-px bg-line" aria-hidden="true" />
+        </>
       )}
+      {!onRequest && (
+        <>
+          <label className="flex items-center gap-1 text-xs text-muted">
+            <span>Scope</span>
+            <select
+              data-testid={TEST_IDS.scopeSelect}
+              data-scope={scopeKey(scope)}
+              value={scope.kind}
+              onChange={(e) => setScopeKind(e.target.value as ScopeKind)}
+              className="od-input"
+            >
+              {(Object.keys(SCOPE_LABELS) as ScopeKind[]).map((kind) => (
+                <option
+                  key={kind}
+                  value={kind}
+                  disabled={kind === 'commit' && (worktreeId === null || !commitList?.length)}
+                >
+                  {SCOPE_LABELS[kind]}
+                  {kind === 'commit' && worktreeId === null ? ' (select a worktree)' : ''}
+                </option>
+              ))}
+            </select>
+          </label>
+          {scope.kind === 'commit' && commitList && (
+            <select
+              aria-label="Commit"
+              value={
+                commitList.find((c) => c.sha.toLowerCase().startsWith(scope.sha.toLowerCase()))
+                  ?.sha ?? ''
+              }
+              onChange={(e) => store.setState({ scope: { kind: 'commit', sha: e.target.value } })}
+              className="od-input max-w-72 font-mono"
+            >
+              {commitList.map((c) => (
+                <option key={c.sha} value={c.sha}>
+                  {c.shortSha} {c.subject.slice(0, 60)}
+                </option>
+              ))}
+            </select>
+          )}
 
-      <span className="mx-1 h-4 w-px bg-line" aria-hidden="true" />
+          <span className="mx-1 h-4 w-px bg-line" aria-hidden="true" />
 
-      <button
-        type="button"
-        data-testid={TEST_IDS.diffModeToggle}
-        data-mode={diffMode}
-        onClick={commands.toggleDiffMode}
-        title="Split / unified (s)"
-        className="od-btn text-fg"
-      >
-        {diffMode === 'split' ? 'Split' : 'Unified'}
-      </button>
-      <ToggleButton
-        pressed={ignoreWhitespace}
-        onClick={commands.toggleWhitespace}
-        title="Hide whitespace changes (w)"
-        testId={TEST_IDS.whitespaceToggle}
-      >
-        Hide whitespace
-      </ToggleButton>
-      <ToggleButton
-        pressed={showReviewed}
-        onClick={commands.toggleShowReviewed}
-        title="Show reviewed files (h)"
-        testId={TEST_IDS.showReviewedToggle}
-      >
-        Show reviewed
-      </ToggleButton>
-      {row && model.viewPolicy && (
-        <ReviewPolicyChip row={row} policy={model.viewPolicy} folderPath={folderPath} />
+          <button
+            type="button"
+            data-testid={TEST_IDS.diffModeToggle}
+            data-mode={diffMode}
+            onClick={commands.toggleDiffMode}
+            title="Split / unified (s)"
+            className="od-btn text-fg"
+          >
+            {diffMode === 'split' ? 'Split' : 'Unified'}
+          </button>
+          <ToggleButton
+            pressed={ignoreWhitespace}
+            onClick={commands.toggleWhitespace}
+            title="Hide whitespace changes (w)"
+            testId={TEST_IDS.whitespaceToggle}
+          >
+            Hide whitespace
+          </ToggleButton>
+          <ToggleButton
+            pressed={showReviewed}
+            onClick={commands.toggleShowReviewed}
+            title="Show reviewed files (h)"
+            testId={TEST_IDS.showReviewedToggle}
+          >
+            Show reviewed
+          </ToggleButton>
+          {row && model.viewPolicy && (
+            <ReviewPolicyChip row={row} policy={model.viewPolicy} folderPath={folderPath} />
+          )}
+        </>
       )}
       {worktreeId && <ChangeRequestBadge worktreeId={worktreeId} />}
-      {model.view.kind === 'worktree' && (
+      {model.view.kind === 'worktree' && !onRequest && (
         <button
           type="button"
           onClick={() => store.setState({ fileListLayout: layout === 'list' ? 'tree' : 'list' })}
