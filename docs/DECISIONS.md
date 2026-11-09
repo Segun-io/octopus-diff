@@ -1274,16 +1274,6 @@ hover card, repository information on the Overviews). Design: `docs/FORGES.md`. 
     extracts it with a regex, rebuilds the query and compares. GitLab's `iid` is a `String!`, so it stays a
     `--raw-field` (digits only). Every other rule is unchanged (`--raw-field` only, `--hostname` first, value
     limits, neutral cwd, host-scoped tokens, signed-in hosts only). Measured: each new GitHub query costs 1 point.
-75. **Repository information: two routes, two sources.** `GET /api/repositories?projectIds=a,b` (max 200) returns
-    local git facts only (`GitCore.readRepositoryInfo`: one `for-each-ref`, `log -1`, `rev-list --left-right
-    --count`, the remote config read; no allowlist change), cached 30 s and dropped on any event naming the
-    project. `GET /api/forges/projects/:projectId/repository` returns the forge facts (one query, cached 10 min,
-    "Refresh" forces it at most every 15 s) with open requests joined to local worktrees by the daemon. Remote
-    URLs lose their userinfo for http(s)/git URLs (a token is often the user name) and their password for ssh.
-76. **The folder Overview runs no forge query.** It shows `/api/repositories` facts plus what the 2-minute batch
-    already knows (forge `host/path`, open requests among the worktrees, how many need attention: failing CI,
-    changes requested or conflicts). Only the project Overview asks the forge, once per project, lazily.
-    Asserted in the daemon test (forge call count unchanged) and the web test (no `/api/forges/projects/` call).
 74. **The UI's CSP allows images from signed-in forge hosts (user's choice), with a switch.** `UI_CSP` became
     `uiCsp(imageHosts)`: `img-src 'self' data: blob:` plus `https://<host>` per pattern, where the patterns come
     from `forgeImageHosts(settings, clis)`: for each host a CLI is signed in to and that passes `ForgeHostSchema`
@@ -1295,6 +1285,16 @@ hover card, repository information on the Overviews). Design: `docs/FORGES.md`. 
     `imageHosts` (sent with every detail/conversation response), with `referrerPolicy="no-referrer"`,
     `loading="lazy"`, `decoding="async"` and a fixed max size; anything else, or a failed load (private-repo
     attachments need cookies), becomes a plain `image: <alt> ↗` link. Avatars fall back to initials.
+75. **Repository information: two routes, two sources.** `GET /api/repositories?projectIds=a,b` (max 200) returns
+    local git facts only (`GitCore.readRepositoryInfo`: one `for-each-ref`, `log -1`, `rev-list --left-right
+    --count`, the remote config read; no allowlist change), cached 30 s and dropped on any event naming the
+    project. `GET /api/forges/projects/:projectId/repository` returns the forge facts (one query, cached 10 min,
+    "Refresh" forces it at most every 15 s) with open requests joined to local worktrees by the daemon. Remote
+    URLs lose their userinfo for http(s)/git URLs (a token is often the user name) and their password for ssh.
+76. **The folder Overview runs no forge query.** It shows `/api/repositories` facts plus what the 2-minute batch
+    already knows (forge `host/path`, open requests among the worktrees, how many need attention: failing CI,
+    changes requested or conflicts). Only the project Overview asks the forge, once per project, lazily.
+    Asserted in the daemon test (forge call count unchanged) and the web test (no `/api/forges/projects/` call).
 77. **Markdown: react-markdown + remark-gfm (MIT), no raw HTML.** `skipHtml`, no rehype-raw, no
     `dangerouslySetInnerHTML`; HTML comments (bot markers) are stripped first (T3's `visibleBody`), so
     `<details>` templates render flattened. Links: `https:`, `mailto:` and `#fragment` only, relative ones
