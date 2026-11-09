@@ -2,6 +2,7 @@ import {
   type ApiClient,
   ApiClientError,
   createApiClient,
+  type DiffResponse,
   type DiffScope,
   scopeKey,
 } from '@octopus-diff/contracts';
@@ -60,6 +61,23 @@ export interface DiffViewParams {
   full?: boolean | undefined;
 }
 
+/** The view options a patch was fetched with, as a short stable string. */
+export function diffViewKey(params: DiffViewParams): string {
+  return `${params.ignoreWhitespace ? 'w' : '-'}:${params.context ?? ''}:${params.full ? 'f' : '-'}`;
+}
+
+/**
+ * A diff response plus the view it was fetched for. While the view changes (more context,
+ * whitespace) the query shows the previous view's patch as placeholder data; anything keyed by
+ * the view (the highlighter's cache key) must use `view`, never the options currently asked for.
+ */
+export type DiffQueryData = DiffResponse & {
+  /** `diffViewKey` of the options this patch was fetched with. */
+  view: string;
+  /** The options this patch was fetched with. */
+  params: DiffViewParams;
+};
+
 function shouldRetry(failureCount: number, error: unknown): boolean {
   if (error instanceof ApiClientError) {
     if (error.status >= 400 && error.status < 500) return false;
@@ -117,15 +135,17 @@ export function useDiffQuery(ref: FileRef | null, scope: DiffScope, params: Diff
   const fileKey = ref ? (ref.rawPath ?? ref.path) : '';
   return useQuery({
     queryKey: queryKeys.diff(ref ?? { worktreeId: '', path: '' }, scope, params),
-    queryFn: () =>
-      api.getDiff(ref?.worktreeId ?? '', {
+    queryFn: async (): Promise<DiffQueryData> => {
+      const response = await api.getDiff(ref?.worktreeId ?? '', {
         scope,
         path: ref?.path ?? '',
         ...(ref?.rawPath ? { rawPath: ref.rawPath } : {}),
         ignoreWhitespace: params.ignoreWhitespace,
         ...(params.context !== undefined ? { context: params.context } : {}),
         ...(params.full ? { full: true } : {}),
-      }),
+      });
+      return { ...response, view: diffViewKey(params), params };
+    },
     enabled: ref !== null,
     // Keep showing the same file's previous diff while view options change (whitespace,
     // context); never show another file's diff as a placeholder.

@@ -142,6 +142,7 @@ function Notice() {
   return (
     <div
       aria-live="polite"
+      data-testid="notice"
       className="pointer-events-none fixed bottom-4 left-1/2 z-40 -translate-x-1/2"
     >
       {notice && (
