@@ -1,5 +1,11 @@
-import type { DiffScope, EffectiveReviewPolicy, InboxEntry } from '@octopus-diff/contracts';
+import type {
+  DiffScope,
+  EffectiveReviewPolicy,
+  InboxEntry,
+  WorktreeForge,
+} from '@octopus-diff/contracts';
 import { createContext, type ReactNode, useContext, useMemo } from 'react';
+import { useForgeIndex } from '../api/forges.ts';
 import { inboxScopeFor, useFilesQuery, useInboxQuery, useProjectsQuery } from '../api/queries.ts';
 import { useScanRootsQuery } from '../api/settings.ts';
 import { fileRefKey } from '../lib/fileRef.ts';
@@ -7,8 +13,10 @@ import {
   buildSidebar,
   type FileGroup,
   flattenGroups,
+  hasSidebarFilters,
   type NavEntry,
   rowVisible,
+  type SidebarFilters,
   type SidebarModel,
   sortFiles,
   sortFilesTreeOrder,
@@ -52,6 +60,9 @@ export interface AppModel {
   viewPolicy: EffectiveReviewPolicy | null;
 }
 
+/** The sidebar's fixed status scope (fallback for daemons without `summary.review`). */
+export const SIDEBAR_STATUS_SCOPE: DiffScope = { kind: 'working' };
+
 const AppModelContext = createContext<AppModel | null>(null);
 
 export function useAppModel(): AppModel {
@@ -68,9 +79,14 @@ export function AppModelProvider({ children }: { children: ReactNode }) {
 function useBuildAppModel(): AppModel {
   const view = useUi((s) => s.view);
   const scope = useUi((s) => s.scope);
-  const filterText = useUi((s) => s.filterText);
+  const filterProjects = useUi((s) => s.filterProjects);
+  const filterWorktrees = useUi((s) => s.filterWorktrees);
   const onlyDirty = useUi((s) => s.onlyDirty);
   const onlyUnreviewed = useUi((s) => s.onlyUnreviewed);
+  const filters = useMemo<SidebarFilters>(
+    () => ({ projects: filterProjects, worktrees: filterWorktrees, onlyDirty, onlyUnreviewed }),
+    [filterProjects, filterWorktrees, onlyDirty, onlyUnreviewed],
+  );
   const showReviewed = useUi((s) => s.showReviewed);
   const selected = useUi((s) => s.selected);
   const pinned = useUi((s) => s.pinned);
@@ -79,36 +95,37 @@ function useBuildAppModel(): AppModel {
   const projects = useProjectsQuery();
   const scanRoots = useScanRootsQuery();
   const inbox = useInboxQuery(scope);
+  // The sidebar's status never depends on the toolbar scope (docs/STATUS-FLOW.md §1.1): its
+  // fallback source for daemons without `summary.review` is a fixed inbox (uncommitted files).
+  // While the toolbar shows Uncommitted both are the same query.
+  const statusInbox = useInboxQuery(SIDEBAR_STATUS_SCOPE);
   const worktreeId = view.kind === 'worktree' ? view.worktreeId : null;
   const files = useFilesQuery(worktreeId, scope);
 
   const projectList = projects.data?.projects;
   const inboxData = inbox.data;
-  // While the inbox for a new scope loads, the previous scope's data is only a placeholder.
-  const inboxMatchesScope = inboxData !== undefined && !inbox.isPlaceholderData;
+  const statusData = statusInbox.data;
 
   const scanRootList = scanRoots.data?.scanRoots;
+  // Forge data moves rows only through stages (In PR, Merged/closed); never the toolbar scope.
+  const forgeIndex = useForgeIndex();
+  const forgeByWorktree = useMemo(() => {
+    const out = new Map<string, WorktreeForge>();
+    for (const [id, entry] of forgeIndex) out.set(id, entry.worktree);
+    return out;
+  }, [forgeIndex]);
   const sidebar = useMemo(
     () =>
       buildSidebar(
         projectList ?? [],
-        inboxMatchesScope ? inboxData?.entries : undefined,
-        { text: filterText, onlyDirty, onlyUnreviewed },
+        statusData?.entries,
+        filters,
         scanRootList,
         pinned,
         settle,
+        forgeByWorktree,
       ),
-    [
-      projectList,
-      inboxData,
-      inboxMatchesScope,
-      filterText,
-      onlyDirty,
-      onlyUnreviewed,
-      scanRootList,
-      pinned,
-      settle,
-    ],
+    [forgeByWorktree, projectList, statusData, filters, scanRootList, pinned, settle],
   );
 
   const inboxEntries = useMemo(() => sortInboxEntries(inboxData?.entries ?? []), [inboxData]);
@@ -130,7 +147,6 @@ function useBuildAppModel(): AppModel {
   const filesData = files.data;
   const groups = useMemo<FileGroup[]>(() => {
     if (view.kind === 'inbox') {
-      const filters = { text: filterText, onlyDirty, onlyUnreviewed };
       const out: FileGroup[] = [];
       for (const entry of inboxEntries) {
         const row = sidebar.byId.get(entry.worktree.id);
@@ -155,9 +171,7 @@ function useBuildAppModel(): AppModel {
     sortedInboxFiles,
     sidebar,
     filesData,
-    filterText,
-    onlyDirty,
-    onlyUnreviewed,
+    filters,
     reviewOffDisplay,
     fileListLayout,
   ]);
@@ -188,9 +202,7 @@ function useBuildAppModel(): AppModel {
 
   const inboxUnfiltered =
     view.kind === 'inbox' &&
-    filterText.trim() === '' &&
-    !onlyDirty &&
-    !onlyUnreviewed &&
+    !hasSidebarFilters(filters) &&
     showReviewed &&
     groups.length === inboxEntries.length;
 

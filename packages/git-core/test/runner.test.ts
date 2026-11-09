@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   ALLOWED_SUBCOMMANDS,
   assertAllowedGitArgs,
+  assertStdinAllowed,
   buildGitArgv,
   buildGitEnv,
   CONFIG_PINS,
@@ -20,6 +21,33 @@ function rejects(args: string[]): void {
     expect.objectContaining({ code: 'command_not_allowed' }),
   );
 }
+
+describe('patch-id and stdin (status flow)', () => {
+  it('allows patch-id with --stable only', () => {
+    expect(() => assertAllowedGitArgs(['patch-id', '--stable'])).not.toThrow();
+    expect(() => assertAllowedGitArgs(['patch-id'])).not.toThrow();
+    rejects(['patch-id', '--unstable']);
+    rejects(['patch-id', '--verbatim']);
+    rejects(['patch-id', '--stable', 'x']);
+    rejects(['patch-id', '--', '--stable']);
+  });
+
+  it('allows stdin only for check-attr --stdin and patch-id', () => {
+    expect(() => assertStdinAllowed(['patch-id', '--stable'])).not.toThrow();
+    expect(() => assertStdinAllowed(['check-attr', '-z', '--stdin', 'diff'])).not.toThrow();
+    for (const args of [
+      ['check-attr', 'diff', '--', 'a'],
+      ['log', '--format=%H'],
+      ['diff', 'HEAD'],
+      ['rev-list', '--stdin'],
+      ['cat-file', '--batch'],
+    ]) {
+      expect(() => assertStdinAllowed(args), args.join(' ')).toThrowError(
+        expect.objectContaining({ code: 'command_not_allowed' }),
+      );
+    }
+  });
+});
 
 describe('subcommand allowlist', () => {
   it('allows exactly the PLAN §5.5 subcommands', () => {
@@ -41,6 +69,7 @@ describe('subcommand allowlist', () => {
         'log',
         'config',
         'check-attr',
+        'patch-id',
       ].sort(),
     );
     for (const args of [
@@ -280,6 +309,26 @@ describe('process control', () => {
     const error = await runner.run(['status'], { cwd: fx.root }).catch((e: unknown) => e);
     expect(isGitCoreError(error, 'timeout')).toBe(true);
     expect(Date.now() - started).toBeLessThan(5_000);
+    await runner.dispose();
+  });
+
+  it('rejects stdin for commands that may not read it, before spawning', async () => {
+    const runner = new GitRunner({ gitBinary: fakeGit, env: { FAKE_MODE: 'stdin' } });
+    for (const args of [
+      ['log', '--format=%H'],
+      ['diff', 'HEAD'],
+      ['check-attr', 'diff', '--', 'a'],
+    ]) {
+      const error = await runner
+        .run(args, { cwd: fx.root, input: Buffer.from('x') })
+        .catch((e: unknown) => e);
+      expect(isGitCoreError(error, 'command_not_allowed'), args.join(' ')).toBe(true);
+    }
+    const ok = await runner.run(['patch-id', '--stable'], {
+      cwd: fx.root,
+      input: Buffer.from('abc'),
+    });
+    expect(ok.stdout.toString()).toBe('abc');
     await runner.dispose();
   });
 

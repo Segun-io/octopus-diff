@@ -409,9 +409,9 @@ function flagsFor(
     (entry.kind === 'unmerged' ||
       entry.kind === 'untracked' ||
       ((entry.kind === 'ordinary' || entry.kind === 'renamed') && entry.y !== '.'));
+  // working, review, branch with includeWorking: flags relative to HEAD, from git status.
+  if (plan.vsWorktree) return { staged: indexChanged, unstaged: worktreeChanged };
   switch (plan.kind) {
-    case 'working':
-      return { staged: indexChanged, unstaged: worktreeChanged };
     case 'staged':
       return { staged: true, unstaged: worktreeChanged };
     case 'unstaged':
@@ -502,7 +502,7 @@ function untrackedIdentity(info: UntrackedInfo): Identity {
 }
 
 function readsWorktree(plan: ScopePlan): boolean {
-  return plan.kind === 'working' || plan.kind === 'unstaged';
+  return plan.vsWorktree || plan.kind === 'unstaged';
 }
 
 /**
@@ -511,7 +511,8 @@ function readsWorktree(plan: ScopePlan): boolean {
  * object ids, modes) and the file's stat signature, so it changes whenever the file does.
  */
 function unreadableIdentity(plan: ScopePlan, entry: StatusEntry, statSig: string): Identity {
-  const working = plan.kind === 'working';
+  // Described relative to HEAD (git status) in every worktree-vs-commit scope.
+  const working = plan.vsWorktree;
   let status: FileStatus = 'modified';
   let oldPath: string | null = null;
   let oldMode: string | null = null;
@@ -539,7 +540,14 @@ function unreadableIdentity(plan: ScopePlan, entry: StatusEntry, statSig: string
     newMode,
     additions: null,
     deletions: null,
-    patchHash: hashParts(['unreadable', plan.kind, entry.line, statSig], PATCH_HASH_LENGTH),
+    // Same hash as `working` when the scope diffs against HEAD; otherwise the base commit is
+    // part of it (the status entry only describes the change relative to HEAD).
+    patchHash: hashParts(
+      working && plan.revArgs[0] !== 'HEAD'
+        ? ['unreadable', 'working', entry.line, statSig, plan.revArgs.join(' ')]
+        : ['unreadable', working ? 'working' : plan.kind, entry.line, statSig],
+      PATCH_HASH_LENGTH,
+    ),
   };
   if (decoded.rawPath !== undefined) identity.rawPath = decoded.rawPath;
   return identity;

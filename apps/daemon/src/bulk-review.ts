@@ -8,6 +8,7 @@ import {
   type ScopeKind,
   type WorktreeSummary,
 } from '@octopus-diff/contracts';
+import type { BookmarkMove } from './core.js';
 import type { TargetRegistry } from './review-policy.js';
 
 /**
@@ -43,6 +44,12 @@ export interface ReviewSource extends TargetRegistry {
   changedFiles(worktreeId: string, scope: DiffScope): Promise<GitChangedFile[]>;
   /** The worktree's current summary `stateHash`, or null when it has none right now. */
   currentStateHash(worktreeId: string): string | null;
+  /** Status flow v2 (optional so test doubles need not provide it): move a review bookmark. */
+  moveBookmark?(worktreeId: string, to: string): Promise<BookmarkMove>;
+  /** Undo of `moveBookmark`; false when the bookmark moved again since. */
+  restoreBookmark?(move: BookmarkMove): boolean;
+  /** Review marks changed in these projects (review states recompute). */
+  reviewChanged?(projectIds: Iterable<string>): void;
 }
 
 /** Same prefilter the inbox uses: can this worktree have files in `scope` at all? */
@@ -106,6 +113,8 @@ export interface UndoEntry {
   /** What the bulk call did: true = created marks, false = removed marks. */
   reviewed: boolean;
   changes: MarkChange[];
+  /** Bookmarks the call moved (status flow v2); undo restores them. */
+  bookmarks?: BookmarkMove[];
 }
 
 interface StoredUndo extends UndoEntry {

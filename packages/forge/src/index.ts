@@ -13,21 +13,58 @@ export {
   type ForgeCliOptions,
   type ForgeCliResult,
   forgeEnv,
+  QUERY_REGISTRY,
 } from './cli.js';
-export { ForgeClient, ForgeFetchError, loginHint } from './client.js';
+export {
+  ForgeClient,
+  type ForgeClientOptions,
+  ForgeFetchError,
+  type ForgeQueryCost,
+  type ForgeTarget,
+  loginHint,
+} from './client.js';
+export {
+  capBytes,
+  dedupeChecks,
+  githubCheckStatus,
+  gitlabJobStatus,
+  httpsUrl,
+  labelColor,
+  toActor,
+} from './details.js';
 export {
   buildGithubQuery,
   GITHUB_MAX_BRANCHES_PER_QUERY,
+  type GithubQueryVariant,
+  githubMergeState,
   normaliseGithubPullRequest,
   parseGithubResponse,
 } from './github.js';
 export {
+  buildGithubConversationQuery,
+  buildGithubDetailQuery,
+  buildGithubRepositoryQuery,
+  githubQueryNumber,
+  normaliseGithubConversation,
+  normaliseGithubDetail,
+  normaliseGithubRepository,
+} from './github-details.js';
+export {
   buildGitlabQuery,
   GITLAB_MAX_BRANCHES_PER_QUERY,
+  gitlabMergeState,
   isUnknownFieldError,
   normaliseGitlabMergeRequest,
   parseGitlabResponse,
 } from './gitlab.js';
+export {
+  buildGitlabConversationQuery,
+  buildGitlabDetailQuery,
+  buildGitlabRepositoryQuery,
+  normaliseGitlabConversation,
+  normaliseGitlabDetail,
+  normaliseGitlabRepository,
+} from './gitlab-details.js';
 export {
   classifyHost,
   forgeFromHostname,

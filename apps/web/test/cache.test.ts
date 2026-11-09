@@ -103,7 +103,7 @@ describe('review marks in the cache', () => {
     expect(files?.files.find((f) => f.path === file.path)?.reviewed).toBe(false);
   });
 
-  it('applies review.changed events without refetching', () => {
+  it('applies review.changed events to the file caches; only the projects list refetches', () => {
     const { qc, a, file } = seeded();
     const event: ServerEvent = {
       type: 'review.changed',
@@ -114,7 +114,10 @@ describe('review marks in the cache', () => {
       reviewed: true,
     };
     const effects = collectEventEffects(qc, event, emptyEffects(), { reconnect: false });
-    expect(effects.projects || effects.inbox || effects.worktrees.size > 0).toBe(false);
+    // Summaries carry review counts (status flow v2), so the projects list refetches; the file
+    // lists and the inbox are patched in place.
+    expect(effects.projects).toBe(true);
+    expect(effects.inbox || effects.worktrees.size > 0).toBe(false);
     const files = qc.getQueryData<FilesResponse>(
       queryKeys.files(a.worktree.id, { kind: 'working' }),
     );

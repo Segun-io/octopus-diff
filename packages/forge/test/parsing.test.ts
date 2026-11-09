@@ -3,10 +3,15 @@ import path from 'node:path';
 import { ChangeRequestSchema } from '@octopus-diff/contracts';
 import { describe, expect, it } from 'vitest';
 import {
+  buildGithubQuery,
   classifyHost,
   firstSafeLine,
   forgeFromHostname,
+  githubMergeState,
+  gitlabMergeState,
   isUnknownFieldError,
+  normaliseGithubPullRequest,
+  normaliseGitlabMergeRequest,
   parseAuthStatus,
   parseGithubResponse,
   parseGitlabResponse,
@@ -227,5 +232,82 @@ describe('GitLab normalisation (real response)', () => {
     expect(
       isUnknownFieldError(["Field 'detailedMergeStatus' doesn't exist on type 'MergeRequest'"]),
     ).toBe(true);
+  });
+});
+
+describe('batch scalars added for the hover card (createdAt, size, merge state)', () => {
+  const base = {
+    number: 7,
+    url: 'https://github.com/o/r/pull/7',
+    baseRefName: 'main',
+    headRefName: 'feat/x',
+    state: 'OPEN',
+  };
+
+  it('reads GitHub scalars and maps mergeStateStatus', () => {
+    const cr = normaliseGithubPullRequest({
+      ...base,
+      createdAt: '2026-11-01T10:00:00Z',
+      additions: 12,
+      deletions: 3,
+      changedFiles: 2,
+      mergeStateStatus: 'DIRTY',
+    });
+    expect(cr).toMatchObject({
+      createdAt: '2026-11-01T10:00:00.000Z',
+      additions: 12,
+      deletions: 3,
+      changedFiles: 2,
+      mergeState: 'conflicts',
+    });
+    expect(ChangeRequestSchema.parse(cr)).toEqual(cr);
+    expect(githubMergeState('CLEAN')).toBe('clean');
+    expect(githubMergeState('BLOCKED')).toBe('blocked');
+    expect(githubMergeState('BEHIND')).toBe('behind');
+    expect(githubMergeState('UNSTABLE')).toBe('unstable');
+    expect(githubMergeState('DRAFT')).toBe('draft');
+    expect(githubMergeState('SOMETHING_NEW')).toBe('unknown');
+    expect(githubMergeState(undefined)).toBeNull();
+  });
+
+  it('old payloads without the scalars still normalise (fields null)', () => {
+    const cr = normaliseGithubPullRequest(base);
+    expect(cr).toMatchObject({ createdAt: null, additions: null, mergeState: null });
+    const merged = normaliseGithubPullRequest({
+      ...base,
+      state: 'MERGED',
+      mergeStateStatus: 'CLEAN',
+    });
+    expect(merged?.mergeState).toBeNull();
+  });
+
+  it('reads GitLab diffStatsSummary and maps detailedMergeStatus', () => {
+    const mr = normaliseGitlabMergeRequest({
+      iid: '4',
+      webUrl: 'https://gitlab.com/g/p/-/merge_requests/4',
+      targetBranch: 'main',
+      sourceBranch: 'b',
+      state: 'opened',
+      createdAt: '2026-10-27T15:30:02Z',
+      diffStatsSummary: { additions: 1488, deletions: 55, fileCount: 5 },
+      detailedMergeStatus: 'NEED_REBASE',
+    });
+    expect(mr).toMatchObject({
+      additions: 1488,
+      deletions: 55,
+      changedFiles: 5,
+      mergeState: 'behind',
+    });
+    expect(gitlabMergeState('MERGEABLE')).toBe('clean');
+    expect(gitlabMergeState('NOT_APPROVED')).toBe('blocked');
+    expect(gitlabMergeState('DRAFT_STATUS')).toBe('draft');
+    expect(gitlabMergeState('CHECKING')).toBe('unknown');
+    expect(gitlabMergeState('NOT_OPEN')).toBeNull();
+  });
+
+  it('the GitHub basic variant drops mergeStateStatus only', () => {
+    expect(buildGithubQuery(1, 'full')).toContain('mergeStateStatus');
+    expect(buildGithubQuery(1, 'basic')).not.toContain('mergeStateStatus');
+    expect(buildGithubQuery(1, 'basic')).toContain('changedFiles');
   });
 });

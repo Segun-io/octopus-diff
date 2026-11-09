@@ -1,5 +1,5 @@
 /**
- * UX-1 in the browser: "Mark all as verified" against the real daemon. Worktree (with filters),
+ * UX-1 in the browser: "Review all" against the real daemon. Worktree (with filters),
  * Inbox-wide with the confirm dialog, undo via the toast and Ctrl/Cmd+Z, Shift+R, project and
  * folder via context menu / Overview, "mark all unreviewed", and the stale case. Every DOM
  * assertion is paired with the daemon's own `reviewed` flags.
@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import { TEST_IDS } from '@octopus-diff/contracts';
 import { findProject, findWorktree, LIVE_FILES } from '@octopus-diff/fixtures';
 import { reviewedPaths, stateHashes, waitForStateHashChange } from '../support/api.js';
-import { expect, test, unreviewedTotal } from '../support/ui.js';
+import { expect, expectTitle, test, unreviewedTotal } from '../support/ui.js';
 
 test.describe('UX-1 bulk review (UI)', () => {
   test('worktree: marks the visible files only; undo from the toast restores them', async ({
@@ -38,7 +38,7 @@ test.describe('UX-1 bulk review (UI)', () => {
     await expect(ui.toast).toBeVisible();
     await expect(ui.toast).toHaveAttribute('data-changed', String(files.length - 1));
     await expect(ui.toast).toHaveAttribute('data-reviewed', 'true');
-    await expect(ui.toast).toContainText(new RegExp(`^${files.length - 1} files? marked verified`));
+    await expect(ui.toast).toContainText(new RegExp(`^${files.length - 1} files? marked reviewed`));
     await expect.poll(() => reviewedPaths(daemon.client, live.id)).toEqual(files);
     await expect(ui.fileList.locator(`[data-testid="${TEST_IDS.fileItem}"]`)).toHaveCount(0);
 
@@ -62,7 +62,7 @@ test.describe('UX-1 bulk review (UI)', () => {
     await expect(ui.markAll).toHaveAttribute('data-target', 'all');
     await expect(ui.markAll).toHaveAttribute('data-count', String(total));
 
-    await ui.byTestId(TEST_IDS.sidebarFilter).fill('live');
+    await ui.filterProject(liveProject.id, liveProject.name);
     await expect(ui.markAll).toHaveAttribute('data-target', 'worktree');
     const liveFiles = (await daemon.client.inbox()).entries
       .filter((e) => e.project.id === liveProject.id)
@@ -80,7 +80,7 @@ test.describe('UX-1 bulk review (UI)', () => {
     expect(await reviewedPaths(daemon.client, alpha.id)).toEqual([]);
     expect(await unreviewedTotal(daemon.client)).toBe(total - liveFiles);
 
-    await ui.byTestId(TEST_IDS.sidebarFilter).fill('');
+    await ui.clearFilters();
     await ui.focusApp();
     await ui.press('Control+z');
     await expect(ui.toast).toContainText('Undone');
@@ -96,12 +96,13 @@ test.describe('UX-1 bulk review (UI)', () => {
     expect(total).toBeGreaterThan(0);
     await ui.open(daemon.authUrl);
     await ui.selectInbox();
-    await expect(page).toHaveTitle(`(${total}) octopus-diff`);
+    // The title counts To review (status flow v2), not the Uncommitted scope marked here.
+    const titled = await expectTitle(page, daemon.client);
 
     await ui.focusApp();
     await ui.press('Shift+R');
     await expect(ui.confirmDialog).toBeVisible();
-    await expect(ui.confirmDialog).toContainText(`Mark ${total} files as verified?`);
+    await expect(ui.confirmDialog).toContainText(`Mark ${total} files reviewed?`);
     await ui.press('Escape');
     await expect(ui.confirmDialog).toBeHidden();
     expect(await unreviewedTotal(daemon.client)).toBe(total);
@@ -110,12 +111,12 @@ test.describe('UX-1 bulk review (UI)', () => {
     await ui.confirmBulk();
     await expect(ui.toast).toHaveAttribute('data-changed', String(total));
     await expect.poll(() => unreviewedTotal(daemon.client)).toBe(0);
-    await expect(page).toHaveTitle('octopus-diff');
+    expect(await expectTitle(page, daemon.client)).toBeLessThan(titled);
 
     await ui.press('Control+z');
     await expect(ui.toast).toContainText(`Undone: ${total} marks restored`);
     await expect.poll(() => unreviewedTotal(daemon.client)).toBe(total);
-    await expect(page).toHaveTitle(`(${total}) octopus-diff`);
+    expect(await expectTitle(page, daemon.client)).toBe(titled);
   });
 
   test('project via context menu, folder via Overview, mark all unreviewed', async ({
@@ -138,7 +139,7 @@ test.describe('UX-1 bulk review (UI)', () => {
 
     await ui.open(daemon.authUrl);
     const menu = await ui.openRowMenu(ui.projectNameButton('live'));
-    await menu.getByRole('menuitem', { name: 'Mark all as verified' }).click();
+    await menu.getByRole('menuitem', { name: 'Mark all reviewed' }).click();
     await ui.confirmBulk();
     await expect(ui.toast).toHaveAttribute('data-reviewed', 'true');
     await expect
@@ -152,7 +153,7 @@ test.describe('UX-1 bulk review (UI)', () => {
 
     // Folder: open its Overview and use the bulk button there.
     await ui.folderNameButton(scan.id).click();
-    const overviewButton = ui.page.getByRole('button', { name: 'Mark all as verified' });
+    const overviewButton = ui.page.getByRole('button', { name: 'Mark all reviewed' });
     await expect(overviewButton).toBeVisible();
     await overviewButton.click();
     await ui.confirmBulk();
@@ -168,7 +169,7 @@ test.describe('UX-1 bulk review (UI)', () => {
 
     // Back to unreviewed for the project, from its context menu.
     const again = await ui.openRowMenu(ui.projectNameButton('live'));
-    await again.getByRole('menuitem', { name: 'Mark all as unreviewed' }).click();
+    await again.getByRole('menuitem', { name: 'Mark all unreviewed' }).click();
     await ui.confirmBulk();
     await expect(ui.toast).toHaveAttribute('data-reviewed', 'false');
     await expect

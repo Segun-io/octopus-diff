@@ -12,6 +12,8 @@ import {
   type BulkReviewRequestParsed,
   type BulkReviewResponse,
   type ChangedFile,
+  type ChangeRequestConversationResponse,
+  type ChangeRequestDetailResponse,
   type CommitInfo,
   type CommitsResponse,
   DEFAULT_APP_SETTINGS,
@@ -28,6 +30,8 @@ import {
   type ProjectListItem,
   type ProjectsResponse,
   type RefreshResponse,
+  type RepositoriesResponse,
+  type RepositoryForgeResponse,
   type RescanResponse,
   type ReviewOverride,
   type ReviewPolicyTarget,
@@ -47,6 +51,13 @@ import {
   type WorktreeSummary,
 } from '@octopus-diff/contracts';
 import { buildPatch, countLines, fileSides, type MockFile, type MockFileKind } from './content.js';
+import {
+  mockConversation,
+  mockDetail,
+  mockImageHosts,
+  mockRepositoryForgeInfo,
+  mockRepositoryInfo,
+} from './forge-details.js';
 import { mockForges } from './forges.js';
 import {
   byteLength,
@@ -70,6 +81,12 @@ export interface MockBackendOptions {
   largeProjects?: number;
   largeWorktreesPerProject?: number;
   largeFilesPerWorktree?: number;
+  /**
+   * Behave like a status-flow daemon (docs/STATUS-FLOW.md): summaries carry `review`, the review
+   * scope lists the branch's committed files (until reviewed) plus the uncommitted ones, and a
+   * bulk review with `advanceBookmarks` moves the bookmark. Off by default (an older daemon).
+   */
+  statusFlow?: boolean;
 }
 
 /** Soft limit: above this the patch is omitted unless `full=true`. Hard cap: patch is cut. */
@@ -111,6 +128,8 @@ interface MockWorktree {
   error: string | null;
   updatedAt: string;
   revision: number;
+  /** Status flow mock: the bookmark reached HEAD (the branch's commits are reviewed). */
+  commitsReviewed?: boolean;
 }
 
 interface MockProject {
@@ -530,6 +549,11 @@ export class MockBackend {
         return mw.files.filter((f) => f.unstaged && f.status !== 'untracked');
       case 'branch':
         return mw.worktree.isMain ? [] : mw.branchFiles;
+      case 'review': {
+        if (!this.options.statusFlow || mw.worktree.isMain || mw.commitsReviewed) return mw.files;
+        const working = new Set(mw.files.map((f) => f.path));
+        return [...mw.files, ...mw.branchFiles.filter((f) => !working.has(f.path))];
+      }
       case 'commit': {
         const sha = scope.sha.toLowerCase();
         const commit = mw.commits.find((c) => c.info.sha.startsWith(sha));
@@ -633,6 +657,24 @@ export class MockBackend {
       inProgress: mw.inProgress,
       stateHash,
       updatedAt: mw.updatedAt,
+      ...(this.options.statusFlow ? { review: this.reviewOf(mp, mw) } : {}),
+    };
+  }
+
+  private newCommits(mw: MockWorktree): number {
+    return mw.worktree.isMain || mw.commitsReviewed || mw.branchFiles.length === 0
+      ? 0
+      : Math.max(1, Math.min(mw.commits.length, 3));
+  }
+
+  private reviewOf(mp: MockProject, mw: MockWorktree): NonNullable<WorktreeSummary['review']> {
+    const files = this.changedFiles(mp, mw, { kind: 'review' });
+    return {
+      bookmark: mw.worktree.headSha,
+      base: mw.worktree.headSha,
+      newCommits: this.newCommits(mw),
+      unreviewedFiles: files.filter((f) => !f.reviewed).length,
+      historyRewritten: false,
     };
   }
 
@@ -740,6 +782,109 @@ export class MockBackend {
     return mockForges(this.listProjects(), this.settings, new Date().toISOString());
   }
 
+  // --- request detail and repository information (mock/forge-details.ts) -------------------
+
+  private imageHosts(): string[] {
+    const forges = this.settings.forges;
+    return mockImageHosts(forges?.images !== false, forges?.enabled ?? true);
+  }
+
+  /** The worktree's matched request and its rotation index; 404 for an unknown worktree. */
+  private forgeEntry(worktreeId: string) {
+    this.findWorktree(worktreeId);
+    const forges = this.forges();
+    const all = forges.projects.flatMap((p) => p.worktrees.map((w) => ({ p, w })));
+    const index = all.findIndex((e) => e.w.worktreeId === worktreeId);
+    const entry = all[index];
+    return entry?.w.changeRequest ? { ...entry, n: index } : null;
+  }
+
+  changeRequest(worktreeId: string): ChangeRequestDetailResponse {
+    const entry = this.forgeEntry(worktreeId);
+    const imageHosts = this.imageHosts();
+    if (!entry) {
+      return {
+        worktreeId,
+        status: 'no-request',
+        message: null,
+        request: null,
+        fetchedAt: null,
+        imageHosts,
+      };
+    }
+    const { mw } = this.findWorktree(worktreeId);
+    const local = this.filesForScope(mw, { kind: 'working' }).map((f) => f.path);
+    return {
+      worktreeId,
+      status: 'ok',
+      message: null,
+      request: mockDetail(entry.w, entry.n, local),
+      fetchedAt: new Date().toISOString(),
+      imageHosts,
+    };
+  }
+
+  changeRequestConversation(worktreeId: string): ChangeRequestConversationResponse {
+    const entry = this.forgeEntry(worktreeId);
+    const imageHosts = this.imageHosts();
+    if (!entry) {
+      return {
+        worktreeId,
+        status: 'no-request',
+        message: null,
+        conversation: null,
+        fetchedAt: null,
+        imageHosts,
+      };
+    }
+    return {
+      worktreeId,
+      status: 'ok',
+      message: null,
+      conversation: mockConversation(entry.w, entry.n),
+      fetchedAt: new Date().toISOString(),
+      imageHosts,
+    };
+  }
+
+  repositoryForge(projectId: string): RepositoryForgeResponse {
+    const index = this.projects.findIndex((p) => p.project.id === projectId);
+    if (index === -1) throw new MockApiError(404, 'not_found', `unknown project ${projectId}`);
+    const state = this.forges().projects.find((p) => p.projectId === projectId);
+    if (!state || state.status === 'disabled') {
+      return {
+        projectId,
+        status: 'disabled',
+        message: 'Forge integration is turned off in Settings.',
+        forge: null,
+        repository: null,
+        fetchedAt: null,
+      };
+    }
+    return {
+      projectId,
+      status: 'ok',
+      message: null,
+      forge: state.forge,
+      repository: mockRepositoryForgeInfo(state, index),
+      fetchedAt: new Date().toISOString(),
+    };
+  }
+
+  repositories(projectIds: readonly string[]): RepositoriesResponse {
+    const items = this.listProjects().projects;
+    return {
+      repositories: projectIds.map((projectId) => {
+        const index = items.findIndex((i) => i.project.id === projectId);
+        const item = items[index];
+        return item
+          ? { projectId, info: mockRepositoryInfo(item, index), error: null }
+          : { projectId, info: null, error: 'unknown project' };
+      }),
+      generatedAt: new Date().toISOString(),
+    };
+  }
+
   private assertTargetExists(target: ReviewPolicyTarget): void {
     const missing = (what: string) =>
       new MockApiError(404, 'not_found', `unknown ${target.kind} ${what}`);
@@ -826,6 +971,7 @@ export class MockBackend {
     let changed = 0;
     let unchanged = 0;
     let worktrees = 0;
+    let bookmarks = 0;
     const wanted = req.paths ? new Set(req.paths.map((p) => p.rawPath ?? p.path)) : null;
     for (const { mp, mw } of this.targetWorktrees(req.target)) {
       if (mw.error || mw.worktree.missing || mw.worktree.prunable) continue;
@@ -836,6 +982,23 @@ export class MockBackend {
       }
       let files = this.changedFiles(mp, mw, req.scope);
       if (wanted) files = files.filter((f) => wanted.has(f.rawPath ?? f.path));
+      if (
+        this.options.statusFlow &&
+        req.advanceBookmarks &&
+        req.reviewed &&
+        req.scope.kind === 'review' &&
+        !wanted &&
+        !mw.commitsReviewed
+      ) {
+        mw.commitsReviewed = true;
+        bookmarks += 1;
+        this.emit({
+          type: 'review.bookmark',
+          projectId: mp.project.id,
+          worktreeId: mw.worktree.id,
+          bookmark: mw.worktree.headSha,
+        });
+      }
       if (files.length === 0) continue;
       if (!req.includeDisabled && !this.policyOf(mp, mw, map).enabled) {
         skippedDisabled.push(mw.worktree.id);
@@ -881,6 +1044,7 @@ export class MockBackend {
       skippedDisabled,
       stale,
       undoToken,
+      ...(req.advanceBookmarks ? { bookmarks } : {}),
     };
   }
 

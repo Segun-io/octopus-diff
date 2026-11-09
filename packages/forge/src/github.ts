@@ -1,4 +1,9 @@
-import type { ChangeRequest, ChangeRequestChecks, ChecksState } from '@octopus-diff/contracts';
+import type {
+  ChangeRequest,
+  ChangeRequestChecks,
+  ChecksState,
+  MergeState,
+} from '@octopus-diff/contracts';
 import {
   asArray,
   asBool,
@@ -20,7 +25,14 @@ export const GITHUB_MAX_BRANCHES_PER_QUERY = 20;
 /** Requests per branch: an open one and recent merged/closed ones, newest first. */
 const PER_BRANCH = 5;
 
-const PR_FIELDS = `number title url state isDraft updatedAt baseRefName headRefName headRefOid
+/**
+ * `full` adds `mergeStateStatus`, which old GitHub Enterprise Server versions lack; `basic` drops
+ * it and is used when the full query reports unknown fields (same rule as GitLab's variants).
+ */
+export type GithubQueryVariant = 'full' | 'basic';
+
+const PR_FIELDS = `number title url state isDraft createdAt updatedAt baseRefName headRefName headRefOid
+  additions deletions changedFiles
   isCrossRepository author { login } headRepository { nameWithOwner }
   reviewDecision mergeable totalCommentsCount
   commits(last: 1) { nodes { commit { statusCheckRollup { state contexts(first: 1) {
@@ -28,7 +40,7 @@ const PR_FIELDS = `number title url state isDraft updatedAt baseRefName headRefN
   } } } } }`;
 
 /** The query for `count` branches. Deterministic, so the allowlist can rebuild and compare it. */
-export function buildGithubQuery(count: number): string {
+export function buildGithubQuery(count: number, variant: GithubQueryVariant = 'full'): string {
   if (!Number.isInteger(count) || count < 1 || count > GITHUB_MAX_BRANCHES_PER_QUERY) {
     throw new RangeError(`branch count out of range: ${count}`);
   }
@@ -40,7 +52,8 @@ export function buildGithubQuery(count: number): string {
       `b${i}: pullRequests(headRefName: $b${i}, first: ${PER_BRANCH}, orderBy: {field: UPDATED_AT, direction: DESC}) { nodes { ...pr } }`,
     );
   }
-  return `query OctopusDiffPullRequests(${vars.join(', ')}) { repository(owner: $owner, name: $name) { ${fields.join(' ')} } } fragment pr on PullRequest { ${PR_FIELDS} }`;
+  const body = variant === 'full' ? `${PR_FIELDS} mergeStateStatus` : PR_FIELDS;
+  return `query OctopusDiffPullRequests(${vars.join(', ')}) { rateLimit { cost remaining } repository(owner: $owner, name: $name) { ${fields.join(' ')} } } fragment pr on PullRequest { ${body} }`;
 }
 
 const PASSED_RUNS = new Set(['SUCCESS', 'NEUTRAL', 'SKIPPED']);
@@ -95,6 +108,29 @@ function normaliseChecks(commits: unknown): ChangeRequestChecks | null {
   };
 }
 
+/** GitHub `mergeStateStatus` -> `MergeState` (null when absent). */
+export function githubMergeState(value: unknown): MergeState | null {
+  switch (asString(value)) {
+    case null:
+      return null;
+    case 'CLEAN':
+    case 'HAS_HOOKS':
+      return 'clean';
+    case 'BLOCKED':
+      return 'blocked';
+    case 'BEHIND':
+      return 'behind';
+    case 'DIRTY':
+      return 'conflicts';
+    case 'UNSTABLE':
+      return 'unstable';
+    case 'DRAFT':
+      return 'draft';
+    default:
+      return 'unknown';
+  }
+}
+
 /** One `PullRequest` node -> `ChangeRequest`; null when required fields are missing. */
 export function normaliseGithubPullRequest(raw: unknown): ChangeRequest | null {
   const pr = asRecord(raw);
@@ -134,6 +170,11 @@ export function normaliseGithubPullRequest(raw: unknown): ChangeRequest | null {
             : null,
     conflicts: mergeable === 'CONFLICTING' ? true : mergeable === 'MERGEABLE' ? false : null,
     comments: asNumber(pr.totalCommentsCount),
+    createdAt: normaliseTimestamp(pr.createdAt),
+    additions: asNumber(pr.additions),
+    deletions: asNumber(pr.deletions),
+    changedFiles: asNumber(pr.changedFiles),
+    mergeState: state === 'OPEN' ? githubMergeState(pr.mergeStateStatus) : null,
   };
 }
 

@@ -1,6 +1,7 @@
 import { type FileDiff, scopeKey, TEST_IDS } from '@octopus-diff/contracts';
 import { lazy, type ReactNode, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { describeError, useDiffQuery } from '../../api/queries.ts';
+import { fileCopyTexts, type SelectionCopyMeta } from '../../lib/copyFormat.ts';
 import {
   classifyDiff,
   type DiffDisplay,
@@ -14,19 +15,24 @@ import {
   findSuspicious,
   hasSuspicious,
 } from '../../lib/unicode.ts';
-import { CONTEXT_STEP, DEFAULT_CONTEXT } from '../../state/commands.ts';
 import { useCommandsContext } from '../../state/commandsContext.tsx';
+import { type CopyFn, copyAndReport } from '../../state/copy.ts';
+import { CONTEXT_STEP, DEFAULT_CONTEXT } from '../../state/diffContext.ts';
 import { useAppModel } from '../../state/model.tsx';
 import { actions, useUi, useUiStore } from '../../state/ui.tsx';
 import { useTheme } from '../../theme/useTheme.ts';
 import {
   CheckIcon,
   LineCounts,
+  MoreIcon,
   StatusIcon,
   statusLabel,
   WarningIcon,
   WorktreeName,
 } from '../bits.tsx';
+import { ContextMenu, useContextMenu } from '../ContextMenu.tsx';
+import { CopyButton } from '../CopyButton.tsx';
+import { COPY_TEST_IDS, fileCopyItems, separated, worktreeCopyItems } from '../copyMenu.ts';
 
 const DiffRenderer = lazy(() =>
   import('./DiffRenderer.tsx').then((m) => ({ default: m.DiffRenderer })),
@@ -95,6 +101,7 @@ export function DiffPane() {
   const entry = model.selectedEntry;
   const reviewed = diff?.reviewed ?? entry?.file.reviewed ?? false;
   const row = selected ? model.sidebar.byId.get(selected.worktreeId) : undefined;
+  const menu = useContextMenu<null>();
 
   // "Updated" banner: the open file's patchHash changed underneath the reader. Keyed by file
   // AND scope (F9): the same file has a different hash per scope, which is not a change.
@@ -128,6 +135,30 @@ export function DiffPane() {
   const file = diff ?? entry?.file;
   const status = file?.status;
   const contextLines = opts.context ?? DEFAULT_CONTEXT;
+  const oldPath = file?.oldPath && file.oldPath !== selected?.path ? file.oldPath : null;
+  const pathTexts = selected ? fileCopyTexts({ path: selected.path }, '') : null;
+  const copy: CopyFn = (text, options) => void copyAndReport(store, text, options);
+  const worktree = row?.worktree;
+  const projectName = row?.project.name;
+  const defaultBranch = row?.project.defaultBranch;
+  const scope = model.scope;
+  const selectedPath = selected?.path;
+  const copyMeta = useMemo<SelectionCopyMeta | undefined>(
+    () =>
+      worktree && projectName !== undefined && selectedPath !== undefined
+        ? {
+            project: projectName,
+            branch: worktree.branch,
+            worktreePath: worktree.path,
+            headSha: worktree.headSha,
+            scope,
+            defaultBranch: defaultBranch ?? null,
+            filePath: selectedPath,
+            oldPath,
+          }
+        : undefined,
+    [worktree, projectName, defaultBranch, scope, selectedPath, oldPath],
+  );
 
   return (
     <section
@@ -142,7 +173,11 @@ export function DiffPane() {
       className="flex h-full min-h-0 min-w-0 flex-col bg-canvas"
     >
       {selected && (
-        <header className="flex min-h-10 flex-wrap items-center gap-2 border-b border-line bg-surface px-3 py-1.5">
+        // biome-ignore lint/a11y/noStaticElementInteractions: right-click shortcut for the ⋯ menu button
+        <header
+          className="flex min-h-10 flex-wrap items-center gap-2 border-b border-line bg-surface px-3 py-1.5"
+          onContextMenu={(e) => menu.open(e, null)}
+        >
           {status && <StatusIcon status={status} />}
           <h2 className="min-w-0 truncate font-mono text-xs" title={selected.path}>
             {file?.oldPath && file.oldPath !== selected.path ? (
@@ -155,6 +190,16 @@ export function DiffPane() {
               escapeSuspicious(selected.path)
             )}
           </h2>
+          {pathTexts && (
+            <CopyButton
+              text={pathTexts.relative}
+              label="Copy path"
+              what="path"
+              escaped={pathTexts.escaped}
+              testId={COPY_TEST_IDS.pathButton}
+              className="-ml-1"
+            />
+          )}
           {status && <span className="text-[11px] text-muted">{statusLabel(status)}</span>}
           {file && <LineCounts additions={file.additions} deletions={file.deletions} />}
           {row && (
@@ -166,6 +211,17 @@ export function DiffPane() {
             />
           )}
           <span className="ml-auto flex items-center gap-1.5">
+            <button
+              type="button"
+              data-testid={COPY_TEST_IDS.diffMenuButton}
+              aria-label="More actions"
+              aria-haspopup="menu"
+              title="Copy path, name, branch…"
+              onClick={(e) => menu.open(e, null)}
+              className="od-btn od-btn-ghost"
+            >
+              <MoreIcon />
+            </button>
             {display?.kind === 'patch' && (
               <>
                 <button
@@ -213,6 +269,38 @@ export function DiffPane() {
             )}
           </span>
         </header>
+      )}
+      {selected && menu.state && (
+        <ContextMenu
+          items={[
+            ...fileCopyItems(
+              { path: selected.path, oldPath },
+              row?.worktree.path,
+              copy,
+              menu.state.position,
+            ),
+            ...(diff?.patch && display?.kind !== 'too-large'
+              ? [
+                  {
+                    id: 'copy-file-diff',
+                    label: 'Copy file diff (patch)',
+                    testId: COPY_TEST_IDS.fileDiff,
+                    onSelect: () =>
+                      copy(escapeSuspicious(diff.patch), {
+                        what: 'file diff',
+                        escaped: suspicious.length > 0,
+                        at: menu.state?.position,
+                      }),
+                  },
+                ]
+              : []),
+            ...(row ? separated(worktreeCopyItems(row.worktree, copy, menu.state.position)) : []),
+          ]}
+          position={menu.state.position}
+          onClose={menu.close}
+          label="Copy"
+          testId="diff-header-menu-list"
+        />
       )}
 
       {suspicious.length > 0 && (
@@ -278,6 +366,8 @@ export function DiffPane() {
             diffTheme={appTheme.diff.theme}
             ignoreWhitespace={ignoreWhitespace}
             context={opts.context}
+            copyMeta={copyMeta}
+            suspicious={suspicious.length > 0}
             onLoadAnyway={() => key && actions.setFileOptions(store, key, { ...opts, full: true })}
           />
         )}
@@ -294,6 +384,8 @@ function DiffBody({
   diffTheme,
   ignoreWhitespace,
   context,
+  copyMeta,
+  suspicious,
   onLoadAnyway,
 }: {
   diff: FileDiff;
@@ -303,6 +395,8 @@ function DiffBody({
   diffTheme: string;
   ignoreWhitespace: boolean;
   context: number | undefined;
+  copyMeta: SelectionCopyMeta | undefined;
+  suspicious: boolean;
   onLoadAnyway: () => void;
 }) {
   switch (display.kind) {
@@ -386,6 +480,8 @@ function DiffBody({
                 mode={mode}
                 theme={theme}
                 diffTheme={diffTheme}
+                copyMeta={copyMeta}
+                suspicious={suspicious}
               />
             </Suspense>
           </div>

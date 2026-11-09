@@ -24,6 +24,8 @@ import {
   ProjectsResponseSchema,
   type RefreshResponse,
   RefreshResponseSchema,
+  type RepositoriesResponse,
+  RepositoriesResponseSchema,
   type RescanResponse,
   RescanResponseSchema,
   type ReviewRequest,
@@ -44,13 +46,26 @@ import {
   OkResponseSchema,
 } from './common.js';
 import { parseServerEvent, type ServerEvent, SseParser } from './events.js';
-import { type ForgesResponse, ForgesResponseSchema, type RefreshForgesRequest } from './forge.js';
+import {
+  type ChangeRequestConversationResponse,
+  ChangeRequestConversationResponseSchema,
+  type ChangeRequestDetailResponse,
+  ChangeRequestDetailResponseSchema,
+  type ForgesResponse,
+  ForgesResponseSchema,
+  type RefreshForgesRequest,
+  type RepositoryForgeResponse,
+  RepositoryForgeResponseSchema,
+} from './forge.js';
 import { appendScopeParams, type DiffScope } from './scope.js';
 import {
   type AppSettingsPatch,
   type BulkReviewRequest,
   type BulkReviewResponse,
   BulkReviewResponseSchema,
+  type SetBookmarkRequest,
+  type SetBookmarkResponse,
+  SetBookmarkResponseSchema,
   type SetReviewPolicyRequest,
   type SettingsResponse,
   SettingsResponseSchema,
@@ -150,11 +165,23 @@ export interface ApiClient {
   /** "Mark all as verified" (or unverified) for a worktree, project, folder or everything. */
   bulkReview(body: BulkReviewRequest): Promise<BulkReviewResponse>;
   undoReview(body: UndoReviewRequest): Promise<UndoReviewResponse>;
+  /** Moves a worktree's review bookmark (status flow v2). 404 on older daemons. */
+  setBookmark(body: SetBookmarkRequest): Promise<SetBookmarkResponse>;
   /** Subdirectories of `path` (default: home) for the folder picker. */
   listDirs(params?: { path?: string }): Promise<DirsResponse>;
   /** Forge integration: CLI status and pull/merge requests per project (forge.ts). */
   getForges(): Promise<ForgesResponse>;
   refreshForges(body?: RefreshForgesRequest): Promise<ForgesResponse>;
+  /** The worktree's matched request in detail (Request tab). */
+  getChangeRequest(worktreeId: string): Promise<ChangeRequestDetailResponse>;
+  getChangeRequestConversation(worktreeId: string): Promise<ChangeRequestConversationResponse>;
+  /** Refetches detail and conversation (at most every 15 s per request). */
+  refreshChangeRequest(worktreeId: string): Promise<ChangeRequestDetailResponse>;
+  /** Forge facts and open requests of a project's repository (project Overview). */
+  getRepositoryForge(projectId: string): Promise<RepositoryForgeResponse>;
+  refreshRepositoryForge(projectId: string): Promise<RepositoryForgeResponse>;
+  /** Local git facts for the listed projects (Overview). */
+  listRepositories(projectIds: readonly string[]): Promise<RepositoriesResponse>;
   /** Absolute or same-origin URL of the SSE stream. */
   eventsUrl(): string;
   /** Subscribes via fetch streaming with the bearer token (browsers and Node). */
@@ -375,6 +402,8 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
       request(BulkReviewResponseSchema, 'POST', ROUTES.bulkReview.path, { body }),
     undoReview: (body) =>
       request(UndoReviewResponseSchema, 'POST', ROUTES.undoReview.path, { body }),
+    setBookmark: (body) =>
+      request(SetBookmarkResponseSchema, 'PUT', ROUTES.setBookmark.path, { body }),
     listDirs: (params = {}) => {
       const query = new URLSearchParams();
       if (params.path !== undefined) query.set('path', params.path);
@@ -383,6 +412,33 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
     getForges: () => request(ForgesResponseSchema, 'GET', ROUTES.getForges.path),
     refreshForges: (body = {}) =>
       request(ForgesResponseSchema, 'POST', ROUTES.refreshForges.path, { body }),
+    getChangeRequest: (worktreeId) =>
+      request(ChangeRequestDetailResponseSchema, 'GET', p(ROUTES.getChangeRequest, { worktreeId })),
+    getChangeRequestConversation: (worktreeId) =>
+      request(
+        ChangeRequestConversationResponseSchema,
+        'GET',
+        p(ROUTES.getChangeRequestConversation, { worktreeId }),
+      ),
+    refreshChangeRequest: (worktreeId) =>
+      request(
+        ChangeRequestDetailResponseSchema,
+        'POST',
+        p(ROUTES.refreshChangeRequest, { worktreeId }),
+      ),
+    getRepositoryForge: (projectId) =>
+      request(RepositoryForgeResponseSchema, 'GET', p(ROUTES.getRepositoryForge, { projectId })),
+    refreshRepositoryForge: (projectId) =>
+      request(
+        RepositoryForgeResponseSchema,
+        'POST',
+        p(ROUTES.refreshRepositoryForge, { projectId }),
+      ),
+    listRepositories: (projectIds) => {
+      const query = new URLSearchParams();
+      query.set('projectIds', projectIds.join(','));
+      return request(RepositoriesResponseSchema, 'GET', ROUTES.listRepositories.path, { query });
+    },
     eventsUrl: () => url(ROUTES.events.path),
     subscribe,
   };

@@ -1,14 +1,19 @@
-import type { ChangedFile, InboxEntry } from '@octopus-diff/contracts';
+import type { ChangedFile, ChangeRequest, InboxEntry } from '@octopus-diff/contracts';
 import { describe, expect, it } from 'vitest';
 import { MockBackend } from '../mock/backend.ts';
 import {
   buildSidebar,
   type FileGroup,
   flattenGroups,
+  NO_SIDEBAR_FILTERS,
   nextUnreviewed,
+  placeOf,
   repairSelection,
+  rowState,
+  settledWord,
   sortFiles,
   sortInboxEntries,
+  stageOf,
   stepFile,
   stepWorktree,
   visibleIf,
@@ -41,11 +46,7 @@ function withReviewed(entries: InboxEntry[], reviewed: (f: ChangedFile) => boole
 describe('sidebar model', () => {
   it('sorts projects by name and puts the main worktree first', () => {
     const { projects, inbox } = demo();
-    const model = buildSidebar(projects, inbox.entries, {
-      text: '',
-      onlyDirty: false,
-      onlyUnreviewed: false,
-    });
+    const model = buildSidebar(projects, inbox.entries, NO_SIDEBAR_FILTERS);
     expect(model.groups.map((g) => g.project.name)).toEqual([
       'docs-site',
       'infra',
@@ -60,19 +61,35 @@ describe('sidebar model', () => {
     expect(model.order).toHaveLength(model.byId.size);
   });
 
-  it('filters by text, dirty and unreviewed', () => {
+  it('filters by picked projects and worktrees (a union), dirty and unreviewed', () => {
     const { projects, inbox } = demo();
-    const text = buildSidebar(projects, inbox.entries, {
-      text: 'CACHE',
-      onlyDirty: false,
-      onlyUnreviewed: false,
+    const cache = projects
+      .flatMap((p) => p.worktrees)
+      .find((w) => w.worktree.branch === 'fix/cache');
+    const infra = projects.find((p) => p.project.name === 'infra');
+    if (!cache || !infra) throw new Error('demo fixture changed');
+    const one = buildSidebar(projects, inbox.entries, {
+      ...NO_SIDEBAR_FILTERS,
+      worktrees: [cache.worktree.id],
     });
-    expect(text.order.map((id) => text.byId.get(id)?.worktree.branch)).toEqual(['fix/cache']);
+    expect(one.order.map((id) => one.byId.get(id)?.worktree.branch)).toEqual(['fix/cache']);
+    // byId keeps every row: the dropdown lists what the filters hide.
+    expect(one.byId.size).toBe(projects.flatMap((p) => p.worktrees).length);
+
+    const union = buildSidebar(projects, inbox.entries, {
+      ...NO_SIDEBAR_FILTERS,
+      projects: [infra.project.id],
+      worktrees: [cache.worktree.id],
+    });
+    const cacheProject = projects.find((p) => p.worktrees.includes(cache))?.project.name;
+    expect(union.groups.map((g) => g.project.name).sort()).toEqual(
+      [infra.project.name, cacheProject].sort(),
+    );
+    expect(union.order).toHaveLength(infra.worktrees.length + 1);
 
     const dirty = buildSidebar(projects, inbox.entries, {
-      text: '',
+      ...NO_SIDEBAR_FILTERS,
       onlyDirty: true,
-      onlyUnreviewed: false,
     });
     expect(dirty.order).toHaveLength(inbox.entries.length);
     expect([...dirty.order].sort()).toEqual(inbox.entries.map((e) => e.worktree.id).sort());
@@ -82,11 +99,145 @@ describe('sidebar model', () => {
       (f) => f.path === 'README.md' || f.path === 'src/server/router.ts',
     );
     const unreviewed = buildSidebar(projects, allReviewedApiMain, {
-      text: '',
-      onlyDirty: false,
+      ...NO_SIDEBAR_FILTERS,
       onlyUnreviewed: true,
     });
     expect(unreviewed.order).toHaveLength(inbox.entries.length - 1);
+  });
+});
+
+describe('stages (docs/STATUS-FLOW.md §2.2)', () => {
+  const { projects } = demo();
+  const all = projects.flatMap((p) => p.worktrees);
+  const base = all.find((w) => w.summary && !w.worktree.missing && !w.summary.inProgress);
+  if (!base?.summary) throw new Error('fixture');
+  const summary = { ...base.summary, counts: { ...base.summary.counts, conflicted: 0 } };
+  const worktree = base.worktree;
+  const on = { enabled: true };
+
+  it('derives each stage', () => {
+    expect(
+      stageOf({ summary: { ...summary, inProgress: 'rebase' }, worktree, unreviewed: 3 }),
+    ).toBe('blocked');
+    expect(
+      stageOf({
+        summary: { ...summary, counts: { ...summary.counts, conflicted: 1 } },
+        worktree,
+        unreviewed: 0,
+        review: { enabled: false },
+      }),
+    ).toBe('blocked');
+    expect(stageOf({ summary, worktree, unreviewed: 2, review: on })).toBe('review');
+    // commits count through their files: nothing unreviewed left = reviewed
+    expect(stageOf({ summary, worktree, unreviewed: 0, newCommits: 2, review: on })).toBe(
+      'reviewed',
+    );
+    expect(stageOf({ summary, worktree, unreviewed: 0, newCommits: 0, review: on })).toBe(
+      'reviewed',
+    );
+    expect(stageOf({ summary, worktree, unreviewed: 4, review: { enabled: false } })).toBe('off');
+    expect(stageOf({ summary: null, worktree, unreviewed: 0 })).toBe('off');
+    expect(stageOf({ summary, worktree: { ...worktree, missing: true }, unreviewed: 1 })).toBe(
+      'off',
+    );
+  });
+
+  it('forge stages: In PR, merged/closed for this HEAD, never over To review (§2.5)', () => {
+    const cr = (over: Partial<ChangeRequest>): ChangeRequest => ({
+      kind: 'github',
+      number: 42,
+      title: 't',
+      url: 'https://github.com/o/r/pull/42',
+      state: 'open',
+      draft: false,
+      author: null,
+      baseBranch: 'main',
+      headBranch: 'feature',
+      headSha: summary.headSha,
+      crossRepository: false,
+      headRepository: null,
+      updatedAt: null,
+      checks: null,
+      review: null,
+      conflicts: null,
+      comments: null,
+      ...over,
+    });
+    const clean = { ...summary, changedFiles: 0 };
+    const forge = (
+      over: Partial<ChangeRequest>,
+      sync: 'same' | 'differs' | 'unknown' = 'unknown',
+    ) => ({
+      changeRequest: cr(over),
+      sync,
+    });
+    const at = (f: ReturnType<typeof forge>, unreviewed = 0, s = clean) =>
+      stageOf({ summary: s, worktree, unreviewed, review: on, forge: f });
+    expect(at(forge({}))).toBe('inPR');
+    expect(at(forge({}), 3)).toBe('review'); // never overrides To review
+    expect(at(forge({ draft: true }))).toBe('reviewed');
+    expect(at(forge({ state: 'merged' }))).toBe('merged');
+    expect(at(forge({ state: 'closed' }))).toBe('closed');
+    // merged even with unreviewed commits: they are counted on the target branch
+    expect(at(forge({ state: 'merged' }), 2)).toBe('merged');
+    // a newer local HEAD: the request is not this work any more
+    expect(at(forge({ state: 'merged', headSha: 'f'.repeat(40) }))).toBe('reviewed');
+    expect(at(forge({ state: 'merged', headSha: 'f'.repeat(40) }, 'same'))).toBe('merged');
+    // merged with uncommitted work left: not the shelf, To review or quietly under the project
+    const dirty = { ...summary, changedFiles: 2 };
+    expect(at(forge({ state: 'merged' }), 2, dirty)).toBe('review');
+    expect(at(forge({ state: 'merged' }), 0, dirty)).toBe('merged');
+    expect(placeOf('merged', true)).toBe('active');
+    expect(placeOf('merged', false)).toBe('settled');
+    // forges off / no data: those stages never apply
+    expect(stageOf({ summary: clean, worktree, unreviewed: 0, review: on, forge: null })).toBe(
+      'reviewed',
+    );
+  });
+
+  it('places stages: blocked and To review under the project, the rest in the shelf', () => {
+    expect(placeOf('blocked')).toBe('blocked');
+    expect(placeOf('review')).toBe('attention');
+    expect(placeOf('inPR')).toBe('active');
+    for (const stage of ['reviewed', 'merged', 'closed', 'off'] as const) {
+      expect(placeOf(stage)).toBe('settled');
+    }
+  });
+
+  it('"Hide until it changes" holds only for the same state hash; blocked is never hidden', () => {
+    const hide = {
+      worktreeId: worktree.id,
+      state: 'settled' as const,
+      stateHash: summary.stateHash,
+    };
+    expect(rowState({ summary, worktree, unreviewed: 2 }, hide)).toEqual({
+      state: 'settled',
+      settledBy: 'user',
+    });
+    const changed = { ...summary, stateHash: 'other' };
+    expect(rowState({ summary: changed, worktree, unreviewed: 2 }, hide).state).toBe('attention');
+    const blocked = { ...summary, inProgress: 'merge' as const };
+    expect(
+      rowState({ summary: blocked, worktree, unreviewed: 2 }, { ...hide, stateHash: 'x' }).state,
+    ).toBe('blocked');
+  });
+
+  it('says "reviewed", never "verified"', () => {
+    const review = { enabled: true, source: 'default' as const };
+    const dirty = { ...summary, changedFiles: 2 };
+    expect(settledWord({ summary: dirty, worktree, error: null, review })).toBe('reviewed');
+    expect(
+      settledWord({ summary: { ...summary, changedFiles: 0 }, worktree, error: null, review }),
+    ).toBe('clean');
+  });
+
+  it('the sidebar takes no scope: the same inputs give the same rows', () => {
+    const { projects: list, inbox } = demo();
+    const a = buildSidebar(list, inbox.entries, NO_SIDEBAR_FILTERS);
+    const b = buildSidebar(list, inbox.entries, NO_SIDEBAR_FILTERS);
+    expect([...a.byId.values()].map((r) => [r.worktree.id, r.state, r.stage])).toEqual(
+      [...b.byId.values()].map((r) => [r.worktree.id, r.state, r.stage]),
+    );
   });
 });
 

@@ -1,0 +1,735 @@
+{
+  "data": {
+    "project": {
+      "mergeRequest": {
+        "discussions": {
+          "pageInfo": {
+            "hasNextPage": false
+          },
+          "nodes": [
+            {
+              "id": "gid://gitlab/Discussion/e33693948b3c3990530075f1a9a9dab3b6bf9c2f",
+              "resolvable": false,
+              "resolved": false,
+              "notes": {
+                "pageInfo": {
+                  "hasNextPage": false
+                },
+                "nodes": [
+                  {
+                    "id": "gid://gitlab/Note/4100193808",
+                    "body": "assigned to @andrew.jung",
+                    "createdAt": "2026-10-27T15:30:04Z",
+                    "lastEditedAt": "2026-10-27T15:30:04Z",
+                    "url": "https://gitlab.com/gitlab-org/cli/-/merge_requests/4230#note_4100193808",
+                    "system": true,
+                    "internal": false,
+                    "author": {
+                      "username": "andrew.jung",
+                      "name": "Andrew Jung",
+                      "avatarUrl": "/uploads/-/system/user/avatar/23194436/avatar.png?v=1794204719",
+                      "bot": false
+                    },
+                    "position": null
+                  }
+                ]
+              }
+            },
+            {
+              "id": "gid://gitlab/Discussion/56a140a3d793f994a27cdaeafeb1ec716a29118a",
+              "resolvable": false,
+              "resolved": false,
+              "notes": {
+                "pageInfo": {
+                  "hasNextPage": false
+                },
+                "nodes": [
+                  {
+                    "id": "gid://gitlab/Note/4100194341",
+                    "body": "mentioned in merge request !4227",
+                    "createdAt": "2026-10-27T15:30:08Z",
+                    "lastEditedAt": "2026-10-27T15:30:08Z",
+                    "url": "https://gitlab.com/gitlab-org/cli/-/merge_requests/4230#note_4100194341",
+                    "system": true,
+                    "internal": false,
+                    "author": {
+                      "username": "andrew.jung",
+                      "name": "Andrew Jung",
+                      "avatarUrl": "/uploads/-/system/user/avatar/23194436/avatar.png?v=1794204719",
+                      "bot": false
+                    },
+                    "position": null
+                  }
+                ]
+              }
+            },
+            {
+              "id": "gid://gitlab/Discussion/8e2e559a5e1600d006a7c95f8455db1baeac7006",
+              "resolvable": false,
+              "resolved": false,
+              "notes": {
+                "pageInfo": {
+                  "hasNextPage": false
+                },
+                "nodes": [
+                  {
+                    "id": "gid://gitlab/Note/4100194679",
+                    "body": "mentioned in merge request !4228",
+                    "createdAt": "2026-10-27T15:30:10Z",
+                    "lastEditedAt": "2026-10-27T15:30:10Z",
+                    "url": "https://gitlab.com/gitlab-org/cli/-/merge_requests/4230#note_4100194679",
+                    "system": true,
+                    "internal": false,
+                    "author": {
+                      "username": "andrew.jung",
+                      "name": "Andrew Jung",
+                      "avatarUrl": "/uploads/-/system/user/avatar/23194436/avatar.png?v=1794204719",
+                      "bot": false
+                    },
+                    "position": null
+                  }
+                ]
+              }
+            },
+            {
+              "id": "gid://gitlab/Discussion/991dca062b63f7b043a210c71eb262f759ffb679",
+              "resolvable": false,
+              "resolved": false,
+              "notes": {
+                "pageInfo": {
+                  "hasNextPage": false
+                },
+                "nodes": [
+                  {
+                    "id": "gid://gitlab/Note/4100194902",
+                    "body": "mentioned in merge request !4229",
+                    "createdAt": "2026-10-27T15:30:12Z",
+                    "lastEditedAt": "2026-10-27T15:30:12Z",
+                    "url": "https://gitlab.com/gitlab-org/cli/-/merge_requests/4230#note_4100194902",
+                    "system": true,
+                    "internal": false,
+                    "author": {
+                      "username": "andrew.jung",
+                      "name": "Andrew Jung",
+                      "avatarUrl": "/uploads/-/system/user/avatar/23194436/avatar.png?v=1794204719",
+                      "bot": false
+                    },
+                    "position": null
+                  }
+                ]
+              }
+            },
+            {
+              "id": "gid://gitlab/Discussion/0c8906613738976d17c59e651dc82c2e7e71f917",
+              "resolvable": false,
+              "resolved": false,
+              "notes": {
+                "pageInfo": {
+                  "hasNextPage": false
+                },
+                "nodes": [
+                  {
+                    "id": "gid://gitlab/Note/4100195247",
+                    "body": "changed the description",
+                    "createdAt": "2026-10-27T15:30:15Z",
+                    "lastEditedAt": "2026-10-27T15:30:15Z",
+                    "url": "https://gitlab.com/gitlab-org/cli/-/merge_requests/4230#note_4100195247",
+                    "system": true,
+                    "internal": false,
+                    "author": {
+                      "username": "andrew.jung",
+                      "name": "Andrew Jung",
+                      "avatarUrl": "/uploads/-/system/user/avatar/23194436/avatar.png?v=1794204719",
+                      "bot": false
+                    },
+                    "position": null
+                  }
+                ]
+              }
+            },
+            {
+              "id": "gid://gitlab/Discussion/c59655f0b48314ab8b8cdbdf356079dec63def99",
+              "resolvable": false,
+              "resolved": false,
+              "notes": {
+                "pageInfo": {
+                  "hasNextPage": false
+                },
+                "nodes": [
+                  {
+                    "id": "gid://gitlab/Note/4100195649",
+                    "body": "mentioned in merge request !4231",
+                    "createdAt": "2026-10-27T15:30:17Z",
+                    "lastEditedAt": "2026-10-27T15:30:17Z",
+                    "url": "https://gitlab.com/gitlab-org/cli/-/merge_requests/4230#note_4100195649",
+                    "system": true,
+                    "internal": false,
+                    "author": {
+                      "username": "andrew.jung",
+                      "name": "Andrew Jung",
+                      "avatarUrl": "/uploads/-/system/user/avatar/23194436/avatar.png?v=1794204719",
+                      "bot": false
+                    },
+                    "position": null
+                  }
+                ]
+              }
+            },
+            {
+              "id": "gid://gitlab/Discussion/60e7ecadb97dcaf6c835c54d365f0ba8aae9267b",
+              "resolvable": false,
+              "resolved": false,
+              "notes": {
+                "pageInfo": {
+                  "hasNextPage": false
+                },
+                "nodes": [
+                  {
+                    "id": "gid://gitlab/Note/4100211539",
+                    "body": "started session [10141426](https://gitlab.com/gitlab-org/cli/-/automate/agent-sessions/10141426) triggered by @andrew.jung",
+                    "createdAt": "2026-10-27T15:32:05Z",
+                    "lastEditedAt": "2026-10-27T15:32:05Z",
+                    "url": "https://gitlab.com/gitlab-org/cli/-/merge_requests/4230#note_4100211539",
+                    "system": true,
+                    "internal": false,
+                    "author": {
+                      "username": "duo-recommend-reviewers-gitlab-org",
+                      "name": "Duo Recommend Reviewers",
+                      "avatarUrl": "/uploads/-/system/user/avatar/39353959/gitlab-duo-flow.png?v=1794182490",
+                      "bot": true
+                    },
+                    "position": null
+                  }
+                ]
+              }
+            },
+            {
+              "id": "gid://gitlab/Discussion/422209b8578dbd8bdeeba52f565b94dfd7971dce",
+              "resolvable": false,
+              "resolved": false,
+              "notes": {
+                "pageInfo": {
+                  "hasNextPage": false
+                },
+                "nodes": [
+                  {
+                    "id": "gid://gitlab/Note/4100225442",
+                    "body": "session [10141426](https://gitlab.com/gitlab-org/cli/-/automate/agent-sessions/10141426) failed (dropped)",
+                    "createdAt": "2026-10-27T15:33:33Z",
+                    "lastEditedAt": "2026-10-27T15:33:33Z",
+                    "url": "https://gitlab.com/gitlab-org/cli/-/merge_requests/4230#note_4100225442",
+                    "system": true,
+                    "internal": false,
+                    "author": {
+                      "username": "duo-recommend-reviewers-gitlab-org",
+                      "name": "Duo Recommend Reviewers",
+                      "avatarUrl": "/uploads/-/system/user/avatar/39353959/gitlab-duo-flow.png?v=1794182490",
+                      "bot": true
+                    },
+                    "position": null
+                  }
+                ]
+              }
+            },
+            {
+              "id": "gid://gitlab/Discussion/29ca5fc049702886928ba0d802efb971199b4519",
+              "resolvable": false,
+              "resolved": false,
+              "notes": {
+                "pageInfo": {
+                  "hasNextPage": false
+                },
+                "nodes": [
+                  {
+                    "id": "gid://gitlab/Note/4100448159",
+                    "body": "mentioned in merge request !4196",
+                    "createdAt": "2026-10-27T15:56:18Z",
+                    "lastEditedAt": "2026-10-27T15:56:18Z",
+                    "url": "https://gitlab.com/gitlab-org/cli/-/merge_requests/4230#note_4100448159",
+                    "system": true,
+                    "internal": false,
+                    "author": {
+                      "username": "andrew.jung",
+                      "name": "Andrew Jung",
+                      "avatarUrl": "/uploads/-/system/user/avatar/23194436/avatar.png?v=1794204719",
+                      "bot": false
+                    },
+                    "position": null
+                  }
+                ]
+              }
+            },
+            {
+              "id": "gid://gitlab/Discussion/19a592681665c399944b6ce258ba693776df6952",
+              "resolvable": false,
+              "resolved": false,
+              "notes": {
+                "pageInfo": {
+                  "hasNextPage": false
+                },
+                "nodes": [
+                  {
+                    "id": "gid://gitlab/Note/4101077108",
+                    "body": "marked this merge request as **ready**",
+                    "createdAt": "2026-10-27T17:03:45Z",
+                    "lastEditedAt": "2026-10-27T17:03:45Z",
+                    "url": "https://gitlab.com/gitlab-org/cli/-/merge_requests/4230#note_4101077108",
+                    "system": true,
+                    "internal": false,
+                    "author": {
+                      "username": "andrew.jung",
+                      "name": "Andrew Jung",
+                      "avatarUrl": "/uploads/-/system/user/avatar/23194436/avatar.png?v=1794204719",
+                      "bot": false
+                    },
+                    "position": null
+                  }
+                ]
+              }
+            },
+            {
+              "id": "gid://gitlab/Discussion/c70b049005f31b7b1d5a80198b9d5a8e621532b5",
+              "resolvable": false,
+              "resolved": false,
+              "notes": {
+                "pageInfo": {
+                  "hasNextPage": false
+                },
+                "nodes": [
+                  {
+                    "id": "gid://gitlab/Note/4101077111",
+                    "body": "requested review from @jay_mccure",
+                    "createdAt": "2026-10-27T17:03:45Z",
+                    "lastEditedAt": "2026-10-27T17:03:45Z",
+                    "url": "https://gitlab.com/gitlab-org/cli/-/merge_requests/4230#note_4101077111",
+                    "system": true,
+                    "internal": false,
+                    "author": {
+                      "username": "andrew.jung",
+                      "name": "Andrew Jung",
+                      "avatarUrl": "/uploads/-/system/user/avatar/23194436/avatar.png?v=1794204719",
+                      "bot": false
+                    },
+                    "position": null
+                  }
+                ]
+              }
+            },
+            {
+              "id": "gid://gitlab/Discussion/10618930e0aba5f32c4236612a52142c05afd8a4",
+              "resolvable": false,
+              "resolved": false,
+              "notes": {
+                "pageInfo": {
+                  "hasNextPage": false
+                },
+                "nodes": [
+                  {
+                    "id": "gid://gitlab/Note/4101077141",
+                    "body": "requested review from @GitLabDuo",
+                    "createdAt": "2026-10-27T17:03:46Z",
+                    "lastEditedAt": "2026-10-27T17:03:46Z",
+                    "url": "https://gitlab.com/gitlab-org/cli/-/merge_requests/4230#note_4101077141",
+                    "system": true,
+                    "internal": false,
+                    "author": {
+                      "username": "andrew.jung",
+                      "name": "Andrew Jung",
+                      "avatarUrl": "/uploads/-/system/user/avatar/23194436/avatar.png?v=1794204719",
+                      "bot": false
+                    },
+                    "position": null
+                  }
+                ]
+              }
+            },
+            {
+              "id": "gid://gitlab/Discussion/49b43441a91935de00573fe223b5e03165d9615a",
+              "resolvable": false,
+              "resolved": false,
+              "notes": {
+                "pageInfo": {
+                  "hasNextPage": false
+                },
+                "nodes": [
+                  {
+                    "id": "gid://gitlab/Note/4101193028",
+                    "body": "This is a well-tested, carefully engineered change: the systemd/launchd config parsers and the atomic-write/rollback logic in `Install` are covered by extensive table-driven tests that match documented systemd/launchd semantics, and I could not find a defect in the core parsing (`systemdServiceValues`, `systemdWords`, `systemdUnescape`, `plistEnv`) or in the removal/rollback flow (`writeUnits`, `removeUnloaded`), which I traced in detail against their tests.\n\nI did find one gap worth a look: `installFallbackSync` in `setup.go` writes `CLAUDE_CONFIG_DIR` into the job without validating it is an absolute path, even though the existing `claudehooks.CheckConfigDir()` helper does that check for the hooks path and `InstalledClaudeConfigDir` itself rejects a relative value when read back — so a relative `CLAUDE_CONFIG_DIR` could be silently written into the job. I also flagged a narrower, lower-confidence inconsistency where `readJob`'s fixed-path existence check can short-circuit before `systemdServiceFiles`'s broader directory search runs.",
+                    "createdAt": "2026-10-27T17:19:15Z",
+                    "lastEditedAt": "2026-10-27T17:19:17Z",
+                    "url": "https://gitlab.com/gitlab-org/cli/-/merge_requests/4230#note_4101193028",
+                    "system": false,
+                    "internal": false,
+                    "author": {
+                      "username": "GitLabDuo",
+                      "name": "GitLab Duo",
+                      "avatarUrl": "/uploads/-/system/user/avatar/21826781/duo-bot.png?v=1792265836",
+                      "bot": true
+                    },
+                    "position": null
+                  }
+                ]
+              }
+            },
+            {
+              "id": "gid://gitlab/Discussion/b4c66a25c1d2b2dc270b35ddd3497a6ed6f4eecb",
+              "resolvable": true,
+              "resolved": true,
+              "notes": {
+                "pageInfo": {
+                  "hasNextPage": false
+                },
+                "nodes": [
+                  {
+                    "id": "gid://gitlab/DiffNote/4101192900",
+                    "body": "`readJob` only checks the single, fixed path `Units(goos, home, Job{})[0].Path` (i.e. `~/.config/systemd/user/glab-govern-audit-sync.service` on Linux) and returns `ErrNotInstalled` if that exact file is missing. `InstalledBinary` and `InstalledClaudeConfigDir` call `readJob` first and bail out with `ErrNotInstalled` before ever calling `systemdServiceFiles`, which searches the full systemd user unit directory priority list (`user.control`, `/etc/systemd/user`, etc.). So if the service unit lives in one of those higher-priority directories but not in `~/.config/systemd/user`, both functions report `ErrNotInstalled` even though `systemdServiceFiles` would have found it. This is a narrow edge case (glab always installs to `~/.config/systemd/user`), but it means the two functions' notion of \"installed\" doesn't match the directory search `systemdServiceFiles` actually performs. Is this early short-circuit intentional, or should the not-installed check also go through `systemdServiceFiles`?",
+                    "createdAt": "2026-10-27T17:19:15Z",
+                    "lastEditedAt": "2026-10-27T18:23:05Z",
+                    "url": "https://gitlab.com/gitlab-org/cli/-/merge_requests/4230#note_4101192900",
+                    "system": false,
+                    "internal": false,
+                    "author": {
+                      "username": "GitLabDuo",
+                      "name": "GitLab Duo",
+                      "avatarUrl": "/uploads/-/system/user/avatar/21826781/duo-bot.png?v=1792265836",
+                      "bot": true
+                    },
+                    "position": {
+                      "filePath": "internal/commands/govern/internal/fallbacksync/fallbacksync.go",
+                      "newLine": 426,
+                      "oldLine": null
+                    }
+                  },
+                  {
+                    "id": "gid://gitlab/DiffNote/4101662832",
+                    "body": "Yes, intentional. glab only writes its unit to `~/.config/systemd/user`, so `readJob` first checks that glab's own file is there.\n\nWhen it is, `systemdServiceFiles` looks through the other unit dirs because systemd applies the highest-priority copy of the unit and its drop-ins on top. That way glab reads the effective `Environment=` value.\n\nA same-named unit that exists only in another directory isn't one glab installed. Setup and doctor should report not installed for it, and setup then installs glab's own. No code change.",
+                    "createdAt": "2026-10-27T18:23:04Z",
+                    "lastEditedAt": "2026-10-27T18:23:05Z",
+                    "url": "https://gitlab.com/gitlab-org/cli/-/merge_requests/4230#note_4101662832",
+                    "system": false,
+                    "internal": false,
+                    "author": {
+                      "username": "andrew.jung",
+                      "name": "Andrew Jung",
+                      "avatarUrl": "/uploads/-/system/user/avatar/23194436/avatar.png?v=1794204719",
+                      "bot": false
+                    },
+                    "position": {
+                      "filePath": "internal/commands/govern/internal/fallbacksync/fallbacksync.go",
+                      "newLine": 426,
+                      "oldLine": null
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "id": "gid://gitlab/Discussion/86f7998238676d73dce7f9f430640591ccd37fdf",
+              "resolvable": true,
+              "resolved": true,
+              "notes": {
+                "pageInfo": {
+                  "hasNextPage": false
+                },
+                "nodes": [
+                  {
+                    "id": "gid://gitlab/DiffNote/4101192946",
+                    "body": "`installFallbackSync` writes `CLAUDE_CONFIG_DIR` into the job's files without checking it is an absolute path. `claudehooks.CheckConfigDir()` already exists and enforces exactly this (it is called from `doctor.go` for the hooks), but it is not called here before `job.ClaudeConfigDir` is set. A relative `CLAUDE_CONFIG_DIR` would be written into the launchd plist or systemd `Environment=` line, and later read back by `InstalledClaudeConfigDir`, which explicitly errors on a relative value (`\"CLAUDE_CONFIG_DIR is not an absolute path\"`). So the job would silently install with a config dir that glab's own reader considers invalid, and nothing in this code path warns the user at setup time. Should `installFallbackSync` call `claudehooks.CheckConfigDir()` (or equivalently validate `filepath.IsAbs`) before setting `job.ClaudeConfigDir`?",
+                    "createdAt": "2026-10-27T17:19:16Z",
+                    "lastEditedAt": "2026-10-27T18:23:06Z",
+                    "url": "https://gitlab.com/gitlab-org/cli/-/merge_requests/4230#note_4101192946",
+                    "system": false,
+                    "internal": false,
+                    "author": {
+                      "username": "GitLabDuo",
+                      "name": "GitLab Duo",
+                      "avatarUrl": "/uploads/-/system/user/avatar/21826781/duo-bot.png?v=1792265836",
+                      "bot": true
+                    },
+                    "position": {
+                      "filePath": "internal/commands/govern/setup/setup.go",
+                      "newLine": 557,
+                      "oldLine": null
+                    }
+                  },
+                  {
+                    "id": "gid://gitlab/DiffNote/4101663045",
+                    "body": "Good catch. Fixed in 386bdd828 (fix(govern): refuse a relative CLAUDE_CONFIG_DIR in setup and uninstall).\n\nSetup and uninstall now call `claudehooks.CheckConfigDir()` first and refuse a relative value before writing anything. Setup stops before it reaches `installFallbackSync`, so the job never gets a relative path. Added `TestRunSetup_RefusesRelativeClaudeConfigDir` and `TestRunUninstall_RefusesRelativeClaudeConfigDir`.\n\nThese checks used to arrive only in https://gitlab.com/gitlab-org/cli/-/merge_requests/4196 at the top of the stack. They land here now, and the final code of the stack is the same.",
+                    "createdAt": "2026-10-27T18:23:06Z",
+                    "lastEditedAt": "2026-10-27T18:23:06Z",
+                    "url": "https://gitlab.com/gitlab-org/cli/-/merge_requests/4230#note_4101663045",
+                    "system": false,
+                    "internal": false,
+                    "author": {
+                      "username": "andrew.jung",
+                      "name": "Andrew Jung",
+                      "avatarUrl": "/uploads/-/system/user/avatar/23194436/avatar.png?v=1794204719",
+                      "bot": false
+                    },
+                    "position": {
+                      "filePath": "internal/commands/govern/setup/setup.go",
+                      "newLine": 557,
+                      "oldLine": null
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "id": "gid://gitlab/Discussion/11188b4faa7910f0a6b65d8be21998f31a84b57a",
+              "resolvable": false,
+              "resolved": false,
+              "notes": {
+                "pageInfo": {
+                  "hasNextPage": false
+                },
+                "nodes": [
+                  {
+                    "id": "gid://gitlab/Note/4101193057",
+                    "body": "requested changes",
+                    "createdAt": "2026-10-27T17:19:17Z",
+                    "lastEditedAt": "2026-10-27T17:19:17Z",
+                    "url": "https://gitlab.com/gitlab-org/cli/-/merge_requests/4230#note_4101193057",
+                    "system": true,
+                    "internal": false,
+                    "author": {
+                      "username": "GitLabDuo",
+                      "name": "GitLab Duo",
+                      "avatarUrl": "/uploads/-/system/user/avatar/21826781/duo-bot.png?v=1792265836",
+                      "bot": true
+                    },
+                    "position": null
+                  }
+                ]
+              }
+            },
+            {
+              "id": "gid://gitlab/Discussion/dc54a49be28b7bf7c0778d08d7bc153191ccd0bc",
+              "resolvable": false,
+              "resolved": false,
+              "notes": {
+                "pageInfo": {
+                  "hasNextPage": false
+                },
+                "nodes": [
+                  {
+                    "id": "gid://gitlab/Note/4101608447",
+                    "body": "added 1 commit\n\n<ul><li>386bdd828a49cd054142e8d362889d0ffafc1f5e - fix(govern): refuse a relative CLAUDE_CONFIG_DIR in setup and uninstall</li></ul>\n\n[Compare with previous version](/gitlab-org/cli/-/merge_requests/4230/diffs?diff_id=2143501403&start_sha=8e985c1587b36348f637246fec7f6ebd9cc187ee)",
+                    "createdAt": "2026-10-27T18:15:01Z",
+                    "lastEditedAt": "2026-10-27T18:15:01Z",
+                    "url": "https://gitlab.com/gitlab-org/cli/-/merge_requests/4230#note_4101608447",
+                    "system": true,
+                    "internal": false,
+                    "author": {
+                      "username": "andrew.jung",
+                      "name": "Andrew Jung",
+                      "avatarUrl": "/uploads/-/system/user/avatar/23194436/avatar.png?v=1794204719",
+                      "bot": false
+                    },
+                    "position": null
+                  }
+                ]
+              }
+            },
+            {
+              "id": "gid://gitlab/Discussion/78856932ba67f6aa4c5911d82755af02667ee946",
+              "resolvable": false,
+              "resolved": false,
+              "notes": {
+                "pageInfo": {
+                  "hasNextPage": false
+                },
+                "nodes": [
+                  {
+                    "id": "gid://gitlab/Note/4101663111",
+                    "body": "resolved all threads",
+                    "createdAt": "2026-10-27T18:23:06Z",
+                    "lastEditedAt": "2026-10-27T18:23:06Z",
+                    "url": "https://gitlab.com/gitlab-org/cli/-/merge_requests/4230#note_4101663111",
+                    "system": true,
+                    "internal": false,
+                    "author": {
+                      "username": "andrew.jung",
+                      "name": "Andrew Jung",
+                      "avatarUrl": "/uploads/-/system/user/avatar/23194436/avatar.png?v=1794204719",
+                      "bot": false
+                    },
+                    "position": null
+                  }
+                ]
+              }
+            },
+            {
+              "id": "gid://gitlab/Discussion/03821bc4d0ebdb933033c2ffd2bd01d071beed79",
+              "resolvable": false,
+              "resolved": false,
+              "notes": {
+                "pageInfo": {
+                  "hasNextPage": false
+                },
+                "nodes": [
+                  {
+                    "id": "gid://gitlab/Note/4101668255",
+                    "body": "I reviewed the changes since my last review and found no new issues. Previous findings:\n\n- **Fixed:** `internal/commands/govern/setup/setup.go`: runSetup and runUninstall now call claudehooks.CheckConfigDir() first, before installFallbackSync or any other work, so a relative CLAUDE_CONFIG_DIR is rejected before it is ever written into the job; new tests confirm nothing is written in that case.\n- **Still outstanding:** `internal/commands/govern/internal/fallbacksync/fallbacksync.go`: readJob still checks only the fixed ~/.config/systemd/user path and returns ErrNotInstalled before systemdServiceFiles' full priority-directory search runs; this code is unchanged in this revision.",
+                    "createdAt": "2026-10-27T18:23:53Z",
+                    "lastEditedAt": "2026-10-27T18:23:53Z",
+                    "url": "https://gitlab.com/gitlab-org/cli/-/merge_requests/4230#note_4101668255",
+                    "system": false,
+                    "internal": false,
+                    "author": {
+                      "username": "GitLabDuo",
+                      "name": "GitLab Duo",
+                      "avatarUrl": "/uploads/-/system/user/avatar/21826781/duo-bot.png?v=1792265836",
+                      "bot": true
+                    },
+                    "position": null
+                  }
+                ]
+              }
+            },
+            {
+              "id": "gid://gitlab/Discussion/a5d24a01b7d80e685945aa0a227e00d2a534bf5f",
+              "resolvable": false,
+              "resolved": false,
+              "notes": {
+                "pageInfo": {
+                  "hasNextPage": false
+                },
+                "nodes": [
+                  {
+                    "id": "gid://gitlab/Note/4109475844",
+                    "body": "<p>changed title from <code class=\"idiff\">fix(govern): read the fallback sync job&#39;s settings as launchd and systemd do</code> to <code class=\"idiff\">fix(govern): read the fallback sync job&#39;s settings as launchd and systemd do<span class=\"idiff left right addition\"> [4 of 6]</span></code></p>",
+                    "createdAt": "2026-10-28T16:23:47Z",
+                    "lastEditedAt": "2026-10-28T16:23:47Z",
+                    "url": "https://gitlab.com/gitlab-org/cli/-/merge_requests/4230#note_4109475844",
+                    "system": true,
+                    "internal": false,
+                    "author": {
+                      "username": "andrew.jung",
+                      "name": "Andrew Jung",
+                      "avatarUrl": "/uploads/-/system/user/avatar/23194436/avatar.png?v=1794204719",
+                      "bot": false
+                    },
+                    "position": null
+                  }
+                ]
+              }
+            },
+            {
+              "id": "gid://gitlab/Discussion/69244cd6c92b81b27c0400a456ce0e2b073ecaa3",
+              "resolvable": false,
+              "resolved": false,
+              "notes": {
+                "pageInfo": {
+                  "hasNextPage": false
+                },
+                "nodes": [
+                  {
+                    "id": "gid://gitlab/Note/4109475865",
+                    "body": "changed the description",
+                    "createdAt": "2026-10-28T16:23:47Z",
+                    "lastEditedAt": "2026-10-28T16:23:47Z",
+                    "url": "https://gitlab.com/gitlab-org/cli/-/merge_requests/4230#note_4109475865",
+                    "system": true,
+                    "internal": false,
+                    "author": {
+                      "username": "andrew.jung",
+                      "name": "Andrew Jung",
+                      "avatarUrl": "/uploads/-/system/user/avatar/23194436/avatar.png?v=1794204719",
+                      "bot": false
+                    },
+                    "position": null
+                  }
+                ]
+              }
+            },
+            {
+              "id": "gid://gitlab/Discussion/c56ed3e4c928075ad1987793ce0602507beb178d",
+              "resolvable": false,
+              "resolved": false,
+              "notes": {
+                "pageInfo": {
+                  "hasNextPage": false
+                },
+                "nodes": [
+                  {
+                    "id": "gid://gitlab/Note/4110102347",
+                    "body": "<!-- triage-ops plan-mr-review-nudge-jay_mccure info -->\n`jay_mccure` currently has 12 active review requests — response may be delayed.\n\n---\n_[Improve this message](https://gitlab.com/gitlab-org/quality/triage-ops/-/blob/master/lib/mr_reviewer_response_helper.rb)_",
+                    "createdAt": "2026-10-28T17:31:50Z",
+                    "lastEditedAt": "2026-10-28T17:31:50Z",
+                    "url": "https://gitlab.com/gitlab-org/cli/-/merge_requests/4230#note_4110102347",
+                    "system": false,
+                    "internal": false,
+                    "author": {
+                      "username": "gitlab-bot",
+                      "name": "🤖 GitLab Bot 🤖",
+                      "avatarUrl": "/uploads/-/system/user/avatar/1786152/avatar.png?v=1794206821",
+                      "bot": false
+                    },
+                    "position": null
+                  }
+                ]
+              }
+            },
+            {
+              "id": "gid://gitlab/Discussion/56dce23648aeab7dd54df9c7c709781f18b9d154",
+              "resolvable": false,
+              "resolved": false,
+              "notes": {
+                "pageInfo": {
+                  "hasNextPage": false
+                },
+                "nodes": [
+                  {
+                    "id": "gid://gitlab/Note/4190007611",
+                    "body": "Unassigning myself for now, once we we get the first 3 from the stack through I can take a look at this",
+                    "createdAt": "2026-11-09T06:38:24Z",
+                    "lastEditedAt": "2026-11-09T06:38:24Z",
+                    "url": "https://gitlab.com/gitlab-org/cli/-/merge_requests/4230#note_4190007611",
+                    "system": false,
+                    "internal": false,
+                    "author": {
+                      "username": "jay_mccure",
+                      "name": "Jay McCure",
+                      "avatarUrl": "/uploads/-/system/user/avatar/11809982/avatar.png?v=1794203538",
+                      "bot": false
+                    },
+                    "position": null
+                  }
+                ]
+              }
+            },
+            {
+              "id": "gid://gitlab/Discussion/eff119504c47fdb488269f660770e6c5a74b99fe",
+              "resolvable": false,
+              "resolved": false,
+              "notes": {
+                "pageInfo": {
+                  "hasNextPage": false
+                },
+                "nodes": [
+                  {
+                    "id": "gid://gitlab/Note/4190007624",
+                    "body": "removed review request for @jay_mccure",
+                    "createdAt": "2026-11-09T06:38:25Z",
+                    "lastEditedAt": "2026-11-09T06:38:25Z",
+                    "url": "https://gitlab.com/gitlab-org/cli/-/merge_requests/4230#note_4190007624",
+                    "system": true,
+                    "internal": false,
+                    "author": {
+                      "username": "jay_mccure",
+                      "name": "Jay McCure",
+                      "avatarUrl": "/uploads/-/system/user/avatar/11809982/avatar.png?v=1794203538",
+                      "bot": false
+                    },
+                    "position": null
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

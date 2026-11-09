@@ -1,0 +1,941 @@
+{
+  "data": {
+    "rateLimit": {
+      "cost": 1,
+      "remaining": 4978
+    },
+    "repository": {
+      "pullRequest": {
+        "number": 32830,
+        "title": "fix(clients): unloaded thread links show their title and project icon",
+        "url": "https://github.com/pingdotgg/t3code/pull/32830",
+        "state": "MERGED",
+        "isDraft": false,
+        "body": "Existing threads appeared as \"Thread no longer available\" when their metadata was absent from the client's loaded thread list. Searching for the thread made the link recover.\n\nResolve unloaded links with a small read of the title and project ID, then use the existing project icon renderer. Web, desktop, and mobile keep the destination clickable while the read is pending or offline. The read includes archived threads and excludes deleted threads. Loaded threads retain the existing fast path. No conversation history or thread families are loaded, and no new cache or state store is added.\n\nLegacy links check their source environment before guessing a match elsewhere. Literal IDs take precedence over percent-decoded fallbacks. Older servers retain the title-only fallback and generic icon until their server supports the metadata read.\n\nValidation: `vp run check:changed`, including browser navigation regressions for title/icon loading, pending and offline reads, legacy environment resolution, percent-encoded IDs, and missing targets. Server tests cover archived and deleted metadata; client runtime tests cover current and older servers.\n\nRelated: #26467, #32541. This overlaps #26472, #30709, and #30635, using a metadata-only read rather than loading thread families or leaving titles unresolved.\n\nImplemented with GPT-6.1-Sol through the Codex harness in T3 Code.\n",
+        "createdAt": "2026-11-08T05:02:55Z",
+        "updatedAt": "2026-11-08T19:41:02Z",
+        "mergedAt": "2026-11-08T19:41:00Z",
+        "closedAt": "2026-11-08T19:41:00Z",
+        "baseRefName": "main",
+        "headRefName": "t3/fix-thread-temporarily-unavailable",
+        "headRefOid": "d38ea206eab9cc86959c7eda35aeddb1f7a38de3",
+        "isCrossRepository": false,
+        "headRepository": {
+          "nameWithOwner": "pingdotgg/t3code"
+        },
+        "mergeable": "UNKNOWN",
+        "mergeStateStatus": "UNKNOWN",
+        "reviewDecision": null,
+        "additions": 470,
+        "deletions": 40,
+        "changedFiles": 21,
+        "totalCommentsCount": 13,
+        "author": {
+          "__typename": "User",
+          "login": "Yash-Singh1",
+          "avatarUrl": "https://avatars.githubusercontent.com/u/53054099?u=cb5b0c881e0c9f7c7aa00da0a6b5bed62da4618e&v=4",
+          "name": "Yash Singh"
+        },
+        "mergedBy": {
+          "__typename": "User",
+          "login": "Yash-Singh1",
+          "avatarUrl": "https://avatars.githubusercontent.com/u/53054099?u=cb5b0c881e0c9f7c7aa00da0a6b5bed62da4618e&v=4",
+          "name": "Yash Singh"
+        },
+        "labels": {
+          "nodes": [
+            {
+              "name": "vouch:trusted",
+              "color": "1f883d"
+            },
+            {
+              "name": "size:L",
+              "color": "fe7d37"
+            }
+          ]
+        },
+        "assignees": {
+          "nodes": []
+        },
+        "reviewRequests": {
+          "nodes": []
+        },
+        "latestOpinionatedReviews": {
+          "nodes": [
+            {
+              "state": "APPROVED",
+              "author": {
+                "__typename": "Bot",
+                "login": "macroscopeapp",
+                "avatarUrl": "https://avatars.githubusercontent.com/in/900172?v=4"
+              },
+              "commit": {
+                "oid": "d38ea206eab9cc86959c7eda35aeddb1f7a38de3"
+              }
+            }
+          ]
+        },
+        "commits": {
+          "totalCount": 4,
+          "nodes": [
+            {
+              "commit": {
+                "oid": "f54e7cf3db0def7e4e5b12e05401e7ae9966d9ae",
+                "messageHeadline": "fix(web): resolve unloaded thread links by title",
+                "committedDate": "2026-11-08T05:02:42Z",
+                "author": {
+                  "name": "Yash Singh",
+                  "user": {
+                    "login": "Yash-Singh1"
+                  }
+                }
+              }
+            },
+            {
+              "commit": {
+                "oid": "be177ecc8e38a34e64fc09075525d2cc51c3b7fb",
+                "messageHeadline": "fix(clients): load thread link titles and project icons",
+                "committedDate": "2026-11-08T05:17:57Z",
+                "author": {
+                  "name": "Yash Singh",
+                  "user": {
+                    "login": "Yash-Singh1"
+                  }
+                }
+              }
+            },
+            {
+              "commit": {
+                "oid": "b79df9f9381afee05e6fdbb04c77954f660b2f65",
+                "messageHeadline": "Merge remote-tracking branch 'origin/main' into t3/fix-thread-tempora…",
+                "committedDate": "2026-11-08T05:26:11Z",
+                "author": {
+                  "name": "Yash Singh",
+                  "user": {
+                    "login": "Yash-Singh1"
+                  }
+                }
+              }
+            },
+            {
+              "commit": {
+                "oid": "d38ea206eab9cc86959c7eda35aeddb1f7a38de3",
+                "messageHeadline": "fix(mobile): distinguish provisional thread labels from confirmed links",
+                "committedDate": "2026-11-08T05:28:47Z",
+                "author": {
+                  "name": "Yash Singh",
+                  "user": {
+                    "login": "Yash-Singh1"
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "files": {
+          "totalCount": 21,
+          "nodes": [
+            {
+              "path": "apps/mobile/src/state/entities.test.ts",
+              "additions": 72,
+              "deletions": 0,
+              "changeType": "ADDED"
+            },
+            {
+              "path": "apps/mobile/src/state/entities.ts",
+              "additions": 39,
+              "deletions": 10,
+              "changeType": "MODIFIED"
+            },
+            {
+              "path": "apps/mobile/src/state/orchestration.ts",
+              "additions": 2,
+              "deletions": 0,
+              "changeType": "MODIFIED"
+            },
+            {
+              "path": "apps/server/src/auth/RpcAuthorization.ts",
+              "additions": 1,
+              "deletions": 0,
+              "changeType": "MODIFIED"
+            },
+            {
+              "path": "apps/server/src/observability/RpcInstrumentation.ts",
+              "additions": 1,
+              "deletions": 0,
+              "changeType": "MODIFIED"
+            },
+            {
+              "path": "apps/server/src/orchestration-v2/Orchestrator.ts",
+              "additions": 9,
+              "deletions": 0,
+              "changeType": "MODIFIED"
+            },
+            {
+              "path": "apps/server/src/orchestration-v2/ProjectionStore.test.ts",
+              "additions": 18,
+              "deletions": 0,
+              "changeType": "MODIFIED"
+            },
+            {
+              "path": "apps/server/src/orchestration-v2/ProjectionStore.ts",
+              "additions": 23,
+              "deletions": 0,
+              "changeType": "MODIFIED"
+            },
+            {
+              "path": "apps/server/src/orchestration-v2/ProviderTurnControlService.test.ts",
+              "additions": 1,
+              "deletions": 0,
+              "changeType": "MODIFIED"
+            },
+            {
+              "path": "apps/server/src/orchestration-v2/ThreadManagementService.ts",
+              "additions": 2,
+              "deletions": 0,
+              "changeType": "MODIFIED"
+            },
+            {
+              "path": "apps/server/src/relay/AgentAwarenessRelay.test.ts",
+              "additions": 1,
+              "deletions": 0,
+              "changeType": "MODIFIED"
+            },
+            {
+              "path": "apps/server/src/ws.ts",
+              "additions": 11,
+              "deletions": 0,
+              "changeType": "MODIFIED"
+            },
+            {
+              "path": "apps/web/src/components/ThreadContextChip.tsx",
+              "additions": 17,
+              "deletions": 6,
+              "changeType": "MODIFIED"
+            },
+            {
+              "path": "apps/web/src/components/chat/MarkdownThreadLink.browser.test.tsx",
+              "additions": 134,
+              "deletions": 0,
+              "changeType": "ADDED"
+            },
+            {
+              "path": "apps/web/src/components/chat/MarkdownThreadLink.tsx",
+              "additions": 35,
+              "deletions": 14,
+              "changeType": "MODIFIED"
+            },
+            {
+              "path": "packages/client-runtime/src/state/orchestration.ts",
+              "additions": 47,
+              "deletions": 9,
+              "changeType": "MODIFIED"
+            },
+            {
+              "path": "packages/client-runtime/src/state/runtime.test.ts",
+              "additions": 34,
+              "deletions": 0,
+              "changeType": "MODIFIED"
+            },
+            {
+              "path": "packages/contracts/src/orchestrationV2.ts",
+              "additions": 11,
+              "deletions": 0,
+              "changeType": "MODIFIED"
+            },
+            {
+              "path": "packages/contracts/src/rpc.ts",
+              "additions": 10,
+              "deletions": 0,
+              "changeType": "MODIFIED"
+            },
+            {
+              "path": "packages/contracts/src/server.ts",
+              "additions": 1,
+              "deletions": 0,
+              "changeType": "MODIFIED"
+            },
+            {
+              "path": "packages/shared/src/threadLinks.ts",
+              "additions": 1,
+              "deletions": 1,
+              "changeType": "MODIFIED"
+            }
+          ]
+        },
+        "head": {
+          "nodes": [
+            {
+              "commit": {
+                "statusCheckRollup": {
+                  "state": "SUCCESS",
+                  "contexts": {
+                    "totalCount": 40,
+                    "checkRunCountsByState": [
+                      {
+                        "state": "ACTION_REQUIRED",
+                        "count": 0
+                      },
+                      {
+                        "state": "CANCELLED",
+                        "count": 0
+                      },
+                      {
+                        "state": "COMPLETED",
+                        "count": 0
+                      },
+                      {
+                        "state": "FAILURE",
+                        "count": 0
+                      },
+                      {
+                        "state": "IN_PROGRESS",
+                        "count": 0
+                      },
+                      {
+                        "state": "NEUTRAL",
+                        "count": 0
+                      },
+                      {
+                        "state": "PENDING",
+                        "count": 0
+                      },
+                      {
+                        "state": "QUEUED",
+                        "count": 0
+                      },
+                      {
+                        "state": "SKIPPED",
+                        "count": 15
+                      },
+                      {
+                        "state": "STALE",
+                        "count": 0
+                      },
+                      {
+                        "state": "STARTUP_FAILURE",
+                        "count": 0
+                      },
+                      {
+                        "state": "SUCCESS",
+                        "count": 25
+                      },
+                      {
+                        "state": "TIMED_OUT",
+                        "count": 0
+                      },
+                      {
+                        "state": "WAITING",
+                        "count": 0
+                      }
+                    ],
+                    "statusContextCountsByState": [
+                      {
+                        "state": "EXPECTED",
+                        "count": 0
+                      },
+                      {
+                        "state": "ERROR",
+                        "count": 0
+                      },
+                      {
+                        "state": "FAILURE",
+                        "count": 0
+                      },
+                      {
+                        "state": "PENDING",
+                        "count": 0
+                      },
+                      {
+                        "state": "SUCCESS",
+                        "count": 0
+                      }
+                    ],
+                    "nodes": [
+                      {
+                        "__typename": "CheckRun",
+                        "name": "Tear down relay preview",
+                        "status": "COMPLETED",
+                        "conclusion": "SKIPPED",
+                        "detailsUrl": "https://github.com/pingdotgg/t3code/actions/runs/42516259617/job/128839857502",
+                        "title": null,
+                        "checkSuite": {
+                          "workflowRun": {
+                            "workflow": {
+                              "name": "Clean up relay preview"
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "Deploy relay preview",
+                        "status": "COMPLETED",
+                        "conclusion": "SKIPPED",
+                        "detailsUrl": "https://github.com/pingdotgg/t3code/actions/runs/42450931155/job/128639810964",
+                        "title": null,
+                        "checkSuite": {
+                          "workflowRun": {
+                            "workflow": {
+                              "name": "Deploy relay preview"
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "Verify preview eligibility",
+                        "status": "COMPLETED",
+                        "conclusion": "SKIPPED",
+                        "detailsUrl": "https://github.com/pingdotgg/t3code/actions/runs/42516260279/job/128839829933",
+                        "title": null,
+                        "checkSuite": {
+                          "workflowRun": {
+                            "workflow": {
+                              "name": "Desktop macOS Preview Publish"
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "EAS Preview",
+                        "status": "COMPLETED",
+                        "conclusion": "SKIPPED",
+                        "detailsUrl": "https://github.com/pingdotgg/t3code/actions/runs/42450931143/job/128639811067",
+                        "title": null,
+                        "checkSuite": {
+                          "workflowRun": {
+                            "workflow": {
+                              "name": "Mobile EAS Preview"
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "Deploy web preview",
+                        "status": "COMPLETED",
+                        "conclusion": "SKIPPED",
+                        "detailsUrl": "https://github.com/pingdotgg/t3code/actions/runs/42450931128/job/128639810755",
+                        "title": null,
+                        "checkSuite": {
+                          "workflowRun": {
+                            "workflow": {
+                              "name": "Web Preview"
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "Agent context budget",
+                        "status": "COMPLETED",
+                        "conclusion": "SUCCESS",
+                        "detailsUrl": "https://github.com/pingdotgg/t3code/actions/runs/42450931176/job/128639809921",
+                        "title": null,
+                        "checkSuite": {
+                          "workflowRun": {
+                            "workflow": {
+                              "name": "Agent Context Budget"
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "Changes",
+                        "status": "COMPLETED",
+                        "conclusion": "SUCCESS",
+                        "detailsUrl": "https://github.com/pingdotgg/t3code/actions/runs/42450931146/job/128639810051",
+                        "title": null,
+                        "checkSuite": {
+                          "workflowRun": {
+                            "workflow": {
+                              "name": "CI"
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "Native fingerprint diff",
+                        "status": "COMPLETED",
+                        "conclusion": "SUCCESS",
+                        "detailsUrl": "https://github.com/pingdotgg/t3code/actions/runs/42450931237/job/128639810469",
+                        "title": null,
+                        "checkSuite": {
+                          "workflowRun": {
+                            "workflow": {
+                              "name": "Mobile Fingerprint Check"
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "Prepare PR size config",
+                        "status": "COMPLETED",
+                        "conclusion": "SUCCESS",
+                        "detailsUrl": "https://github.com/pingdotgg/t3code/actions/runs/42450931159/job/128639810688",
+                        "title": null,
+                        "checkSuite": {
+                          "workflowRun": {
+                            "workflow": {
+                              "name": "PR Size"
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "Collect PR targets",
+                        "status": "COMPLETED",
+                        "conclusion": "SUCCESS",
+                        "detailsUrl": "https://github.com/pingdotgg/t3code/actions/runs/42450931121/job/128639810586",
+                        "title": null,
+                        "checkSuite": {
+                          "workflowRun": {
+                            "workflow": {
+                              "name": "PR Vouch"
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "List closed relay previews",
+                        "status": "COMPLETED",
+                        "conclusion": "SKIPPED",
+                        "detailsUrl": "https://github.com/pingdotgg/t3code/actions/runs/42516259617/job/128839827554",
+                        "title": null,
+                        "checkSuite": {
+                          "workflowRun": {
+                            "workflow": {
+                              "name": "Clean up relay preview"
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "Sync PR size label definitions",
+                        "status": "COMPLETED",
+                        "conclusion": "SKIPPED",
+                        "detailsUrl": "https://github.com/pingdotgg/t3code/actions/runs/42450931159/job/128639827067",
+                        "title": null,
+                        "checkSuite": {
+                          "workflowRun": {
+                            "workflow": {
+                              "name": "PR Size"
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "Lint",
+                        "status": "COMPLETED",
+                        "conclusion": "SUCCESS",
+                        "detailsUrl": "https://github.com/pingdotgg/t3code/actions/runs/42450931146/job/128639810169",
+                        "title": null,
+                        "checkSuite": {
+                          "workflowRun": {
+                            "workflow": {
+                              "name": "CI"
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "Remove preview download",
+                        "status": "COMPLETED",
+                        "conclusion": "SUCCESS",
+                        "detailsUrl": "https://github.com/pingdotgg/t3code/actions/runs/42516260279/job/128839828902",
+                        "title": null,
+                        "checkSuite": {
+                          "workflowRun": {
+                            "workflow": {
+                              "name": "Desktop macOS Preview Publish"
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "Label PR 32830",
+                        "status": "COMPLETED",
+                        "conclusion": "SUCCESS",
+                        "detailsUrl": "https://github.com/pingdotgg/t3code/actions/runs/42450931121/job/128639827955",
+                        "title": null,
+                        "checkSuite": {
+                          "workflowRun": {
+                            "workflow": {
+                              "name": "PR Vouch"
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "Retry teardown for PR ${{ matrix.number }}",
+                        "status": "COMPLETED",
+                        "conclusion": "SKIPPED",
+                        "detailsUrl": "https://github.com/pingdotgg/t3code/actions/runs/42516259617/job/128839827770",
+                        "title": null,
+                        "checkSuite": {
+                          "workflowRun": {
+                            "workflow": {
+                              "name": "Clean up relay preview"
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "Package and sign macOS arm64 preview",
+                        "status": "COMPLETED",
+                        "conclusion": "SKIPPED",
+                        "detailsUrl": "https://github.com/pingdotgg/t3code/actions/runs/42516260279/job/128839829824",
+                        "title": null,
+                        "checkSuite": {
+                          "workflowRun": {
+                            "workflow": {
+                              "name": "Desktop macOS Preview Publish"
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "Test Server 1",
+                        "status": "COMPLETED",
+                        "conclusion": "SUCCESS",
+                        "detailsUrl": "https://github.com/pingdotgg/t3code/actions/runs/42450931146/job/128639810223",
+                        "title": null,
+                        "checkSuite": {
+                          "workflowRun": {
+                            "workflow": {
+                              "name": "CI"
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "Label PR size",
+                        "status": "COMPLETED",
+                        "conclusion": "SUCCESS",
+                        "detailsUrl": "https://github.com/pingdotgg/t3code/actions/runs/42450931159/job/128639825986",
+                        "title": null,
+                        "checkSuite": {
+                          "workflowRun": {
+                            "workflow": {
+                              "name": "PR Size"
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "Test Server 2",
+                        "status": "COMPLETED",
+                        "conclusion": "SUCCESS",
+                        "detailsUrl": "https://github.com/pingdotgg/t3code/actions/runs/42450931146/job/128639810320",
+                        "title": null,
+                        "checkSuite": {
+                          "workflowRun": {
+                            "workflow": {
+                              "name": "CI"
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "Test Server 3",
+                        "status": "COMPLETED",
+                        "conclusion": "SUCCESS",
+                        "detailsUrl": "https://github.com/pingdotgg/t3code/actions/runs/42450931146/job/128639810296",
+                        "title": null,
+                        "checkSuite": {
+                          "workflowRun": {
+                            "workflow": {
+                              "name": "CI"
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "Test Server 4",
+                        "status": "COMPLETED",
+                        "conclusion": "SUCCESS",
+                        "detailsUrl": "https://github.com/pingdotgg/t3code/actions/runs/42450931146/job/128639810310",
+                        "title": null,
+                        "checkSuite": {
+                          "workflowRun": {
+                            "workflow": {
+                              "name": "CI"
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "Test Server 5",
+                        "status": "COMPLETED",
+                        "conclusion": "SUCCESS",
+                        "detailsUrl": "https://github.com/pingdotgg/t3code/actions/runs/42450931146/job/128639810332",
+                        "title": null,
+                        "checkSuite": {
+                          "workflowRun": {
+                            "workflow": {
+                              "name": "CI"
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "Test Server 6",
+                        "status": "COMPLETED",
+                        "conclusion": "SUCCESS",
+                        "detailsUrl": "https://github.com/pingdotgg/t3code/actions/runs/42450931146/job/128639810241",
+                        "title": null,
+                        "checkSuite": {
+                          "workflowRun": {
+                            "workflow": {
+                              "name": "CI"
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "Test Server 7",
+                        "status": "COMPLETED",
+                        "conclusion": "SUCCESS",
+                        "detailsUrl": "https://github.com/pingdotgg/t3code/actions/runs/42450931146/job/128639810351",
+                        "title": null,
+                        "checkSuite": {
+                          "workflowRun": {
+                            "workflow": {
+                              "name": "CI"
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "Test Server 8",
+                        "status": "COMPLETED",
+                        "conclusion": "SUCCESS",
+                        "detailsUrl": "https://github.com/pingdotgg/t3code/actions/runs/42450931146/job/128639810371",
+                        "title": null,
+                        "checkSuite": {
+                          "workflowRun": {
+                            "workflow": {
+                              "name": "CI"
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "Build and Typecheck",
+                        "status": "COMPLETED",
+                        "conclusion": "SUCCESS",
+                        "detailsUrl": "https://github.com/pingdotgg/t3code/actions/runs/42450931146/job/128639836993",
+                        "title": null,
+                        "checkSuite": {
+                          "workflowRun": {
+                            "workflow": {
+                              "name": "CI"
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "Publish anonymous download",
+                        "status": "COMPLETED",
+                        "conclusion": "SKIPPED",
+                        "detailsUrl": "https://github.com/pingdotgg/t3code/actions/runs/42516260279/job/128839830167",
+                        "title": null,
+                        "checkSuite": {
+                          "workflowRun": {
+                            "workflow": {
+                              "name": "Desktop macOS Preview Publish"
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "Test",
+                        "status": "COMPLETED",
+                        "conclusion": "SUCCESS",
+                        "detailsUrl": "https://github.com/pingdotgg/t3code/actions/runs/42450931146/job/128639837028",
+                        "title": null,
+                        "checkSuite": {
+                          "workflowRun": {
+                            "workflow": {
+                              "name": "CI"
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "Test Web",
+                        "status": "COMPLETED",
+                        "conclusion": "SUCCESS",
+                        "detailsUrl": "https://github.com/pingdotgg/t3code/actions/runs/42450931146/job/128639837076",
+                        "title": null,
+                        "checkSuite": {
+                          "workflowRun": {
+                            "workflow": {
+                              "name": "CI"
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "Rust",
+                        "status": "COMPLETED",
+                        "conclusion": "SKIPPED",
+                        "detailsUrl": "https://github.com/pingdotgg/t3code/actions/runs/42450931146/job/128639837795",
+                        "title": null,
+                        "checkSuite": {
+                          "workflowRun": {
+                            "workflow": {
+                              "name": "CI"
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "Mobile Native Static Analysis",
+                        "status": "COMPLETED",
+                        "conclusion": "SKIPPED",
+                        "detailsUrl": "https://github.com/pingdotgg/t3code/actions/runs/42450931146/job/128639837687",
+                        "title": null,
+                        "checkSuite": {
+                          "workflowRun": {
+                            "workflow": {
+                              "name": "CI"
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "Release Smoke",
+                        "status": "COMPLETED",
+                        "conclusion": "SUCCESS",
+                        "detailsUrl": "https://github.com/pingdotgg/t3code/actions/runs/42450931146/job/128639837035",
+                        "title": null,
+                        "checkSuite": {
+                          "workflowRun": {
+                            "workflow": {
+                              "name": "CI"
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "Check",
+                        "status": "COMPLETED",
+                        "conclusion": "SUCCESS",
+                        "detailsUrl": "https://github.com/pingdotgg/t3code/actions/runs/42450931146/job/128640500426",
+                        "title": null,
+                        "checkSuite": {
+                          "workflowRun": {
+                            "workflow": {
+                              "name": "CI"
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "Macroscope - Effect Service Conventions",
+                        "status": "COMPLETED",
+                        "conclusion": "SKIPPED",
+                        "detailsUrl": "https://github.com/pingdotgg/t3code/pull/32830/checks?check_run_id=128639817846",
+                        "title": "Prerequisite check(s) not found",
+                        "checkSuite": {
+                          "workflowRun": null
+                        }
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "Macroscope - Test Signal",
+                        "status": "COMPLETED",
+                        "conclusion": "SKIPPED",
+                        "detailsUrl": "https://github.com/pingdotgg/t3code/pull/32830/checks?check_run_id=128639819182",
+                        "title": "Prerequisite check(s) not found",
+                        "checkSuite": {
+                          "workflowRun": null
+                        }
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "Macroscope - UI Consistency",
+                        "status": "COMPLETED",
+                        "conclusion": "SKIPPED",
+                        "detailsUrl": "https://github.com/pingdotgg/t3code/pull/32830/checks?check_run_id=128639820596",
+                        "title": "Prerequisite check(s) not found",
+                        "checkSuite": {
+                          "workflowRun": null
+                        }
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "CodeRabbit",
+                        "status": "COMPLETED",
+                        "conclusion": "SUCCESS",
+                        "detailsUrl": "https://app.coderabbit.ai/change-stack/pingdotgg/t3code/pull/32830?scope=ghh_OusAJGA4HG8ljoOV0wJvVx8NmnZIjc2DdjmxOu0xZWA",
+                        "title": "Finished",
+                        "checkSuite": {
+                          "workflowRun": null
+                        }
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "Macroscope - Approvability Check",
+                        "status": "COMPLETED",
+                        "conclusion": "SUCCESS",
+                        "detailsUrl": "https://github.com/pingdotgg/t3code/pull/32830/checks?check_run_id=128639811705",
+                        "title": "Approved",
+                        "checkSuite": {
+                          "workflowRun": null
+                        }
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "Macroscope - Correctness Check",
+                        "status": "COMPLETED",
+                        "conclusion": "SUCCESS",
+                        "detailsUrl": "https://github.com/pingdotgg/t3code/pull/32830/checks?check_run_id=128639810187",
+                        "title": "No issues identified (4 code objects reviewed).",
+                        "checkSuite": {
+                          "workflowRun": null
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

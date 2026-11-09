@@ -91,6 +91,31 @@ export const ChangeCountsSchema = z.object({
 });
 export type ChangeCounts = z.infer<typeof ChangeCountsSchema>;
 
+/**
+ * What a worktree has to review (docs/STATUS-FLOW.md §2.1), attached by the daemon (git-core
+ * never sets it): the commits after the branch's "reviewed up to" bookmark plus the unreviewed
+ * uncommitted files. Absent from older daemons.
+ */
+export const WorktreeReviewSchema = z.object({
+  /**
+   * The last commit the user reviewed through on this branch (one per project and branch; per
+   * worktree when detached). Null on an unborn branch.
+   */
+  bookmark: CommitShaSchema.nullable(),
+  /**
+   * Where the "To review" diff starts: the bookmark, or, when history was rewritten, the
+   * fallback (merge-base with the default branch). Null on an unborn branch.
+   */
+  base: CommitShaSchema.nullable(),
+  /** Commits after `base` that are not reviewed (by commit id or patch-id) and bring changes. */
+  newCommits: Count,
+  /** Files of the "To review" diff (`scope=review`) that are not reviewed. */
+  unreviewedFiles: Count,
+  /** The bookmark is not an ancestor of HEAD (rebase, reset, force-push). */
+  historyRewritten: z.boolean(),
+});
+export type WorktreeReview = z.infer<typeof WorktreeReviewSchema>;
+
 /** Cheap per-worktree status, computed from `git status --porcelain=v2 -z --branch` + numstat. */
 export const WorktreeSummarySchema = z.object({
   worktreeId: IdSchema,
@@ -120,6 +145,11 @@ export const WorktreeSummarySchema = z.object({
    */
   stateHash: z.string().min(1),
   updatedAt: TimestampSchema,
+  /**
+   * Review state (daemon app state, docs/STATUS-FLOW.md). Not part of `stateHash`, which stays a
+   * hash of git state only. Absent from older daemons (clients fall back to the inbox).
+   */
+  review: WorktreeReviewSchema.optional(),
 });
 export type WorktreeSummary = z.infer<typeof WorktreeSummarySchema>;
 
@@ -179,7 +209,11 @@ export const GitChangedFileSchema = z.object({
 export type GitChangedFile = z.infer<typeof GitChangedFileSchema>;
 
 export const ChangedFileSchema = GitChangedFileSchema.extend({
-  /** App state: a review mark exists for (projectId, scopeKind, path, patchHash). */
+  /**
+   * App state: a review mark exists for (projectId, path, patchHash) (marks no longer depend on
+   * the scope kind, docs/STATUS-FLOW.md §2.4), or, in the `review` scope, every commit that
+   * touched the file is already reviewed and it has no uncommitted change.
+   */
   reviewed: z.boolean(),
 });
 export type ChangedFile = z.infer<typeof ChangedFileSchema>;
@@ -276,3 +310,40 @@ export const InboxEntrySchema = z.object({
   review: EffectiveReviewPolicySchema.optional(),
 });
 export type InboxEntry = z.infer<typeof InboxEntrySchema>;
+
+// --- repository information (Overview; docs/FORGES.md "Repository information") ------------
+
+/** Local git facts about a project, from `GitCore.readRepositoryInfo` (local refs only). */
+export const GitRepositoryInfoSchema = z.object({
+  defaultBranch: z
+    .object({
+      name: z.string().min(1),
+      head: z
+        .object({
+          sha: CommitShaSchema,
+          subject: z.string(),
+          authorName: z.string(),
+          authorDate: TimestampSchema,
+        })
+        .nullable(),
+      /** Short upstream name (`origin/main`), or null. */
+      upstream: z.string().nullable(),
+      /** Against the upstream, as of the last fetch (octopus-diff never fetches). */
+      ahead: z.number().int().min(0).nullable(),
+      behind: z.number().int().min(0).nullable(),
+    })
+    .nullable(),
+  localBranches: z.number().int().min(0),
+  tags: z.number().int().min(0),
+  /** URLs with any `user:password@` removed. */
+  remotes: z.array(
+    z.object({
+      name: z.string().min(1),
+      url: z.string().nullable(),
+      pushUrl: z.string().nullable(),
+    }),
+  ),
+  /** Latest committer date over local branches, or null. */
+  lastActivityAt: TimestampSchema.nullable(),
+});
+export type GitRepositoryInfo = z.infer<typeof GitRepositoryInfoSchema>;

@@ -13,6 +13,7 @@ import {
   type GitCoreErrorCode,
   type GitFileDiff,
   type GitRemoteConfig,
+  type GitRepositoryInfo,
   type GitVersion,
   type ProjectLocator,
   type ResolvedProject,
@@ -450,6 +451,26 @@ export class FakeGitCore implements GitCore {
     return (
       this.remoteConfigs.get(project.commonDir) ?? { remotes: [], branches: {}, pushDefault: null }
     );
+  }
+
+  /** Repository facts (Overview tests); default: the branch count of the fake repo. */
+  repositoryInfo: ((project: ProjectLocator) => Promise<GitRepositoryInfo>) | null = null;
+  repositoryInfoCalls = 0;
+
+  async readRepositoryInfo(project: ProjectLocator): Promise<GitRepositoryInfo> {
+    this.repositoryInfoCalls += 1;
+    if (this.repositoryInfo) return this.repositoryInfo(project);
+    return {
+      defaultBranch: null,
+      localBranches: 1,
+      tags: 0,
+      remotes: (await this.readRemoteConfig(project)).remotes.map((r) => ({
+        name: r.name,
+        url: r.url,
+        pushUrl: r.pushUrl,
+      })),
+      lastActivityAt: null,
+    };
   }
 
   async getWatchTargets(loc: WorktreeLocator): Promise<WatchTargets> {

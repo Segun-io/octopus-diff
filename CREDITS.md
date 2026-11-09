@@ -38,57 +38,128 @@ they pull in.
 | `@shikijs/vscode-textmate` | 10.1.0 | MIT | via `shiki` | https://github.com/shikijs/vscode-textmate |
 | `@tanstack/query-core` | 5.107.1 | MIT | via `@tanstack/react-query` | https://github.com/TanStack/query |
 | `@tanstack/react-query` | 5.107.1 | MIT | apps/web | https://github.com/TanStack/query |
-| `@types/hast` | 3.0.5 | MIT | via `hast-util-to-html` | https://github.com/DefinitelyTyped/DefinitelyTyped |
-| `@types/mdast` | 4.0.4 | MIT | via `mdast-util-to-hast` | https://github.com/DefinitelyTyped/DefinitelyTyped |
+| `@types/debug` | 4.1.13 | MIT | via `micromark` | https://github.com/DefinitelyTyped/DefinitelyTyped |
+| `@types/estree` | 1.0.10 | MIT | via `hast-util-to-jsx-runtime` | https://github.com/DefinitelyTyped/DefinitelyTyped |
+| `@types/estree-jsx` | 1.0.5 | MIT | via `mdast-util-mdx-expression` | https://github.com/DefinitelyTyped/DefinitelyTyped |
+| `@types/hast` | 3.0.5 | MIT | via `react-markdown` | https://github.com/DefinitelyTyped/DefinitelyTyped |
+| `@types/mdast` | 4.0.4 | MIT | via `react-markdown` | https://github.com/DefinitelyTyped/DefinitelyTyped |
+| `@types/ms` | 2.1.0 | MIT | via `@types/debug` | https://github.com/DefinitelyTyped/DefinitelyTyped |
+| `@types/unist` | 2.0.11 | MIT | via `parse-entities` | https://github.com/DefinitelyTyped/DefinitelyTyped |
 | `@types/unist` | 3.0.3 | MIT | via `hast-util-to-html` | https://github.com/DefinitelyTyped/DefinitelyTyped |
 | `@ungap/structured-clone` | 1.4.0 | ISC | via `mdast-util-to-hast` | https://github.com/ungap/structured-clone |
+| `bail` | 2.0.2 | MIT | via `unified` | https://github.com/wooorm/bail |
 | `ccount` | 2.0.1 | MIT | via `hast-util-to-html` | https://github.com/wooorm/ccount |
+| `character-entities` | 2.0.2 | MIT | via `decode-named-character-reference` | https://github.com/wooorm/character-entities |
 | `character-entities-html4` | 2.1.0 | MIT | via `stringify-entities` | https://github.com/wooorm/character-entities-html4 |
 | `character-entities-legacy` | 3.0.0 | MIT | via `stringify-entities` | https://github.com/wooorm/character-entities-legacy |
+| `character-reference-invalid` | 2.0.1 | MIT | via `parse-entities` | https://github.com/wooorm/character-reference-invalid |
 | `comma-separated-tokens` | 2.0.3 | MIT | via `hast-util-to-html` | https://github.com/wooorm/comma-separated-tokens |
+| `debug` | 4.4.3 | MIT | via `micromark` | https://github.com/debug-js/debug |
+| `decode-named-character-reference` | 1.3.0 | MIT | via `mdast-util-from-markdown` | https://github.com/wooorm/decode-named-character-reference |
 | `dequal` | 2.0.3 | MIT | via `devlop` | https://github.com/lukeed/dequal |
 | `detect-libc` | 2.1.2 | Apache-2.0 | via `@parcel/watcher` | https://github.com/lovell/detect-libc |
-| `devlop` | 1.1.0 | MIT | via `mdast-util-to-hast` | https://github.com/wooorm/devlop |
+| `devlop` | 1.1.0 | MIT | via `react-markdown` | https://github.com/wooorm/devlop |
 | `diff` | 9.0.0 | BSD-3-Clause | via `@pierre/diffs` | https://github.com/kpdecker/jsdiff |
+| `escape-string-regexp` | 5.0.0 | MIT | via `mdast-util-find-and-replace` | https://github.com/sindresorhus/escape-string-regexp |
+| `estree-util-is-identifier-name` | 3.0.0 | MIT | via `hast-util-to-jsx-runtime` | https://github.com/syntax-tree/estree-util-is-identifier-name |
+| `extend` | 3.0.2 | MIT | via `unified` | https://github.com/justmoon/node-extend |
 | `hast-util-to-html` | 9.0.5 | MIT | via `@pierre/diffs` | https://github.com/syntax-tree/hast-util-to-html |
 | `hast-util-to-html` | 9.0.6 | MIT | via `@shikijs/core` | https://github.com/syntax-tree/hast-util-to-html |
+| `hast-util-to-jsx-runtime` | 2.3.7 | MIT | via `react-markdown` | https://github.com/syntax-tree/hast-util-to-jsx-runtime |
 | `hast-util-whitespace` | 3.0.0 | MIT | via `hast-util-to-html` | https://github.com/syntax-tree/hast-util-whitespace |
 | `hono` | 4.13.17 | MIT | apps/daemon | https://github.com/honojs/hono |
+| `html-url-attributes` | 3.0.1 | MIT | via `react-markdown` | https://github.com/rehypejs/rehype-minify/tree/main/packages/html-url-attributes |
 | `html-void-elements` | 3.0.0 | MIT | via `hast-util-to-html` | https://github.com/wooorm/html-void-elements |
+| `inline-style-parser` | 0.2.9 | MIT | via `style-to-object` | https://github.com/remarkablemark/inline-style-parser |
+| `is-alphabetical` | 2.0.1 | MIT | via `is-alphanumerical` | https://github.com/wooorm/is-alphabetical |
+| `is-alphanumerical` | 2.0.1 | MIT | via `parse-entities` | https://github.com/wooorm/is-alphanumerical |
+| `is-decimal` | 2.0.1 | MIT | via `parse-entities` | https://github.com/wooorm/is-decimal |
 | `is-extglob` | 2.1.1 | MIT | via `is-glob` | https://github.com/jonschlinkert/is-extglob |
 | `is-glob` | 4.0.3 | MIT | via `@parcel/watcher` | https://github.com/micromatch/is-glob |
+| `is-hexadecimal` | 2.0.1 | MIT | via `parse-entities` | https://github.com/wooorm/is-hexadecimal |
+| `is-plain-obj` | 4.1.0 | MIT | via `unified` | https://github.com/sindresorhus/is-plain-obj |
+| `longest-streak` | 3.1.0 | MIT | via `mdast-util-to-markdown` | https://github.com/wooorm/longest-streak |
 | `lru_map` | 0.4.1 | MIT | via `@pierre/diffs` | https://github.com/rsms/js-lru |
-| `mdast-util-to-hast` | 13.2.1 | MIT | via `hast-util-to-html` | https://github.com/syntax-tree/mdast-util-to-hast |
+| `markdown-table` | 3.1.0 | MIT | via `mdast-util-gfm-table` | https://github.com/wooorm/markdown-table |
+| `mdast-util-find-and-replace` | 3.0.4 | MIT | via `mdast-util-gfm-autolink-literal` | https://github.com/syntax-tree/mdast-util-find-and-replace |
+| `mdast-util-from-markdown` | 2.1.0 | MIT | via `remark-parse` | https://github.com/syntax-tree/mdast-util-from-markdown |
+| `mdast-util-gfm` | 3.1.0 | MIT | via `remark-gfm` | https://github.com/syntax-tree/mdast-util-gfm |
+| `mdast-util-gfm-autolink-literal` | 2.1.0 | MIT | via `mdast-util-gfm` | https://github.com/syntax-tree/mdast-util-gfm-autolink-literal |
+| `mdast-util-gfm-footnote` | 2.1.0 | MIT | via `mdast-util-gfm` | https://github.com/syntax-tree/mdast-util-gfm-footnote |
+| `mdast-util-gfm-strikethrough` | 2.0.1 | MIT | via `mdast-util-gfm` | https://github.com/syntax-tree/mdast-util-gfm-strikethrough |
+| `mdast-util-gfm-table` | 2.0.1 | MIT | via `mdast-util-gfm` | https://github.com/syntax-tree/mdast-util-gfm-table |
+| `mdast-util-gfm-task-list-item` | 2.0.1 | MIT | via `mdast-util-gfm` | https://github.com/syntax-tree/mdast-util-gfm-task-list-item |
+| `mdast-util-mdx-expression` | 2.0.1 | MIT | via `hast-util-to-jsx-runtime` | https://github.com/syntax-tree/mdast-util-mdx-expression |
+| `mdast-util-mdx-jsx` | 3.2.1 | MIT | via `hast-util-to-jsx-runtime` | https://github.com/syntax-tree/mdast-util-mdx-jsx |
+| `mdast-util-mdxjs-esm` | 2.0.1 | MIT | via `hast-util-to-jsx-runtime` | https://github.com/syntax-tree/mdast-util-mdxjs-esm |
+| `mdast-util-phrasing` | 4.1.0 | MIT | via `mdast-util-to-markdown` | https://github.com/syntax-tree/mdast-util-phrasing |
+| `mdast-util-to-hast` | 13.2.1 | MIT | via `react-markdown` | https://github.com/syntax-tree/mdast-util-to-hast |
+| `mdast-util-to-markdown` | 2.2.3 | MIT | via `mdast-util-gfm` | https://github.com/syntax-tree/mdast-util-to-markdown |
+| `mdast-util-to-string` | 4.0.0 | MIT | via `mdast-util-from-markdown` | https://github.com/syntax-tree/mdast-util-to-string |
+| `micromark` | 4.0.3 | MIT | via `mdast-util-from-markdown` | https://github.com/micromark/micromark/tree/main/packages/micromark |
+| `micromark-core-commonmark` | 2.0.4 | MIT | via `micromark-extension-gfm-footnote` | https://github.com/micromark/micromark/tree/main/packages/micromark-core-commonmark |
+| `micromark-extension-gfm` | 3.0.0 | MIT | via `remark-gfm` | https://github.com/micromark/micromark-extension-gfm |
+| `micromark-extension-gfm-autolink-literal` | 2.1.0 | MIT | via `micromark-extension-gfm` | https://github.com/micromark/micromark-extension-gfm-autolink-literal |
+| `micromark-extension-gfm-footnote` | 2.1.0 | MIT | via `micromark-extension-gfm` | https://github.com/micromark/micromark-extension-gfm-footnote |
+| `micromark-extension-gfm-strikethrough` | 2.1.0 | MIT | via `micromark-extension-gfm` | https://github.com/micromark/micromark-extension-gfm-strikethrough |
+| `micromark-extension-gfm-table` | 2.1.2 | MIT | via `micromark-extension-gfm` | https://github.com/micromark/micromark-extension-gfm-table |
+| `micromark-extension-gfm-tagfilter` | 2.0.0 | MIT | via `micromark-extension-gfm` | https://github.com/micromark/micromark-extension-gfm-tagfilter |
+| `micromark-extension-gfm-task-list-item` | 2.1.0 | MIT | via `micromark-extension-gfm` | https://github.com/micromark/micromark-extension-gfm-task-list-item |
+| `micromark-factory-destination` | 2.0.1 | MIT | via `micromark-core-commonmark` | https://github.com/micromark/micromark/tree/main/packages/micromark-factory-destination |
+| `micromark-factory-label` | 2.0.1 | MIT | via `micromark-core-commonmark` | https://github.com/micromark/micromark/tree/main/packages/micromark-factory-label |
+| `micromark-factory-space` | 2.1.0 | MIT | via `micromark-extension-gfm-footnote` | https://github.com/micromark/micromark/tree/main/packages/micromark-factory-space |
+| `micromark-factory-title` | 2.0.1 | MIT | via `micromark-core-commonmark` | https://github.com/micromark/micromark/tree/main/packages/micromark-factory-title |
+| `micromark-factory-whitespace` | 2.0.1 | MIT | via `micromark-core-commonmark` | https://github.com/micromark/micromark/tree/main/packages/micromark-factory-whitespace |
 | `micromark-util-character` | 2.1.1 | MIT | via `micromark-util-sanitize-uri` | https://github.com/micromark/micromark/tree/main/packages/micromark-util-character |
+| `micromark-util-chunked` | 2.0.1 | MIT | via `micromark-extension-gfm-strikethrough` | https://github.com/micromark/micromark/tree/main/packages/micromark-util-chunked |
+| `micromark-util-classify-character` | 2.0.1 | MIT | via `mdast-util-to-markdown` | https://github.com/micromark/micromark/tree/main/packages/micromark-util-classify-character |
+| `micromark-util-combine-extensions` | 2.0.1 | MIT | via `micromark-extension-gfm` | https://github.com/micromark/micromark/tree/main/packages/micromark-util-combine-extensions |
+| `micromark-util-decode-numeric-character-reference` | 2.0.2 | MIT | via `mdast-util-from-markdown` | https://github.com/micromark/micromark/tree/main/packages/micromark-util-decode-numeric-character-reference |
+| `micromark-util-decode-string` | 2.0.1 | MIT | via `mdast-util-from-markdown` | https://github.com/micromark/micromark/tree/main/packages/micromark-util-decode-string |
+| `micromark-util-edit-map` | 1.0.0 | MIT | via `micromark` | https://github.com/micromark/micromark/tree/main/packages/micromark-util-edit-map |
 | `micromark-util-encode` | 2.0.1 | MIT | via `micromark-util-sanitize-uri` | https://github.com/micromark/micromark/tree/main/packages/micromark-util-encode |
+| `micromark-util-html-tag-name` | 2.0.1 | MIT | via `mdast-util-to-markdown` | https://github.com/micromark/micromark/tree/main/packages/micromark-util-html-tag-name |
+| `micromark-util-normalize-identifier` | 2.0.1 | MIT | via `mdast-util-from-markdown` | https://github.com/micromark/micromark/tree/main/packages/micromark-util-normalize-identifier |
+| `micromark-util-resolve-all` | 2.0.1 | MIT | via `micromark-extension-gfm-strikethrough` | https://github.com/micromark/micromark/tree/main/packages/micromark-util-resolve-all |
 | `micromark-util-sanitize-uri` | 2.0.1 | MIT | via `mdast-util-to-hast` | https://github.com/micromark/micromark/tree/main/packages/micromark-util-sanitize-uri |
+| `micromark-util-subtokenize` | 2.1.0 | MIT | via `micromark` | https://github.com/micromark/micromark/tree/main/packages/micromark-util-subtokenize |
 | `micromark-util-symbol` | 2.0.1 | MIT | via `micromark-util-sanitize-uri` | https://github.com/micromark/micromark/tree/main/packages/micromark-util-symbol |
-| `micromark-util-types` | 2.0.3 | MIT | via `micromark-util-character` | https://github.com/micromark/micromark/tree/main/packages/micromark-util-types |
+| `micromark-util-types` | 2.0.3 | MIT | via `remark-parse` | https://github.com/micromark/micromark/tree/main/packages/micromark-util-types |
+| `ms` | 2.1.3 | MIT | via `debug` | https://github.com/vercel/ms |
 | `node-addon-api` | 7.1.1 | MIT | via `@parcel/watcher` | https://github.com/nodejs/node-addon-api |
 | `oniguruma-parser` | 0.12.2 | MIT | via `oniguruma-to-es` | https://github.com/slevithan/oniguruma-parser |
 | `oniguruma-to-es` | 4.3.6 | MIT | via `@shikijs/engine-javascript` | https://github.com/slevithan/oniguruma-to-es |
+| `parse-entities` | 4.0.2 | MIT | via `mdast-util-mdx-jsx` | https://github.com/wooorm/parse-entities |
 | `picomatch` | 4.0.7 | MIT | via `@parcel/watcher` | https://github.com/micromatch/picomatch |
 | `preact` | 11.0.0-beta.0 | MIT | via `@pierre/trees` | https://github.com/preactjs/preact |
 | `preact-render-to-string` | 6.6.5 | MIT | via `@pierre/trees` | https://github.com/preactjs/preact-render-to-string |
 | `property-information` | 7.2.0 | MIT | via `hast-util-to-html` | https://github.com/wooorm/property-information |
 | `react` | 19.3.1 | MIT | apps/web | https://github.com/react/react |
 | `react-dom` | 19.3.1 | MIT | apps/web | https://github.com/react/react |
+| `react-markdown` | 10.1.0 | MIT | apps/web | https://github.com/remarkjs/react-markdown |
 | `regex` | 6.1.0 | MIT | via `oniguruma-to-es` | https://github.com/slevithan/regex |
 | `regex-recursion` | 6.0.2 | MIT | via `oniguruma-to-es` | https://github.com/slevithan/regex-recursion |
 | `regex-utilities` | 2.3.0 | MIT | via `regex` | https://github.com/slevithan/regex-utilities |
+| `remark-gfm` | 4.0.1 | MIT | apps/web | https://github.com/remarkjs/remark-gfm |
+| `remark-parse` | 11.0.0 | MIT | via `react-markdown` | https://github.com/remarkjs/remark/tree/main/packages/remark-parse |
+| `remark-rehype` | 11.1.2 | MIT | via `react-markdown` | https://github.com/remarkjs/remark-rehype |
+| `remark-stringify` | 11.0.0 | MIT | via `remark-gfm` | https://github.com/remarkjs/remark/tree/main/packages/remark-stringify |
 | `scheduler` | 0.28.0 | MIT | via `react-dom` | https://github.com/react/react |
 | `shiki` | 4.6.0 | MIT | via `@pierre/diffs` | https://github.com/shikijs/shiki |
 | `space-separated-tokens` | 2.0.2 | MIT | via `hast-util-to-html` | https://github.com/wooorm/space-separated-tokens |
 | `stringify-entities` | 4.0.4 | MIT | via `hast-util-to-html` | https://github.com/wooorm/stringify-entities |
+| `style-to-object` | 2.0.2 | MIT | via `hast-util-to-jsx-runtime` | https://github.com/remarkablemark/style-to-object |
 | `tailwindcss` | 4.3.5 | MIT | apps/web | https://github.com/tailwindlabs/tailwindcss |
 | `trim-lines` | 3.0.1 | MIT | via `mdast-util-to-hast` | https://github.com/wooorm/trim-lines |
+| `trough` | 2.2.0 | MIT | via `unified` | https://github.com/wooorm/trough |
+| `unified` | 11.0.5 | MIT | via `react-markdown` | https://github.com/unifiedjs/unified |
 | `unist-util-is` | 6.0.1 | MIT | via `unist-util-visit` | https://github.com/syntax-tree/unist-util-is |
-| `unist-util-position` | 5.0.0 | MIT | via `mdast-util-to-hast` | https://github.com/syntax-tree/unist-util-position |
-| `unist-util-stringify-position` | 4.0.0 | MIT | via `vfile-message` | https://github.com/syntax-tree/unist-util-stringify-position |
-| `unist-util-visit` | 5.2.0 | MIT | via `mdast-util-to-hast` | https://github.com/syntax-tree/unist-util-visit |
+| `unist-util-position` | 5.0.0 | MIT | via `hast-util-to-jsx-runtime` | https://github.com/syntax-tree/unist-util-position |
+| `unist-util-stringify-position` | 4.0.0 | MIT | via `mdast-util-mdx-jsx` | https://github.com/syntax-tree/unist-util-stringify-position |
+| `unist-util-visit` | 5.2.0 | MIT | via `react-markdown` | https://github.com/syntax-tree/unist-util-visit |
 | `unist-util-visit-parents` | 6.1.0 | MIT | via `unist-util-visit` | https://github.com/syntax-tree/unist-util-visit-parents |
-| `vfile` | 6.0.3 | MIT | via `mdast-util-to-hast` | https://github.com/vfile/vfile |
-| `vfile-message` | 4.0.4 | MIT | via `vfile` | https://github.com/vfile/vfile-message |
+| `vfile` | 6.0.3 | MIT | via `react-markdown` | https://github.com/vfile/vfile |
+| `vfile-message` | 4.0.4 | MIT | via `hast-util-to-jsx-runtime` | https://github.com/vfile/vfile-message |
 | `zod` | 4.6.7 | MIT | apps/cli, apps/web, packages/contracts | https://github.com/colinhacks/zod |
 | `zwitch` | 2.0.4 | MIT | via `hast-util-to-html` | https://github.com/wooorm/zwitch |
 
@@ -133,6 +204,13 @@ Each adapted file also carries an attribution comment.
   - `apps/web/src/lib/folderPath.ts`: The path rules of the command-palette browse mode.
   - `apps/web/test/folderPath.test.ts`: Test cases ported from packages/shared/src/path.test.ts.
   - `packages/forge/src/auth.ts`: The auth-status host parser, adapted from packages/source-control-gitlab/src/server/gitLabAuthStatus.ts.
+  - `packages/forge/src/details.ts`: The check-status mapping and the "unfinished runs outrank finished ones" dedupe, adapted from toCheckStatus / toCheckEntries in packages/source-control-github/src/server/gitHubPullRequestJson.ts.
+  - `apps/web/src/lib/request.ts`: Checks grouping and the status-line wording, adapted from groupPullRequestChecks / describePullRequestChecks in apps/web/src/components/pullRequest/pullRequestDetail.logic.ts.
+  - `apps/web/src/lib/markdown.ts`: visibleBody (HTML comments stripped before rendering), from apps/web/src/components/pullRequest/pullRequestDetail.logic.ts.
+  - `apps/web/src/lib/copy.ts`: The hidden-textarea clipboard fallback, adapted from writeTextWithExecCommand / writeTextToClipboard in apps/web/src/hooks/useCopyToClipboard.ts.
+  - `apps/web/src/lib/copyFormat.ts`: Diff lines of a selected range and the fence language by extension, adapted from buildDiffReviewLines / inferReviewCommentFenceLanguage / formatReviewCommentFence in apps/web/src/reviewCommentContext.ts.
+  - `apps/web/src/components/CopyButton.tsx`: Copy feedback (copied state, check icon, anchored "Copied!" toast), modelled on useCopyToClipboard, DiffFilePathCopyButton and anchoredCopyToast.
+  - `apps/web/src/lib/selectionPosition.ts`: Placement of the floating Copy bar next to the pointer, after resolveSelectionActionPosition in apps/web/src/lib/selectionActions.ts.
   - The sidebar (folders, the Settled shelf, settling by hand), the folder picker and the command palette's browse mode are modelled on T3 Code's UI. The forge integration (remote recognition, CLI-login refinement for self-hosted hosts, the GitHub base-repository order, the merge request fields and PR glyphs) follows T3 Code's source-control packages.
 
 ## Inspiration (ideas only, no code)

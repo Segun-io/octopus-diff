@@ -3,7 +3,8 @@
 > Status: MVP complete (Phases 0–2, 2026-11-08): see `docs/reports/mvp.md`. Phase 3 needs the user. UX rounds 1–4
 > (identity, themes, settings, bulk review; two unslop passes; the sidebar: folders, settle, a closed shelf) are done:
 > `docs/reports/ux-*.md`. Forges (read-only PR/MR status through `gh`/`glab`, 2026-11-09) are done: `docs/FORGES.md`,
-> `docs/reports/forges.md`.
+> `docs/reports/forges.md`. The Request tab and repository information on the Overviews (2026-11-09) are done:
+> `docs/FORGES.md`, `docs/reports/forge-details.md`.
 > This file is the source of truth for every session working on the project. If reality disagrees
 > with it, fix the code or update this file and log why in `docs/DECISIONS.md`. Never leave them out of sync.
 
@@ -35,9 +36,9 @@ speaks git, so it works with any tool that edits files or creates worktrees.
 ### Non-goals (MVP and near term)
 
 History graph, rebase / merge / conflict editors, staging / committing / pushing / discarding, PR hosting
-or forge write features (create / merge / approve / comment), embedded editor or terminal, agent orchestration,
-holding credentials for remotes. (Read-only PR/MR status through the user's own `gh`/`glab` logins is in scope
-since 2026-11-09: `docs/FORGES.md`, DECISIONS #61.) Other tools do
+or forge write features (create / merge / approve / comment / react / label), embedded editor or terminal, agent
+orchestration, holding credentials for remotes. (Read-only PR/MR status and detail through the user's own
+`gh`/`glab` logins are in scope since 2026-11-09: `docs/FORGES.md`, DECISIONS #61, #71–#80.) Other tools do
 these well (lazygit, GitButler, forges). A read-only product also removes the riskiest class of bugs.
 
 ## 2. Locked decisions (from the user, 2026-11-08)
@@ -81,36 +82,61 @@ References to read (do not fork):
 - **Project** = a git repository (identified by its common git dir). Added explicitly or via a *scan root*.
 - **Worktree** = main checkout or linked worktree of a project, from `git worktree list --porcelain`.
   If a user adds a linked-worktree path, resolve it to its project.
-- **Scope** = which diff to show for a worktree:
-  - `working`: working tree + index vs `HEAD` (default; includes untracked files as additions)
+- **Scope** = which diff the diff pane shows for a worktree (a filter with counts; it never changes where a
+  worktree sits in the sidebar, `docs/STATUS-FLOW.md`):
+  - `review` ("To review", the default): working tree + index + untracked vs the branch's **review bookmark**, i.e.
+    the commits after it plus the uncommitted changes, one patch per file
+  - `branch` with `includeWorking` ("All on branch"): working tree vs merge-base with the default branch
+  - `working` ("Uncommitted"): working tree + index vs `HEAD` (includes untracked files as additions)
   - `staged`: index vs `HEAD`
   - `unstaged`: working tree vs index
   - `branch`: `HEAD` vs merge-base with the default branch (auto-detected, overridable per project)
   - `commit`: a single commit (`<sha>^..<sha>`; root commits handled)
-- **Reviewed mark** = app-side flag keyed by `(projectId, scopeKind, path, patchHash)`. If the file's patch
-  changes, the key no longer matches, so the file is automatically "unreviewed" again. This is the core
-  agent-era feature.
+- **Reviewed mark** = app-side flag keyed by `(projectId, path, patchHash)` (no longer by scope kind, DECISIONS
+  #95). If the file's patch changes, the key no longer matches, so the file is automatically "unreviewed" again.
+  This is the core agent-era feature.
+- **Review bookmark** ("reviewed up to") = the last commit the user reviewed through, one per `(project, branch)`
+  (per worktree when detached), app state in SQLite. First sight: HEAD on the default branch, else the merge-base
+  with it. **Review all** in To review moves it to HEAD and records the commits it passes (id and
+  `git patch-id --stable`), so they are skipped when they reach another branch by fast-forward, merge, squash or
+  rebase. Not an ancestor of HEAD any more = `history rewritten` (the range falls back to the merge-base).
+- **Stage** of a worktree (sidebar, never from the toolbar scope): Blocked, To review (`2 commits · 3`),
+  Reviewed, In PR, Merged/closed (forge data), plus "Hide until it changes" (per device) and outside the loop
+  (review off, missing, failed). DECISIONS #81–#99.
 
 ### 4.2 UI
 
 Three-pane layout, dark and light themes:
 
 1. **Sidebar** (DECISIONS "UX round 4"). Top entry **Inbox** = every dirty worktree of every project. Then
-   **Pinned** worktrees. Then every folder (scan root) with its projects, and under each project the worktrees that
-   are open: blocked by a conflict or an in-progress operation, with unreviewed files in the current scope, or
-   un-settled by hand; one line each (branch, chips, the unreviewed count or `1 conflict`). Everything else (clean,
-   verified, review off, missing, failed, or settled by hand) sits in the **Settled** shelf at the bottom, closed by
-   default. Folder and project headers collapse, open their Overview on click, and show what they hide while closed.
-   Settle / un-settle on hover and in the row menu; a manual settle holds until the worktree's state hash changes.
-   Rows keep a static folder, project and worktree order; only review marks and the settle action move a worktree
-   between its project and the shelf. Filters: text filter, "only dirty", "only unreviewed" (chips).
+   **Pinned** worktrees. Then every folder (scan root) with its projects, and under each project the worktrees with
+   something to do: Blocked (a conflict or an in-progress operation), To review (unreviewed files of the To review
+   diff; `N commits ·` and the pill), In PR (`#42 · checks ✓`), or kept there by hand. Everything else (Reviewed,
+   Merged/closed for this HEAD, review off, missing, failed, or hidden until it changes) sits in the shelf at the
+   bottom, closed by default. A commit or a merge moves work into a bookmark range; it never settles it. Status
+   comes from `WorktreeSummary.review` (status flow v2), never from the toolbar scope. Folder and project headers
+   collapse, open their Overview on click, and show what they hide while closed. "Hide until it changes" / "Show"
+   on hover and in the row menu; it holds until the worktree's state hash changes. No activity pulse. Rows keep a
+   static folder, project and worktree order. Filters: text filter, "only dirty", "only unreviewed" (chips).
 2. **File list** (`@pierre/trees`): changed files for the selected worktree (or, in Inbox mode, grouped by
    project → worktree). Status icons, +/− counts, reviewed checkmark.
 3. **Diff viewer** (`@pierre/diffs`): split / unified toggle, hide-whitespace toggle, collapsed unchanged
    regions, lazy rendering with virtualization for huge diffs, binary / too-large placeholders,
    rename display (`old → new`), submodule and symlink diffs shown sanely.
 
-Toolbar: scope selector, split/unified, whitespace, "show reviewed" toggle, refresh indicator.
+Toolbar: scope filter with counts (`To review (5) · All on branch (12) · Uncommitted (3) · Staged · Unstaged ·
+Commit…`), one verb "Reviewed" (`r` per file, **Review all** `⇧R`, undo restores the bookmark too), split/unified, whitespace, "show reviewed" toggle, refresh indicator. For a worktree whose
+branch has a matched pull/merge request, a `Changes | PR #n` switch opens the **Request** tab (read-only: summary,
+checks, conversation, timeline, files; `docs/FORGES.md`). Folder and project Overviews show repository information
+(local git facts; the project Overview also the forge's facts and open requests).
+
+Copy (`docs/COPY-TOOLS.md`, web only): a "Copy" group in the worktree menus (sidebar, Overview, Inbox group
+headers: branch name, worktree path, commit id), a file menu on list and tree rows (path, old path, name, absolute
+path), a copy-path button and a `⋯` menu in the diff header (plus the file's patch), a copy button for the commit
+scope, and palette commands. In the diff, a press-and-drag on the line numbers selects lines; a floating bar copies
+them as plain code or as Markdown with where they live (file, lines, branch, worktree, project, scope, HEAD), and
+`Ctrl/⌘ C` copies them too. Copies keep invisible / bidirectional characters escaped (SEC-05) and fall back to
+`execCommand('copy')` where `navigator.clipboard` is missing (plain-http LAN).
 
 Keyboard: `j`/`k` next/prev file · `J`/`K` next/prev worktree · `n` next **unreviewed** file anywhere ·
 `r` toggle reviewed · `s` split/unified · `/` filter · `g i` inbox · `?` help. All actions reachable
@@ -122,7 +148,8 @@ file's patch changed, show a subtle "updated" banner and keep reading position w
 ### 4.3 Differentiators (protect these)
 
 1. Cross-repo **Inbox** ("what did my agents change?").
-2. **Reviewed marks that survive and invalidate** correctly (patch-hash keyed).
+2. **Reviewed marks that survive and invalidate** correctly (patch-hash keyed), and **review bookmarks** so that
+   committed, merged, squashed or rebased work is reviewed once (`docs/STATUS-FLOW.md`).
 3. **Worktree auto-discovery**, no agent integration needed (covers T3 Code `~/.t3/worktrees`,
    Claude Code `.claude/worktrees`, Conductor, Codex, hand-made worktrees).
 4. **Live** updates via filesystem watching.
@@ -276,8 +303,18 @@ All git access goes through **one runner** in `packages/git-core`:
 ### 5.7 Review state
 
 SQLite table `reviewed(project_id, scope_kind, path, patch_hash, reviewed_at)`. `patchHash` = stable hash
-(e.g. SHA-1 of the normalized per-file patch text). Reviewed state is looked up when building `ChangedFile`.
-Garbage-collect rows for projects removed and for patch hashes unseen for 30 days.
+(e.g. SHA-1 of the normalized per-file patch text). Reviewed state is looked up when building `ChangedFile`, by
+`(project_id, path, patch_hash)` whatever the scope kind (`scope_kind` records where the mark was made; DECISIONS
+#95). Garbage-collect rows for projects removed and for patch hashes unseen for 30 days.
+
+Status flow v2 (migration v3, DECISIONS #88–#97): `bookmarks(project_id, key, sha)` with key `branch:<name>` or
+`worktree:<id>`, and `reviewed_commits(project_id, sha, patch_id)` (a `<from>..<to>` row holds a reviewed range's
+patch-id). The daemon computes `WorktreeSummary.review` (`bookmark`, `base`, `newCommits`, `unreviewedFiles`,
+`historyRewritten`) per (state hash, review version), through git-core's `readReviewRange`, `describeCommits` and
+`rangePatchId` (read-only: `rev-parse`, `merge-base --is-ancestor`, `rev-list`, `log`, `diff`, `patch-id --stable`
+with an explicitly allowlisted stdin pipe). A file of the To review diff is reviewed when marked, or when it has no
+uncommitted change and only reviewed commits touched it. `PUT /api/review/bookmark`, bulk `advanceBookmarks`,
+event `review.bookmark`. Removed projects drop their bookmarks and reviewed commits.
 
 ## 6. Work plan
 
@@ -402,6 +439,27 @@ These apply to the lead and to every delegated session.
 10. Perf target on the 30-repo fixture: initial paint < 3 s, steady-state idle CPU low (single-digit %),
     single-file refresh < 1 s. (Targets, to be measured; report actual numbers.)
 11. `typecheck`, `lint`, unit and e2e tests are green; README accurate.
+
+Status flow v2 (`docs/STATUS-FLOW.md` §5, added 2026-11-09):
+
+12. Switching the toolbar scope never moves a sidebar row.
+13. An agent commits in a worktree: the row shows `N commits` and stays out of the shelf until reviewed.
+14. An agent merges a reviewed branch into `main` (ff, merge commit, squash): `main` shows only content not yet
+    reviewed; the branch row moves to the shelf as `merged` when the forge says so.
+15. Reset/rebase: `history rewritten`, nothing previously reviewed is shown as unreviewed.
+16. "Hide until it changes" returns the row on the next commit or edit.
+17. No pulse; no "verify"/"verified" strings in the UI.
+18. Restart the daemon: bookmarks and marks survive. Read-only proof tests still pass.
+
+Copy tools (`docs/COPY-TOOLS.md` §8, added 2026-11-09):
+
+19. Branch name, worktree path, file path, file name and absolute path can each be copied from a menu or button
+    on the worktree row, the file row and the diff header, and from the palette.
+20. Selecting diff lines shows a Copy bar; plain copy yields only the selected code; Markdown copy yields the
+    `docs/COPY-TOOLS.md` §5 format.
+21. Copying works on `http://localhost` and on a plain-http LAN address (textarea fallback).
+22. Invisible / bidirectional characters are never copied raw.
+23. No daemon request, git call or contract change was added; the read-only proof harness still passes.
 
 ## 9. Risks and mitigations
 

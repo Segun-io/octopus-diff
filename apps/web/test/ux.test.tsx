@@ -50,9 +50,10 @@ function setup(
   opts: {
     wrap?: (fetch: Fetch) => Fetch;
     store?: Partial<Parameters<typeof createUiStore>[0]>;
+    statusFlow?: boolean;
   } = {},
 ): Harness {
-  const backend = new MockBackend({ dataset });
+  const backend = new MockBackend({ dataset, statusFlow: opts.statusFlow ?? false });
   const base = createMockFetch(backend);
   const mockFetch = opts.wrap ? opts.wrap(base) : base;
   const requests: Harness['requests'] = [];
@@ -274,7 +275,7 @@ describe('settings screen', () => {
   });
 });
 
-describe('mark all as verified', () => {
+describe('review all', () => {
   it('marks the visible files of a worktree, shows the toast and undoes', async () => {
     const { requests, backend } = setup();
     await ready();
@@ -327,7 +328,7 @@ describe('mark all as verified', () => {
     await press(user, 'R');
     const confirm = await screen.findByRole('alertdialog');
     expect(confirm.textContent).toContain('Across 5 worktrees');
-    fireEvent.click(within(confirm).getByText(/^Mark verified$/));
+    fireEvent.click(within(confirm).getByText(/^Mark reviewed$/));
     await waitFor(() => expect(backend.reviews.size).toBe(30));
   });
 
@@ -489,13 +490,13 @@ describe('folder tier, overview and palette', () => {
     // missing worktrees are settled and the shelf is closed
     expect(section('folder')).toEqual(['', 'main', 'feat/auth', 'fix/cache', 'main']);
     expect(section('settled')).toEqual([]);
-    expect(within(sidebar).getByLabelText('Expand settled').textContent).toContain('5');
+    expect(within(sidebar).getByLabelText('Expand hidden').textContent).toContain('5');
     // a project whose worktrees all settled says so instead of listing them
-    expect(project('infra').textContent).toContain('settled');
-    expect(project('octopus-api').textContent).not.toContain('settled');
+    expect(project('infra').textContent).toContain('hidden');
+    expect(project('octopus-api').textContent).not.toContain('hidden');
 
     // opening the shelf lists them, one word each, folder order; the pref persists
-    fireEvent.click(within(sidebar).getByLabelText('Expand settled'));
+    fireEvent.click(within(sidebar).getByLabelText('Expand hidden'));
     expect(section('settled')).toEqual([
       '',
       'agent/codex-123',
@@ -512,15 +513,15 @@ describe('folder tier, overview and palette', () => {
 
     // a closed shelf still shows the selected worktree
     const trunkId = worktreeItem('trunk').dataset.worktreeId as string;
-    fireEvent.click(within(sidebar).getByLabelText('Collapse settled'));
+    fireEvent.click(within(sidebar).getByLabelText('Collapse hidden'));
     expect(section('settled')).toEqual([]);
     store.setState({ view: { kind: 'worktree', worktreeId: trunkId } });
     await waitFor(() => expect(section('settled')).toEqual(['trunk']));
     expect(store.getState().settledOpen).toBe(false);
-    fireEvent.click(within(sidebar).getByLabelText('Expand settled'));
+    fireEvent.click(within(sidebar).getByLabelText('Expand hidden'));
 
-    // settle by hand: the row leaves its project for the shelf, pinned to the state hash
-    fireEvent.click(rowActions('fix/cache').getByLabelText('Settle worktree'));
+    // hide until it changes: the row leaves its project for the shelf, pinned to the state hash
+    fireEvent.click(rowActions('fix/cache').getByLabelText('Hide until it changes'));
     await waitFor(() => expect(worktreeItem('fix/cache').dataset.state).toBe('settled'));
     expect(section('folder')).not.toContain('fix/cache');
     expect(section('settled')).toContain('fix/cache');
@@ -532,24 +533,24 @@ describe('folder tier, overview and palette', () => {
     await waitFor(() => expect(store.getState().settle).toEqual([]));
     expect(section('folder')).toContain('fix/cache');
 
-    // un-settle a clean worktree by hand: it comes back under its project with its word
-    fireEvent.click(rowActions('trunk').getByLabelText('Un-settle worktree'));
+    // keep a clean worktree under its project by hand: it comes back with its word
+    fireEvent.click(rowActions('trunk').getByLabelText('Keep under its project'));
     await waitFor(() => expect(worktreeItem('trunk').dataset.state).toBe('active'));
     expect(section('folder')).toContain('trunk');
     expect(worktreeItem('trunk').textContent).toContain('clean');
     expect(project('infra').textContent).not.toContain('settled');
-    fireEvent.click(rowActions('trunk').getByLabelText('Settle worktree'));
+    fireEvent.click(rowActions('trunk').getByLabelText('Hide until it changes'));
     await waitFor(() => expect(worktreeItem('trunk').dataset.state).toBe('settled'));
     expect(store.getState().settle).toEqual([]);
 
-    // blocked work never settles: no check on the row, the menu item is disabled
-    expect(rowActions('').queryByLabelText('Settle worktree')).toBeNull();
+    // blocked work is never hidden: no action on the row, the menu item is disabled
+    expect(rowActions('').queryByLabelText('Hide until it changes')).toBeNull();
     fireEvent.contextMenu(worktreeItem(''));
-    const blockedItem = await screen.findByRole('menuitem', { name: 'Settle (blocked)' });
+    const blockedItem = await screen.findByRole('menuitem', { name: 'Hide (blocked)' });
     expect(blockedItem.getAttribute('aria-disabled')).toBe('true');
     fireEvent.keyDown(blockedItem, { key: 'Escape' });
 
-    // marking every file of fix/cache reviewed settles it too, and it says "verified"
+    // marking every file of fix/cache reviewed moves it to the shelf too, and it says "reviewed"
     const files = backend.listFiles(cacheId, { kind: 'working' }).files;
     for (const f of files) {
       backend.setReview({
@@ -561,7 +562,8 @@ describe('folder tier, overview and palette', () => {
       });
     }
     await waitFor(() => expect(worktreeItem('fix/cache').dataset.state).toBe('settled'));
-    expect(worktreeItem('fix/cache').textContent).toContain('verified');
+    expect(worktreeItem('fix/cache').textContent).toContain('reviewed');
+    expect(worktreeItem('fix/cache').dataset.stage).toBe('reviewed');
 
     // pin it: listed first under "Pinned", whatever its state
     fireEvent.contextMenu(worktreeItem('fix/cache'));
@@ -575,6 +577,59 @@ describe('folder tier, overview and palette', () => {
     expect(section('folder')).toEqual(['', 'main']);
     expect(store.getState().collapsed).toEqual([project('octopus-api').dataset.projectId]);
     expect(project('octopus-api').textContent).toContain('4');
+  });
+
+  it('status flow: To review is the default; rows say N commits; Review all moves the bookmark', async () => {
+    const { user, requests } = setup('demo', {
+      statusFlow: true,
+      store: { scope: { kind: 'review' } },
+    });
+    await waitFor(() => expect(app().getAttribute('data-ready')).toBe('true'));
+    const select = screen.getByTestId(TEST_IDS.scopeSelect) as HTMLSelectElement;
+    expect(select.dataset.scope).toBe('review');
+    const row = worktreeItem('fix/cache');
+    await waitFor(() => expect(Number(row.dataset.commits)).toBeGreaterThan(0));
+    expect(row.dataset.stage).toBe('review');
+    expect(row.textContent).toMatch(/\d+ commits? ·/);
+    fireEvent.click(row);
+    await waitFor(() => expect(screen.getAllByTestId(TEST_IDS.fileItem).length).toBeGreaterThan(0));
+    expect(select.textContent).toMatch(/To review \(\d+\)/);
+    await press(user, 'R');
+    await screen.findByTestId(TEST_IDS.bulkReviewToast);
+    const bulk = requests.find((r) => r.url.endsWith('/api/review/bulk'));
+    expect(bulk?.body).toMatchObject({
+      target: { kind: 'worktree' },
+      scope: { kind: 'review' },
+      advanceBookmarks: true,
+    });
+    expect(bodyOf<{ paths?: unknown }>(bulk).paths).toBeUndefined();
+    await waitFor(() => expect(worktreeItem('fix/cache').dataset.commits).toBe('0'));
+    await waitFor(() => expect(worktreeItem('fix/cache').dataset.stage).toBe('reviewed'));
+  });
+
+  it('switching the toolbar scope never moves a sidebar row (status flow v2)', async () => {
+    setup('demo');
+    await ready();
+    const snapshot = () =>
+      screen
+        .getAllByTestId(TEST_IDS.worktreeItem)
+        .map((el) => {
+          const section = el.closest('li[data-section]')?.getAttribute('data-section');
+          return `${el.dataset.worktreeId}:${section}:${el.dataset.state}:${el.dataset.stage}:${el.dataset.unreviewed}`;
+        })
+        .sort();
+    const before = snapshot();
+    const select = screen.getByTestId(TEST_IDS.scopeSelect) as HTMLSelectElement;
+    for (const kind of ['branch', 'staged', 'unstaged', 'working'] as const) {
+      fireEvent.change(select, { target: { value: kind } });
+      await waitFor(() => expect(select.dataset.scope?.startsWith(kind)).toBe(true));
+      // let the inbox for the new scope land
+      await waitFor(() => expect(app().getAttribute('data-ready')).toBe('true'));
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 30));
+      });
+      expect(snapshot(), `scope ${kind}`).toEqual(before);
+    }
   });
 
   it('selecting a folder or project shows the Overview; the view registry routes it', async () => {

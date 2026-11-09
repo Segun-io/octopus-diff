@@ -14,6 +14,7 @@ import {
   ChangedFileSchema,
   CommitInfoSchema,
   FileDiffSchema,
+  GitRepositoryInfoSchema,
   InboxEntrySchema,
   ProjectListItemSchema,
   SCAN_DEPTH_DEFAULT,
@@ -58,11 +59,29 @@ export const ROUTES = {
   setReviewPolicy: { method: 'PUT', path: '/api/review-policy' },
   bulkReview: { method: 'POST', path: '/api/review/bulk' },
   undoReview: { method: 'POST', path: '/api/review/undo' },
+  // --- status flow v2 (additive; docs/STATUS-FLOW.md) ---
+  setBookmark: { method: 'PUT', path: '/api/review/bookmark' },
   // --- folder picker (additive; see "folder picker" below) ---
   listDirs: { method: 'GET', path: '/api/fs/dirs' },
   // --- forges (additive; see forge.ts) ---
   getForges: { method: 'GET', path: '/api/forges' },
   refreshForges: { method: 'POST', path: '/api/forges/refresh' },
+  // --- request detail and repository information (additive; see forge.ts) ---
+  getChangeRequest: { method: 'GET', path: '/api/forges/worktrees/:worktreeId/request' },
+  getChangeRequestConversation: {
+    method: 'GET',
+    path: '/api/forges/worktrees/:worktreeId/request/conversation',
+  },
+  refreshChangeRequest: {
+    method: 'POST',
+    path: '/api/forges/worktrees/:worktreeId/request/refresh',
+  },
+  getRepositoryForge: { method: 'GET', path: '/api/forges/projects/:projectId/repository' },
+  refreshRepositoryForge: {
+    method: 'POST',
+    path: '/api/forges/projects/:projectId/repository/refresh',
+  },
+  listRepositories: { method: 'GET', path: '/api/repositories' },
 } as const;
 export type RouteName = keyof typeof ROUTES;
 
@@ -208,9 +227,9 @@ export type DirsResponse = z.infer<typeof DirsResponseSchema>;
 export const InboxQuerySchema = z
   .object({ ...scopeQueryShape, onlyUnreviewed: QueryBool.default(false) })
   .superRefine(refineScopeQuery)
-  .transform(({ scope, base, sha, ...rest }) => ({
+  .transform(({ scope, base, sha, working, ...rest }) => ({
     ...rest,
-    scope: scopeFromQueryFields({ scope, base, sha }),
+    scope: scopeFromQueryFields({ scope, base, sha, working }),
   }));
 export type InboxQuery = z.output<typeof InboxQuerySchema>;
 
@@ -255,9 +274,9 @@ export const DiffQuerySchema = z
     full: QueryBool.default(false),
   })
   .superRefine(refineScopeQuery)
-  .transform(({ scope, base, sha, ...rest }) => ({
+  .transform(({ scope, base, sha, working, ...rest }) => ({
     ...rest,
-    scope: scopeFromQueryFields({ scope, base, sha }),
+    scope: scopeFromQueryFields({ scope, base, sha, working }),
   }));
 export type DiffQuery = z.output<typeof DiffQuerySchema>;
 
@@ -284,7 +303,10 @@ export type RefreshResponse = z.infer<typeof RefreshResponseSchema>;
 
 // --- app state: review marks, focus ----------------------------------------------------------
 
-/** Review marks are keyed by (projectId, scopeKind, rawPath ?? path, patchHash). */
+/**
+ * Review marks are keyed by (projectId, rawPath ?? path, patchHash). `scopeKind` is still sent and
+ * stored (where the mark was made) but no longer part of the key (docs/STATUS-FLOW.md §2.4).
+ */
 export const ReviewRequestSchema = z.object({
   projectId: IdSchema,
   scopeKind: ScopeKindSchema,
@@ -306,3 +328,30 @@ export const FocusRequestSchema = z.object({ worktreeId: IdSchema.nullable() });
 export type FocusRequest = z.infer<typeof FocusRequestSchema>;
 
 export { OkResponseSchema };
+
+// --- repository information (Overview) -------------------------------------------------------
+
+export const REPOSITORIES_MAX = 200;
+
+/** `GET /api/repositories?projectIds=a,b,c`: local facts for up to `REPOSITORIES_MAX` projects. */
+export const RepositoriesQuerySchema = z.object({
+  projectIds: z
+    .string()
+    .max(REPOSITORIES_MAX * 17)
+    .transform((v) => [...new Set(v.split(',').filter((s) => s.length > 0))])
+    .pipe(z.array(IdSchema).min(1).max(REPOSITORIES_MAX)),
+});
+export type RepositoriesQuery = z.output<typeof RepositoriesQuerySchema>;
+
+export const RepositoriesResponseSchema = z.object({
+  repositories: z.array(
+    z.object({
+      projectId: IdSchema,
+      info: GitRepositoryInfoSchema.nullable(),
+      /** Why `info` is null (unknown project, git failed). */
+      error: z.string().nullable(),
+    }),
+  ),
+  generatedAt: TimestampSchema,
+});
+export type RepositoriesResponse = z.infer<typeof RepositoriesResponseSchema>;

@@ -6,6 +6,7 @@ import { fileMatchesSelector, filterByPaths, mayHaveFiles, UndoStore } from '../
 import { EventHub } from '../src/events.js';
 import { createLogger } from '../src/logger.js';
 import { policyInputFor, validateReviewPolicyTarget } from '../src/review-policy.js';
+import { bookmarkKey, coveredByCommits } from '../src/review-state.js';
 import { SettingsService } from '../src/settings.js';
 import { parseStoredSettings } from '../src/settings-store.js';
 import { DB_FILE, SCHEMA_VERSION, Store } from '../src/store.js';
@@ -189,8 +190,9 @@ describe('settings store (migration v2)', () => {
     legacy.close();
 
     const store = await Store.open(dir);
-    expect(SCHEMA_VERSION).toBe(2);
-    expect(store.schemaVersion()).toBe(2);
+    expect(SCHEMA_VERSION).toBe(3);
+    expect(store.schemaVersion()).toBe(3);
+    expect(store.getBookmark('0123456789abcdef', 'branch:main')).toBeNull();
     expect(store.listReviewMarks('0123456789abcdef', 'working')).toHaveLength(1);
     expect(store.settings.getRevision()).toBe(0);
     expect(store.settings.getSettings()).toEqual({
@@ -315,5 +317,68 @@ describe('settings store: forges', () => {
       review: { defaultEnabled: true },
       forges: { enabled: true, hosts: { 'git.acme.io': 'gitlab' } },
     });
+  });
+});
+
+describe('status flow v2 store and helpers', () => {
+  it('stores bookmarks and reviewed commits per project; deleting a project drops them', async () => {
+    const store = await Store.open(await tempDir());
+    const p = '0123456789abcdef';
+    const a = 'a'.repeat(40);
+    const b = 'b'.repeat(40);
+    expect(store.getBookmark(p, 'branch:main')).toBeNull();
+    store.setBookmark(p, 'branch:main', a, '2026-01-01T00:00:00.000Z');
+    store.setBookmark(p, 'branch:main', b, '2026-01-02T00:00:00.000Z');
+    expect(store.getBookmark(p, 'branch:main')).toBe(b);
+    expect(store.getBookmark(p, 'branch:other')).toBeNull();
+    expect(store.addReviewedCommits(p, [{ sha: a, patchId: 'x' }], 'now')).toEqual([a]);
+    expect(
+      store.addReviewedCommits(
+        p,
+        [
+          { sha: a, patchId: 'x' },
+          { sha: `${a}..${b}`, patchId: 'y' },
+        ],
+        'now',
+      ),
+    ).toEqual([`${a}..${b}`]);
+    expect(
+      store
+        .listReviewedCommits(p)
+        .map((c) => c.patchId)
+        .sort(),
+    ).toEqual(['x', 'y']);
+    store.removeReviewedCommits(p, [a]);
+    expect(store.listReviewedCommits(p)).toEqual([{ sha: `${a}..${b}`, patchId: 'y' }]);
+    store.setBookmark(p, 'branch:main', null, 'now');
+    expect(store.getBookmark(p, 'branch:main')).toBeNull();
+    store.setBookmark(p, 'branch:main', a, 'now');
+    store.deleteProject(p);
+    expect(store.getBookmark(p, 'branch:main')).toBeNull();
+    expect(store.listReviewedCommits(p)).toEqual([]);
+    store.close();
+  });
+
+  it('keys bookmarks by branch, or by worktree when detached', () => {
+    expect(bookmarkKey({ id: 'w1', branch: 'main', detached: false })).toBe('branch:main');
+    expect(bookmarkKey({ id: 'w1', branch: null, detached: true })).toBe('worktree:w1');
+  });
+
+  it('a file is covered by reviewed commits only without uncommitted changes and unreviewed touches', () => {
+    const file = {
+      path: 'a.txt',
+      oldPath: null,
+      staged: false,
+      unstaged: false,
+      status: 'modified' as const,
+    };
+    expect(coveredByCommits(file, null)).toBe(false);
+    expect(coveredByCommits(file, new Set())).toBe(true);
+    expect(coveredByCommits(file, new Set(['a.txt']))).toBe(false);
+    expect(coveredByCommits({ ...file, unstaged: true }, new Set())).toBe(false);
+    expect(coveredByCommits({ ...file, status: 'untracked' }, new Set())).toBe(false);
+    expect(
+      coveredByCommits({ ...file, status: 'renamed', oldPath: 'old.txt' }, new Set(['old.txt'])),
+    ).toBe(false);
   });
 });

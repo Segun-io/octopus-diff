@@ -8,6 +8,8 @@ import {
   AUTH_FRAGMENT_PARAM,
   AUTH_QUERY_PARAM,
   BulkReviewRequestSchema,
+  type ChangeRequestConversationResponse,
+  type ChangeRequestDetailResponse,
   CommitsQuerySchema,
   type CommitsResponse,
   DiffQuerySchema,
@@ -24,12 +26,16 @@ import {
   type ProjectsResponse,
   RefreshForgesRequestSchema,
   type RefreshResponse,
+  RepositoriesQuerySchema,
+  type RepositoriesResponse,
+  type RepositoryForgeResponse,
   type RescanResponse,
   ReviewRequestSchema,
   ROUTES,
   type RouteName,
   type ScanRootsResponse,
   type ServerEvent,
+  SetBookmarkRequestSchema,
   SetReviewPolicyRequestSchema,
   type SettingsResponse,
   UndoReviewRequestSchema,
@@ -44,6 +50,7 @@ import { ApiError, toApiError } from './errors.js';
 import type { EventHub } from './events.js';
 import type { ForgeService } from './forges.js';
 import { listDirs } from './fs-browse.js';
+import type { RepositoryInfoService } from './repositories.js';
 import type { ReviewControls } from './review-controls.js';
 import {
   API_CSP,
@@ -52,7 +59,7 @@ import {
   isApiPath,
   isHostAllowed,
   isOriginAllowed,
-  UI_CSP,
+  uiCsp,
 } from './security.js';
 import type { SettingsService } from './settings.js';
 import type { StaticFiles } from './static.js';
@@ -79,6 +86,8 @@ export interface AppDeps {
   reviewControls?: ReviewControls;
   /** Forge integration (routes 404 when absent, as older daemons). */
   forges?: ForgeService;
+  /** Local repository facts for the Overviews (route 404 when absent). */
+  repositories?: RepositoryInfoService;
 }
 
 interface SafeParser<T> {
@@ -175,6 +184,9 @@ function errorResponse(c: Context, error: ApiError): Response {
 export function createApp(deps: AppDeps): Hono {
   const { core, hub, logger, token, hostPolicy, staticFiles } = deps;
   const app = new Hono();
+  // The UI policy, with img-src widened to the forge image hosts unless forges or images are
+  // off (DECISIONS #74). Evaluated per response; a newly signed-in host applies on reload.
+  const currentUiCsp = () => uiCsp(deps.forges?.imageHosts() ?? []);
 
   // Security headers on every response (set after the handler so they cannot be dropped).
   // Path decisions use `c.req.path`: the path Hono routes on (SEC-10).
@@ -191,7 +203,10 @@ export function createApp(deps: AppDeps): Hono {
       headers.set('Cross-Origin-Resource-Policy', 'same-origin');
       if (!headers.has('Content-Security-Policy')) {
         const isHtml = (headers.get('content-type') ?? '').startsWith('text/html');
-        headers.set('Content-Security-Policy', isHtml && !isApiPath(pathname) ? UI_CSP : API_CSP);
+        headers.set(
+          'Content-Security-Policy',
+          isHtml && !isApiPath(pathname) ? currentUiCsp() : API_CSP,
+        );
       }
       if (isApiPath(pathname) || !headers.has('Cache-Control'))
         headers.set('Cache-Control', 'no-store');
@@ -400,6 +415,10 @@ export function createApp(deps: AppDeps): Hono {
       const request = parseWith(UndoReviewRequestSchema, await readJson(c), 'request body');
       return c.json(reviewControls.undoBulk(request));
     });
+    route('setBookmark', async (c) => {
+      const request = parseWith(SetBookmarkRequestSchema, await readJson(c), 'request body');
+      return c.json(await reviewControls.setBookmark(request));
+    });
   }
 
   // --- forges: pull/merge requests via gh / glab (docs/FORGES.md) --------------------------
@@ -419,6 +438,48 @@ export function createApp(deps: AppDeps): Hono {
       );
       await forges.refresh(request.projectIds, { force: true });
       const body: ForgesResponse = await forges.response();
+      return c.json(body);
+    });
+
+    // Keyed by worktree / project id only: the daemon resolves repository and number from the
+    // request it already matched, so a client cannot make it query arbitrary requests.
+    route('getChangeRequest', async (c) => {
+      const body: ChangeRequestDetailResponse = await forges.detail(idParam(c, 'worktreeId'));
+      return c.json(body);
+    });
+
+    route('getChangeRequestConversation', async (c) => {
+      const body: ChangeRequestConversationResponse = await forges.conversation(
+        idParam(c, 'worktreeId'),
+      );
+      return c.json(body);
+    });
+
+    route('refreshChangeRequest', async (c) => {
+      const body: ChangeRequestDetailResponse = await forges.refreshRequest(
+        idParam(c, 'worktreeId'),
+      );
+      return c.json(body);
+    });
+
+    route('getRepositoryForge', async (c) => {
+      const body: RepositoryForgeResponse = await forges.repository(idParam(c, 'projectId'));
+      return c.json(body);
+    });
+
+    route('refreshRepositoryForge', async (c) => {
+      const body: RepositoryForgeResponse = await forges.repository(idParam(c, 'projectId'), {
+        force: true,
+      });
+      return c.json(body);
+    });
+  }
+
+  const { repositories } = deps;
+  if (repositories) {
+    route('listRepositories', async (c) => {
+      const query = parseWith(RepositoriesQuerySchema, c.req.query(), 'query');
+      const body: RepositoriesResponse = await repositories.list(query.projectIds);
       return c.json(body);
     });
   }
@@ -477,7 +538,7 @@ export function createApp(deps: AppDeps): Hono {
     // response, and the API policy (`default-src 'none'`) blocked the highlight workers'
     // chunk imports, so every diff was highlighted on the main thread.
     if (file.isHtml || file.contentType.startsWith('text/javascript')) {
-      headers['Content-Security-Policy'] = UI_CSP;
+      headers['Content-Security-Policy'] = currentUiCsp();
     }
     return file.body === null ? c.body(null, 200, headers) : c.body(file.body, 200, headers);
   });

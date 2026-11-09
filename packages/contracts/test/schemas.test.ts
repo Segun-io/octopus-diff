@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   AddScanRootRequestSchema,
+  appendScopeParams,
   ChangedFileSchema,
   DiffQuerySchema,
   DiffScopeSchema,
@@ -69,6 +70,9 @@ describe('DiffScopeSchema', () => {
       { kind: 'branch' },
       { kind: 'branch', base: 'main' },
       { kind: 'commit', sha: 'deadbeef' },
+      { kind: 'branch', includeWorking: true },
+      { kind: 'review' },
+      { kind: 'review', base: 'a'.repeat(40) },
     ]) {
       expect(DiffScopeSchema.parse(scope)).toEqual(scope);
     }
@@ -84,6 +88,14 @@ describe('DiffScopeSchema', () => {
     expect(scopeKey({ kind: 'branch' })).toBe('branch');
     expect(scopeKey({ kind: 'branch', base: 'main' })).toBe('branch:main');
     expect(scopeKey({ kind: 'commit', sha: 'DEADBEEF' })).toBe('commit:deadbeef');
+    expect(scopeKey({ kind: 'branch', includeWorking: true })).toBe('branch:~w');
+    expect(scopeKey({ kind: 'branch', base: 'main', includeWorking: true })).toBe('branch:main:~w');
+    expect(scopeKey({ kind: 'review' })).toBe('review');
+    expect(scopeKey({ kind: 'review', base: 'ABCDEF12' })).toBe('review:abcdef12');
+  });
+
+  it('rejects a review scope whose base is not a commit id', () => {
+    expect(DiffScopeSchema.safeParse({ kind: 'review', base: 'main' }).success).toBe(false);
   });
 });
 
@@ -99,6 +111,24 @@ describe('query schemas', () => {
     expect(FilesQuerySchema.parse({ scope: 'commit', sha: 'abc123' })).toEqual({
       scope: { kind: 'commit', sha: 'abc123' },
     });
+  });
+
+  it('parses the status-flow scopes from query fields and writes them back', () => {
+    expect(FilesQuerySchema.parse({ scope: 'branch', working: '1' })).toEqual({
+      scope: { kind: 'branch', includeWorking: true },
+    });
+    expect(FilesQuerySchema.parse({ scope: 'review' })).toEqual({ scope: { kind: 'review' } });
+    expect(FilesQuerySchema.parse({ scope: 'review', base: 'abc123' })).toEqual({
+      scope: { kind: 'review', base: 'abc123' },
+    });
+    expect(FilesQuerySchema.safeParse({ scope: 'review', base: 'main' }).success).toBe(false);
+    for (const scope of [
+      { kind: 'branch', base: 'main', includeWorking: true },
+      { kind: 'review', base: 'abc123' },
+    ] as const) {
+      const params = Object.fromEntries(appendScopeParams(new URLSearchParams(), scope));
+      expect(FilesQuerySchema.parse(params)).toEqual({ scope });
+    }
   });
 
   it('requires sha for scope=commit', () => {

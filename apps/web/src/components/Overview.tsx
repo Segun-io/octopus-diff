@@ -1,11 +1,18 @@
 import { type ReviewPolicyTarget, reviewTargetKey } from '@octopus-diff/contracts';
 import type { ReactNode } from 'react';
 import {
+  type RepositoryEntry,
+  useForgeIndex,
+  useForgesQuery,
+  useRepositories,
+} from '../api/forges.ts';
+import {
   useRescanScanRoot,
   useSetReviewPolicy,
   useSettingsQuery,
   useSettingsSupport,
 } from '../api/settings.ts';
+import { type ForgeIndexEntry, needsAttention, REVIEW_WORD, remoteLabel } from '../lib/forge.ts';
 import {
   DIRECT_FOLDER_ID,
   type FolderNode,
@@ -13,15 +20,21 @@ import {
   type NodeStats,
   type ProjectGroup,
   statsOfRows,
+  type WorktreeRow,
   worktreeLabel,
 } from '../lib/model.ts';
 import { SOURCE_LABELS, shortenHome } from '../lib/policy.ts';
 import { worktreeSource } from '../lib/source.ts';
+import { absoluteTime, relativeTime } from '../lib/time.ts';
 import { useCommandsContext } from '../state/commandsContext.tsx';
+import { type CopyFn, copyAndReport } from '../state/copy.ts';
 import { useAppModel } from '../state/model.tsx';
 import { actions, useUiStore, type View } from '../state/ui.tsx';
 import { ChangeRequestChip } from './ChangeRequest.tsx';
+import { ContextMenu, useContextMenu } from './ContextMenu.tsx';
+import { separated, worktreeCopyItems } from './copyMenu.ts';
 import { Mark } from './Mark.tsx';
+import { ForgeRepositoryFacts, LocalRepositoryFacts, OpenRequests } from './RepositoryInfo.tsx';
 /**
  * Overview for a folder or a project (views/registry.ts): figures, the worktrees or projects
  * inside, bulk actions and the review policy of the node. Future read-only views (Files, History)
@@ -58,7 +71,15 @@ function Stat({ label, value, tone }: { label: string; value: ReactNode; tone?: 
   );
 }
 
-function StatsRow({ stats, repos }: { stats: NodeStats; repos: boolean }) {
+function StatsRow({
+  stats,
+  repos,
+  children,
+}: {
+  stats: NodeStats;
+  repos: boolean;
+  children?: ReactNode;
+}) {
   return (
     <dl className="flex flex-wrap gap-x-8 gap-y-3 border-y border-line py-3">
       {repos && <Stat label="repositories" value={stats.projects} />}
@@ -74,6 +95,7 @@ function StatsRow({ stats, repos }: { stats: NodeStats; repos: boolean }) {
           </>
         }
       />
+      {children}
     </dl>
   );
 }
@@ -107,10 +129,10 @@ function PolicyControl({ target, label }: { target: ReviewPolicyTarget | null; l
 }
 
 function BulkButtons({
-  onVerified,
+  onReviewed,
   onUnreviewed,
 }: {
-  onVerified: () => void;
+  onReviewed: () => void;
   onUnreviewed: () => void;
 }) {
   const support = useSettingsSupport();
@@ -119,13 +141,13 @@ function BulkButtons({
     <div className="flex items-center gap-2">
       <button
         type="button"
-        onClick={onVerified}
+        onClick={onReviewed}
         className="od-btn hover:border-add hover:bg-add-soft"
       >
-        Mark all as verified
+        Mark all reviewed
       </button>
       <button type="button" onClick={onUnreviewed} className="od-btn">
-        Mark all as unreviewed
+        Mark all unreviewed
       </button>
     </div>
   );
@@ -167,6 +189,125 @@ function Figures({ additions, deletions }: { additions: number; deletions: numbe
 }
 
 const CELL = 'py-1.5 pr-3';
+
+/** Open requests and those needing attention among the given worktrees (batch data only). */
+function rollupRequests(worktreeIds: readonly string[], index: Map<string, ForgeIndexEntry>) {
+  let open = 0;
+  let attention = 0;
+  let known = false;
+  let github = 0;
+  let gitlab = 0;
+  for (const id of worktreeIds) {
+    const entry = index.get(id);
+    if (!entry) continue;
+    known = true;
+    const cr = entry.worktree.changeRequest;
+    if (cr?.state !== 'open') continue;
+    open += 1;
+    if (cr.kind === 'github') github += 1;
+    else gitlab += 1;
+    if (needsAttention(cr)) attention += 1;
+  }
+  const noun = gitlab > github ? 'merge request' : 'pull request';
+  return { open, attention, known, noun };
+}
+
+/** Folder Overview cells from `/api/repositories` and the cached `/api/forges`. */
+function FolderRepoCells({
+  entry,
+  state,
+  worktreeIds,
+}: {
+  entry: RepositoryEntry | undefined;
+  state: { forge: { host: string; repository: string; webUrl: string } | null } | undefined;
+  worktreeIds: readonly string[];
+}) {
+  const index = useForgeIndex();
+  const info = entry?.info;
+  const branch = info?.defaultBranch;
+  const forge = state?.forge ?? null;
+  const roll = rollupRequests(worktreeIds, index);
+  const origin = info?.remotes.find((r) => r.name === 'origin') ?? info?.remotes[0];
+  const label = forge
+    ? `${forge.host}/${forge.repository}`
+    : origin?.url
+      ? remoteLabel(origin.url)
+      : null;
+  return (
+    <>
+      <td className={`${CELL} font-mono text-[11px]`}>
+        {branch ? (
+          <>
+            {branch.name}
+            {branch.ahead !== null && branch.behind !== null && (
+              <span
+                className="ml-1.5 text-muted"
+                title={`Against ${branch.upstream}, as of the last fetch; octopus-diff never fetches`}
+              >
+                ↑{branch.ahead} ↓{branch.behind}
+              </span>
+            )}
+          </>
+        ) : (
+          <span className="text-faint">–</span>
+        )}
+      </td>
+      <td
+        className={`${CELL} whitespace-nowrap text-[11px] text-muted`}
+        title={absoluteTime(branch?.head?.authorDate)}
+      >
+        {branch?.head ? relativeTime(branch.head.authorDate) : '–'}
+      </td>
+      <td className={`${CELL} max-w-48 truncate font-mono text-[11px] text-muted`}>
+        {label === null ? (
+          <span className="text-faint">–</span>
+        ) : forge?.webUrl.startsWith('https://') ? (
+          <a
+            href={forge.webUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="hover:underline"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {label} <span className="text-faint">↗</span>
+          </a>
+        ) : (
+          label
+        )}
+      </td>
+      <td className={`${CELL} font-mono tabular-nums`}>
+        {roll.open > 0 ? (
+          <span title={`${roll.attention} need attention`}>
+            {roll.open}
+            {roll.attention > 0 && (
+              <span className="ml-1.5 font-sans text-[11px] text-danger">
+                {roll.attention} need attention
+              </span>
+            )}
+          </span>
+        ) : (
+          <span className="text-faint">–</span>
+        )}
+      </td>
+    </>
+  );
+}
+
+/** The Pull request column: chip, truncated title, review word (batch data, no query). */
+function RequestCell({ worktreeId }: { worktreeId: string }) {
+  const entry = useForgeIndex().get(worktreeId);
+  const cr = entry?.worktree.changeRequest;
+  if (!cr) return <span className="text-faint">–</span>;
+  return (
+    <span className="flex min-w-0 items-center gap-1.5 text-[11px]" title={cr.title}>
+      <ChangeRequestChip worktreeId={worktreeId} />
+      <span className="min-w-0 truncate">{cr.title}</span>
+      {cr.review && cr.state === 'open' && (
+        <span className="shrink-0 text-muted">{REVIEW_WORD[cr.review]}</span>
+      )}
+    </span>
+  );
+}
 const NUM = `${CELL} font-mono tabular-nums`;
 
 function FolderOverview({ node }: { node: FolderNode }) {
@@ -175,6 +316,13 @@ function FolderOverview({ node }: { node: FolderNode }) {
   const rescan = useRescanScanRoot();
   const root = node.root;
   const ids = node.groups.flatMap((g) => g.allRows.map((r) => r.worktree.id));
+  // Local facts for the listed projects (git only) and already-known forge data: the folder
+  // Overview runs no forge query of its own (DECISIONS #76).
+  const repositories = useRepositories(node.groups.map((g) => g.project.id));
+  const forges = useForgesQuery();
+  const forgeIndex = useForgeIndex();
+  const forgeStates = new Map((forges.data?.projects ?? []).map((p) => [p.projectId, p]));
+  const forgeRollup = rollupRequests(ids, forgeIndex);
   const target = root
     ? ({ kind: 'folder', scanRootId: root.id } as const)
     : ({ kind: 'all' } as const);
@@ -205,7 +353,7 @@ function FolderOverview({ node }: { node: FolderNode }) {
         </div>
         <div className="flex flex-col items-end gap-2">
           <BulkButtons
-            onVerified={() => commands.markAllFor(target, true, ids)}
+            onReviewed={() => commands.markAllFor(target, true, ids)}
             onUnreviewed={() => commands.markAllFor(target, false, ids)}
           />
           <div className="flex items-center gap-2">
@@ -226,7 +374,18 @@ function FolderOverview({ node }: { node: FolderNode }) {
           </div>
         </div>
       </header>
-      <StatsRow stats={node.stats} repos />
+      <StatsRow stats={node.stats} repos>
+        {forgeRollup.known && (
+          <>
+            <Stat label={`open ${forgeRollup.noun}s`} value={forgeRollup.open} />
+            <Stat
+              label="need attention"
+              value={forgeRollup.attention}
+              {...(forgeRollup.attention > 0 ? { tone: 'text-danger' } : {})}
+            />
+          </>
+        )}
+      </StatsRow>
       <table className="mt-4 w-full text-xs">
         <thead>
           <tr>
@@ -235,6 +394,10 @@ function FolderOverview({ node }: { node: FolderNode }) {
             <th className="od-th">With changes</th>
             <th className="od-th">Lines</th>
             <th className="od-th">Unreviewed</th>
+            <th className="od-th">Default branch</th>
+            <th className="od-th">Last commit</th>
+            <th className="od-th">Forge</th>
+            <th className="od-th">PRs</th>
             <th className="od-th">Path</th>
           </tr>
         </thead>
@@ -259,6 +422,11 @@ function FolderOverview({ node }: { node: FolderNode }) {
                 <td className={NUM}>
                   {s.unreviewed > 0 ? <span className="font-semibold">{s.unreviewed}</span> : '–'}
                 </td>
+                <FolderRepoCells
+                  entry={repositories.data?.get(g.project.id)}
+                  state={forgeStates.get(g.project.id)}
+                  worktreeIds={g.allRows.map((r) => r.worktree.id)}
+                />
                 <td className="truncate py-1.5 font-mono text-[11px] text-faint">
                   {shortenHome(g.project.mainWorktreePath ?? g.project.commonDir)}
                 </td>
@@ -274,7 +442,11 @@ function FolderOverview({ node }: { node: FolderNode }) {
 function ProjectOverview({ group }: { group: ProjectGroup }) {
   const store = useUiStore();
   const commands = useCommandsContext();
+  const menu = useContextMenu<WorktreeRow>();
+  const copy: CopyFn = (text, options) => void copyAndReport(store, text, options);
   const { project } = group;
+  const repositories = useRepositories([project.id]);
+  const forgeState = useForgesQuery().data?.projects.find((p) => p.projectId === project.id);
   const ids = group.allRows.map((r) => r.worktree.id);
   const stats = statsOfRows(group.allRows);
   return (
@@ -293,7 +465,7 @@ function ProjectOverview({ group }: { group: ProjectGroup }) {
         </div>
         <div className="flex flex-col items-end gap-2">
           <BulkButtons
-            onVerified={() =>
+            onReviewed={() =>
               commands.markAllFor({ kind: 'project', projectId: project.id }, true, ids)
             }
             onUnreviewed={() =>
@@ -303,6 +475,14 @@ function ProjectOverview({ group }: { group: ProjectGroup }) {
           <PolicyControl target={{ kind: 'project', projectId: project.id }} label="this project" />
         </div>
       </header>
+      <div className="mb-4 grid gap-x-8 gap-y-4 border-t border-line pt-3 lg:grid-cols-2">
+        <LocalRepositoryFacts
+          entry={repositories.data?.get(project.id)}
+          forge={forgeState?.forge ?? null}
+          worktrees={group.allRows.length}
+        />
+        <ForgeRepositoryFacts projectId={project.id} />
+      </div>
       <StatsRow stats={stats} repos={false} />
       <table className="mt-4 w-full text-xs">
         <thead>
@@ -313,6 +493,7 @@ function ProjectOverview({ group }: { group: ProjectGroup }) {
             <th className="od-th">Files</th>
             <th className="od-th">Lines</th>
             <th className="od-th">Unreviewed</th>
+            <th className="od-th">Pull request</th>
             <th className="od-th">Review</th>
           </tr>
         </thead>
@@ -328,6 +509,9 @@ function ProjectOverview({ group }: { group: ProjectGroup }) {
                 key={row.worktree.id}
                 className="cursor-pointer hover:bg-hover"
                 onClick={go}
+                onContextMenu={(e) => menu.open(e, row)}
+                data-testid="overview-worktree-row"
+                data-worktree-id={row.worktree.id}
                 title={row.worktree.path}
               >
                 <td className={CELL}>
@@ -342,9 +526,6 @@ function ProjectOverview({ group }: { group: ProjectGroup }) {
                   {s?.inProgress && (
                     <span className="ml-1.5 text-[11px] text-warn">{s.inProgress}</span>
                   )}
-                  <span className="ml-1.5 inline-flex align-middle text-[11px]">
-                    <ChangeRequestChip worktreeId={row.worktree.id} />
-                  </span>
                   {row.worktree.missing && (
                     <span className="ml-1.5 text-[11px] text-danger">missing</span>
                   )}
@@ -374,6 +555,9 @@ function ProjectOverview({ group }: { group: ProjectGroup }) {
                     '–'
                   )}
                 </td>
+                <td className={`${CELL} max-w-64`}>
+                  <RequestCell worktreeId={row.worktree.id} />
+                </td>
                 <td className="py-1.5 text-[11px] text-muted">
                   {row.review.enabled ? <span className="text-add">on</span> : <span>off</span>}{' '}
                   <span className="text-faint">(from {SOURCE_LABELS[row.review.source]})</span>
@@ -383,6 +567,26 @@ function ProjectOverview({ group }: { group: ProjectGroup }) {
           })}
         </tbody>
       </table>
+      <OpenRequests projectId={project.id} />
+      {menu.state && (
+        <ContextMenu
+          items={[
+            {
+              id: 'open',
+              label: 'Open changes',
+              onSelect: () =>
+                actions.setView(store, {
+                  kind: 'worktree',
+                  worktreeId: menu.state?.target.worktree.id ?? '',
+                }),
+            },
+            ...separated(worktreeCopyItems(menu.state.target.worktree, copy, menu.state.position)),
+          ]}
+          position={menu.state.position}
+          onClose={menu.close}
+          label="Actions"
+        />
+      )}
     </div>
   );
 }

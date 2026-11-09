@@ -177,3 +177,56 @@ describe('forge UI (mock daemon)', () => {
     expect(backend.settings.forges?.enabled).toBe(false);
   });
 });
+
+describe('forge details from batch data (hover card, Overview column)', () => {
+  it('the hover card shows the request block only on rows with a request', async () => {
+    const { backend } = setup();
+    await screen.findAllByTestId(TEST_IDS.changeRequestChip);
+    const forges = backend.forges();
+    const withRequest = forges.projects
+      .flatMap((p) => p.worktrees)
+      .find((w) => w.changeRequest?.state === 'open' && !w.changeRequest.draft);
+    if (!withRequest?.changeRequest) throw new Error('no open request in the demo data');
+    const rows = screen.getAllByTestId(TEST_IDS.worktreeItem);
+    const row = rows.find((r) => r.dataset.worktreeId === withRequest.worktreeId);
+    if (!row) throw new Error('row not found');
+    fireEvent.pointerEnter(row, { pointerType: 'mouse' });
+    const card = await screen.findByRole('tooltip', {}, { timeout: 2000 });
+    const block = within(card).getByTestId(TEST_IDS.changeRequestHoverBlock);
+    expect(block.dataset.number).toBe(String(withRequest.changeRequest.number));
+    expect(block.textContent).toContain(withRequest.changeRequest.title);
+    expect(block.textContent).toContain(
+      `${withRequest.changeRequest.headBranch} → ${withRequest.changeRequest.baseBranch}`,
+    );
+    expect(block.textContent).toMatch(/checks passed|pipeline/);
+    fireEvent.pointerLeave(row);
+    await waitFor(() => expect(screen.queryByRole('tooltip')).toBeNull());
+
+    const matched = new Set(
+      forges.projects
+        .flatMap((p) => p.worktrees.filter((w) => w.changeRequest))
+        .map((w) => w.worktreeId),
+    );
+    const plain = rows.find((r) => r.dataset.worktreeId && !matched.has(r.dataset.worktreeId));
+    if (!plain) throw new Error('no row without a request');
+    fireEvent.pointerEnter(plain, { pointerType: 'mouse' });
+    const other = await screen.findByRole('tooltip', {}, { timeout: 2000 });
+    expect(within(other).queryByTestId(TEST_IDS.changeRequestHoverBlock)).toBeNull();
+  });
+
+  it('the project Overview has a Pull request column with chip, title and review word', async () => {
+    const { store, backend } = setup();
+    await screen.findAllByTestId(TEST_IDS.changeRequestChip);
+    const project = backend
+      .forges()
+      .projects.find((p) => p.worktrees.some((w) => w.changeRequest?.review));
+    if (!project) throw new Error('no project with a reviewed request');
+    store.setState({ view: { kind: 'project', projectId: project.projectId } });
+    const header = await screen.findByRole('columnheader', { name: 'Pull request' });
+    expect(header).toBeTruthy();
+    const table = header.closest('table') as HTMLElement;
+    const chips = within(table).getAllByTestId(TEST_IDS.changeRequestChip);
+    expect(chips.length).toBe(project.worktrees.filter((w) => w.changeRequest).length);
+    expect(table.textContent).toContain('review required');
+  });
+});

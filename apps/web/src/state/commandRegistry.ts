@@ -3,9 +3,10 @@
  * Settings → Keyboard and the command palette. Keys are display strings; the actual key
  * matching lives in `useKeyboardShortcuts` (chords and modifier handling need code).
  */
-import { CONTEXT_STEP, type Commands } from './commands.ts';
+import type { Commands } from './commands.ts';
+import { CONTEXT_STEP } from './diffContext.ts';
 
-export type CommandGroup = 'navigate' | 'review' | 'view' | 'diff' | 'app';
+export type CommandGroup = 'navigate' | 'review' | 'view' | 'diff' | 'copy' | 'app';
 
 export interface CommandDef {
   id: string;
@@ -20,6 +21,8 @@ export interface CommandDef {
   paletteOnly?: boolean;
   /** Hidden from the palette (navigation primitives nobody searches for). */
   hideInPalette?: boolean;
+  /** Listed in the palette only with an open worktree / a selected file. */
+  needs?: 'worktree' | 'file';
 }
 
 export const COMMANDS: readonly CommandDef[] = [
@@ -96,14 +99,14 @@ export const COMMANDS: readonly CommandDef[] = [
   },
   {
     id: 'markAllVerified',
-    label: 'Mark all as verified',
+    label: 'Review all (mark everything shown reviewed)',
     group: 'review',
     keys: ['⇧ R'],
     run: (c) => c.markAll(true),
   },
   {
     id: 'markAllUnreviewed',
-    label: 'Mark all as unreviewed',
+    label: 'Mark all unreviewed',
     group: 'review',
     keys: [],
     run: (c) => c.markAll(false),
@@ -186,6 +189,61 @@ export const COMMANDS: readonly CommandDef[] = [
     run: (c) => c.refreshNow(),
     paletteOnly: true,
   },
+  // copy (palette only; menus and buttons have the same actions)
+  {
+    id: 'copySelection',
+    label: 'Copy the selected diff lines (drag on the line numbers to select)',
+    group: 'copy',
+    keys: ['Ctrl/⌘ C'],
+    // Handled by the diff renderer while a line selection exists (docs/COPY-TOOLS.md §3.7).
+    run: () => {},
+    hideInPalette: true,
+  },
+  {
+    id: 'copyBranch',
+    label: 'Copy branch name',
+    group: 'copy',
+    keys: [],
+    run: (c) => c.copy('branch'),
+    paletteOnly: true,
+    needs: 'worktree',
+  },
+  {
+    id: 'copyWorktreePath',
+    label: 'Copy worktree path',
+    group: 'copy',
+    keys: [],
+    run: (c) => c.copy('worktreePath'),
+    paletteOnly: true,
+    needs: 'worktree',
+  },
+  {
+    id: 'copyFilePath',
+    label: 'Copy file path',
+    group: 'copy',
+    keys: [],
+    run: (c) => c.copy('filePath'),
+    paletteOnly: true,
+    needs: 'file',
+  },
+  {
+    id: 'copyFileName',
+    label: 'Copy file name',
+    group: 'copy',
+    keys: [],
+    run: (c) => c.copy('fileName'),
+    paletteOnly: true,
+    needs: 'file',
+  },
+  {
+    id: 'copyAbsolutePath',
+    label: 'Copy absolute file path',
+    group: 'copy',
+    keys: [],
+    run: (c) => c.copy('absolutePath'),
+    paletteOnly: true,
+    needs: 'file',
+  },
   // app
   {
     id: 'settings',
@@ -216,6 +274,7 @@ export const GROUP_LABELS: Record<CommandGroup, string> = {
   review: 'Review',
   view: 'View',
   diff: 'Diff',
+  copy: 'Copy',
   app: 'App',
 };
 

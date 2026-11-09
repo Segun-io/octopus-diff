@@ -206,9 +206,10 @@ describe('API routes (fake git-core)', () => {
       full: false,
     });
 
-    // Same file, other scope kind: not reviewed there.
+    // Same file and patch in another scope kind: reviewed there too (status flow v2, marks are
+    // keyed by path and patch hash only).
     fake.setFiles(wt, 'staged', [fakeFile('a.ts', { staged: true, unstaged: false })]);
-    expect((await api.listFiles(wt, { scope: { kind: 'staged' } })).files[0]?.reviewed).toBe(false);
+    expect((await api.listFiles(wt, { scope: { kind: 'staged' } })).files[0]?.reviewed).toBe(true);
 
     // The agent edits a.ts again: new patch hash -> unreviewed again.
     fake.setFiles(wt, 'working', [fakeFile('a.ts', { patchHash: 'v2:a.ts' }), fakeFile('b.ts')]);

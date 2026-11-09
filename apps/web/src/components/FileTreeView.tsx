@@ -7,12 +7,18 @@ import type { GitStatusEntry } from '@pierre/trees';
 import { FileTree, useFileTree } from '@pierre/trees/react';
 import { useEffect, useMemo, useRef } from 'react';
 import type { NavEntry } from '../lib/model.ts';
+import { copyAndReport } from '../state/copy.ts';
+import { useUiStore } from '../state/ui.tsx';
+import { ContextMenu, type MenuItem } from './ContextMenu.tsx';
+import { fileCopyItems } from './copyMenu.ts';
 
 export interface FileTreeViewProps {
   entries: readonly NavEntry[];
   selectedKey: string | null;
   onSelect: (entry: NavEntry) => void;
   theme: 'light' | 'dark';
+  /** The worktree root of an entry, for "Copy absolute path". */
+  worktreePathOf?: (worktreeId: string) => string | undefined;
 }
 
 function gitStatus(entry: NavEntry): GitStatusEntry['status'] {
@@ -31,7 +37,14 @@ function gitStatus(entry: NavEntry): GitStatusEntry['status'] {
   }
 }
 
-export function FileTreeView({ entries, selectedKey, onSelect, theme }: FileTreeViewProps) {
+export function FileTreeView({
+  entries,
+  selectedKey,
+  onSelect,
+  theme,
+  worktreePathOf,
+}: FileTreeViewProps) {
+  const store = useUiStore();
   const byPath = useMemo(() => new Map(entries.map((e) => [e.file.path, e])), [entries]);
   const latest = useRef({ byPath, onSelect, selectedKey });
   latest.current = { byPath, onSelect, selectedKey };
@@ -85,6 +98,30 @@ export function FileTreeView({ entries, selectedKey, onSelect, theme }: FileTree
   return (
     <FileTree
       model={model}
+      renderContextMenu={(item, context) => {
+        const entry = byPath.get(item.path);
+        const at = { x: context.anchorRect.left, y: context.anchorRect.bottom + 2 };
+        const root = entry
+          ? worktreePathOf?.(entry.worktreeId)
+          : worktreePathOf?.(entries[0]?.worktreeId ?? '');
+        // A directory row copies its own path; a file row its path, old path, name, absolute path.
+        const file = entry?.file ?? { path: item.path.replace(/\/$/, '') };
+        const items: MenuItem[] = fileCopyItems(
+          file,
+          root,
+          (text, options) => void copyAndReport(store, text, options),
+          at,
+        ).filter((i) => item.kind === 'file' || i.id !== 'copy-name');
+        return (
+          <ContextMenu
+            items={items}
+            position={at}
+            onClose={() => context.close()}
+            label="Copy"
+            testId="file-tree-menu"
+          />
+        );
+      }}
       aria-label="Changed files (tree)"
       className="block h-full"
       style={{

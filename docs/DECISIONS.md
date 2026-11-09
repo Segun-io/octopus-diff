@@ -1240,3 +1240,332 @@ discover them correctly and get valid information about PRs/MRs", then to build 
     `03-scopes` "the scope selector switches the file list" is flaky on `main` too (1 of 4 runs on an untouched
     `main` build, "element is not attached to the DOM"): not caused by this change, left for its owner.
 
+
+## Forge details: the Request tab and repository information (session, 2026-11-09)
+
+Brief: `/home/santosa/.claude/plans/you-are-planning-the-cosmic-abelson.md` (PR/MR detail as a `Request` tab, a richer
+hover card, repository information on the Overviews). Design: `docs/FORGES.md`. Report: `docs/reports/forge-details.md`.
+
+71. **[contracts] Request detail, conversation and repository information, all additive.** `ChangeRequest` gains
+    optional scalars (`createdAt`, `additions`, `deletions`, `changedFiles`, `mergeState`). New schemas:
+    `ForgeActor`, `ChangeRequestLabel`, `ChangeRequestReviewer`, `ChangeRequestCheck`, `ChangeRequestCommit`,
+    `ChangeRequestFile`, `ChangeRequestDetail`, `ChangeRequestConversation` (+ comment, review entry, thread),
+    their `*Response`s, `ForgeRepositoryInfo`, `RepositoryForgeResponse`; `ForgeSettings.images?`;
+    `GitRepositoryInfo` (domain.ts) and optional `GitCore.readRepositoryInfo(project, { defaultBranch })`;
+    six routes (`getChangeRequest`, `getChangeRequestConversation`, `refreshChangeRequest`, `getRepositoryForge`,
+    `refreshRepositoryForge`, `listRepositories`) with client methods; test ids for the new surfaces.
+    Deviation from the brief: the detail's per-check list is **`checkList`**, not `checks`, because `ChangeRequest`
+    already has `checks` (the CI summary object) and the detail extends `ChangeRequest`; renaming would have broken
+    the existing field. `readRepositoryInfo` takes the project's effective default branch (it has the override) and
+    detects it only when absent.
+72. **Batch query: scalars only, a GitHub `basic` variant, and the cost on every GitHub query.** The per-branch batch
+    gains `createdAt additions deletions changedFiles mergeStateStatus` (GitLab: `createdAt` and, in the full
+    variant, `diffStatsSummary`), never connections (labels, reviewers), so the hover card and the Overview
+    column cost nothing extra. Measured live: still 1 point. `mergeStateStatus` is missing on old GitHub
+    Enterprise, so the GitHub batch now has a `basic` variant with the same "unknown field → retry basic" rule as
+    GitLab. Every GitHub query now asks for `rateLimit { cost remaining }`; `ForgeClient({ onCost })` reports it
+    (the opt-in live test asserts `cost <= 1`). The Overview's chip moved from the worktree cell to a new
+    **Pull request** column (chip, title, review word); the worktree cell otherwise is unchanged.
+73. **The forge allowlist is a registry of query kinds, and GitHub PR numbers are inlined.** `cli.ts`
+    `QUERY_REGISTRY` has four kinds (`batch`, `repository`, `detail`, `conversation`); each knows its fixed
+    variable names and rebuilds every query string it allows, and the caller's query must equal one byte for byte.
+    `gh api graphql --raw-field number=1` fails for `$number: Int!` and `-F` stays banned (it reads files), so
+    the GitHub detail and conversation builders take a validated safe integer and inline it; the registry
+    extracts it with a regex, rebuilds the query and compares. GitLab's `iid` is a `String!`, so it stays a
+    `--raw-field` (digits only). Every other rule is unchanged (`--raw-field` only, `--hostname` first, value
+    limits, neutral cwd, host-scoped tokens, signed-in hosts only). Measured: each new GitHub query costs 1 point.
+74. **The UI's CSP allows images from signed-in forge hosts (user's choice), with a switch.** `UI_CSP` became
+    `uiCsp(imageHosts)`: `img-src 'self' data: blob:` plus `https://<host>` per pattern, where the patterns come
+    from `forgeImageHosts(settings, clis)`: for each host a CLI is signed in to and that passes `ForgeHostSchema`
+    (and is not overridden to `none`), GitHub.com adds `github.com` and `*.githubusercontent.com`, GitHub
+    Enterprise `H` adds `H` and `*.H`, GitLab `H` adds `H` and `secure.gravatar.com`. The builder drops any
+    entry that is not a plain host pattern, so nothing can inject a directive. `forges.images: false` or forges
+    off gives exactly the old policy; API responses keep `API_CSP`. The policy is computed per page load, so a
+    newly signed-in host applies after a reload. The UI renders an `<img>` only for https URLs on
+    `imageHosts` (sent with every detail/conversation response), with `referrerPolicy="no-referrer"`,
+    `loading="lazy"`, `decoding="async"` and a fixed max size; anything else, or a failed load (private-repo
+    attachments need cookies), becomes a plain `image: <alt> ↗` link. Avatars fall back to initials.
+75. **Repository information: two routes, two sources.** `GET /api/repositories?projectIds=a,b` (max 200) returns
+    local git facts only (`GitCore.readRepositoryInfo`: one `for-each-ref`, `log -1`, `rev-list --left-right
+    --count`, the remote config read; no allowlist change), cached 30 s and dropped on any event naming the
+    project. `GET /api/forges/projects/:projectId/repository` returns the forge facts (one query, cached 10 min,
+    "Refresh" forces it at most every 15 s) with open requests joined to local worktrees by the daemon. Remote
+    URLs lose their userinfo for http(s)/git URLs (a token is often the user name) and their password for ssh.
+76. **The folder Overview runs no forge query.** It shows `/api/repositories` facts plus what the 2-minute batch
+    already knows (forge `host/path`, open requests among the worktrees, how many need attention: failing CI,
+    changes requested or conflicts). Only the project Overview asks the forge, once per project, lazily.
+    Asserted in the daemon test (forge call count unchanged) and the web test (no `/api/forges/projects/` call).
+77. **Markdown: react-markdown + remark-gfm (MIT), no raw HTML.** `skipHtml`, no rehype-raw, no
+    `dangerouslySetInnerHTML`; HTML comments (bot markers) are stripped first (T3's `visibleBody`), so
+    `<details>` templates render flattened. Links: `https:`, `mailto:` and `#fragment` only, relative ones
+    resolved against the forge repository, `target=_blank rel="noopener noreferrer"`; anything else renders as
+    text. Task-list boxes are disabled. `#123` (GitHub, GitLab issues) and `!123` (GitLab MRs) autolink through
+    a small remark plugin. The chunk is lazy (Request tab only). The dependency pulls the unified/micromark
+    family (shipped packages 71 → 142, all MIT/ISC-compatible; the credits license gate passed).
+78. **The Request tab is a registry view; live refresh is bounded.** `ViewId` gains `request`, `Selection` gains
+    `hasRequest`, the worktree `View` gains `tab`; `activeView(view, { hasRequest })` picks the chosen tab when it
+    applies and falls back to Changes. `actions.setView` carries the tab to the next worktree. The Toolbar shows
+    a `Changes | PR #12` segmented control only for worktrees with a matched request (the forge link badge and
+    its test id stay); the Request layout is the Overview's two columns with the Toolbar on top. Inside:
+    `Summary | Timeline | Files`. The detail query key holds the batch entry's `updatedAt`, `headSha` and
+    checks state (no new SSE event). Checks refresh every 45 s only while a check is running, the tab is
+    shown, the browser tab is in the foreground (react-query pauses intervals in the background) and the user
+    gave input in the last 20 minutes (risk 3 in the brief: caps the cost at about 80 points per hour per open
+    tab while CI runs, and to zero for a forgotten tab). The daemon caches detail/conversation 60 s (10 min for
+    merged/closed), dedupes in-flight fetches, spaces forced refreshes 15 s and keeps stale data on errors.
+    Routes are keyed by worktree id, so the browser cannot make the daemon query an arbitrary request.
+79. **GitLab gets the same UI from GraphQL only; missing data hides.** Detail: description, labels, assignees,
+    reviewers with `mergeRequestInteraction.reviewState` (full variant), approvers, commits (newest 100, shown
+    oldest first), `diffStats` (change kind unknown: `changed`, shown as `·`), and pipeline jobs grouped by stage
+    as checks (`MANUAL` is neutral). Conversation: discussions; diff notes become threads, other notes become
+    comments, system notes are dropped, and there are no review objects. GitLab cannot be verified with a
+    signed-in `glab` here (none on this machine): field names were checked against gitlab.com's public GraphQL
+    with the recorded fixtures; the `basic` variants (older self-managed versions) are untested live.
+80. **Request tab and Overview implementation notes.** The Files tab marks `changed here` from the worktree's
+    own changed files in the current scope; clicking such a row switches to Changes with that file selected
+    (no patch from the forge). The Conversation shows 10 items per page ("Show N older"), filters for bots and
+    for resolved/dismissed items (both shown by default), and collapses resolved threads and dismissed reviews
+    to one line. Phases C and D landed in one web commit because the Summary embeds the Conversation; the
+    daemon routes for both landed with Phase B's daemon commit.
+
+
+## Status flow v2: review stages and "reviewed up to" bookmarks (lead, 2026-11-09)
+
+Lead session on branch `feat/status-flow` (from `main` at `984f2ad`). Design: `docs/STATUS-FLOW.md` (agreed with the
+user). Report: `docs/reports/status-flow.md`. Steps 1 → 4 of the plan's build order, each committed with a green
+`pnpm check`.
+
+81. **Step 1: the sidebar's status has its own fixed source.** `state/model.tsx` builds the sidebar from
+    `summary.review` (step 2) and, for daemons without it, from a second inbox query pinned to the `working` scope
+    (`SIDEBAR_STATUS_SCOPE`); the toolbar's inbox still feeds the Inbox view and `n`. While the toolbar shows
+    Uncommitted both are one query. The plan said "`branch` + working until step 2 lands": not done, because the
+    branch inbox is not cacheable in the daemon (it recomputes every worktree's branch diff on every request) and
+    step 2 replaces the fallback within the same round; until then commits are invisible to the sidebar, as before.
+82. **Stages and places.** `lib/model.ts` gets `stageOf()` (`blocked | review | reviewed | inPR | merged | closed |
+    off`) and `placeOf()`; `RowState` (`data-state`, read by the e2e suite) keeps its four values and now derives
+    from the stage: blocked and To review under the project, In PR `active` under the project, the rest in the
+    shelf. Rows carry `data-stage`, `data-unreviewed` and `data-commits`. The plan's open question (does
+    Reviewed with no PR stay under its project?) is decided as its default, **shelf**: density stays earned, a row
+    you finish still shows while selected (the closed shelf lists the selected row, #49), and it is the smallest
+    change. The shelf header keeps its name ("Settled") and its test labels.
+83. **One verb, "Reviewed".** "Mark N visible as verified" / "Verify N" became "Review N shown" / "Review all N"
+    (⇧R), the menus "Mark all reviewed" / "Mark all unreviewed", the confirm dialog "Mark N files reviewed?", the
+    toast "N files marked reviewed", a quiet row says `reviewed` (dirty) or `clean`. The command id
+    `markAllVerified` is internal and kept. No UI string contains "verif" (e2e acceptance 6).
+84. **Settle is "Hide until it changes".** Same mechanics as round 4 (#48: per device, held by `stateHash`, blocked
+    rows never hide), new words: the hover action is `Hide` (aria-label "Hide until it changes", an eye glyph), on
+    a hidden row `Show` ("Show again"), on a row the shelf holds by itself "Keep under its project". The hover card
+    says "Hidden: until it changes".
+85. **The pulse is gone** (`.od-pulse`, `@keyframes od-pulse`, `isRecentlyActive`, `ACTIVITY_WINDOW_MS`,
+    `useClock`, `data-active`). Rows outside a project lose the 24 px indent that only made room for it; rows
+    under a project keep theirs, which aligns the branch with the project name.
+86. **The toolbar scope is a filter with counts.** The select keeps its test id, values and `data-scope` (the e2e
+    helper picks options by value) and reads "Show: All on branch (12) · Uncommitted (3) · Staged (1) · Unstaged
+    (2) · Commit…". Counts come from the open worktree's summary; "All on branch" lists the branch scope's files
+    for the open worktree only (one request, cached by react-query). Settings → General's default scope uses the
+    same words.
+87. **`pnpm dev:mock` import cycle fixed.** `commands.ts` re-exports `SHORTCUTS` from `commandRegistry.ts`, which
+    imported the value `CONTEXT_STEP` back from `commands.ts`; Vite's unbundled ESM evaluated the registry first.
+    The two constants moved to a leaf module `state/diffContext.ts` (re-exported from `commands.ts`).
+88. **[contracts] Step 2/3 surface, all additive** (`87e3889`): `DiffScope` gets kind `review` `{ base?: sha }` and
+    `branch.includeWorking`; `WorktreeSummary.review` (`WorktreeReviewSchema`: `bookmark`, `base`, `newCommits`,
+    `unreviewedFiles`, `historyRewritten`); `PUT /api/review/bookmark` (`SetBookmarkRequest/Response`, client
+    `setBookmark`), event `review.bookmark`, `BulkReviewRequest.advanceBookmarks` and `BulkReviewResponse.bookmarks`;
+    optional `GitCore.readReviewRange`, `describeCommits`, `rangePatchId`. Query strings: `scope=review&base=<sha>`,
+    `scope=branch&working=1`. `scopeKey`: `review[:sha]`, `branch[:base]:~w` (`~` cannot occur in a ref name). Written
+    on a side branch so the git-core work could run in parallel, cherry-picked after step 1.
+89. **The plan's choice: kind `review` = the working tree against the bookmark, one patch per file**, not a `range`
+    kind plus the working scope in two sections. `git diff <bookmark>` (plus untracked files) is exactly the working
+    scope with another base, so git-core reuses the status-based code path; and a file's patch in it does not change
+    when the agent commits it (same blobs, same text), so a mark made before the commit still matches after it
+    (§2.4's "commit then already reviewed" falls out of the key). The cost: no "commits" / "uncommitted" section
+    headers in the file list (a file changed in both shows one combined patch). Logged as a deviation from §2.3's
+    sections; the toolbar count and the row's `N commits` carry the split.
+90. **Bookmarks.** Table `bookmarks(project_id, key, sha)` (migration v3), key `branch:<name>`, or `worktree:<id>` when
+    detached or without a branch. First sight: git-core's `initial` (HEAD on the default branch and when detached,
+    else the merge-base with the default branch, else HEAD), stored on first computation. `historyRewritten` = a
+    stored bookmark that is not an ancestor of HEAD; the range then starts at the merge-base with the default branch
+    (the merge-base with the old bookmark on the default branch itself). The bookmark is not moved by a rewrite: only
+    Review all / PUT move it.
+91. **Review state lives in the daemon, cached per (stateHash, review version, default branch).** `#reviewOf` runs
+    after each summary (before `worktree.changed` is announced, so clients refetch a ready state) and on demand;
+    every review write (mark, bulk, undo, bookmark) bumps a per-project version. `readReviewRange` is cached per
+    (HEAD, bookmark) while the bookmark is reachable, so a steady worktree costs no extra git process; a clean
+    worktree whose base is HEAD lists no files at all. `stateHash` stays a hash of git state only (Hide until it
+    changes, #84, depends on that). `listProjects` waits (bounded, like summaries) for review states; on failure the
+    last state is kept.
+92. **To review = unreviewed files only.** The row is To review while `unreviewedFiles > 0`; `newCommits` (unreviewed
+    commits that bring changes) is shown next to it (`2 commits · 3`) but does not hold a row on its own: once every
+    file of the review diff is reviewed (by hand or through reviewed commits) nothing is left, even if the bookmark
+    did not move. Otherwise a branch whose files were all marked one by one would stay To review with nothing to
+    review.
+93. **Review all in To review moves the bookmark.** The web sends the bulk call without `paths` and with
+    `advanceBookmarks` (in To review the only hidden files are reviewed ones, so the worktree is what the user sees);
+    the daemon moves each marked worktree's bookmark to the HEAD of the state that passed the `expectedStateHashes`
+    check, and the undo entry carries the bookmark moves (`BookmarkMove`), restored only if the bookmark did not move
+    again. `PUT /api/review/bookmark` takes a full commit id that is HEAD or an ancestor of it; its undo token goes
+    through `POST /api/review/undo`. Older daemons ignore `advanceBookmarks` (zod strips it).
+94. **Web defaults.** Default scope `review` (pref `defaultScope`, Settings → General "To review"); on a daemon without
+    `summary.review` the option is disabled and the scope falls back to Uncommitted. A stored `defaultScope` keeps
+    its value (no prefs migration). "All on branch" is `branch` + `includeWorking`. The sidebar refetches projects on
+    `review.changed`, `review.bulk` and `review.bookmark` (counts live in summaries). The mock backend has an opt-in
+    `statusFlow` mode for the web tests. The e2e `AppPage.open` seeds `defaultScope: 'working'` (the scope specs
+    compare against the working scope); the status-flow spec opens with To review.
+95. **Step 3: marks no longer depend on the scope kind.** No migration: `listReviewMarks` reads every row of a project
+    (grouped by raw, path, patch hash), unreviewing deletes the mark in every kind, touches ignore the kind;
+    `scope_kind` stays as "where the mark was made" and old rows keep working. The web patches every cached scope on
+    `review.changed`.
+96. **Step 3: reviewed commits** (`reviewed_commits(project_id, sha, patch_id)`). A bookmark move to HEAD records every
+    commit of the review range by id and `git patch-id --stable`, plus a `<base>..<head>` row with the whole range's
+    patch-id (a squash merge of the range has it). A moved-to commit other than HEAD records nothing (rare; PUT
+    only). In a range, a commit is reviewed when its id is recorded, or (non-merge) its patch-id is; a commit with no
+    paths (clean merge: `--cc` lists only paths that differ from every parent; empty commit) brings nothing. The
+    paths of the remaining commits are "uncovered"; a file of the review diff with no uncommitted change and no
+    uncovered path (or rename source) is reviewed. A truncated range (> 500 commits) covers nothing. Undo removes the
+    rows the move added.
+97. **git-core (delegated in this session, branch `status-flow/git-core`, cherry-picked):** `patch-id` allowlisted with
+    `--stable` only; **stdin is explicit**: the runner rejects `input` for anything but `check-attr --stdin` and
+    `patch-id` (before, any command could get stdin); `patchid.stable=true` / `patchid.verbatim=false` pinned so repo
+    config cannot change patch-ids; `describeCommits` caches per (common dir, sha) and batches 200 commits per
+    process; `rangePatchId` resolves both ends with `rev-parse`. The read-only proof covers the new reads. Known
+    gap: in the review scope with an older base, an untracked file at a path that differs from the base is listed
+    once, as the tracked change (the same de-duplication as `working`).
+98. **Step 4: forge stages, web only, from the existing `WorktreeForge` data** (`buildSidebar` takes the forge index).
+    A request is *finished for this HEAD* when it is merged or closed and its `headSha` is HEAD, or the forge says
+    `sync: same`; a newer local commit means the work moved on and the request no longer decides the stage. Order:
+    blocked; finished with nothing uncommitted → **Merged / Closed** (shelf, word `merged` / `closed`, even with
+    unreviewed commits: they show on the target branch); unreviewed files → To review; finished with uncommitted
+    work left → stays under its project, `merged · 2 files`; an open non-draft request → **In PR** (under its
+    project, `#42 · checks ✓` / `checks ✗` / `checks …` / `#42 · changes requested` in the warn colour); a draft →
+    Reviewed. Forges off or no data: those stages never apply. Review-off worktrees still reach Merged/closed (the
+    word is more useful than `review off` there).
+99. **Not done, on purpose.** No e2e for In PR / Merged: the fake `gh` of spec 14 serves recorded open requests only;
+    the stage table is covered by unit tests (`model.test.ts`). No automatic bookmark advance when every commit of a
+    range is already reviewed (ranges stay short in practice; the review state is cached). No "commits" /
+    "uncommitted" section headers in To review (#89). A bookmark moved by PUT to a commit other than HEAD records no
+    reviewed commits (#96).
+100. **PLAN change: status flow v2.** PLAN §4.1 (scopes: To review default, All on branch, Uncommitted; marks keyed
+     without the scope kind; review bookmarks; stages), §4.2 (sidebar and toolbar wording), §4.3 (differentiator 2
+     includes bookmarks), §5.7 (the v3 tables, the review state and the new read-only git commands) and §8 (items
+     12–18 from `docs/STATUS-FLOW.md` §5) now describe what this round built. `docs/STATUS-FLOW.md` stays as the
+     design record.
+
+## Copy tools: branch, path, file and code selection (lead, 2026-11-09)
+
+Plan: `docs/COPY-TOOLS.md` (written against `6c53f1a`; built on `1561c3c`, after status flow v2). Web only: no daemon
+request, git call or contract change.
+
+101. **Step 1: foundation.** `lib/copy.ts` `copyText` (async Clipboard API, then a hidden `<textarea>` +
+     `execCommand('copy')`; never throws, resolves to whether it copied). `lib/copyFormat.ts` (pure): file / branch /
+     sha texts, `fenceFor`, `inlineCode`, `languageForPath`, `selectedDiffLines`, `buildSelectionCopy` (§5 format).
+     Every copied text goes through `escapeSuspicious`, so invisible / bidirectional characters are copied as the
+     visible `⟨U+…⟩`. Feedback is a new `CopyToastHost` + `useCopyFeedback` + `CopyButton`
+     (`components/CopyButton.tsx`), not the bulk toast: that one carries undo and bulk test ids, and generalising it
+     would change its behaviour. The copy toast sits above the button that copied (T3's anchored "Copied!") or
+     bottom-centre for menu and palette copies; failures say "Failed to copy: the clipboard is not available here".
+     Adapted T3 Code code is credited in `scripts/credits/acknowledgements.json`.
+102. **Differences from the plan, after the status-flow merge.** (a) Scope words: the plan's `working tree` /
+     `branch vs <base>` predate the new scopes; the header uses the toolbar's words lower-cased (`to review`,
+     `uncommitted`, `staged`, `unstaged`, `branch vs \`main\``, `all on branch vs \`main\``, `commit \`a1b2c3d\``).
+     The toolbar's `SCOPE_LABELS` moved to `lib/scopeLabels.ts` so both share one table. (b) A rename's Markdown
+     header names the old path: `` `new.ts` (renamed from `old.ts`) L3 ``. (c) A selection of only deleted lines is
+     labelled `old L10–12` (no `→ new`), with a `+N,0` hunk side. (d) In split mode a range that stays in one
+     column keeps only that column's lines; in unified mode (or across columns) the range is the rows between the
+     two ends in diff order (T3's behaviour). (e) No `contracts:` change: the new elements use plain `data-testid`s
+     (`copy-toast`, `copy-selection-bar`, …), as plan §7 allows.
+103. **Step 2: names and paths, where they landed in the merged UI.** A "Copy" group (separator, then Copy branch
+     name / Copy worktree path / Copy commit id (`a1b2c3d`)) closes the sidebar worktree menu, below the review and
+     policy items; the same group is in the Overview's worktree rows (right-click, after "Open changes") and on the
+     Inbox file list's group headers. File rows (list and tree) get a right-click menu: Copy path / Copy old path
+     (renames) / Copy file name / Copy absolute path (a tree directory row offers its path and absolute path). The
+     diff header gets T3's copy-path icon button next to the path, and a ⋯ button (also the header's right-click)
+     with every file item plus the worktree group. The toolbar's commit select gets a copy button for the selected
+     commit id. Palette: Copy branch name / worktree path / file path / file name / absolute file path, in a new
+     "Copy" command group. Shared item builders: `components/copyMenu.ts` (`COPY_TEST_IDS`).
+104. **Plan items changed or dropped.** (a) The sidebar hover card's `Path` line has no copy button: the card is
+     `pointer-events: none` and closes when the pointer leaves the row, so nothing in it can be clicked; the row menu
+     has "Copy worktree path". (b) "Copy commit id" copies the full 40-character id (unambiguous in any repository,
+     accepted everywhere git takes a commit); the label shows the short one. (c) The diff header's branch label stays
+     text: its copy actions are in the ⋯ menu next to it, rather than a second control on the label. (d) Palette
+     copy commands are *hidden* without an open worktree / selected file (the palette has no greyed-out rows); run by
+     a stale palette they show a notice ("No file selected."). (e) Copy toasts anchor at the menu's position (a
+     menu item has gone by the time the copy resolves) or above the button that copied.
+105. **ContextMenu changes.** `MenuItem.title` (the disabled "Copy branch name" says "Detached HEAD"). The menu's
+     mount effect now depends on the position's x / y and reads `onClose` through a ref, so callers may pass an inline
+     `onClose` (the tree's `renderContextMenu` does) without the menu re-focusing its first item on every render. The
+     file list renders its menu outside the `listbox`, so the menu's arrow keys do not move the file selection.
+106. **Spike (plan §4 step 3.2), Chromium via Playwright on the `live` fixture, `@pierre/diffs` 1.6.4.** (a) Line
+     selection starts only on a line number (`requireNumberColumn`) or the gutter button. `start` / `end` are the
+     line numbers of the side pressed and released; `side` / `endSide` are `deletions` for a deleted row and
+     `additions` for added and context rows, the same in split and unified (`endSide` is omitted when equal). A drag
+     from deleted line 29 to added line 3 gives `{start: 29, side: deletions, end: 3, endSide: additions}`, i.e.
+     5 rows in diff order; `selectedDiffLines` resolves that correctly. In split mode the library highlights the
+     whole row band across both columns, but a range pressed and released in one column keeps that column's lines
+     (#102 d). (b) A native text drag on the code plus Ctrl+C copies **only the code text**, no line numbers and no
+     `+` / `-` markers, in both modes (the gutter and markers are not selectable text), and keeps the visible
+     `⟨U+…⟩` escapes, so no `copy` interception is needed. (c) Gotchas: a selection inside the shadow root shows on
+     `document.getSelection()` with `isCollapsed: true` but `type: 'Range'` and a non-empty `toString()`, so "has a
+     text selection" is tested with `type` + `toString()`; and a gutter drag does not clear an earlier text
+     selection. Rule: the last gesture wins (a line selection removes the text selection; a later text drag keeps
+     its native Ctrl+C). The library refuses `onGutterUtilityClick` together with `renderGutterUtility` ("Use only
+     one gutter utility API"), so the gutter button is the library's default one (T3 does the same).
+107. **Step 3: code selection.** `DiffRenderer` turns on `enableLineSelection` + `enableGutterUtility` when it gets
+     `copyMeta` (the raw `<pre>` fallback and the placeholders have no selection), holds `{ file index, range }` and
+     passes it back as `selectedLines`; per-file options are memoised and call through a ref, because new callbacks
+     would make the library re-render every diff. A new `cacheKey` (patch hash + whitespace + context) drops the
+     selection; another file remounts `DiffBody`. The Copy bar (`CopySelectionBar.tsx`: `N lines`, Copy, Copy as
+     Markdown, close) appears below-right of where the pointer was released, inside the diff area; on scroll it
+     docks to the bottom-right corner. It never takes focus (`mousedown` prevented, buttons `tabIndex=-1`); Esc or
+     the close button clears. Ctrl/⌘ C with a line selection and no text selection copies the plain code (outside
+     inputs). `copyMeta` comes from the diff pane (selected row, project, scope, default branch).
+108. **Gutter button stays the library's "+".** T3 uses the same default button (its comment affordance). A copy
+     glyph through `renderGutterUtility` was tried and dropped inside the spike's time box: the library rejects it
+     next to `onGutterUtilityClick`, and on its own the custom element did not appear on hover with `FileDiff`
+     1.6.4 in a `Virtualizer`. Pressing the "+" (or any line number) and dragging selects lines; the title of the
+     bar's buttons and the help dialog say what it is for. Follow-up if it confuses: swap the glyph once the library
+     renders custom gutter utilities in this setup.
+109. **Step 4 (polish), partly.** Done: "Copy file diff (patch)" in the diff header's `⋯` menu (the escaped patch,
+     as shown); a `Ctrl/⌘ C` row in the help dialog and Settings → Keyboard (registry entry `copySelection`,
+     group "Copy", hidden from the palette, handled by the renderer); README feature line and
+     `docs/screenshots/copy-selection-{light,dark}.png`, written by a new `e2e/support/copy-screenshots.ts` (the
+     shared `e2e/scripts/screenshots.ts` is untouched, so the other README screenshots were not regenerated and do
+     not show the new header buttons yet). Not done: the Settings → copy toggles (Markdown header without the
+     worktree path, absolute vs relative path in Markdown); the §5 format is fixed until someone asks.
+110. **PLAN change: copy tools.** PLAN §4.2 gains a "Copy" paragraph and §8 items 19–23 (from `docs/COPY-TOOLS.md`
+     §8). `docs/COPY-TOOLS.md` stays as the design record; #101–#109 record where the build differs from it.
+111. **Flaky check, not from this round: git-core `test/readonly.test.ts` "never writes to any repository".** It takes
+     ~2.4 s alone but 5.7–5.8 s when `pnpm test` runs every package in parallel, over vitest's default 5 s timeout.
+     Measured on 2026-11-09: `main` (`1561c3c`, a temporary worktree) failed 1 of 3 `pnpm test` runs, this branch 1
+     of 3; `pnpm check` on this branch failed 5 of 9 runs, always this one test. git-core is WS1's; proposal for its
+     owner: give that test an explicit timeout (e.g. 30 s). Not changed here (AGENTS: edit only owned paths).
+
+## Sidebar: "Hidden" shelf and the filter dropdown (lead, 2026-11-09)
+
+112. **The sidebar filter is a dropdown with a search field, not a free-text box.** The user asked for it: a text
+     box hides what you can filter by and matches substrings you have to guess. `SidebarFilter.tsx`: a trigger
+     (funnel, a summary such as `alpha, dirty` or `All worktrees`, `/` hint, `×` to clear) opens a listbox under it
+     with a search field (combobox, `aria-activedescendant`, as the command palette) over three groups: **Status**
+     (Only dirty, Only unreviewed: the two chips moved in here), **Projects** and **Worktrees** (every row of
+     `sidebar.byId`, so options stay listed while the filters hide their rows). Multi-select; arrows move, `Enter`
+     or a click ticks, Escape clears the search then closes, an outside click or Tab away closes. Search is the
+     palette's `fuzzyMatch`, best match first inside each group. Semantics: picked projects and worktrees are one
+     union (a row shows when its project or the row is picked; none picked = all), the status options narrow it.
+     `SidebarFilters` loses `text` and gains `projects` / `worktrees` (ids; transient state `filterProjects`,
+     `filterWorktrees`, `filterOpen`, not persisted, like the old text). `/` (`focusFilter`) opens the dropdown,
+     or focuses its search when open. Path substring matching is gone; T3 Code's pickers (branch, project) are
+     the model.
+113. **Contracts (test ids, additive plus one re-pointing).** New: `sidebarFilterSearch`, `sidebarFilterOption`
+     (`data-kind`, `data-project-id` / `data-worktree-id`, `aria-selected`), `sidebarFilterClear`.
+     `sidebarFilter` now sits on the dropdown's trigger and `onlyDirtyToggle` / `onlyUnreviewedToggle` on its
+     status options (`aria-selected` instead of `aria-pressed`): the old elements no longer exist, and keeping the
+     names keeps their meaning ("the sidebar filter", "the only-dirty control"). e2e gains `openFilter`,
+     `closeFilter`, `setFilterOption`, `filterProject`, `clearFilters`; specs 01, 05, 06, 11 use them.
+114. **"Settled" is now "Hidden" everywhere the user reads it.** #84 renamed the action (Hide / Show, "Hide until
+     it changes") but the shelf header still said **Settled** and a project with nothing open said `settled`, so
+     one concept had two names. The shelf is now **Hidden** (aria "Expand hidden" / "Collapse hidden") and the
+     project word `hidden`. The shelf also holds rows that went there on their own (reviewed, clean, merged, review
+     off, missing); "hidden" still fits, since the shelf is closed by default and each row keeps its reason word.
+     Internal names (`state: 'settled'`, `settledOpen`, `settle` pref, `setSettle`) are unchanged, so stored prefs
+     and the e2e `data-state` values keep working.
+115. **Screenshots.** `e2e/scripts/screenshots.ts` adds `sidebar-filter-{light,dark}.png` (dropdown open, Only
+     dirty and `alpha` ticked); every README screenshot was regenerated since the sidebar header changed.

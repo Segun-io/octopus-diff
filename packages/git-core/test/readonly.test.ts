@@ -198,6 +198,7 @@ describe('read-only proof', () => {
     }
     expect(locators.map((l) => l.worktreeId)).toContain(hashId(bare));
     let diffs = 0;
+    let reviewCalls = 0;
     for (const wt of locators) {
       await core.getSummary(wt);
       await core.getSummary(wt, { defaultBranch: 'main' });
@@ -208,8 +209,26 @@ describe('read-only proof', () => {
         { kind: 'staged' },
         { kind: 'unstaged' },
         { kind: 'branch', base: 'main' },
+        { kind: 'branch', base: 'main', includeWorking: true },
+        { kind: 'review' },
+        ...commits.slice(1, 2).map((c) => ({ kind: 'review' as const, base: c.sha })),
         ...commits.slice(0, 2).map((c) => ({ kind: 'commit' as const, sha: c.sha })),
       ];
+      // Status flow v2: review range, commit details (log, patch-id on stdin), range patch-id.
+      for (const bookmark of [null, commits[1]?.sha ?? null, 'ab'.repeat(20)]) {
+        const range = await core.readReviewRange?.(wt, { bookmark, defaultBranch: 'main' });
+        expect(range).toBeDefined();
+      }
+      if (commits.length > 0) {
+        const details = await core.describeCommits?.(
+          wt,
+          commits.map((c) => c.sha),
+        );
+        expect(details?.length).toBe(commits.length);
+        reviewCalls += 1;
+      }
+      const [newest, older] = commits;
+      if (newest && older) await core.rangePatchId?.(wt, older.sha, newest.sha);
       for (const scope of scopes) {
         const files = await core.listChangedFiles(wt, scope).catch((error: unknown) => {
           // Branch scope on an unborn HEAD is expected to fail; anything else is not.
@@ -240,6 +259,7 @@ describe('read-only proof', () => {
       }
     }
     expect(diffs).toBeGreaterThan(10);
+    expect(reviewCalls).toBeGreaterThan(3);
     await new Promise((resolve) => setTimeout(resolve, 200));
 
     // --- Nothing changed. ---

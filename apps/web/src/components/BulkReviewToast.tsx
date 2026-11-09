@@ -89,7 +89,7 @@ function ConfirmBulk({
       <div
         role="alertdialog"
         aria-modal="true"
-        aria-label={`Mark ${what} as ${reviewed ? 'verified' : 'unreviewed'}?`}
+        aria-label={`Mark ${what} ${reviewed ? 'reviewed' : 'unreviewed'}?`}
         className="od-overlay od-fade-in w-[min(420px,92vw)] rounded-lg p-4 text-xs"
         onKeyDown={(e) => {
           if (e.key === 'Escape') {
@@ -100,7 +100,7 @@ function ConfirmBulk({
         }}
       >
         <p className="text-sm font-semibold">
-          Mark {what} as {reviewed ? 'verified' : 'unreviewed'}?
+          Mark {what} {reviewed ? 'reviewed' : 'unreviewed'}?
         </p>
         <p className="mt-1 text-muted">
           Across {worktrees} worktrees. You can undo this afterwards (Ctrl/⌘ Z while the notice is
@@ -116,7 +116,7 @@ function ConfirmBulk({
             onClick={() => commands.confirmBulk()}
             className="od-btn od-btn-primary px-3"
           >
-            Mark {reviewed ? 'verified' : 'unreviewed'}
+            Mark {reviewed ? 'reviewed' : 'unreviewed'}
           </button>
         </div>
       </div>

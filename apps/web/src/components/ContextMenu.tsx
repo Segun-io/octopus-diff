@@ -15,6 +15,8 @@ export interface MenuItem {
   checked?: boolean;
   testId?: string;
   data?: Record<string, string>;
+  /** Tooltip (e.g. why an item is disabled). */
+  title?: string;
 }
 
 export interface MenuPosition {
@@ -43,25 +45,30 @@ export function ContextMenu({
   const [pos, setPos] = useState(position);
   const selectable = items.filter((i) => !i.heading && !i.disabled);
 
+  // Latest onClose without re-running the mount effect (callers may pass an inline function).
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+  const { x, y } = position;
+
   useEffect(() => {
     const previous = document.activeElement as HTMLElement | null;
     const el = ref.current;
     if (el) {
       const rect = el.getBoundingClientRect();
-      const x = Math.min(position.x, window.innerWidth - rect.width - 8);
-      const y = Math.min(position.y, window.innerHeight - rect.height - 8);
-      setPos({ x: Math.max(4, x), y: Math.max(4, y) });
+      const left = Math.min(x, window.innerWidth - rect.width - 8);
+      const top = Math.min(y, window.innerHeight - rect.height - 8);
+      setPos({ x: Math.max(4, left), y: Math.max(4, top) });
       el.querySelector<HTMLElement>('[role^="menuitem"]:not([aria-disabled="true"])')?.focus();
     }
     const onDown = (e: MouseEvent) => {
-      if (el && !el.contains(e.target as Node)) onClose();
+      if (el && !el.contains(e.target as Node)) closeRef.current();
     };
     document.addEventListener('mousedown', onDown);
     return () => {
       document.removeEventListener('mousedown', onDown);
       previous?.focus?.();
     };
-  }, [position, onClose]);
+  }, [x, y]);
 
   const move = (delta: 1 | -1) => {
     const buttons = [
@@ -109,6 +116,7 @@ export function ContextMenu({
               ? { role: 'menuitem' as const }
               : { role: 'menuitemradio' as const, 'aria-checked': item.checked })}
             aria-disabled={item.disabled ? 'true' : undefined}
+            title={item.title}
             data-testid={item.testId}
             {...item.data}
             onClick={() => {

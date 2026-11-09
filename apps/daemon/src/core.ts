@@ -19,6 +19,7 @@ import {
   type Project,
   type ProjectListItem,
   type ResolvedProject,
+  type ReviewRange,
   type ReviewRequest,
   type ReviewResponse,
   type ScanRoot,
@@ -38,6 +39,7 @@ import type { EventHub } from './events.js';
 import { hashId } from './ids.js';
 import { resolveInputPath } from './paths.js';
 import { policyInputFor, type ReviewPolicyProvider } from './review-policy.js';
+import { bookmarkKey, coveredByCommits, type ReviewComputed } from './review-state.js';
 import {
   type ProjectRow,
   REVIEW_TOUCH_INTERVAL_MS,
@@ -96,6 +98,11 @@ interface WorktreeEntry {
   /** The folder may have been recycled: compare `targets.gitDir` with its `.git` (F1). */
   checkGitDir: boolean;
   refresher: Coalescer;
+  /** Status flow v2: the last computed review state (may lag the summary briefly). */
+  review: ReviewComputed | null;
+  reviewRun: { key: string; promise: Promise<ReviewComputed | null> } | null;
+  /** `readReviewRange` result for (HEAD, bookmark) while the bookmark is reachable. */
+  rangeCache: { key: string; range: ReviewRange } | null;
 }
 
 /** How long a removed worktree id is remembered: git-core caches repository info for 5 min. */
@@ -150,7 +157,22 @@ function compareProjects(a: ProjectRow, b: ProjectRow): number {
 }
 
 function isCacheableScope(scope: DiffScope): boolean {
-  return scope.kind !== 'branch';
+  // `review` without a base is resolved before it gets here; with a base it is immutable.
+  return scope.kind !== 'branch' && !(scope.kind === 'review' && !scope.base);
+}
+
+/** A bookmark target must be a full commit id (the daemon never stores abbreviations). */
+const FULL_SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+
+/** What `moveBookmark` changed (for the route, bulk review and undo). */
+export interface BookmarkMove {
+  projectId: string;
+  worktreeId: string;
+  key: string;
+  previous: string | null;
+  bookmark: string;
+  /** Commits newly recorded as reviewed (removed again by undo). */
+  recorded: string[];
 }
 
 function errnoCode(error: unknown): string | undefined {
@@ -182,6 +204,8 @@ export class DaemonCore {
   readonly #filesInflight = new Map<string, Promise<GitChangedFile[]>>();
   /** Worktree ids removed recently (id → time), to spot a path re-added soon after (F1). */
   readonly #recentlyRemoved = new Map<string, number>();
+  /** Bumped on every review write in a project (marks, bookmarks, reviewed commits). */
+  readonly #reviewVersion = new Map<string, number>();
   #gitVersion: string | null = null;
   #timers: NodeJS.Timeout[] = [];
   #closed = false;
@@ -335,6 +359,7 @@ export class DaemonCore {
   async listProjects(): Promise<ProjectListItem[]> {
     const entries = [...this.#projects.values()];
     await this.#awaitInitial(entries);
+    await this.#awaitReviews(entries);
     return entries
       .filter((e) => this.#projects.get(e.row.id) === e)
       .sort((a, b) => compareProjects(a.row, b.row))
@@ -771,6 +796,9 @@ export class DaemonCore {
       targets: null,
       checkGitDir: false,
       refresher: new Coalescer(() => this.#computeSummary(entry)),
+      review: null,
+      reviewRun: null,
+      rangeCache: null,
     };
     return entry;
   }
@@ -794,9 +822,10 @@ export class DaemonCore {
       .sort((a, b) => compareWorktrees(a.worktree, b.worktree))
       .map((e) => {
         const review = this.#policy(entry, e);
+        const summary = e.summary && e.review ? { ...e.summary, review: e.review.info } : e.summary;
         return {
           worktree: e.worktree,
-          summary: e.summary,
+          summary,
           error: e.error,
           ...(review ? { review } : {}),
         };
@@ -895,6 +924,9 @@ export class DaemonCore {
           detached: summary.detached,
         };
       }
+      // The review state is ready (cached) before clients are told to refetch.
+      await this.#reviewOf(project, entry);
+      if (this.#closed || project.worktrees.get(entry.worktree.id) !== entry) return;
       this.#announce(entry, summary.stateHash);
     } catch (error) {
       if (this.#closed || isShutdownError(error)) return;
@@ -949,7 +981,10 @@ export class DaemonCore {
     this.#invalidateWorktreeFiles(worktreeId);
     void this.#relist(project);
     await this.#refresh(entry);
-    if (entry.summary) return entry.summary;
+    if (entry.summary) {
+      const review = await this.#reviewOf(project, entry);
+      return review ? { ...entry.summary, review: review.info } : entry.summary;
+    }
     if (entry.worktree.bare)
       throw new ApiError('bad_request', 'a bare repository has no working tree');
     throw this.#errorFromInfo(entry.error);
@@ -1041,12 +1076,13 @@ export class DaemonCore {
     const { project, entry } = this.#requireWorktree(worktreeId);
     await this.#ensureSummary(entry);
     const stateHash = this.#summaryOrThrow(entry);
-    const files = await this.#gitFiles(project, entry, scope);
+    const resolved = await this.#resolveScope(project, entry, scope);
+    const files = await this.#gitFiles(project, entry, resolved.scope);
     return {
       worktreeId,
-      scope,
+      scope: resolved.scope,
       stateHash,
-      files: this.#attachReviewed(project.row.id, scope.kind, files),
+      files: this.#attachReviewedFor(project.row.id, resolved.scope, files, resolved.review),
     };
   }
 
@@ -1067,11 +1103,22 @@ export class DaemonCore {
       query.rawPath === undefined
         ? { path: query.path }
         : { path: query.path, rawPath: query.rawPath };
-    const diff = await this.#git.getFileDiff(this.#locator(entry), query.scope, selector, options);
-    const [withReview] = this.#attachReviewed(project.row.id, query.scope.kind, [diff]);
+    const resolved = await this.#resolveScope(project, entry, query.scope);
+    const diff = await this.#git.getFileDiff(
+      this.#locator(entry),
+      resolved.scope,
+      selector,
+      options,
+    );
+    const [withReview] = this.#attachReviewedFor(
+      project.row.id,
+      resolved.scope,
+      [diff],
+      resolved.review,
+    );
     return {
       worktreeId,
-      scope: query.scope,
+      scope: resolved.scope,
       diff: { ...diff, reviewed: withReview?.reviewed ?? false },
     };
   }
@@ -1112,8 +1159,14 @@ export class DaemonCore {
     const results = await Promise.all(
       candidates.map(async (c): Promise<InboxEntry | null> => {
         try {
-          const gitFiles = await this.#gitFiles(c.project, c.entry, scope);
-          let files = this.#attachReviewed(c.project.row.id, scope.kind, gitFiles);
+          const resolved = await this.#resolveScope(c.project, c.entry, scope);
+          const gitFiles = await this.#gitFiles(c.project, c.entry, resolved.scope);
+          let files = this.#attachReviewedFor(
+            c.project.row.id,
+            resolved.scope,
+            gitFiles,
+            resolved.review,
+          );
           if (onlyUnreviewed) files = files.filter((f) => !f.reviewed);
           if (files.length === 0) return null;
           return {
@@ -1141,6 +1194,272 @@ export class DaemonCore {
         return compareWorktrees(a.worktree, b.worktree);
       });
     return { scope, entries, generatedAt: this.#nowIso() };
+  }
+
+  // --- status flow v2: review state, bookmarks (docs/STATUS-FLOW.md) ---------------------------
+
+  /** Notes a review write in these projects: review states recompute on next use. */
+  bumpReview(projectIds: Iterable<string>): void {
+    for (const id of projectIds)
+      this.#reviewVersion.set(id, (this.#reviewVersion.get(id) ?? 0) + 1);
+  }
+
+  async #awaitReviews(projects: ProjectEntry[]): Promise<void> {
+    const pending: Promise<unknown>[] = [];
+    for (const project of projects) {
+      if (project.missing) continue;
+      for (const e of project.worktrees.values()) pending.push(this.#reviewOf(project, e));
+    }
+    if (pending.length) await settleWithin(Promise.all(pending), this.#initialWaitMs);
+  }
+
+  /**
+   * The worktree's review state, computed once per (summary state, review version, default
+   * branch) and single-flight. Null without a summary, for bare or missing worktrees, or when
+   * git-core cannot read review ranges (test doubles). On failure the last state is kept.
+   */
+  #reviewOf(project: ProjectEntry, entry: WorktreeEntry): Promise<ReviewComputed | null> {
+    const summary = entry.summary;
+    if (
+      !summary ||
+      !this.#git.readReviewRange ||
+      entry.worktree.bare ||
+      entry.worktree.missing ||
+      project.missing
+    ) {
+      return Promise.resolve(null);
+    }
+    const key = [
+      summary.stateHash,
+      this.#reviewVersion.get(project.row.id) ?? 0,
+      this.#defaultBranch(project) ?? '',
+    ].join('\u0000');
+    if (entry.review?.key === key) return Promise.resolve(entry.review);
+    if (entry.reviewRun?.key === key) return entry.reviewRun.promise;
+    const promise = this.#computeReview(project, entry, key).then(
+      (review) => {
+        if (project.worktrees.get(entry.worktree.id) === entry) entry.review = review;
+        return review;
+      },
+      (error: unknown) => {
+        if (!isShutdownError(error)) {
+          this.#log.debug('review state failed', { worktreeId: entry.worktree.id, error });
+        }
+        return entry.review;
+      },
+    );
+    const run = { key, promise };
+    entry.reviewRun = run;
+    void promise.finally(() => {
+      if (entry.reviewRun === run) entry.reviewRun = null;
+    });
+    return promise;
+  }
+
+  async #computeReview(
+    project: ProjectEntry,
+    entry: WorktreeEntry,
+    key: string,
+  ): Promise<ReviewComputed> {
+    const readRange = this.#git.readReviewRange;
+    const summary = entry.summary;
+    if (!readRange || !summary) throw new ApiError('internal', 'review state unavailable');
+    const projectId = project.row.id;
+    const bk = bookmarkKey(entry.worktree);
+    let bookmark = this.#store.getBookmark(projectId, bk);
+    const rangeKey = `${summary.headSha ?? ''}\u0000${bookmark ?? ''}`;
+    let range: ReviewRange;
+    if (entry.rangeCache?.key === rangeKey) {
+      range = entry.rangeCache.range;
+    } else {
+      range = await readRange.call(this.#git, this.#locator(entry), {
+        bookmark,
+        defaultBranch: this.#defaultBranch(project),
+      });
+      // A reachable bookmark's range depends only on HEAD and the bookmark.
+      entry.rangeCache = range.bookmarkReachable ? { key: rangeKey, range } : null;
+    }
+    const firstSight = bookmark === null;
+    if (bookmark === null && range.initial !== null) {
+      // First sight of this branch: start at HEAD (default branch) or the merge-base.
+      bookmark = range.initial;
+      this.#store.setBookmark(projectId, bk, bookmark, this.#nowIso());
+    }
+    const { unreviewedCommits, uncovered } = await this.#commitCoverage(project, entry, range);
+    const scope: DiffScope = range.base ? { kind: 'review', base: range.base } : { kind: 'review' };
+    const nothing =
+      summary.changedFiles === 0 && (range.base === null || range.base === range.head);
+    const files = nothing ? [] : await this.#gitFiles(project, entry, scope);
+    const marked = this.#attachReviewed(projectId, 'review', files);
+    let unreviewedFiles = 0;
+    for (const f of marked) if (!f.reviewed && !coveredByCommits(f, uncovered)) unreviewedFiles++;
+    return {
+      key,
+      bookmarkKey: bk,
+      range,
+      scope,
+      uncovered,
+      unreviewedCommits,
+      info: {
+        bookmark,
+        base: range.base,
+        newCommits: unreviewedCommits.length,
+        unreviewedFiles,
+        historyRewritten: !firstSight && range.head !== null && !range.bookmarkReachable,
+      },
+    };
+  }
+
+  /**
+   * Which commits of the range are unreviewed and which paths they touched (§2.4). Without
+   * commit facts every commit counts and coverage is unknown.
+   */
+  async #commitCoverage(
+    project: ProjectEntry,
+    entry: WorktreeEntry,
+    range: ReviewRange,
+  ): Promise<{ unreviewedCommits: string[]; uncovered: Set<string> | null }> {
+    const all = range.commits.map((c) => c.sha);
+    if (range.commits.length === 0) return { unreviewedCommits: [], uncovered: new Set() };
+    const describe = this.#git.describeCommits;
+    if (!describe) return { unreviewedCommits: all, uncovered: null };
+    const reviewedShas = new Set<string>();
+    const reviewedPatches = new Set<string>();
+    for (const c of this.#store.listReviewedCommits(project.row.id)) {
+      reviewedShas.add(c.sha);
+      if (c.patchId) reviewedPatches.add(c.patchId);
+    }
+    const unknown = range.commits.filter((c) => !reviewedShas.has(c.sha));
+    if (unknown.length === 0) return { unreviewedCommits: [], uncovered: new Set() };
+    const details = await describe.call(
+      this.#git,
+      this.#locator(entry),
+      unknown.map((c) => c.sha),
+    );
+    const unreviewedCommits: string[] = [];
+    const uncovered = new Set<string>();
+    unknown.forEach((commit, i) => {
+      const d = details[i];
+      if (!d) return;
+      const merge = commit.parents.length > 1;
+      // Same change already reviewed elsewhere (rebase, cherry-pick, squash of a reviewed range).
+      if (!merge && d.patchId !== null && reviewedPatches.has(d.patchId)) return;
+      // A clean merge or an empty commit brings nothing new; a merge's `--cc` paths are its
+      // conflict resolutions and evil-merge edits.
+      if (d.paths.length === 0) return;
+      unreviewedCommits.push(commit.sha);
+      for (const p of d.paths) uncovered.add(p);
+    });
+    return { unreviewedCommits, uncovered: range.truncated ? null : uncovered };
+  }
+
+  /**
+   * `scope=review` without a base resolves to the worktree's review base (its bookmark, or the
+   * fallback after a history rewrite). Other scopes pass through.
+   */
+  async #resolveScope(
+    project: ProjectEntry,
+    entry: WorktreeEntry,
+    scope: DiffScope,
+  ): Promise<{ scope: DiffScope; review: ReviewComputed | null }> {
+    if (scope.kind !== 'review' || scope.base) return { scope, review: null };
+    await this.#ensureSummary(entry);
+    const review = await this.#reviewOf(project, entry);
+    return review ? { scope: review.scope, review } : { scope, review: null };
+  }
+
+  /** Review marks, plus (in the review scope) files that only reviewed commits touched. */
+  #attachReviewedFor<T extends Pick<GitChangedFile, 'path' | 'rawPath' | 'patchHash'>>(
+    projectId: string,
+    scope: DiffScope,
+    files: T[],
+    review: ReviewComputed | null,
+  ): Array<T & { reviewed: boolean }> {
+    const out = this.#attachReviewed(projectId, scope.kind, files);
+    if (!review || review.uncovered === null) return out;
+    return out.map((f) =>
+      f.reviewed ||
+      !coveredByCommits(f as unknown as Parameters<typeof coveredByCommits>[0], review.uncovered)
+        ? f
+        : { ...f, reviewed: true },
+    );
+  }
+
+  /**
+   * Moves the worktree's bookmark to `to` (HEAD or an ancestor of it, full commit id). Records
+   * the commits it passes as reviewed (step 3). Emits `review.bookmark`.
+   */
+  async moveBookmark(worktreeId: string, to: string): Promise<BookmarkMove> {
+    const { project, entry } = this.#requireWorktree(worktreeId);
+    const readRange = this.#git.readReviewRange;
+    if (!readRange) throw new ApiError('bad_request', 'review bookmarks are not supported');
+    if (entry.worktree.bare) throw new ApiError('bad_request', 'a bare repository has no HEAD');
+    const target = to.toLowerCase();
+    if (!FULL_SHA.test(target)) throw new ApiError('bad_request', 'to must be a full commit id');
+    await this.#ensureSummary(entry);
+    const projectId = project.row.id;
+    const key = bookmarkKey(entry.worktree);
+    const previous = this.#store.getBookmark(projectId, key);
+    const check = await readRange.call(this.#git, this.#locator(entry), {
+      bookmark: target,
+      defaultBranch: this.#defaultBranch(project),
+      maxCommits: 1,
+    });
+    if (check.head === null || !check.bookmarkReachable) {
+      throw new ApiError('bad_request', 'to must be HEAD or an ancestor of HEAD');
+    }
+    const recorded = await this.#recordReviewed(project, entry, target);
+    this.#store.setBookmark(projectId, key, target, this.#nowIso());
+    this.bumpReview([projectId]);
+    this.#hub.emit({ type: 'review.bookmark', projectId, worktreeId, bookmark: target });
+    return { projectId, worktreeId, key, previous, bookmark: target, recorded };
+  }
+
+  /**
+   * Records the commits a bookmark move passes as reviewed (§2.4): each commit by id and
+   * patch-id, plus the whole range's patch-id as `<base>..<to>` (a squash merge of it has the
+   * same one). Only when `to` is HEAD (Review all), where the range is the review range itself.
+   */
+  async #recordReviewed(
+    project: ProjectEntry,
+    entry: WorktreeEntry,
+    to: string,
+  ): Promise<string[]> {
+    const review = await this.#reviewOf(project, entry);
+    const range = review?.range;
+    if (!range || range.head !== to || range.base === null || range.base === to) return [];
+    const commits = range.commits;
+    const details = this.#git.describeCommits
+      ? await this.#git.describeCommits(
+          this.#locator(entry),
+          commits.map((c) => c.sha),
+        )
+      : [];
+    const rows = commits.map((c, i) => ({ sha: c.sha, patchId: details[i]?.patchId ?? null }));
+    const whole = this.#git.rangePatchId
+      ? await this.#git.rangePatchId(this.#locator(entry), range.base, to)
+      : null;
+    if (whole !== null) rows.push({ sha: `${range.base}..${to}`, patchId: whole });
+    return this.#store.transaction(() =>
+      this.#store.addReviewedCommits(project.row.id, rows, this.#nowIso()),
+    );
+  }
+
+  /** Undo of a bookmark move: restores `previous` unless the bookmark moved again since. */
+  restoreBookmark(move: BookmarkMove): boolean {
+    if (this.#store.getBookmark(move.projectId, move.key) !== move.bookmark) return false;
+    this.#store.transaction(() => {
+      this.#store.setBookmark(move.projectId, move.key, move.previous, this.#nowIso());
+      this.#store.removeReviewedCommits(move.projectId, move.recorded);
+    });
+    this.bumpReview([move.projectId]);
+    this.#hub.emit({
+      type: 'review.bookmark',
+      projectId: move.projectId,
+      worktreeId: move.worktreeId,
+      bookmark: move.previous,
+    });
+    return true;
   }
 
   // --- review marks ----------------------------------------------------------------------------
@@ -1188,6 +1507,7 @@ export class DaemonCore {
       request.reviewed,
       this.#nowIso(),
     );
+    this.bumpReview([request.projectId]);
     this.#hub.emit({
       type: 'review.changed',
       projectId: request.projectId,
@@ -1244,10 +1564,14 @@ export class DaemonCore {
         await this.#awaitInitial(projects);
         return projects.flatMap((p) => [...p.worktrees.values()].map((e) => toBulk(p, e)));
       },
-      changedFiles: (worktreeId, scope) => {
+      changedFiles: async (worktreeId, scope) => {
         const { project, entry } = this.#requireWorktree(worktreeId);
-        return this.#gitFiles(project, entry, scope);
+        const resolved = await this.#resolveScope(project, entry, scope);
+        return this.#gitFiles(project, entry, resolved.scope);
       },
+      moveBookmark: (worktreeId, to) => this.moveBookmark(worktreeId, to),
+      restoreBookmark: (move) => this.restoreBookmark(move),
+      reviewChanged: (projectIds) => this.bumpReview(projectIds),
       currentStateHash: (worktreeId) => {
         for (const p of this.#projects.values()) {
           const e = p.worktrees.get(worktreeId);

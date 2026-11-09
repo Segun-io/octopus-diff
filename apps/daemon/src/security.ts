@@ -135,12 +135,13 @@ export function hostForUrl(host: string): string {
   return isIP(bare(host)) === 6 ? `[${bare(host)}]` : host;
 }
 
-/** Content-Security-Policy for the web UI (see DECISIONS, WS2). */
-export const UI_CSP = [
+const IMG_SRC = "img-src 'self' data: blob:";
+
+const CSP_PARTS = [
   "default-src 'self'",
   "script-src 'self' 'wasm-unsafe-eval'",
   "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' data: blob:",
+  IMG_SRC,
   "font-src 'self' data:",
   "connect-src 'self'",
   "worker-src 'self' blob:",
@@ -148,7 +149,26 @@ export const UI_CSP = [
   "base-uri 'none'",
   "form-action 'self'",
   "frame-ancestors 'none'",
-].join('; ');
+];
+
+/** Content-Security-Policy for the web UI (see DECISIONS, WS2): the strict policy. */
+export const UI_CSP = CSP_PARTS.join('; ');
+
+/** A host source the CSP may name: a lower-case hostname, optional `*.` prefix and port. */
+const IMAGE_HOST =
+  /^(?:\*\.)?[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*(?::\d{1,5})?$/;
+
+/**
+ * The UI policy with `img-src` extended to forge image hosts (DECISIONS #74): `https://<host>`
+ * per entry. Entries that are not plain host patterns are dropped, so nothing can inject a
+ * directive. With no hosts this is exactly `UI_CSP`.
+ */
+export function uiCsp(imageHosts: readonly string[]): string {
+  const hosts = [...new Set(imageHosts.filter((h) => IMAGE_HOST.test(h)))].sort();
+  if (hosts.length === 0) return UI_CSP;
+  const img = `${IMG_SRC} ${hosts.map((h) => `https://${h}`).join(' ')}`;
+  return CSP_PARTS.map((part) => (part === IMG_SRC ? img : part)).join('; ');
+}
 
 /** CSP for API responses and error pages: nothing may load. */
 export const API_CSP = "default-src 'none'; frame-ancestors 'none'";

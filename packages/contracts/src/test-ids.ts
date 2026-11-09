@@ -14,12 +14,24 @@ export const TEST_IDS = {
 
   // --- sidebar ---------------------------------------------------------------------------
   sidebar: 'sidebar',
-  /** Text filter input (focused by `/`). */
+  /**
+   * The sidebar filter (focused by `/`). Since the filter dropdown (DECISIONS #112): the dropdown's
+   * trigger button, `aria-expanded`, `data-filtering`; its search field is `sidebarFilterSearch`.
+   */
   sidebarFilter: 'sidebar-filter',
-  /** `aria-pressed`. */
+  /** Status option in the filter dropdown, `aria-selected` (was a chip with `aria-pressed`). */
   onlyDirtyToggle: 'only-dirty-toggle',
-  /** `aria-pressed`. */
+  /** Status option in the filter dropdown, `aria-selected` (was a chip with `aria-pressed`). */
   onlyUnreviewedToggle: 'only-unreviewed-toggle',
+  /** The filter dropdown's search field (`/` focuses it). */
+  sidebarFilterSearch: 'sidebar-filter-search',
+  /**
+   * A project or worktree option in the filter dropdown: `aria-selected`, `data-kind`
+   * (`project` | `worktree`), `data-project-id` or `data-worktree-id`.
+   */
+  sidebarFilterOption: 'sidebar-filter-option',
+  /** Clears every sidebar filter (shown while filtering). */
+  sidebarFilterClear: 'sidebar-filter-clear',
   /** The Inbox entry. `data-count` = number of dirty worktrees; `aria-current="true"` if selected. */
   inboxItem: 'inbox-item',
   /** `data-project-id`, `data-project-name`. */
@@ -139,8 +151,36 @@ export const TEST_IDS = {
   changeRequestBadge: 'change-request-badge',
   /** Settings → Forges: the enable switch (`aria-checked`). */
   settingsForgesEnabled: 'settings-forges-enabled',
+  /** Settings → Forges: load images from the forge hosts (`aria-checked`). */
+  settingsForgesImages: 'settings-forges-images',
   /** Settings → Forges: one row per CLI; `data-kind`, `data-available`, `data-auth`. */
   forgeCliStatus: 'forge-cli-status',
+  // --- request detail and repository information (forge.ts) ---
+  /** Hover card's pull/merge request block; `data-number`, `data-state`. */
+  changeRequestHoverBlock: 'change-request-hover-block',
+  /** Toolbar `Changes | Request` segmented control; each button has `data-tab` and `aria-pressed`. */
+  worktreeTabs: 'worktree-tabs',
+  worktreeTab: 'worktree-tab',
+  /** The Request tab's root; `data-status` (`loading` | `ok` | `no-request` | `unavailable` | `error`). */
+  requestView: 'request-view',
+  /** Request tab sub-tabs (`Summary | Timeline | Files`); `data-tab`, `aria-selected`. */
+  requestTab: 'request-tab',
+  /** One check row; `data-status`. */
+  requestCheck: 'request-check',
+  /** One conversation card (comment, review or thread); `data-kind`. */
+  requestConversationItem: 'request-conversation-item',
+  /** One timeline entry; `data-kind`. */
+  requestTimelineItem: 'request-timeline-item',
+  /** One file row in the Files tab; `data-path`, `data-changed-here`. */
+  requestFile: 'request-file',
+  /** Rendered markdown container. */
+  markdown: 'markdown',
+  /** Overview: local repository facts block. */
+  repoInfoLocal: 'repo-info-local',
+  /** Overview: forge repository block; `data-status`. */
+  repoInfoForge: 'repo-info-forge',
+  /** Overview: one open pull/merge request row; `data-number`, `data-worktree`. */
+  repoOpenRequest: 'repo-open-request',
 } as const;
 
 export type TestId = (typeof TEST_IDS)[keyof typeof TEST_IDS];

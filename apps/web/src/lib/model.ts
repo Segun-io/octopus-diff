@@ -4,12 +4,14 @@
  */
 import type {
   ChangedFile,
+  ChangeRequest,
   EffectiveReviewPolicy,
   InboxEntry,
   Project,
   ProjectListItem,
   ScanRoot,
   Worktree,
+  WorktreeForge,
   WorktreeListItem,
   WorktreeSummary,
 } from '@octopus-diff/contracts';
@@ -70,10 +72,32 @@ export function sortFilesTreeOrder(files: readonly ChangedFile[]): ChangedFile[]
 
 // --- sidebar --------------------------------------------------------------------------------
 
+/**
+ * The sidebar filter dropdown's selection. Picked projects and worktrees are one union (a row
+ * shows when its project or the row itself is picked; nothing picked = every row); the status
+ * options narrow that further.
+ */
 export interface SidebarFilters {
-  text: string;
+  projects: readonly string[];
+  worktrees: readonly string[];
   onlyDirty: boolean;
   onlyUnreviewed: boolean;
+}
+
+export const NO_SIDEBAR_FILTERS: SidebarFilters = {
+  projects: [],
+  worktrees: [],
+  onlyDirty: false,
+  onlyUnreviewed: false,
+};
+
+export function hasSidebarFilters(filters: SidebarFilters): boolean {
+  return (
+    filters.projects.length > 0 ||
+    filters.worktrees.length > 0 ||
+    filters.onlyDirty ||
+    filters.onlyUnreviewed
+  );
 }
 
 export interface WorktreeRow {
@@ -82,37 +106,48 @@ export interface WorktreeRow {
   summary: WorktreeSummary | null;
   error: WorktreeListItem['error'];
   /**
-   * Unreviewed files in the current scope (from the inbox), 0 if not in the inbox or when the
-   * worktree is out of the review loop.
+   * Unreviewed files of what the worktree has to review (docs/STATUS-FLOW.md §2.1), never the
+   * toolbar scope: `summary.review.unreviewedFiles` from daemons that send it, else the
+   * unreviewed uncommitted files (the sidebar's own fixed inbox). 0 when out of the review loop.
    */
   unreviewed: number;
-  /** Changed files in the current scope (from the inbox), 0 if not in the inbox. */
+  /** Unreviewed commits after the review bookmark (0 from older daemons or review off). */
+  newCommits: number;
+  /** Files the sidebar's fixed status source lists for the worktree (reviewed or not). */
   scopeFiles: number;
   /** Effective review policy (absent from older daemons = enabled by default). */
   review: EffectiveReviewPolicy;
+  /** The review stage (docs/STATUS-FLOW.md §2.2), before any manual hide. */
+  stage: Stage;
   /** Where the row sits in the sidebar (see `rowState`). */
   state: RowState;
-  /** The user settled or un-settled this worktree by hand and the override still holds. */
+  /** The user hid ("Hide until it changes") or un-hid this worktree and that still holds. */
   settledBy: 'auto' | 'user';
   /** Pinned on this device: listed at the top under "Pinned", whatever its state. */
   pinned: boolean;
+  /** The worktree's matched pull/merge request (forges on), or null. */
+  request: ChangeRequest | null;
 }
 
 /**
- * A worktree's place in the sidebar (DECISIONS "UX round 4"). `blocked`: a conflict or an
- * in-progress operation (merge, rebase, …); blocked work never settles. `attention`: unreviewed
- * files in the current scope. `settled`: clean, all verified, out of the review loop, missing or
- * failed, or settled by hand; settled rows leave their project and sit in the Settled shelf.
- * `active`: a row the user un-settled by hand that would otherwise be settled; it stays under its
- * project with its word. Only review marks and the settle action move a row; activity never
- * reorders rows.
+ * The review stage of a worktree (docs/STATUS-FLOW.md §2.2), computed from a fixed source and
+ * never from the toolbar scope. `blocked`: a conflict or an operation in progress. `review`:
+ * unreviewed files or commits. `reviewed`: nothing new. `inPR` / `merged` / `closed`: from the
+ * forge (step 4). `off`: review off, missing, failed or still loading (outside the loop).
+ */
+export type Stage = 'blocked' | 'review' | 'reviewed' | 'inPR' | 'merged' | 'closed' | 'off';
+
+/**
+ * A worktree's place in the sidebar (DECISIONS "UX round 4", status flow v2). `blocked` and
+ * `attention` (To review) rows sit under their project; `active` rows too (an open PR, or a row
+ * the user brought back by hand). `settled` rows sit in the shelf: reviewed, merged/closed,
+ * outside the review loop, or hidden by hand until they change. Rows never reorder on activity.
  */
 export type RowState = 'blocked' | 'attention' | 'active' | 'settled';
 
 /**
- * A manual settle or un-settle, per device. It holds only while the worktree's `stateHash` is the
- * one it was made on: the next change to the worktree (a new patch, a commit, a branch switch)
- * drops it and the automatic rule applies again, which is T3 Code's "new activity un-settles".
+ * "Hide until it changes" (or "Show" for a row the shelf holds), per device. It holds only while
+ * the worktree's `stateHash` is the one it was made on: the next commit or edit drops it.
  */
 export interface SettleOverride {
   worktreeId: string;
@@ -120,15 +155,74 @@ export interface SettleOverride {
   stateHash: string;
 }
 
-export function autoRowState(
-  row: Pick<WorktreeRow, 'summary' | 'unreviewed' | 'worktree'>,
-): RowState {
+export interface StageInput {
+  summary: WorktreeSummary | null;
+  worktree: Worktree;
+  unreviewed: number;
+  newCommits?: number;
+  review?: Pick<EffectiveReviewPolicy, 'enabled'>;
+  error?: WorktreeListItem['error'];
+  /** The matched pull/merge request (forge data, docs/STATUS-FLOW.md §2.5). */
+  forge?: Pick<WorktreeForge, 'changeRequest' | 'sync'> | null;
+}
+
+/**
+ * The request is merged or closed **for this HEAD**: its head commit is HEAD (or the forge says
+ * the local branch is in sync). A newer local commit means the work moved on.
+ */
+function finishedRequest(row: StageInput): 'merged' | 'closed' | null {
+  const cr = row.forge?.changeRequest;
+  if (!cr || cr.state === 'open' || !row.summary) return null;
+  const same =
+    (cr.headSha !== null && cr.headSha === row.summary.headSha) || row.forge?.sync === 'same';
+  return same ? cr.state : null;
+}
+
+/** The review stage of a row (docs/STATUS-FLOW.md §2.2, forge stages §2.5). */
+export function stageOf(row: StageInput): Stage {
   const s = row.summary;
   if (s && !row.worktree.missing && (s.counts.conflicted > 0 || s.inProgress !== null)) {
     return 'blocked';
   }
-  if (row.unreviewed > 0) return 'attention';
-  return 'settled';
+  if (row.worktree.missing || row.error || !s) return 'off';
+  // Merged / closed with nothing uncommitted: the shelf, whatever it carried (unreviewed commits
+  // it brought are counted on the target branch's bookmark). With uncommitted work left it stays
+  // out of the shelf (see `placeOf`).
+  const finished = finishedRequest(row);
+  if (finished && (s.changedFiles === 0 || !(row.review?.enabled ?? true))) return finished;
+  if (row.review && !row.review.enabled) return 'off';
+  // A commit counts through its files: once every file of the review diff is reviewed (by hand,
+  // or because only reviewed commits touched it) there is nothing left, bookmark moved or not.
+  if (row.unreviewed > 0) return 'review';
+  if (finished) return finished;
+  // An open, non-draft request with nothing new: In PR, under its project. A draft is Reviewed.
+  const cr = row.forge?.changeRequest;
+  if (cr && cr.state === 'open' && !cr.draft) return 'inPR';
+  return 'reviewed';
+}
+
+/**
+ * Where a stage sits when nothing was hidden by hand. A merged/closed worktree with uncommitted
+ * work left (`merged · 2 files`) stays under its project.
+ */
+export function placeOf(stage: Stage, uncommittedLeft = false): RowState {
+  switch (stage) {
+    case 'blocked':
+      return 'blocked';
+    case 'review':
+      return 'attention';
+    case 'inPR':
+      return 'active';
+    case 'merged':
+    case 'closed':
+      return uncommittedLeft ? 'active' : 'settled';
+    default:
+      return 'settled';
+  }
+}
+
+export function autoRowState(row: StageInput): RowState {
+  return placeOf(stageOf(row), (row.summary?.changedFiles ?? 0) > 0);
 }
 
 /** True while an override still applies to the worktree's current state. */
@@ -140,13 +234,13 @@ export function overrideHolds(
 }
 
 export function rowState(
-  row: Pick<WorktreeRow, 'summary' | 'unreviewed' | 'worktree'>,
+  row: StageInput,
   override?: SettleOverride,
 ): { state: RowState; settledBy: 'auto' | 'user' } {
   const auto = autoRowState(row);
   if (!overrideHolds(override, row.summary)) return { state: auto, settledBy: 'auto' };
   if (override.state === 'settled') {
-    // Blocked work never settles, not even by hand.
+    // Blocked work is never hidden, not even by hand.
     return auto === 'blocked'
       ? { state: auto, settledBy: 'auto' }
       : { state: 'settled', settledBy: 'user' };
@@ -156,17 +250,27 @@ export function rowState(
     : { state: auto, settledBy: 'auto' };
 }
 
-/** The one word a settled (or un-settled) row says instead of its counts. */
-export type SettledWord = 'verified' | 'clean' | 'review off' | 'missing' | 'error' | 'loading';
+/** The one word a quiet row (reviewed, hidden, outside the loop) says instead of its counts. */
+export type SettledWord =
+  | 'reviewed'
+  | 'clean'
+  | 'merged'
+  | 'closed'
+  | 'review off'
+  | 'missing'
+  | 'error'
+  | 'loading';
 
 export function settledWord(
-  row: Pick<WorktreeRow, 'summary' | 'worktree' | 'error' | 'review'>,
+  row: Pick<WorktreeRow, 'summary' | 'worktree' | 'error' | 'review'> & { stage?: Stage },
 ): SettledWord {
   if (row.worktree.missing) return 'missing';
   if (row.error) return 'error';
   if (!row.summary) return 'loading';
   if (!row.review.enabled) return 'review off';
-  return isDirtySummary(row.summary) ? 'verified' : 'clean';
+  if (row.stage === 'merged') return 'merged';
+  if (row.stage === 'closed') return 'closed';
+  return isDirtySummary(row.summary) ? 'reviewed' : 'clean';
 }
 
 export interface ProjectGroup {
@@ -304,19 +408,15 @@ export function isDirtySummary(summary: WorktreeSummary | null): boolean {
   return summary !== null && summary.changedFiles > 0;
 }
 
-function matchesText(row: WorktreeRow, needle: string): boolean {
-  if (!needle) return true;
-  return (
-    row.project.name.toLowerCase().includes(needle) ||
-    (row.worktree.branch ?? '').toLowerCase().includes(needle) ||
-    row.worktree.path.toLowerCase().includes(needle)
-  );
+function matchesPicked(row: WorktreeRow, filters: SidebarFilters): boolean {
+  if (filters.projects.length === 0 && filters.worktrees.length === 0) return true;
+  return filters.projects.includes(row.project.id) || filters.worktrees.includes(row.worktree.id);
 }
 
 export function rowVisible(row: WorktreeRow, filters: SidebarFilters): boolean {
   if (filters.onlyDirty && !isDirtySummary(row.summary)) return false;
   if (filters.onlyUnreviewed && row.unreviewed === 0) return false;
-  return matchesText(row, filters.text.trim().toLowerCase());
+  return matchesPicked(row, filters);
 }
 
 export function buildSidebar(
@@ -326,7 +426,9 @@ export function buildSidebar(
   scanRoots?: readonly ScanRoot[],
   pinned: readonly string[] = [],
   settle: readonly SettleOverride[] = [],
+  forges?: ReadonlyMap<string, Pick<WorktreeForge, 'changeRequest' | 'sync'>>,
 ): SidebarModel {
+  // Status never depends on the toolbar scope: `inbox` is the sidebar's own fixed source.
   const inboxStats = new Map<string, { unreviewed: number; files: number }>();
   for (const entry of inbox ?? []) {
     let unreviewed = 0;
@@ -345,22 +447,39 @@ export function buildSidebar(
     for (const wt of worktrees) {
       const stats = inboxStats.get(wt.worktree.id);
       const review = effectivePolicy(wt.review);
-      const unreviewed = review.enabled ? (stats?.unreviewed ?? 0) : 0;
-      const { state, settledBy } = rowState(
-        { summary: wt.summary, unreviewed, worktree: wt.worktree },
-        overrides.get(wt.worktree.id),
-      );
+      // Status flow v2 daemons send `summary.review`; older ones: the fixed inbox's count.
+      const fromDaemon = wt.summary?.review;
+      const unreviewed = !review.enabled
+        ? 0
+        : fromDaemon
+          ? fromDaemon.unreviewedFiles
+          : (stats?.unreviewed ?? 0);
+      const newCommits = review.enabled && fromDaemon ? fromDaemon.newCommits : 0;
+      const input: StageInput = {
+        summary: wt.summary,
+        worktree: wt.worktree,
+        unreviewed,
+        newCommits,
+        review,
+        error: wt.error,
+        forge: forges?.get(wt.worktree.id) ?? null,
+      };
+      const stage = stageOf(input);
+      const { state, settledBy } = rowState(input, overrides.get(wt.worktree.id));
       const row: WorktreeRow = {
         project: item.project,
         worktree: wt.worktree,
         summary: wt.summary,
         error: wt.error,
         unreviewed,
+        newCommits,
         scopeFiles: stats?.files ?? 0,
         review,
+        stage,
         state,
         settledBy,
         pinned: pinnedSet.has(wt.worktree.id),
+        request: input.forge?.changeRequest ?? null,
       };
       byId.set(wt.worktree.id, row);
       allRows.push(row);

@@ -123,12 +123,18 @@ Settings → Folders → **Start browsing in** sets where the picker opens (defa
 - **The sidebar is your folders and projects, with the open work under them.** Under the Inbox (and anything
   you pinned), each watched folder lists its repositories, and each repository lists the worktrees that are
   still open: unreviewed files, a conflict or an operation in progress. Everything else (`clean`, `verified`,
-  `review off`, `missing`) sits in the **Settled** shelf at the bottom, closed by default with a count; a
-  project whose worktrees all settled just says `settled`. Hover a row for the check that settles it by hand
-  (or the arrow that brings it back); the next change to that worktree un-settles it automatically, as does a
-  new patch after you verified everything. Blocked work never settles. Click a folder or repository for its
+  `review off`, `missing`) sits in the **Hidden** shelf at the bottom, closed by default with a count; a
+  project whose worktrees are all there just says `hidden`. Hover a row for **Hide** to put it away by hand
+  until it changes (or **Show** to bring it back); the next change to that worktree shows it again, as does a
+  new patch after you reviewed everything. Blocked work never hides. Click a folder or repository for its
   Overview, right-click for the actions, and pin a worktree to keep it at the top. Each worktree is a
   small card: the branch, then its files, `+adds −dels` and ahead/behind; hover a moment for the full details.
+- **Filter from a dropdown, not a text box.** The filter at the top of the sidebar (`/`) opens a searchable
+  list: **Only dirty** and **Only unreviewed**, then every project and every worktree. Type to narrow it,
+  arrows and `Enter` (or a click) to tick as many as you like; ticked projects and worktrees add up, the
+  status options narrow them. The button says what is filtered, and `×` clears it.
+
+  ![The sidebar filter dropdown: status options, projects and worktrees with a search field](docs/screenshots/sidebar-filter-dark.png)
 - **Mark all as verified.** The button above the file list marks every file you can see (respecting the
   sidebar filters); in the Inbox it marks everything. `Shift+R` does the same from the keyboard, and the
   context menu of a worktree, project or folder (and the folder Overview) can mark that whole level, or
@@ -147,6 +153,15 @@ Settings → Folders → **Start browsing in** sets where the picker opens (defa
   daemon and shared by every browser that opens it; appearance and layout preferences are stored in the
   browser, per device. The **command palette** (`Ctrl/Cmd+K`) jumps to any worktree, project or folder
   and runs any command.
+- **Copy anything you are reading.** Right-click a worktree for its branch name, worktree path or commit id;
+  right-click a file (list or tree) for its path, old path, name or absolute path; the diff header has a
+  copy-path button and a `⋯` menu (also the whole file's patch), and the palette has the same commands.
+  Press on a line number in the diff and drag to select lines: a small bar offers **Copy** (just the code)
+  and **Copy as Markdown** (a fenced block headed by the file, line range, branch, worktree, scope and HEAD,
+  ready for an issue or an agent prompt); `Ctrl/Cmd+C` copies the selected lines too. Copies keep
+  invisible or bidirectional characters escaped as `⟨U+…⟩`, and work on a plain-http LAN address as well.
+
+  ![Two diff lines selected, with the Copy and Copy as Markdown bar](docs/screenshots/copy-selection-dark.png)
 - **Pull and merge requests.** If the GitHub CLI (`gh`) or GitLab CLI (`glab`) is installed and signed in,
   each worktree on a feature branch shows its PR/MR next to the branch: number, open / draft / merged /
   closed, and a CI dot; the tooltip adds the review decision, conflicts and whether the request's head
@@ -157,6 +172,22 @@ Settings → Folders → **Start browsing in** sets where the picker opens (defa
   [`docs/FORGES.md`](docs/FORGES.md).
 
   ![Pull request chips in the sidebar and the PR link in the toolbar](docs/screenshots/forges-dark.png)
+- **The Request tab.** A worktree whose branch has a PR/MR gets a `Changes | PR #12` switch in the
+  toolbar. The Request tab shows, read-only: reviewers (with `stale` verdicts), labels and mergeability;
+  the description (markdown, no raw HTML); the checks grouped as *needs attention*, *running* and
+  *passed*, refreshed while they run; the conversation (comments, reviews, review threads, with filters
+  and paging); a timeline; and the changed files, marking the ones also changed in your worktree (click
+  one to see your local diff). Hovering a sidebar row shows the request's size, CI, review and merge
+  state without asking the forge again.
+
+  ![The Request tab: summary, reviewers, description and checks](docs/screenshots/request-dark.png)
+- **Repository information on the Overviews.** A project's Overview shows its remotes, default branch
+  (with ahead/behind as of the last fetch), last commit, branch and tag counts, and, from the forge, the
+  description, visibility, open PR and issue counts, default-branch CI and the newest open requests,
+  each linked to its worktree when you have it checked out. A folder's Overview adds the default branch,
+  last commit, forge and open requests per repository without asking any forge.
+
+  ![The project Overview with local and forge facts and open pull requests](docs/screenshots/overview-project-dark.png)
 - **Themes.** Octopus Dark, Octopus Light and a high-contrast theme; "System" follows the OS. Themes
   are plain data files, so adding one is a one-file change: see [`docs/design/THEMING.md`](docs/design/THEMING.md).
   The identity and palette are described in [`docs/design/IDENTITY.md`](docs/design/IDENTITY.md).
@@ -269,6 +300,10 @@ The daemon serves the contents of your repositories over HTTP, so it is locked d
   queries (an exact allowlist), outside your repositories, and only against hosts they are already
   signed in to; `GH_ENTERPRISE_TOKEN` / `GITLAB_TOKEN` from the environment are passed only for their own
   host, so a crafted remote URL cannot collect them. Turn the feature off in Settings → Forges.
+- **Forge images are opt-out.** Avatars and pictures in PR descriptions load only from the forge hosts
+  `gh`/`glab` are signed in to (the page's Content-Security-Policy names exactly those hosts), without a
+  referrer; everything else shows as a link. Settings → Forges → "Load images from the forges" turns
+  this off and restores the strict policy.
 - **No write endpoints toward repositories.** The only writes are octopus-diff's own state (project
   list, review marks, focus) in the state directory.
 
@@ -304,7 +339,9 @@ printf 'fs.inotify.max_user_watches=524288\nfs.inotify.max_user_instances=512\n'
 - **Read-only by design**: no staging, committing, discarding, pushing or conflict resolution. Use
   your agent, editor, lazygit or the git CLI for that.
 - No history graph and no fetching: ahead/behind counts use local refs only. Forge support is read-only
-  status for GitHub and GitLab (no creating, merging or commenting; no Bitbucket, Azure DevOps or Gitea).
+  for GitHub and GitLab (no creating, merging, approving or commenting; no Bitbucket, Azure DevOps or
+  Gitea). The Request tab loads the first page of each list (100 files, 100 commits, 50 conversations)
+  and links to the forge for the rest; it never shows the forge's diff.
 - Very large diffs are capped and shown as "too large" placeholders (you can load them on demand);
   binary files are shown as binary.
 - One machine: the browser and the repositories must be on the machine running the daemon (or reach

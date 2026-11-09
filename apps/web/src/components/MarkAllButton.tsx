@@ -5,8 +5,8 @@ import { useAppModel } from '../state/model.tsx';
 import { CheckIcon } from './bits.tsx';
 
 /**
- * "Mark N visible as verified" for the current view (worktree: the files after filters; Inbox:
- * everything shown). Hidden on daemons without the bulk API.
+ * "Review all" (⇧R) for the current view (worktree: the files after filters; Inbox: everything
+ * shown): one verb, "Reviewed" (docs/STATUS-FLOW.md §2.3). Hidden on daemons without the bulk API.
  */
 export function MarkAllButton({ compact = false }: { compact?: boolean }) {
   const support = useSettingsSupport();
@@ -16,9 +16,7 @@ export function MarkAllButton({ compact = false }: { compact?: boolean }) {
   const plan = commands.currentPlan(true);
   const disabled = plan.count === 0;
   const label =
-    model.view.kind === 'inbox'
-      ? `Mark all ${plan.count} as verified`
-      : `Mark ${plan.count} visible as verified`;
+    model.view.kind === 'inbox' ? `Review all ${plan.count}` : `Review ${plan.count} shown`;
   return (
     <button
       type="button"
@@ -33,7 +31,7 @@ export function MarkAllButton({ compact = false }: { compact?: boolean }) {
       className={`od-btn shrink-0 ${disabled ? '' : 'hover:border-add hover:bg-add-soft'}`}
     >
       <CheckIcon />
-      {compact ? `Verify ${plan.count}` : label}
+      {compact ? `Review ${plan.count}` : label}
     </button>
   );
 }

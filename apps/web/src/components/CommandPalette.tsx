@@ -7,6 +7,7 @@ import { rankBy } from '../lib/fuzzy.ts';
 import { DIRECT_FOLDER_ID, worktreeLabel } from '../lib/model.ts';
 import { SETTINGS_SECTIONS } from '../settings/registry.ts';
 import { COMMANDS, GROUP_LABELS } from '../state/commandRegistry.ts';
+import { copyWorktreeId } from '../state/commands.ts';
 import { useCommandsContext } from '../state/commandsContext.tsx';
 import { useAppModel } from '../state/model.tsx';
 import { actions, useUiStore } from '../state/ui.tsx';
@@ -78,6 +79,9 @@ export function CommandPalette() {
     },
   });
 
+  const copyId = copyWorktreeId(model);
+  const hasWorktree = copyId !== null && model.sidebar.byId.has(copyId);
+  const hasFile = model.selectedEntry !== undefined;
   const items = useMemo<PaletteItem[]>(() => {
     const out: PaletteItem[] = [];
     out.push({
@@ -127,6 +131,8 @@ export function CommandPalette() {
     }
     for (const c of COMMANDS) {
       if (c.hideInPalette) continue;
+      if (c.needs === 'worktree' && !hasWorktree) continue;
+      if (c.needs === 'file' && !hasFile) continue;
       if ((c.id === 'markAllVerified' || c.id === 'markAllUnreviewed') && support !== 'ready') {
         continue;
       }
@@ -165,6 +171,8 @@ export function CommandPalette() {
     commands,
     support,
     folderStart.prefetch,
+    hasWorktree,
+    hasFile,
   ]);
 
   const results = useMemo(

@@ -1,0 +1,639 @@
+{
+  "data": {
+    "project": {
+      "fullPath": "gitlab-org/cli",
+      "webUrl": "https://gitlab.com/gitlab-org/cli",
+      "description": "A GitLab CLI tool bringing GitLab to your command line",
+      "visibility": "public",
+      "archived": false,
+      "lastActivityAt": "2026-11-09T06:38:26Z",
+      "openIssuesCount": 255,
+      "forkedFrom": null,
+      "topics": [],
+      "languages": [
+        {
+          "name": "Go",
+          "share": 99.34
+        },
+        {
+          "name": "Shell",
+          "share": 0.22
+        },
+        {
+          "name": "Inno Setup",
+          "share": 0.15
+        },
+        {
+          "name": "Makefile",
+          "share": 0.14
+        },
+        {
+          "name": "JavaScript",
+          "share": 0.1
+        }
+      ],
+      "repository": {
+        "rootRef": "main",
+        "tree": {
+          "lastCommit": {
+            "sha": "0c564ce86e69938376b2f65fd66544bfb5c3493a",
+            "title": "Merge branch 'jmrp-ssh-config-include-test' into 'main'",
+            "committedDate": "2026-11-09T14:51:47+10:00",
+            "pipelines": {
+              "nodes": [
+                {
+                  "status": "SUCCESS"
+                }
+              ]
+            }
+          }
+        }
+      },
+      "mergeRequests": {
+        "count": 89,
+        "nodes": [
+          {
+            "iid": "4266",
+            "title": "fix(auth): validate OAuth client ID before browser step",
+            "webUrl": "https://gitlab.com/gitlab-org/cli/-/merge_requests/4266",
+            "state": "opened",
+            "draft": false,
+            "updatedAt": "2026-11-09T06:49:26Z",
+            "targetBranch": "main",
+            "sourceBranch": "8698-validate-oauth-client-id",
+            "author": {
+              "username": "amegahed12"
+            },
+            "sourceProject": {
+              "fullPath": "gitlab-community/gitlab-org/cli"
+            },
+            "targetProject": {
+              "fullPath": "gitlab-org/cli"
+            },
+            "headPipeline": {
+              "status": "SUCCESS"
+            },
+            "approved": false,
+            "approvedBy": {
+              "nodes": []
+            },
+            "detailedMergeStatus": "REQUESTED_CHANGES"
+          },
+          {
+            "iid": "4230",
+            "title": "fix(govern): read the fallback sync job's settings as launchd and systemd do [4 of 6]",
+            "webUrl": "https://gitlab.com/gitlab-org/cli/-/merge_requests/4230",
+            "state": "opened",
+            "draft": false,
+            "updatedAt": "2026-11-09T06:38:25Z",
+            "targetBranch": "andrew-jung/630020-split-3-claude-config-dir",
+            "sourceBranch": "andrew-jung/630020-split-3b-fallback-job-settings",
+            "author": {
+              "username": "andrew.jung"
+            },
+            "sourceProject": {
+              "fullPath": "gitlab-org/cli"
+            },
+            "targetProject": {
+              "fullPath": "gitlab-org/cli"
+            },
+            "headPipeline": {
+              "status": "SUCCESS"
+            },
+            "approved": true,
+            "approvedBy": {
+              "nodes": []
+            },
+            "detailedMergeStatus": "REQUESTED_CHANGES"
+          },
+          {
+            "iid": "4337",
+            "title": "feat(auth): use the built-in OAuth client ID on self-managed and Dedicated",
+            "webUrl": "https://gitlab.com/gitlab-org/cli/-/merge_requests/4337",
+            "state": "opened",
+            "draft": false,
+            "updatedAt": "2026-11-09T06:29:51Z",
+            "targetBranch": "main",
+            "sourceBranch": "jmc-8700-default-client-id-self-managed",
+            "author": {
+              "username": "jay_mccure"
+            },
+            "sourceProject": {
+              "fullPath": "gitlab-org/cli"
+            },
+            "targetProject": {
+              "fullPath": "gitlab-org/cli"
+            },
+            "headPipeline": {
+              "status": "SUCCESS"
+            },
+            "approved": false,
+            "approvedBy": {
+              "nodes": [
+                {
+                  "username": "GitLabDuo"
+                }
+              ]
+            },
+            "detailedMergeStatus": "BLOCKED_STATUS"
+          },
+          {
+            "iid": "4242",
+            "title": "fix(auth): stop resending a dead OAuth refresh token",
+            "webUrl": "https://gitlab.com/gitlab-org/cli/-/merge_requests/4242",
+            "state": "opened",
+            "draft": false,
+            "updatedAt": "2026-11-09T06:05:08Z",
+            "targetBranch": "main",
+            "sourceBranch": "theoretick/oauth-forget-dead-refresh-token",
+            "author": {
+              "username": "theoretick"
+            },
+            "sourceProject": {
+              "fullPath": "gitlab-org/cli"
+            },
+            "targetProject": {
+              "fullPath": "gitlab-org/cli"
+            },
+            "headPipeline": {
+              "status": "FAILED"
+            },
+            "approved": true,
+            "approvedBy": {
+              "nodes": [
+                {
+                  "username": "jay_mccure"
+                }
+              ]
+            },
+            "detailedMergeStatus": "REQUESTED_CHANGES"
+          },
+          {
+            "iid": "4346",
+            "title": "Draft: ci: log GitHub's response when the gotestsum download fails",
+            "webUrl": "https://gitlab.com/gitlab-org/cli/-/merge_requests/4346",
+            "state": "opened",
+            "draft": true,
+            "updatedAt": "2026-11-09T05:47:07Z",
+            "targetBranch": "main",
+            "sourceBranch": "jmc-debug-gotestsum-download",
+            "author": {
+              "username": "jay_mccure"
+            },
+            "sourceProject": {
+              "fullPath": "gitlab-org/cli"
+            },
+            "targetProject": {
+              "fullPath": "gitlab-org/cli"
+            },
+            "headPipeline": {
+              "status": "SUCCESS"
+            },
+            "approved": false,
+            "approvedBy": {
+              "nodes": []
+            },
+            "detailedMergeStatus": "DRAFT_STATUS"
+          },
+          {
+            "iid": "4260",
+            "title": "perf(mr): skip fetching the merge request when only its IID is needed",
+            "webUrl": "https://gitlab.com/gitlab-org/cli/-/merge_requests/4260",
+            "state": "opened",
+            "draft": false,
+            "updatedAt": "2026-11-09T05:22:47Z",
+            "targetBranch": "main",
+            "sourceBranch": "jmc-mr-ref-skip-get-mr",
+            "author": {
+              "username": "jay_mccure"
+            },
+            "sourceProject": {
+              "fullPath": "gitlab-org/cli"
+            },
+            "targetProject": {
+              "fullPath": "gitlab-org/cli"
+            },
+            "headPipeline": {
+              "status": "SUCCESS"
+            },
+            "approved": true,
+            "approvedBy": {
+              "nodes": [
+                {
+                  "username": "GitLabDuo"
+                }
+              ]
+            },
+            "detailedMergeStatus": "DISCUSSIONS_NOT_RESOLVED"
+          },
+          {
+            "iid": "4340",
+            "title": "feat(milestone): add --include-descendants to milestone list",
+            "webUrl": "https://gitlab.com/gitlab-org/cli/-/merge_requests/4340",
+            "state": "opened",
+            "draft": false,
+            "updatedAt": "2026-11-09T04:44:24Z",
+            "targetBranch": "main",
+            "sourceBranch": "8709-add-include-descendants-to-milestone-list",
+            "author": {
+              "username": "amegahed12"
+            },
+            "sourceProject": {
+              "fullPath": "gitlab-community/gitlab-org/cli"
+            },
+            "targetProject": {
+              "fullPath": "gitlab-org/cli"
+            },
+            "headPipeline": {
+              "status": "SUCCESS"
+            },
+            "approved": false,
+            "approvedBy": {
+              "nodes": [
+                {
+                  "username": "GitLabDuo"
+                }
+              ]
+            },
+            "detailedMergeStatus": "REQUESTED_CHANGES"
+          },
+          {
+            "iid": "4345",
+            "title": "feat(govern): redact values assigned to credential-like names in text",
+            "webUrl": "https://gitlab.com/gitlab-org/cli/-/merge_requests/4345",
+            "state": "opened",
+            "draft": false,
+            "updatedAt": "2026-11-09T03:58:40Z",
+            "targetBranch": "main",
+            "sourceBranch": "8695-redact-credential-names",
+            "author": {
+              "username": "jeanvdw"
+            },
+            "sourceProject": {
+              "fullPath": "gitlab-org/cli"
+            },
+            "targetProject": {
+              "fullPath": "gitlab-org/cli"
+            },
+            "headPipeline": {
+              "status": "SUCCESS"
+            },
+            "approved": false,
+            "approvedBy": {
+              "nodes": []
+            },
+            "detailedMergeStatus": "UNCHECKED"
+          },
+          {
+            "iid": "4336",
+            "title": "chore(duo): add review rule for keeping bundled skills in sync",
+            "webUrl": "https://gitlab.com/gitlab-org/cli/-/merge_requests/4336",
+            "state": "opened",
+            "draft": false,
+            "updatedAt": "2026-11-09T03:03:34Z",
+            "targetBranch": "main",
+            "sourceBranch": "jmc-duo-review-bundled-skills",
+            "author": {
+              "username": "jay_mccure"
+            },
+            "sourceProject": {
+              "fullPath": "gitlab-org/cli"
+            },
+            "targetProject": {
+              "fullPath": "gitlab-org/cli"
+            },
+            "headPipeline": {
+              "status": "SUCCESS"
+            },
+            "approved": false,
+            "approvedBy": {
+              "nodes": [
+                {
+                  "username": "GitLabDuo"
+                }
+              ]
+            },
+            "detailedMergeStatus": "REQUESTED_CHANGES"
+          },
+          {
+            "iid": "4179",
+            "title": "feat(minder): add glab minder command via binarymgr (linux)",
+            "webUrl": "https://gitlab.com/gitlab-org/cli/-/merge_requests/4179",
+            "state": "opened",
+            "draft": false,
+            "updatedAt": "2026-11-09T03:00:19Z",
+            "targetBranch": "main",
+            "sourceBranch": "feat/agent-binarymgr",
+            "author": {
+              "username": "mtolpin"
+            },
+            "sourceProject": {
+              "fullPath": "gitlab-org/cli"
+            },
+            "targetProject": {
+              "fullPath": "gitlab-org/cli"
+            },
+            "headPipeline": {
+              "status": "SUCCESS"
+            },
+            "approved": false,
+            "approvedBy": {
+              "nodes": [
+                {
+                  "username": "GitLabDuo"
+                }
+              ]
+            },
+            "detailedMergeStatus": "UNCHECKED"
+          },
+          {
+            "iid": "4301",
+            "title": "feat(minder): rename glab govern to glab minder",
+            "webUrl": "https://gitlab.com/gitlab-org/cli/-/merge_requests/4301",
+            "state": "opened",
+            "draft": false,
+            "updatedAt": "2026-11-09T02:16:57Z",
+            "targetBranch": "main",
+            "sourceBranch": "minder-rename",
+            "author": {
+              "username": "jeanvdw"
+            },
+            "sourceProject": {
+              "fullPath": "gitlab-org/cli"
+            },
+            "targetProject": {
+              "fullPath": "gitlab-org/cli"
+            },
+            "headPipeline": {
+              "status": "SUCCESS"
+            },
+            "approved": false,
+            "approvedBy": {
+              "nodes": [
+                {
+                  "username": "GitLabDuo"
+                }
+              ]
+            },
+            "detailedMergeStatus": "UNCHECKED"
+          },
+          {
+            "iid": "4342",
+            "title": "feat(ci): add fail-on-manual policy to ci status",
+            "webUrl": "https://gitlab.com/gitlab-org/cli/-/merge_requests/4342",
+            "state": "opened",
+            "draft": false,
+            "updatedAt": "2026-11-09T00:41:11Z",
+            "targetBranch": "main",
+            "sourceBranch": "feat/ci-status-fail-on-manual-8713",
+            "author": {
+              "username": "THAIF74"
+            },
+            "sourceProject": {
+              "fullPath": "THAIF74/cli"
+            },
+            "targetProject": {
+              "fullPath": "gitlab-org/cli"
+            },
+            "headPipeline": {
+              "status": "FAILED"
+            },
+            "approved": false,
+            "approvedBy": {
+              "nodes": []
+            },
+            "detailedMergeStatus": "NOT_APPROVED"
+          },
+          {
+            "iid": "4069",
+            "title": "fix(variable): support scoped group updates and deletes",
+            "webUrl": "https://gitlab.com/gitlab-org/cli/-/merge_requests/4069",
+            "state": "opened",
+            "draft": false,
+            "updatedAt": "2026-11-09T00:31:30Z",
+            "targetBranch": "main",
+            "sourceBranch": "fix/7436-group-variable-scope",
+            "author": {
+              "username": "jhahimanshu653"
+            },
+            "sourceProject": {
+              "fullPath": "gitlab-community/gitlab-org/cli"
+            },
+            "targetProject": {
+              "fullPath": "gitlab-org/cli"
+            },
+            "headPipeline": {
+              "status": "SUCCESS"
+            },
+            "approved": false,
+            "approvedBy": {
+              "nodes": [
+                {
+                  "username": "GitLabDuo"
+                }
+              ]
+            },
+            "detailedMergeStatus": "UNCHECKED"
+          },
+          {
+            "iid": "4343",
+            "title": "fix: avoid unsupported telemetry properties on older GitLab instances",
+            "webUrl": "https://gitlab.com/gitlab-org/cli/-/merge_requests/4343",
+            "state": "opened",
+            "draft": false,
+            "updatedAt": "2026-11-09T00:12:28Z",
+            "targetBranch": "main",
+            "sourceBranch": "fix/telemetry-properties-older-gitlab-8710",
+            "author": {
+              "username": "THAIF74"
+            },
+            "sourceProject": {
+              "fullPath": "THAIF74/cli"
+            },
+            "targetProject": {
+              "fullPath": "gitlab-org/cli"
+            },
+            "headPipeline": {
+              "status": "SUCCESS"
+            },
+            "approved": false,
+            "approvedBy": {
+              "nodes": []
+            },
+            "detailedMergeStatus": "NOT_APPROVED"
+          },
+          {
+            "iid": "4344",
+            "title": "ci: skip tests:coverage when a test job fails",
+            "webUrl": "https://gitlab.com/gitlab-org/cli/-/merge_requests/4344",
+            "state": "opened",
+            "draft": false,
+            "updatedAt": "2026-11-08T23:08:01Z",
+            "targetBranch": "main",
+            "sourceBranch": "jmc-coverage-skip-on-test-failure",
+            "author": {
+              "username": "jay_mccure"
+            },
+            "sourceProject": {
+              "fullPath": "gitlab-org/cli"
+            },
+            "targetProject": {
+              "fullPath": "gitlab-org/cli"
+            },
+            "headPipeline": {
+              "status": "SUCCESS"
+            },
+            "approved": false,
+            "approvedBy": {
+              "nodes": [
+                {
+                  "username": "GitLabDuo"
+                }
+              ]
+            },
+            "detailedMergeStatus": "NOT_APPROVED"
+          },
+          {
+            "iid": "3880",
+            "title": "feat(ci): load pipeline inputs from a JSON file",
+            "webUrl": "https://gitlab.com/gitlab-org/cli/-/merge_requests/3880",
+            "state": "opened",
+            "draft": false,
+            "updatedAt": "2026-11-08T22:02:58Z",
+            "targetBranch": "main",
+            "sourceBranch": "feat/ci-run-inputs-from-8543",
+            "author": {
+              "username": "xbankov1"
+            },
+            "sourceProject": {
+              "fullPath": "xbankov1/cli"
+            },
+            "targetProject": {
+              "fullPath": "gitlab-org/cli"
+            },
+            "headPipeline": {
+              "status": "SUCCESS"
+            },
+            "approved": false,
+            "approvedBy": {
+              "nodes": []
+            },
+            "detailedMergeStatus": "DISCUSSIONS_NOT_RESOLVED"
+          },
+          {
+            "iid": "4265",
+            "title": "feat(auth): add --client-id flag to glab auth login",
+            "webUrl": "https://gitlab.com/gitlab-org/cli/-/merge_requests/4265",
+            "state": "opened",
+            "draft": false,
+            "updatedAt": "2026-11-08T13:33:57Z",
+            "targetBranch": "main",
+            "sourceBranch": "8699-set-oauth-client-id-flag",
+            "author": {
+              "username": "amegahed12"
+            },
+            "sourceProject": {
+              "fullPath": "gitlab-community/gitlab-org/cli"
+            },
+            "targetProject": {
+              "fullPath": "gitlab-org/cli"
+            },
+            "headPipeline": {
+              "status": "SUCCESS"
+            },
+            "approved": false,
+            "approvedBy": {
+              "nodes": [
+                {
+                  "username": "GitLabDuo"
+                }
+              ]
+            },
+            "detailedMergeStatus": "REQUESTED_CHANGES"
+          },
+          {
+            "iid": "4341",
+            "title": "docs(work-items): add tester guide for the experimental REST get command",
+            "webUrl": "https://gitlab.com/gitlab-org/cli/-/merge_requests/4341",
+            "state": "opened",
+            "draft": false,
+            "updatedAt": "2026-11-08T13:11:55Z",
+            "targetBranch": "work-items-experimental-get",
+            "sourceBranch": "docs/8586-work-items-tester-guide",
+            "author": {
+              "username": "benjaminkincses"
+            },
+            "sourceProject": {
+              "fullPath": "benjaminkincses/cli"
+            },
+            "targetProject": {
+              "fullPath": "gitlab-org/cli"
+            },
+            "headPipeline": {
+              "status": "SUCCESS"
+            },
+            "approved": true,
+            "approvedBy": {
+              "nodes": []
+            },
+            "detailedMergeStatus": "MERGEABLE"
+          },
+          {
+            "iid": "4091",
+            "title": "feat(runner): add runner create command",
+            "webUrl": "https://gitlab.com/gitlab-org/cli/-/merge_requests/4091",
+            "state": "opened",
+            "draft": false,
+            "updatedAt": "2026-11-08T00:36:16Z",
+            "targetBranch": "main",
+            "sourceBranch": "create-runner-command",
+            "author": {
+              "username": "dankparth"
+            },
+            "sourceProject": {
+              "fullPath": "gitlab-community/gitlab-org/cli"
+            },
+            "targetProject": {
+              "fullPath": "gitlab-org/cli"
+            },
+            "headPipeline": {
+              "status": "FAILED"
+            },
+            "approved": false,
+            "approvedBy": {
+              "nodes": []
+            },
+            "detailedMergeStatus": "UNCHECKED"
+          },
+          {
+            "iid": "4151",
+            "title": "feat(config): allow scoping accounts to specific directories",
+            "webUrl": "https://gitlab.com/gitlab-org/cli/-/merge_requests/4151",
+            "state": "opened",
+            "draft": false,
+            "updatedAt": "2026-11-08T00:36:15Z",
+            "targetBranch": "main",
+            "sourceBranch": "feat/account-dirs",
+            "author": {
+              "username": "hwittenborn"
+            },
+            "sourceProject": {
+              "fullPath": "hwittenborn/glab-cli"
+            },
+            "targetProject": {
+              "fullPath": "gitlab-org/cli"
+            },
+            "headPipeline": {
+              "status": "FAILED"
+            },
+            "approved": false,
+            "approvedBy": {
+              "nodes": []
+            },
+            "detailedMergeStatus": "UNCHECKED"
+          }
+        ]
+      }
+    }
+  }
+}

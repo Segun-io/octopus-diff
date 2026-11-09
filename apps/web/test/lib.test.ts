@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { planBulk } from '../src/lib/bulk.ts';
 import { fuzzyMatch, rankBy } from '../src/lib/fuzzy.ts';
 import type { FileGroup, NavEntry } from '../src/lib/model.ts';
-import { isRecentlyActive, middleEllipsis, worktreeSource } from '../src/lib/source.ts';
+import { middleEllipsis, worktreeSource } from '../src/lib/source.ts';
 import { activeView, selectionOf, viewsFor } from '../src/views/registry.ts';
 
 describe('fuzzy', () => {
@@ -27,11 +27,7 @@ describe('source chip and activity', () => {
     expect(worktreeSource('/Users/me/conductor/workspaces/y')?.id).toBe('conductor');
     expect(worktreeSource('/home/dev/code/x')).toBeNull();
   });
-  it('pulse window is ~10 s', () => {
-    const now = Date.parse('2026-11-08T10:00:00Z');
-    expect(isRecentlyActive('2026-11-08T09:59:55Z', now)).toBe(true);
-    expect(isRecentlyActive('2026-11-08T09:59:40Z', now)).toBe(false);
-    expect(isRecentlyActive(undefined, now)).toBe(false);
+  it('middle-ellipsis keeps both ends of a path', () => {
     expect(middleEllipsis('/home/dev/code/project/src/index.ts', 20)).toBe('/home/dev/…/index.ts');
   });
 });

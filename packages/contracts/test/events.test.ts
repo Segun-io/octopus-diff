@@ -71,6 +71,7 @@ describe('server events', () => {
       reviewed: true,
     },
     { type: 'review.bulk', projectIds: [id], reviewed: true, changed: 12 },
+    { type: 'review.bookmark', projectId: id, worktreeId: id, bookmark: 'a'.repeat(40) },
     { type: 'settings.changed', revision: 3 },
     { type: 'forge.updated', projectIds: ['0123456789abcdef'] },
   ];

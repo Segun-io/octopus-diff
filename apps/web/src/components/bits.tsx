@@ -104,6 +104,15 @@ export function CloseIcon(props: IconProps) {
   );
 }
 
+export function CopyIcon(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <rect x="5.5" y="5.5" width="8" height="8" rx="1.5" />
+      <path d="M10.5 3.5v-.5a1 1 0 0 0-1-1h-6a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h.5" />
+    </Svg>
+  );
+}
+
 export function MoreIcon(props: IconProps) {
   return (
     <Svg {...props}>

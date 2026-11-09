@@ -5,6 +5,7 @@ import type {
   GitChangedFile,
   GitFileDiff,
   GitProjectInfo,
+  GitRepositoryInfo,
   Worktree,
   WorktreeSummary,
 } from './domain.js';
@@ -77,8 +78,94 @@ export interface GitCore {
    */
   readRemoteConfig?(project: ProjectLocator): Promise<GitRemoteConfig>;
 
+  /**
+   * Local facts for the Overview (docs/FORGES.md "Repository information"): default branch head
+   * and its ahead/behind against its upstream (local refs only), branch and tag counts, remotes
+   * (credentials stripped from URLs) and the latest commit date over all branches. Uses only
+   * allowlisted reads. `defaultBranch` is the project's effective default branch; detected when
+   * absent. Optional so that test doubles and older implementations need not provide it.
+   */
+  readRepositoryInfo?(
+    project: ProjectLocator,
+    options?: { defaultBranch?: string | null },
+  ): Promise<GitRepositoryInfo>;
+
+  /**
+   * The commit range a worktree has to review (docs/STATUS-FLOW.md §2.1): where it starts and
+   * the commits in `base..HEAD`. Uses `rev-parse`, `merge-base` (`--is-ancestor`) and
+   * `rev-list` only. Optional so that test doubles and older implementations need not provide it.
+   */
+  readReviewRange?(worktree: WorktreeLocator, options: ReviewRangeOptions): Promise<ReviewRange>;
+
+  /**
+   * Per-commit facts for skipping already-reviewed work (§2.4): `git patch-id --stable` of each
+   * commit's diff against its first parent, and the paths it touched. Commits are immutable, so
+   * results may be cached. Order follows `shas`; unknown commits reject with `not_found`.
+   * Optional (test doubles).
+   */
+  describeCommits?(worktree: WorktreeLocator, shas: readonly string[]): Promise<CommitDetails[]>;
+
+  /**
+   * `git patch-id --stable` of the whole diff `from..to` (a squash merge of that range has the
+   * same patch-id); null when the diff is empty. Optional (test doubles).
+   */
+  rangePatchId?(worktree: WorktreeLocator, from: string, to: string): Promise<string | null>;
+
   /** Kills in-flight git processes and rejects queued work. */
   dispose(): Promise<void>;
+}
+
+export interface ReviewRangeOptions extends ScopeOptions {
+  /** The stored bookmark (full commit id), or null on first sight of the branch. */
+  bookmark: string | null;
+  /** Cap on the commits returned (default 500); `truncated` says when more exist. */
+  maxCommits?: number;
+}
+
+export interface ReviewRange {
+  /** Full HEAD commit id; null on an unborn branch (then everything else is empty/null). */
+  head: string | null;
+  /** HEAD is the project's default branch, or detached (bookmarks start at HEAD there). */
+  startsAtHead: boolean;
+  /** `options.bookmark` is HEAD or an ancestor of it. False when it is null or unknown. */
+  bookmarkReachable: boolean;
+  /**
+   * First sight (`options.bookmark` null): where the bookmark should start: HEAD when
+   * `startsAtHead`, else the merge-base of HEAD and the default branch (HEAD when there is none).
+   * Null otherwise.
+   */
+  initial: string | null;
+  /**
+   * Where the range starts: the bookmark when reachable; `initial` on first sight; when history
+   * was rewritten (bookmark set but not reachable): the merge-base of HEAD and the default branch
+   * for other branches, the merge-base of HEAD and the bookmark when `startsAtHead` (HEAD when
+   * none can be computed).
+   */
+  base: string | null;
+  /** `base..HEAD` (`rev-list` order: newest first), with parents. */
+  commits: ReviewRangeCommit[];
+  /** More than `maxCommits` commits exist in the range. */
+  truncated: boolean;
+}
+
+export interface ReviewRangeCommit {
+  sha: string;
+  parents: string[];
+}
+
+export interface CommitDetails {
+  sha: string;
+  /**
+   * `git patch-id --stable` of the commit's diff against its first parent (git-core's pinned
+   * diff options). Null for merge commits and commits without a textual diff.
+   */
+  patchId: string | null;
+  /**
+   * Paths the commit touched, both sides of renames, in review-mark form (`rawPath ?? path`:
+   * base64 of the raw bytes when not UTF-8). Merge commits: only the paths that differ from
+   * every parent (`--cc`), i.e. conflict resolutions and evil-merge edits.
+   */
+  paths: string[];
 }
 
 export interface GitCoreOptions {

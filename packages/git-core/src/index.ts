@@ -29,7 +29,16 @@ export {
 export { forEachRefFormat, parseForEachRef } from './parse/refs.js';
 export { parseStatusV2, type StatusBranch, type StatusEntry } from './parse/status.js';
 export { parseWorktreeList, type WorktreeRecord } from './parse/worktrees.js';
-export { ALLOWED_SUBCOMMANDS, assertAllowedGitArgs } from './runner/allowlist.js';
+export {
+  parseCommitPaths,
+  parsePatchIds,
+  REVIEW_RANGE_MAX_COMMITS_DEFAULT,
+} from './review.js';
+export {
+  ALLOWED_SUBCOMMANDS,
+  assertAllowedGitArgs,
+  assertStdinAllowed,
+} from './runner/allowlist.js';
 export { CONFIG_PINS } from './runner/config-pins.js';
 export { buildGitEnv, SAFETY_ENV } from './runner/env.js';
 export { buildGitArgv, GitRunner, resolveExecutable } from './runner/runner.js';
@@ -40,3 +49,4 @@ export { MIN_GIT_VERSION, parseGitVersion } from './version.js';
 /** The real implementation (the Phase 0 placeholder exported `false`). */
 export const GIT_CORE_IMPLEMENTED: boolean = true;
 export { parseRemoteConfig, REMOTE_CONFIG_REGEX, rewriteUrl } from './remotes.js';
+export { readRepositoryInfo, stripUrlCredentials } from './repository.js';

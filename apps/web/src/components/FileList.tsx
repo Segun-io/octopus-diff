@@ -9,8 +9,13 @@ import {
   worktreeLabel,
 } from '../lib/model.ts';
 import { escapeSuspicious, hasSuspicious } from '../lib/unicode.ts';
-import { useUi } from '../state/ui.tsx';
+import { type CopyFn, copyAndReport } from '../state/copy.ts';
+import { useUi, useUiStore } from '../state/ui.tsx';
 import { CheckIcon, LineCounts, StatusIcon, statusLabel, WarningIcon } from './bits.tsx';
+import { ContextMenu, type MenuItem, useContextMenu } from './ContextMenu.tsx';
+import { fileCopyItems, worktreeCopyItems } from './copyMenu.ts';
+
+type ListMenuTarget = { kind: 'file'; entry: NavEntry } | { kind: 'group'; group: FileGroup };
 
 /** Row heights per density (mirrors `--od-row` / `--od-row-header` in styles.css). */
 export const ROW_HEIGHTS = {
@@ -66,6 +71,24 @@ export function FileList({
 }: FileListProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [viewport, setViewport] = useState({ top: 0, height: 800 });
+  const store = useUiStore();
+  const menu = useContextMenu<ListMenuTarget>();
+  const openMenu = menu.open;
+  const onFileMenu = useCallback(
+    (event: React.MouseEvent, entry: NavEntry) => openMenu(event, { kind: 'file', entry }),
+    [openMenu],
+  );
+  const onGroupMenu = useCallback(
+    (event: React.MouseEvent, group: FileGroup) => openMenu(event, { kind: 'group', group }),
+    [openMenu],
+  );
+  const worktreePath = (id: string) => groups.find((g) => g.worktree.id === id)?.worktree.path;
+  const copy: CopyFn = (text, options) => void copyAndReport(store, text, options);
+  const menuItems = (target: ListMenuTarget): MenuItem[] => {
+    const at = menu.state?.position;
+    if (target.kind === 'group') return worktreeCopyItems(target.group.worktree, copy, at);
+    return fileCopyItems(target.entry.file, worktreePath(target.entry.worktreeId), copy, at);
+  };
   const density = useUi((s) => s.density);
   const ROW_HEIGHT = ROW_HEIGHTS[density].row;
   const HEADER_HEIGHT = ROW_HEIGHTS[density].header;
@@ -154,7 +177,7 @@ export function FileList({
     [layout, selectedKey, onSelect],
   );
 
-  return (
+  const list = (
     <div
       ref={scrollRef}
       data-testid={TEST_IDS.fileList}
@@ -199,6 +222,7 @@ export function FileList({
             >
               {grouped && (
                 <GroupHeader
+                  onMenu={onGroupMenu}
                   group={g.group}
                   shown={g.rows.length}
                   height={HEADER_HEIGHT}
@@ -213,6 +237,7 @@ export function FileList({
                   height={ROW_HEIGHT}
                   selected={entry.key === selectedKey}
                   onSelect={onSelect}
+                  onMenu={onFileMenu}
                 />
               ))}
             </div>
@@ -221,6 +246,21 @@ export function FileList({
       </div>
     </div>
   );
+  // The menu sits outside the listbox: its arrow keys must not move the file selection.
+  return (
+    <>
+      {list}
+      {menu.state && (
+        <ContextMenu
+          items={menuItems(menu.state.target)}
+          position={menu.state.position}
+          onClose={menu.close}
+          label="Copy"
+          testId="file-list-menu"
+        />
+      )}
+    </>
+  );
 }
 
 const GroupHeader = memo(function GroupHeader({
@@ -228,19 +268,23 @@ const GroupHeader = memo(function GroupHeader({
   shown,
   height,
   reviewOff,
+  onMenu,
 }: {
   group: FileGroup;
   shown: number;
   height: number;
   reviewOff: boolean;
+  onMenu: (event: React.MouseEvent, group: FileGroup) => void;
 }) {
   const total = group.files.length;
   const unreviewed = reviewOff ? 0 : group.files.reduce((n, f) => n + (f.reviewed ? 0 : 1), 0);
   return (
+    // biome-ignore lint/a11y/noStaticElementInteractions: right-click shortcut; the palette has the same copy commands
     <div
       className="flex items-center gap-2 border-b border-line bg-raised px-2 text-xs"
       style={{ height }}
       title={group.worktree.path}
+      onContextMenu={(e) => onMenu(e, group)}
     >
       <span className="truncate font-semibold">{group.project.name}</span>
       <span className="truncate text-muted">{worktreeLabel(group.worktree)}</span>
@@ -269,12 +313,14 @@ const FileRow = memo(function FileRow({
   height,
   selected,
   onSelect,
+  onMenu,
 }: {
   entry: NavEntry;
   top: number;
   height: number;
   selected: boolean;
   onSelect: (entry: NavEntry) => void;
+  onMenu: (event: React.MouseEvent, entry: NavEntry) => void;
 }) {
   const { file } = entry;
   const suspicious =
@@ -301,6 +347,7 @@ const FileRow = memo(function FileRow({
       data-deletions={file.deletions === null ? '' : String(file.deletions)}
       title={`${statusLabel(file.status)}: ${rename ?? file.path}${file.reviewed ? ' (reviewed)' : ''}`}
       onClick={() => onSelect(entry)}
+      onContextMenu={(e) => onMenu(e, entry)}
       className={`absolute right-0 left-0 flex cursor-pointer items-center gap-1.5 px-2 text-xs ${
         selected ? 'bg-selected' : 'hover:bg-hover'
       } ${file.reviewed ? 'opacity-60' : ''}`}

@@ -29,7 +29,9 @@ export type View =
   | { kind: 'inbox' }
   | { kind: 'folder'; scanRootId: string }
   | { kind: 'project'; projectId: string }
-  | { kind: 'worktree'; worktreeId: string };
+  | { kind: 'worktree'; worktreeId: string; tab?: WorktreeTab };
+/** Main-pane tab of a worktree (views/registry.ts): its changes, or its pull/merge request. */
+export type WorktreeTab = 'changes' | 'request';
 export type ConnectionState = 'connecting' | 'open' | 'offline';
 
 /** Per-file view options that change the diff request (reset when the file changes). */
@@ -61,7 +63,11 @@ export interface UiState extends Prefs {
   view: View;
   selected: FileRef | null;
   scope: DiffScope;
-  filterText: string;
+  /** Sidebar filter dropdown: picked project and worktree ids (a union; empty = all). */
+  filterProjects: string[];
+  filterWorktrees: string[];
+  /** The filter dropdown is open (`/` opens it). */
+  filterOpen: boolean;
   onlyDirty: boolean;
   onlyUnreviewed: boolean;
   helpOpen: boolean;
@@ -78,6 +84,16 @@ export interface UiState extends Prefs {
   scan: ScanStatus | null;
   /** Transient one-line message (e.g. "No unreviewed files left"). */
   notice: { id: number; text: string } | null;
+  /** Result of the last copy (docs/COPY-TOOLS.md): anchored near `at`, else bottom-centre. */
+  copyToast: CopyToast | null;
+}
+
+export interface CopyToast {
+  id: number;
+  ok: boolean;
+  text: string;
+  /** Viewport point to anchor the toast above (a copy button's centre-top). */
+  at?: { x: number; y: number };
 }
 
 export const DEFAULT_UI_STATE: UiState = {
@@ -85,7 +101,9 @@ export const DEFAULT_UI_STATE: UiState = {
   view: { kind: 'inbox' },
   selected: null,
   scope: DEFAULT_SCOPE,
-  filterText: '',
+  filterProjects: [],
+  filterWorktrees: [],
+  filterOpen: false,
   onlyDirty: false,
   onlyUnreviewed: false,
   helpOpen: false,
@@ -99,6 +117,7 @@ export const DEFAULT_UI_STATE: UiState = {
   connection: 'connecting',
   scan: null,
   notice: null,
+  copyToast: null,
 };
 
 export type UiStore = Store<UiState>;
@@ -157,6 +176,9 @@ export const actions = {
   notice(store: UiStore, text: string) {
     store.setState({ notice: { id: ++noticeId, text } });
   },
+  copyToast(store: UiStore, toast: Omit<CopyToast, 'id'>) {
+    store.setState({ copyToast: { ...toast, id: ++noticeId } });
+  },
   select(store: UiStore, ref: FileRef | null) {
     const current = store.getState().selected;
     if (current && ref && fileRefKey(current) === fileRefKey(ref)) return;
@@ -166,7 +188,17 @@ export const actions = {
     const state = store.getState();
     const scope =
       view.kind !== 'worktree' && state.scope.kind === 'commit' ? DEFAULT_SCOPE : state.scope;
-    store.setState({ view, scope });
+    // Moving to another worktree keeps the chosen tab (the registry falls back to Changes when
+    // the new worktree has no request).
+    const current = state.view;
+    const next =
+      view.kind === 'worktree' &&
+      view.tab === undefined &&
+      current.kind === 'worktree' &&
+      current.tab
+        ? { ...view, tab: current.tab }
+        : view;
+    store.setState({ view: next, scope });
   },
   setFileOptions(store: UiStore, key: string, options: FileViewOptions) {
     store.setState((s) => ({ fileOptions: { ...s.fileOptions, [key]: options } }));
