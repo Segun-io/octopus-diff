@@ -28,18 +28,28 @@ Resolved items move to the bottom with the resolution.
    `poll()` and throws `"Unable to poll: " + strerror(errno)` on any negative result, `EINTR` included (a signal
    delivered to the watcher thread, e.g. `SIGCHLD` from the many short git processes); the throw skips
    `mEndedSignal.notify()` after the loop; `Backend::run()` catches it, reports it (the daemon's "polling continues"
-   path) and the thread ends. When the daemon's `close()` later unsubscribes the last watcher of that backend,
-   `~InotifyBackend()` does `mEndedSignal.wait()`, which never returns, and the process's main thread is the one
-   observed blocked. 2.6.0 is the newest release (`pnpm view @parcel/watcher version`). *Impact:* a full e2e run is a
-   coin flip on this machine; any daemon, the LAN one included, can deadlock on shutdown after one `EINTR` in a
-   watcher thread. The web UI is not involved: one hang followed an API-only test, and the page is closed before the
-   daemon fixture closes. *Workaround:* rerun, or run spec files alone
-   (`pnpm --filter @octopus-diff/e2e exec playwright test tests/<spec>`). *Proper fix (WS2 / lead):* retry `EINTR`
-   in `InotifyBackend::start()` (`if (result < 0) { if (errno == EINTR) continue; throw … }`) as a pnpm patch
-   (`pnpm patch @parcel/watcher`, which also needs `allowBuilds` for the rebuild) or upstream; or make
-   `apps/daemon/src/watcher.ts` skip awaiting `unsubscribe()` for a subscription whose backend already reported an
-   error (its thread is gone; there is nothing to wait for). Not changed in this round: the daemon and its
-   dependencies are outside its scope.
+   path) and the thread ends without notifying. `~InotifyBackend()` does `mEndedSignal.wait()`, which then never returns,
+   and it runs on whichever thread drops the last reference to the backend. Usually that is the dying watcher thread
+   itself, which blocks forever. But a subscribe or unsubscribe in flight holds a reference in its N-API runner, and
+   the runner is destroyed on the JavaScript thread; if that runner releases the last reference (an unsubscribe of
+   the last watcher, at `close()` for instance), the process's main thread is the one blocked, as observed. Reproduced
+   with `tgkill` (an `EINTR` while a subscribe is crawling): main thread in `futex_do_wait`. 2.6.0 is the newest release
+   (`pnpm view @parcel/watcher version`). *Impact:* a full e2e run is a coin flip on this machine; any daemon, the LAN
+   one included, can deadlock after one `EINTR` in a watcher thread, and until then every subscription is dead (live
+   updates fall back to polling). The web UI is not involved: one hang followed an API-only test, and the page is
+   closed before the daemon fixture closes. *Workaround:* rerun, or run spec files alone
+   (`pnpm --filter @octopus-diff/e2e exec playwright test tests/<spec>`). *What a fix must do:* not awaiting
+   `unsubscribe()` is **not** a fix: the call itself can release the last reference, and its native completion can
+   still block the JavaScript thread in the destructor, awaited or not. A failed subscription must never be
+   unsubscribed (drop the reference), and since runners in flight can still end up running the destructor, the
+   native code must not run on the daemon's thread at all. A native patch (retry `EINTR` in `InotifyBackend::start()`)
+   is not enough on its own either: the install script builds only with `npm_config_build_from_source=true` (plus
+   `allowBuilds` and a C++ toolchain), `index.js` loads the prebuilt `@parcel/watcher-<platform>` package before
+   `build/Release/watcher.node`, so the runtime must also be made to load the local build, and users installing the
+   published package would still get the unpatched prebuild. *Fix in progress:*
+   https://github.com/Segun-io/octopus-diff/pull/3 runs `@parcel/watcher` in a child process (no `SIGCHLD` reaches
+   it; a stuck one is killed, never waited for), never unsubscribes a failed subscription, and re-subscribes with a
+   backoff (its DECISIONS #130–#132). This entry moves to "Resolved" once that PR is merged.
 
 ### WS1 — git-core
 

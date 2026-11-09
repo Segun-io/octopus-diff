@@ -61,7 +61,13 @@ const STATES: Record<string, Step> = {
   },
   'commit-scope': async (page) => {
     await page.locator('[data-testid="worktree-item"][data-branch="feat/auth"]').click();
-    await page.locator('[data-testid="scope-select"]').selectOption('commit');
+    // The commit option stays disabled until the commit list has loaded, and selectOption does
+    // not wait for an option to become enabled: the select would revert to the default scope.
+    const scope = page.locator('[data-testid="scope-select"]');
+    await scope.locator('option[value="commit"]:not([disabled])').waitFor({ state: 'attached' });
+    await scope.selectOption('commit');
+    const value = await scope.inputValue();
+    if (value !== 'commit') throw new Error(`commit-scope: the scope is "${value}", not "commit"`);
     await page.waitForTimeout(400);
   },
   'policy-menu': async (page) => {
