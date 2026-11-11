@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, realpath, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {
@@ -31,7 +31,9 @@ export function onCleanup(fn: () => Promise<void> | void): void {
 }
 
 export async function tempDir(prefix = 'octopus-diff-'): Promise<string> {
-  const dir = await mkdtemp(path.join(os.tmpdir(), prefix));
+  // realpath: on macOS os.tmpdir() is under /var, a symlink to /private/var, and the watcher and
+  // git report resolved paths.
+  const dir = await realpath(await mkdtemp(path.join(os.tmpdir(), prefix)));
   onCleanup(() => rm(dir, { recursive: true, force: true }));
   return dir;
 }

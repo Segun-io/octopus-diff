@@ -45,6 +45,26 @@ jobs:
           node apps/cli/dist/index.js --version
           node apps/cli/dist/index.js doctor --state-dir "$RUNNER_TEMP/od-state" --config-dir "$RUNNER_TEMP/od-config"
 
+  # FSEvents, APFS (no non-UTF-8 file names) and /var -> /private/var behave differently from
+  # Linux; the unit tests cover the watcher against the real backend (DECISIONS #164).
+  test-macos:
+    name: test (macOS, Node 26)
+    runs-on: macos-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+          cache: pnpm
+      - run: git --version
+      - run: pnpm install $PNPM_INSTALL_FLAGS
+      - run: pnpm build # before tests: the CLI integration test runs the built bin
+      # One package at a time: git spawns are slower on macOS, and packages running side by side
+      # (each vitest using every core) push git-heavy tests past their timeouts.
+      - run: pnpm -r --workspace-concurrency=1 run test && pnpm run test:scripts
+
   e2e:
     name: e2e (Playwright, Chromium)
     runs-on: ubuntu-latest

@@ -1,4 +1,4 @@
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -119,7 +119,7 @@ describe('ForgeCli and ForgeClient with a fake CLI', () => {
   let fakeGlab: string;
 
   beforeAll(() => {
-    dir = mkdtempSync(path.join(os.tmpdir(), 'octopus-diff-'));
+    dir = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'octopus-diff-'))); // macOS: /var -> /private/var
     log = path.join(dir, 'calls.jsonl');
     const script = (name: string) => {
       const file = path.join(dir, name);

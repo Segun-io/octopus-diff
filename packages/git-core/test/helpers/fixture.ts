@@ -31,6 +31,26 @@ export interface Fixture {
 
 const FIXED_DATE = '2026-01-01T00:00:00Z';
 
+/**
+ * Whether the temp dir's file system accepts file names that are not valid UTF-8. Linux file
+ * systems take any bytes; APFS (macOS) refuses them with EILSEQ, so tests that need such a name
+ * skip it there (the parsers are still covered by synthetic git output in parsers.test.ts).
+ */
+export const RAW_NAMES_SUPPORTED: boolean = probeRawNames();
+
+function probeRawNames(): boolean {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'octopus-diff-probe-'));
+  try {
+    writeFileSync(Buffer.concat([Buffer.from(`${dir}/`), Buffer.from([0x78, 0xff])]), '');
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EILSEQ') return false;
+    throw error;
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 export function createFixture(prefix = 'octopus-diff-'): Fixture {
   const root = realpathSync(mkdtempSync(path.join(os.tmpdir(), prefix)));
   const configFile = path.join(root, '.gitconfig-test');

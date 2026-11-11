@@ -1806,7 +1806,7 @@
     },
     {
       "name": "@testing-library/user-event",
-      "version": "14.6.8",
+      "version": "14.6.9",
       "license": "MIT",
       "author": "Giorgio Polvara",
       "url": "https://github.com/testing-library/user-event",
@@ -1862,7 +1862,7 @@
     },
     {
       "name": "@vitejs/plugin-react",
-      "version": "6.2.1",
+      "version": "6.3.0",
       "license": "MIT",
       "author": "Evan You",
       "url": "https://github.com/vitejs/vite-plugin-react",
@@ -1932,7 +1932,7 @@
     },
     {
       "name": "vite",
-      "version": "8.3.6",
+      "version": "8.3.7",
       "license": "MIT",
       "author": "Evan You",
       "url": "https://github.com/vitejs/vite",

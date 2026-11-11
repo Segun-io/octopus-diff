@@ -9,7 +9,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createGitCore } from '../src/index.js';
 import { nestedRepoHead } from '../src/untracked.js';
 import { expectConsistentHashes, fileDiff, listFiles, locator } from './helpers/core.js';
-import { createFixture, type Fixture, lines } from './helpers/fixture.js';
+import { createFixture, type Fixture, lines, RAW_NAMES_SUPPORTED } from './helpers/fixture.js';
 
 let fx: Fixture;
 let core: GitCore;
@@ -63,11 +63,12 @@ describe('F4: an untracked file keeps its patchHash through git add -N and git a
     fx.write(path.join(repo, 'exec.sh'), '#!/bin/sh\n');
     chmodSync(path.join(repo, 'exec.sh'), 0o755);
     fx.symlink('new.ts', path.join(repo, 'link'));
-    fx.writeRaw(repo, NON_UTF8, 'raw name\n');
+    if (RAW_NAMES_SUPPORTED) fx.writeRaw(repo, NON_UTF8, 'raw name\n');
     const wt = locator(repo);
 
     const untracked = await working(wt);
-    expect(untracked.size).toBe(Object.keys(contents).length + 3);
+    // exec.sh, link and (where the file system allows it) the non-UTF-8 name.
+    expect(untracked.size).toBe(Object.keys(contents).length + (RAW_NAMES_SUPPORTED ? 3 : 2));
     for (const file of untracked.values()) expect(file.status, file.path).toBe('untracked');
     await expectConsistentHashes(core, wt, { kind: 'working' }, [...untracked.values()]);
     // The displayed patch is the canonical text the hash is computed from.

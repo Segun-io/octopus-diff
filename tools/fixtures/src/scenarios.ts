@@ -1,6 +1,6 @@
 import { readFile, utimes } from 'node:fs/promises';
 import { join } from 'node:path';
-import { type BuildContext, RepoBuilder } from './builder.js';
+import { type BuildContext, RepoBuilder, supportsRawFileNames } from './builder.js';
 import type { CaseLocation, RepoRole, SpecialCase } from './manifest.js';
 import { codeLines, type Rng, word } from './random.js';
 
@@ -335,6 +335,8 @@ export async function buildKitchenSink(
     Buffer.from([0xe9]),
     Buffer.from('.txt'),
   ]);
+  // APFS (macOS) refuses non-UTF-8 names: the case is left out there.
+  const rawNames = await supportsRawFileNames(paths.repos);
   await repo.writeLines('src/both.ts', both);
   await seedFiles(repo, rng, {
     'src/old-name.ts': 40,
@@ -352,7 +354,7 @@ export async function buildKitchenSink(
   await repo.write('dist/app.min.js', `${minifiedText}\n`);
   await repo.writeLines('windows/crlf.txt', crlf, '\r\n');
   await repo.writeLines('docs/ünïcødé ✓.md', unicodeLines);
-  await repo.write(nonUtf8Name, 'caf\xe9 au lait\nline two\n');
+  if (rawNames) await repo.write(nonUtf8Name, 'caf\xe9 au lait\nline two\n');
   await repo.symlink('../src/both.ts', 'links/current');
   await repo.commitAll('kitchen sink: initial');
   // Relative URL (resolved against the superproject dir) keeps commit shas independent of the
@@ -391,7 +393,7 @@ export async function buildKitchenSink(
     '\r\n',
   );
   await repo.writeLines('docs/ünïcødé ✓.md', [`# ${marker('unicode')}`, ...unicodeLines.slice(1)]);
-  await repo.write(nonUtf8Name, `caf\xe9 au lait\n${marker('non-utf8')}\n`);
+  if (rawNames) await repo.write(nonUtf8Name, `caf\xe9 au lait\n${marker('non-utf8')}\n`);
   await repo.symlink('../src/new-name.ts', 'links/current');
   await repo.remove('config/settings.json');
   await repo.symlink('../src/both.ts', 'config/settings.json');
@@ -433,12 +435,14 @@ export async function buildKitchenSink(
       'very-large': { worktree: w, path: 'generated/huge.sql', addedMarker: marker('very-large') },
       minified: { worktree: w, path: 'dist/app.min.js' },
       crlf: { worktree: w, path: 'windows/crlf.txt', addedMarker: marker('crlf') },
-      'non-utf8-filename': {
-        worktree: w,
-        path: Buffer.from(nonUtf8Name).toString('utf8'),
-        rawPath: nonUtf8Name.toString('base64'),
-        addedMarker: marker('non-utf8'),
-      },
+      ...(rawNames && {
+        'non-utf8-filename': {
+          worktree: w,
+          path: Buffer.from(nonUtf8Name).toString('utf8'),
+          rawPath: nonUtf8Name.toString('base64'),
+          addedMarker: marker('non-utf8'),
+        },
+      }),
       'unicode-filename': {
         worktree: w,
         path: 'docs/ünïcødé ✓.md',

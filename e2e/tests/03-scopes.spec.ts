@@ -208,14 +208,18 @@ test.describe('§8.4 scopes (API, against the git oracle)', () => {
     expect(ctx.diff.patch.length).toBeLessThan(ctxDefault.diff.patch.length);
     expect(ctx.diff.patchHash).toBe(ctxDefault.diff.patchHash);
 
+    // Absent where the file system refuses non-UTF-8 names (APFS on macOS); the fixtures' own
+    // tests check that it is present everywhere else.
     const latin = sink.cases['non-utf8-filename'];
-    if (!latin?.rawPath) throw new Error('non-UTF-8 case missing');
-    const latinDiff = await daemon.client.getDiff(wt.id, {
-      path: latin.path,
-      rawPath: latin.rawPath,
-    });
-    expect(latinDiff.diff.rawPath).toBe(latin.rawPath);
-    expect(latinDiff.diff.patch).toContain('octopus-marker-non-utf8');
+    if (latin) {
+      if (!latin.rawPath) throw new Error('non-UTF-8 case without rawPath');
+      const latinDiff = await daemon.client.getDiff(wt.id, {
+        path: latin.path,
+        rawPath: latin.rawPath,
+      });
+      expect(latinDiff.diff.rawPath).toBe(latin.rawPath);
+      expect(latinDiff.diff.patch).toContain('octopus-marker-non-utf8');
+    }
 
     const renamed = await daemon.client.getDiff(wt.id, { path: 'src/new-name.ts' });
     expect(renamed.diff).toMatchObject({ status: 'renamed', oldPath: 'src/old-name.ts' });
@@ -302,9 +306,11 @@ test.describe('§8.4 scopes (UI)', () => {
     await app.openFile('windows/crlf.txt');
     await app.expectDiffText('octopus-marker-crlf');
 
-    const latin = sink.cases['non-utf8-filename'];
-    await app.openFile(latin?.path ?? '');
-    await app.expectDiffText('octopus-marker-non-utf8');
+    const latin = sink.cases['non-utf8-filename']; // absent on APFS (macOS)
+    if (latin) {
+      await app.openFile(latin.path);
+      await app.expectDiffText('octopus-marker-non-utf8');
+    }
 
     await app.openFile('docs/ünïcødé ✓.md');
     await app.expectDiffText('octopus-marker-unicode');

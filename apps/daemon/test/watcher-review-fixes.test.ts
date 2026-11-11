@@ -139,6 +139,12 @@ describe('F1: worktree folder deleted / replaced at the same path', { timeout: 2
 
     // `git worktree remove --force wt && git worktree add wt` as seen by the file system.
     await rm(layout.linked, { recursive: true, force: true });
+    if (process.platform === 'darwin') {
+      // FSEvents coalesces an immediate re-create with the delete into an `update` of the root
+      // and keeps watching the path (nothing to heal; the relist sees the new inode, as in the
+      // next test). Let the delete arrive first to exercise the same degraded path as inotify.
+      await eventually(() => rec.lists.some((l) => l.reason === 'missing'), 5000);
+    }
     await mkdir(path.join(layout.linked, 'src'), { recursive: true });
     await eventually(() => rec.lists.some((l) => l.reason === 'missing'), 5000);
     expect(rec.replaced).toEqual(['linked']); // DaemonCore re-checks the watch targets
@@ -248,17 +254,20 @@ describe('F3: submodules', { timeout: 20_000 }, () => {
     await mkdir(path.join(linkedMod, 'objects', 'cd'), { recursive: true });
     const { watcher, rec } = makeWatcher();
     await watcher.setProject('p1', layout.common, layout.worktrees);
+    // FSEvents (macOS) replays the directories created just before subscribing: let them settle.
+    await sleep(300);
+    const start = rec.dirty.length;
 
     await writeFile(path.join(modDir, 'objects', 'ab', 'cdef'), 'x');
     await writeFile(path.join(linkedMod, 'objects', 'cd', 'ef01'), 'x');
     await sleep(500);
-    expect(rec.dirty).toEqual([]);
+    expect(rec.dirty.slice(start)).toEqual([]);
 
     await writeFile(path.join(modDir, 'refs', 'heads', 'main'), 'c2'); // commit inside the submodule
-    await eventually(() => rec.dirty.length > 0, 5000);
+    await eventually(() => rec.dirty.length > start, 5000);
     await sleep(250);
-    expect(idsOf(rec)).toEqual(['main']);
-    expect(rec.dirty[0]?.reason).toBe('git');
+    expect(idsOf(rec, start)).toEqual(['main']);
+    expect(rec.dirty[start]?.reason).toBe('git');
 
     const mark = rec.dirty.length;
     await writeFile(path.join(linkedMod, 'HEAD'), 'c3'); // the linked worktree's submodule

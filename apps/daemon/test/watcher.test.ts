@@ -11,6 +11,7 @@ import {
   type SubscribeFn,
   WatcherService,
   type WatcherServiceOptions,
+  withDescendants,
 } from '../src/watcher.js';
 import { eventually, onCleanup, sleep, tempDir } from './helpers.js';
 
@@ -137,12 +138,21 @@ describe('WatcherService', () => {
     await mkdir(path.join(layout.main, 'generated'), { recursive: true });
     const { watcher, rec } = makeWatcher({ ignore: ['generated'] });
     await watcher.setProject('p1', layout.common, layout.worktrees);
+    await mkdir(path.join(layout.main, 'packages', 'a', 'node_modules', 'dep'), {
+      recursive: true,
+    });
+    await mkdir(path.join(layout.main, 'packages', 'a', 'generated'), { recursive: true });
+    await sleep(300); // FSEvents (macOS) replays the directories created just before
+    const start = rec.dirty.length;
     await writeFile(path.join(layout.main, 'node_modules', 'pkg', 'index.js'), 'x');
     await writeFile(path.join(layout.main, 'generated', 'out.txt'), 'x');
+    // Nested (monorepo) ones: FSEvents only drops paths an ignore glob matches (withDescendants).
+    await writeFile(path.join(layout.main, 'packages', 'a', 'node_modules', 'dep', 'i.js'), 'x');
+    await writeFile(path.join(layout.main, 'packages', 'a', 'generated', 'out.txt'), 'x');
     await writeFile(path.join(layout.common, 'objects', 'ab', 'cdef'), 'x');
     await writeFile(path.join(layout.common, 'index.lock'), 'x');
     await sleep(600);
-    expect(rec.dirty).toEqual([]);
+    expect(rec.dirty.slice(start)).toEqual([]);
   });
 
   it('routes git-dir events to the right worktrees and detects worktree list changes', async () => {
@@ -294,6 +304,17 @@ describe('WatcherService', () => {
     expect(ignores).toContain('**/gen');
     expect(ignores).toContain('docs/**/*.tmp');
     expect(ignores).not.toContain('**/docs/**/*.tmp');
+  });
+
+  it('ignores the contents of every ignored glob, not just the directory itself', () => {
+    expect(withDescendants(['node_modules', '**/{dist,gen}', 'docs/**/*.tmp', 'a/**'])).toEqual([
+      'node_modules',
+      '**/{dist,gen}',
+      '**/{dist,gen}/**',
+      'docs/**/*.tmp',
+      'docs/**/*.tmp/**',
+      'a/**',
+    ]);
   });
 
   it('compacts any-depth name globs into one brace glob for the native matcher', () => {
