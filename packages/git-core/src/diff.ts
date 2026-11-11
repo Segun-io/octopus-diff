@@ -1048,9 +1048,7 @@ export async function getFileDiff(
   if (!info) throw notFound();
   return {
     ...untrackedIdentity(info),
-    ...(info.binary
-      ? { images: await imageComparison(ctx, repo, plan, null, untrackedIdentity(info), info.key) }
-      : {}),
+    images: await imageComparison(ctx, repo, plan, null, untrackedIdentity(info), info.key),
     ...(await untrackedPatch(ctx, repo, info, attributes.get(info.key), limit, view.full)),
   };
 }

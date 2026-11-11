@@ -68,3 +68,31 @@ Follow-up validation:
   proof: 12 control repositories, 842 lock polls, zero violations.
 - The full browser suite was not repeated locally for this follow-up; CI will
   run it again after the commit is pushed.
+
+## Review follow-up: untracked files, transparency and recovery
+
+Address all three review findings:
+- Generate untracked raster previews even when attributes classify them as text
+  or the untracked inspection cap skips content inspection.
+- Flatten each image onto its own opaque white layer before difference blending.
+  A browser screenshot regression checks every pixel of identical translucent
+  images and requires opaque black output.
+- Associate decoding failures and dimensions with the source being displayed;
+  refreshing repaired bytes retries the image and clears stale dimensions.
+
+Targeted verification: 7 git-core tests and 4 web component tests passed.
+The scope and image browser suites passed all 9 tests (37.4 s); read-only proof
+covered 12 repositories, 956 lock polls and zero violations. Lint, typecheck and
+build passed. No dependency or contract changes.
+
+## Review follow-up: resized image dimensions
+
+Keep the Difference view's two white matte layers at their respective image
+sizes and align them to the top left. A checkerboard canvas remains visible
+outside both layers and exposes added or removed image areas. The control
+caption explains that the checkerboard represents areas outside an image.
+
+Chrome verification: `15-images.spec.ts` passed all 3 browser tests (15 s),
+including opaque white 12 × 12 versus 24 × 24 images. The shared read-only proof
+covered 12 control repositories, 297 lock polls and zero violations. Lint,
+typecheck, build, and `git diff --check` passed.

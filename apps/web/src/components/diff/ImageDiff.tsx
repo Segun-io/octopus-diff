@@ -6,8 +6,11 @@ type Images = NonNullable<FileDiff['images']>;
 type Image = NonNullable<Images['before']>;
 
 function Picture({ image, label }: { image: Image; label: string }) {
-  const [failed, setFailed] = useState(false);
-  const [dimensions, setDimensions] = useState('');
+  const source = `data:${image.mime};base64,${image.base64}`;
+  const [failedSource, setFailedSource] = useState<string | null>(null);
+  const [size, setSize] = useState<{ source: string; text: string } | null>(null);
+  const dimensions = size?.source === source ? size.text : '';
+  const failed = failedSource === source;
   return (
     <figure className="min-w-0 flex-1">
       <figcaption className="mb-3 text-xs text-muted">
@@ -17,15 +20,16 @@ function Picture({ image, label }: { image: Image; label: string }) {
         <p role="status">This image could not be decoded.</p>
       ) : (
         <img
-          src={`data:${image.mime};base64,${image.base64}`}
+          src={source}
           alt={label}
           className="mx-auto max-w-full"
           onLoad={(event) =>
-            setDimensions(
-              `${event.currentTarget.naturalWidth} × ${event.currentTarget.naturalHeight}`,
-            )
+            setSize({
+              source,
+              text: `${event.currentTarget.naturalWidth} × ${event.currentTarget.naturalHeight}`,
+            })
           }
-          onError={() => setFailed(true)}
+          onError={() => setFailedSource(source)}
         />
       )}
     </figure>
@@ -65,7 +69,9 @@ export function ImageDiff({ images }: { images: Images }) {
           </label>
         )}
         {both && mode === 'difference' && (
-          <span>Black means identical pixels. Images align at the top left.</span>
+          <span>
+            Black means identical pixels; the checkerboard shows areas outside either image.
+          </span>
         )}
       </div>
       {images.warning && (
@@ -89,25 +95,48 @@ export function ImageDiff({ images }: { images: Images }) {
       ) : (
         <div
           className="grid w-max max-w-none"
-          style={{ background: mode === 'difference' ? 'black' : undefined, isolation: 'isolate' }}
+          style={{
+            background:
+              mode === 'difference'
+                ? 'conic-gradient(#bbb 25%, #777 0 50%, #bbb 0 75%, #777 0) 0 0 / 16px 16px'
+                : undefined,
+            isolation: 'isolate',
+          }}
         >
-          <img
-            alt="Before"
-            src={`data:${images.before?.mime};base64,${images.before?.base64}`}
-            style={{ gridArea: '1 / 1', maxWidth: 'none' }}
-          />
-          <img
-            alt="After"
-            src={`data:${images.after?.mime};base64,${images.after?.base64}`}
+          <div
             style={{
               gridArea: '1 / 1',
               alignSelf: 'start',
               justifySelf: 'start',
-              maxWidth: 'none',
+              width: 'max-content',
+              height: 'max-content',
+              background: mode === 'difference' ? 'white' : undefined,
+            }}
+          >
+            <img
+              alt="Before"
+              src={`data:${images.before?.mime};base64,${images.before?.base64}`}
+              style={{ maxWidth: 'none' }}
+            />
+          </div>
+          <div
+            style={{
+              gridArea: '1 / 1',
+              alignSelf: 'start',
+              justifySelf: 'start',
+              width: 'max-content',
+              height: 'max-content',
+              background: mode === 'difference' ? 'white' : undefined,
               opacity: mode === 'overlay' ? opacity / 100 : 1,
               mixBlendMode: mode === 'difference' ? 'difference' : 'normal',
             }}
-          />
+          >
+            <img
+              alt="After"
+              src={`data:${images.after?.mime};base64,${images.after?.base64}`}
+              style={{ maxWidth: 'none' }}
+            />
+          </div>
         </div>
       )}
     </div>
