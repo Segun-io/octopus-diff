@@ -24,7 +24,13 @@ import {
   runGit,
 } from '@octopus-diff/fixtures';
 import { type Browser, chromium, type Page } from '@playwright/test';
-import { applyChromiumLibraryPath, assertBuilt, E2E_DIR, WEB_DIST, webUiProblem } from '../support/env.js';
+import {
+  applyChromiumLibraryPath,
+  assertBuilt,
+  E2E_DIR,
+  WEB_DIST,
+  webUiProblem,
+} from '../support/env.js';
 
 const { values: args } = parseArgs({
   options: {
@@ -75,7 +81,11 @@ async function main() {
     };
     child = spawn(
       process.execPath,
-      ['--import', join(E2E_DIR, 'bench', 'spawn-trace.mjs'), join(E2E_DIR, 'bench', 'daemon-child.mjs')],
+      [
+        '--import',
+        join(E2E_DIR, 'bench', 'spawn-trace.mjs'),
+        join(E2E_DIR, 'bench', 'daemon-child.mjs'),
+      ],
       {
         cwd: E2E_DIR,
         env: {
@@ -101,13 +111,16 @@ async function main() {
     for (;;) {
       const { projects } = await client.listProjects();
       const wts = projects.flatMap((p) => p.worktrees);
-      if (projects.length >= repos && wts.every((w) => w.summary !== null || w.error !== null)) break;
+      if (projects.length >= repos && wts.every((w) => w.summary !== null || w.error !== null))
+        break;
       if (Date.now() > deadline) throw new Error('timed out waiting for summaries');
       await sleep(100);
     }
     await sleep(1500);
     const { projects } = await client.listProjects();
-    const worktrees = projects.flatMap((p) => p.worktrees.map((w) => w.worktree)).filter((w) => !w.bare);
+    const worktrees = projects
+      .flatMap((p) => p.worktrees.map((w) => w.worktree))
+      .filter((w) => !w.bare);
     log(`${worktrees.length} worktrees ready`);
 
     const spawnCount = async (): Promise<number> => {
@@ -117,7 +130,11 @@ async function main() {
     const waitChanged = async (worktreeId: string, since: number) => {
       const end = Date.now() + 10_000;
       while (Date.now() < end) {
-        if (events.slice(since).some((e) => e.type === 'worktree.changed' && e.worktreeId === worktreeId))
+        if (
+          events
+            .slice(since)
+            .some((e) => e.type === 'worktree.changed' && e.worktreeId === worktreeId)
+        )
           return true;
         await sleep(10);
       }
@@ -139,7 +156,8 @@ async function main() {
     const result: Record<string, unknown> = { layout: { repos, worktrees: worktrees.length } };
     result.cold = await timed('branch inbox, cold', branchInbox).then(strip);
     const repeats = [];
-    for (let i = 0; i < 5; i++) repeats.push(strip(await timed(`branch inbox, repeat ${i + 1}`, branchInbox)));
+    for (let i = 0; i < 5; i++)
+      repeats.push(strip(await timed(`branch inbox, repeat ${i + 1}`, branchInbox)));
     result.repeat = repeats;
     result.workingRepeat = strip(
       await timed('working inbox (repeat)', () => client.inbox({ scope: { kind: 'working' } })),
@@ -154,7 +172,10 @@ async function main() {
     await appendFile(join(target.path, 'README.md'), 'cache edit\n');
     result.editEvent = await waitChanged(target.id, mark);
     const afterEdit = await timed('branch inbox after an edit', branchInbox);
-    const editAdds = filesOf(afterEdit.value, target.id).reduce((n, f) => n + (f.additions ?? 0), 0);
+    const editAdds = filesOf(afterEdit.value, target.id).reduce(
+      (n, f) => n + (f.additions ?? 0),
+      0,
+    );
     result.afterEdit = { ...strip(afterEdit), fresh: editAdds > beforeAdds };
     result.afterEditRepeat = strip(await timed('branch inbox repeat after edit', branchInbox));
 
@@ -165,7 +186,10 @@ async function main() {
     await runGit(['commit', '-q', '-m', 'cache commit'], env);
     result.commitEvent = await waitChanged(target.id, mark);
     const afterCommit = await timed('branch inbox after a commit', branchInbox);
-    const commitAdds = filesOf(afterCommit.value, target.id).reduce((n, f) => n + (f.additions ?? 0), 0);
+    const commitAdds = filesOf(afterCommit.value, target.id).reduce(
+      (n, f) => n + (f.additions ?? 0),
+      0,
+    );
     result.afterCommit = { ...strip(afterCommit), sameAdditions: commitAdds >= editAdds };
 
     // Default branch move: fast-forward `main` to the commit just made (merge base moves).
@@ -173,18 +197,29 @@ async function main() {
     if (main) {
       const head = (await runGit(['rev-parse', 'HEAD'], env)).stdout.toString().trim();
       mark = events.length;
-      await runGit(['update-ref', 'refs/heads/main', head], { cwd: main.path, env: fixtures.env.vars });
+      await runGit(['update-ref', 'refs/heads/main', head], {
+        cwd: main.path,
+        env: fixtures.env.vars,
+      });
       await sleep(1200);
       const afterMove = await timed('branch inbox after main moved', branchInbox);
-      const moveAdds = filesOf(afterMove.value, target.id).reduce((n, f) => n + (f.additions ?? 0), 0);
-      result.afterDefaultMove = { ...strip(afterMove), fresh: moveAdds < commitAdds || moveAdds === 0 };
+      const moveAdds = filesOf(afterMove.value, target.id).reduce(
+        (n, f) => n + (f.additions ?? 0),
+        0,
+      );
+      result.afterDefaultMove = {
+        ...strip(afterMove),
+        fresh: moveAdds < commitAdds || moveAdds === 0,
+      };
     }
     sub.close();
 
     if (!args['no-ui'] && !webUiProblem()) {
       applyChromiumLibraryPath();
       browser = await chromium.launch();
-      const page: Page = await (await browser.newContext({ viewport: { width: 1440, height: 900 } })).newPage();
+      const page: Page = await (
+        await browser.newContext({ viewport: { width: 1440, height: 900 } })
+      ).newPage();
       const requests: Array<{ t: number; url: string }> = [];
       page.on('request', (r) => {
         const u = new URL(r.url());
@@ -194,7 +229,9 @@ async function main() {
       const paint = async (url: string) => {
         const t0 = performance.now();
         await page.goto(url);
-        await page.locator(`[data-testid="${TEST_IDS.app}"][data-ready="true"]`).waitFor({ timeout: 60_000 });
+        await page
+          .locator(`[data-testid="${TEST_IDS.app}"][data-ready="true"]`)
+          .waitFor({ timeout: 60_000 });
         return performance.now() - t0;
       };
       const cold = await paint(ready.authUrl);
@@ -202,18 +239,36 @@ async function main() {
       requests.length = 0;
       const warm = await paint(ready.url);
       const warmRequests = requests.map((r) => r.url);
-      result.ui = { coldMs: Math.round(cold), warmMs: Math.round(warm), firstLoadRequests: firstLoad, warmRequests };
+      result.ui = {
+        coldMs: Math.round(cold),
+        warmMs: Math.round(warm),
+        firstLoadRequests: firstLoad,
+        warmRequests,
+      };
       log(`UI cold ${cold.toFixed(0)} ms, warm ${warm.toFixed(0)} ms`);
       // Open a worktree, edit it, count the requests the UI makes.
-      await page.locator(`[data-testid="${TEST_IDS.worktreeItem}"][data-worktree-id="${target.id}"]`).first().click();
+      await page
+        .locator(`[data-testid="${TEST_IDS.worktreeItem}"][data-worktree-id="${target.id}"]`)
+        .first()
+        .click();
       await sleep(1500);
       requests.length = 0;
       await appendFile(join(target.path, 'README.md'), 'ui edit\n');
       await sleep(2500);
       const after = requests.map((r) => r.url);
       const files = after.filter((u) => u.includes('/files'));
-      result.ui = { ...(result.ui as object), requestsAfterEdit: after, filesRequestsAfterEdit: files.length };
-      log(`requests after an edit: ${after.length} (files: ${files.length})`);
+      const counts = new Map<string, number>();
+      for (const u of files) counts.set(u, (counts.get(u) ?? 0) + 1);
+      const duplicateFiles = [...counts.entries()].filter(([, n]) => n > 1).map(([u]) => u);
+      result.ui = {
+        ...(result.ui as object),
+        requestsAfterEdit: after,
+        filesRequestsAfterEdit: files.length,
+        duplicateFilesRequests: duplicateFiles,
+      };
+      log(
+        `requests after an edit: ${after.length} (files: ${files.length}, duplicated: ${duplicateFiles.length})`,
+      );
     }
 
     const text = `${JSON.stringify(result, null, 2)}\n`;
@@ -237,6 +292,8 @@ function strip<T extends { ms: number; spawns: number }>(t: T): { ms: number; sp
 }
 
 main().catch((error: unknown) => {
-  process.stderr.write(`[inbox-cache] FAILED: ${error instanceof Error ? error.stack : String(error)}\n`);
+  process.stderr.write(
+    `[inbox-cache] FAILED: ${error instanceof Error ? error.stack : String(error)}\n`,
+  );
   process.exitCode = 1;
 });
