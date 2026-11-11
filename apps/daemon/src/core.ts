@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { realpath, stat } from 'node:fs/promises';
 import {
   API_VERSION,
@@ -156,9 +157,31 @@ function compareProjects(a: ProjectRow, b: ProjectRow): number {
   return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
 }
 
+/**
+ * Scopes whose file list is a function of the worktree state (and, for `branch`, of its base
+ * ref: see `#branchBase`). `review` without a base is resolved before it gets here; with a base
+ * it is immutable.
+ */
 function isCacheableScope(scope: DiffScope): boolean {
-  // `review` without a base is resolved before it gets here; with a base it is immutable.
-  return scope.kind !== 'branch' && !(scope.kind === 'review' && !scope.base);
+  return !(scope.kind === 'review' && !scope.base);
+}
+
+/** The scope whose base is the project's default branch (what "All on branch" measures). */
+const DEFAULT_BASE_SCOPE: DiffScope = { kind: 'branch' };
+
+/**
+ * The summary with its `stateHash` extended by the default branch's commit (`ref=oid`), so equal
+ * hashes keep meaning "nothing to refetch" for branch scopes too. Unchanged without a base.
+ */
+function withBase(summary: WorktreeSummary, base: string | null | undefined): WorktreeSummary {
+  if (!base) return summary;
+  const hash = createHash('sha1')
+    .update(summary.stateHash)
+    .update('\u0000')
+    .update(base)
+    .digest('hex')
+    .slice(0, Math.max(summary.stateHash.length, 16));
+  return { ...summary, stateHash: hash };
 }
 
 /** A bookmark target must be a full commit id (the daemon never stores abbreviations). */
@@ -200,8 +223,17 @@ export class DaemonCore {
   readonly #reviewPolicy: ReviewPolicyProvider | null;
   readonly #projects = new Map<string, ProjectEntry>();
   readonly #scanRoots = new Map<string, ScanState>();
-  readonly #filesCache = new Map<string, { stateHash: string; files: GitChangedFile[] }>();
+  /**
+   * Changed files per (worktree, scope), valid while the worktree's `stateHash` and, for branch
+   * scopes, the base ref's commit (`base`) are the ones they were listed under (#27).
+   */
+  readonly #filesCache = new Map<
+    string,
+    { stateHash: string; base: string | null; files: GitChangedFile[] }
+  >();
   readonly #filesInflight = new Map<string, Promise<GitChangedFile[]>>();
+  /** Identical inbox requests that overlap share one run (`inbox`), keyed by what it reads. */
+  readonly #inboxInflight = new Map<string, Promise<InboxResponse>>();
   /** Worktree ids removed recently (id → time), to spot a path re-added soon after (F1). */
   readonly #recentlyRemoved = new Map<string, number>();
   /** Bumped on every review write in a project (marks, bookmarks, reviewed commits). */
@@ -906,9 +938,12 @@ export class DaemonCore {
       return;
     }
     try {
-      const summary = await this.#git.getSummary(this.#locator(entry), {
+      const gitSummary = await this.#git.getSummary(this.#locator(entry), {
         defaultBranch: this.#defaultBranch(project),
       });
+      // The state hash also covers the default branch's commit (#27): a branch scope's diff
+      // follows it (the merge base moves) while the worktree itself stays as it was.
+      const summary = withBase(gitSummary, await this.#branchBase(project, DEFAULT_BASE_SCOPE));
       if (this.#closed || project.worktrees.get(entry.worktree.id) !== entry) return;
       entry.summary = summary;
       entry.error = null;
@@ -1016,7 +1051,38 @@ export class DaemonCore {
     for (const id of project.worktrees.keys()) this.#invalidateWorktreeFiles(id);
   }
 
-  /** Changed files from git-core, cached by (worktree, scope, stateHash) and single-flight. */
+  /**
+   * What a branch scope diffs against: `<ref>=<commit>` of its base (the scope's `base`, else the
+   * project's default branch), read from the ref files (no git process, #27). A branch scope's
+   * file list depends on HEAD, the working tree and this commit, and nothing else: a default
+   * branch that moves changes the merge base without touching the worktree's own state.
+   * `undefined`: not a branch scope. `null`: unknown (git-core cannot say), so not cacheable.
+   */
+  async #branchBase(project: ProjectEntry, scope: DiffScope): Promise<string | null | undefined> {
+    if (scope.kind !== 'branch') return undefined;
+    const read = this.#git.readBranchBase;
+    if (!read) return null;
+    const name = scope.base ?? this.#defaultBranch(project);
+    if (name === null) return null;
+    try {
+      const base = await read.call(
+        this.#git,
+        { id: project.row.id, commonDir: project.row.commonDir },
+        scope.base ? { base: scope.base } : { defaultBranch: name },
+      );
+      return base ? `${base.ref}=${base.oid}` : null;
+    } catch (error) {
+      if (!isShutdownError(error)) this.#log.debug('branch base unreadable', { error });
+      return null;
+    }
+  }
+
+  /**
+   * Changed files from git-core, cached by (worktree, scope, stateHash, base commit) and
+   * single-flight. The cache key is exactly "the state changed": the worktree's `stateHash`
+   * covers HEAD, the index and the working tree; `base` the ref a branch scope is measured
+   * against. A forced refresh and every project change drop the entries (`#invalidate*`).
+   */
   async #gitFiles(
     project: ProjectEntry,
     entry: WorktreeEntry,
@@ -1024,16 +1090,18 @@ export class DaemonCore {
   ): Promise<GitChangedFile[]> {
     const key = this.#filesKey(entry.worktree.id, scope);
     const stateHash = scope.kind === 'commit' ? 'immutable' : (entry.summary?.stateHash ?? null);
-    const cacheable = isCacheableScope(scope) && stateHash !== null;
+    const base = (await this.#branchBase(project, scope)) ?? null;
+    const cacheable =
+      isCacheableScope(scope) && stateHash !== null && (scope.kind !== 'branch' || base !== null);
     if (cacheable) {
       const cached = this.#filesCache.get(key);
-      if (cached && cached.stateHash === stateHash) {
+      if (cached && cached.stateHash === stateHash && cached.base === base) {
         this.#filesCache.delete(key);
         this.#filesCache.set(key, cached);
         return cached.files;
       }
     }
-    const flightKey = `${key}\u0000${stateHash ?? ''}`;
+    const flightKey = `${key}\u0000${stateHash ?? ''}\u0000${base ?? ''}`;
     const inflight = this.#filesInflight.get(flightKey);
     if (inflight) return inflight;
     const run = this.#git
@@ -1050,7 +1118,7 @@ export class DaemonCore {
         }
         if (tracked.length) this.#watcher.noteTrackedPaths(entry.worktree.id, tracked);
         if (cacheable && stateHash !== null && project.worktrees.get(entry.worktree.id) === entry) {
-          this.#filesCache.set(key, { stateHash, files });
+          this.#filesCache.set(key, { stateHash, base, files });
           while (this.#filesCache.size > CORE_DEFAULTS.filesCacheSize) {
             const oldest = this.#filesCache.keys().next().value;
             if (oldest === undefined) break;
@@ -1156,6 +1224,42 @@ export class DaemonCore {
         if (relevant) candidates.push({ project, entry, summary, review });
       }
     }
+    // Single-flight (#27): the UI asks for the same inbox from several places at once (first
+    // load, a refetch right after an event). Requests share a run only when everything the run
+    // reads is equal: scope, filter, every candidate's state hash (HEAD, index, worktree and the
+    // default branch's commit), effective policy, review version and project facts. A request
+    // that arrives after any of those moved starts its own run, so nobody is served older data.
+    const bases = new Map<string, string | null | undefined>();
+    for (const project of projects)
+      bases.set(project.row.id, await this.#branchBase(project, scope));
+    const hash = createHash('sha1')
+      .update(`${scopeKey(scope)}\u0000${onlyUnreviewed}`)
+      .update(`\u0000${[...bases.values()].join('\u0001')}`);
+    for (const c of candidates) {
+      hash.update(
+        `\u0000${c.entry.worktree.id}\u0001${c.summary.stateHash}\u0001${this.#reviewVersion.get(c.project.row.id) ?? 0}\u0001${JSON.stringify(c.review ?? null)}\u0001${JSON.stringify(this.#toProject(c.project.row))}`,
+      );
+    }
+    const flightKey = hash.digest('hex');
+    const inflight = this.#inboxInflight.get(flightKey);
+    if (inflight) return inflight;
+    const run = this.#buildInbox(scope, onlyUnreviewed, candidates).finally(() => {
+      this.#inboxInflight.delete(flightKey);
+    });
+    this.#inboxInflight.set(flightKey, run);
+    return run;
+  }
+
+  async #buildInbox(
+    scope: DiffScope,
+    onlyUnreviewed: boolean,
+    candidates: ReadonlyArray<{
+      project: ProjectEntry;
+      entry: WorktreeEntry;
+      summary: WorktreeSummary;
+      review: EffectiveReviewPolicy | undefined;
+    }>,
+  ): Promise<InboxResponse> {
     const results = await Promise.all(
       candidates.map(async (c): Promise<InboxEntry | null> => {
         try {
