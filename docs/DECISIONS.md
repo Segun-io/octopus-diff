@@ -1998,3 +1998,11 @@ this makes identical translucent pixels render black. Track decode errors and
 reported dimensions by the actual image source so a repaired file recovers on
 refresh without switching files. Add regression coverage for attributes, the
 inspection cap, repaired sources and browser-rendered translucent pixels.
+
+## 2026-11-11 — Keep image dimensions visible in difference mode
+
+The difference canvas uses intrinsic-sized, top-left-aligned image layers. A
+checkerboard canvas remains visible outside either layer, so a white image growing
+from 12 × 12 to 24 × 24 shows its added area clearly. The existing opaque white
+matte remains inside each image layer so identical translucent pixels still
+compare as black. The caption explains both results.

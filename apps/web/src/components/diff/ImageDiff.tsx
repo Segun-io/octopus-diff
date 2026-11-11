@@ -69,7 +69,9 @@ export function ImageDiff({ images }: { images: Images }) {
           </label>
         )}
         {both && mode === 'difference' && (
-          <span>Black means identical pixels. Images align at the top left.</span>
+          <span>
+            Black means identical pixels; the checkerboard shows areas outside either image.
+          </span>
         )}
       </div>
       {images.warning && (
@@ -93,10 +95,23 @@ export function ImageDiff({ images }: { images: Images }) {
       ) : (
         <div
           className="grid w-max max-w-none"
-          style={{ background: mode === 'difference' ? 'black' : undefined, isolation: 'isolate' }}
+          style={{
+            background:
+              mode === 'difference'
+                ? 'conic-gradient(#bbb 25%, #777 0 50%, #bbb 0 75%, #777 0) 0 0 / 16px 16px'
+                : undefined,
+            isolation: 'isolate',
+          }}
         >
           <div
-            style={{ gridArea: '1 / 1', background: mode === 'difference' ? 'white' : undefined }}
+            style={{
+              gridArea: '1 / 1',
+              alignSelf: 'start',
+              justifySelf: 'start',
+              width: 'max-content',
+              height: 'max-content',
+              background: mode === 'difference' ? 'white' : undefined,
+            }}
           >
             <img
               alt="Before"
@@ -107,6 +122,10 @@ export function ImageDiff({ images }: { images: Images }) {
           <div
             style={{
               gridArea: '1 / 1',
+              alignSelf: 'start',
+              justifySelf: 'start',
+              width: 'max-content',
+              height: 'max-content',
               background: mode === 'difference' ? 'white' : undefined,
               opacity: mode === 'overlay' ? opacity / 100 : 1,
               mixBlendMode: mode === 'difference' ? 'difference' : 'normal',

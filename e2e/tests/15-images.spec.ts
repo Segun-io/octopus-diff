@@ -96,3 +96,76 @@ test('identical translucent pixels are black in difference mode', async ({
     await unlink(file).catch(() => {});
   }
 });
+
+test('difference mode marks areas added by image resizing', async ({
+  manifest,
+  daemon,
+  app,
+  page,
+}) => {
+  const live = findWorktree(manifest, 'live').worktree;
+  const name = 'resized-preview.png';
+  const file = join(live.path, name);
+  const [before, after] = await page.evaluate(() => {
+    const png = (size: number) => {
+      const canvas = document.createElement('canvas');
+      canvas.width = size;
+      canvas.height = size;
+      const context = canvas.getContext('2d');
+      if (!context) throw new Error('Canvas is unavailable');
+      context.fillStyle = 'white';
+      context.fillRect(0, 0, size, size);
+      return canvas.toDataURL('image/png').split(',')[1] as string;
+    };
+    return [png(12), png(24)];
+  });
+  try {
+    await writeFile(file, Buffer.from(after, 'base64'));
+    await daemon.client.refreshWorktree(live.id);
+    await page.route('**/api/worktrees/*/diff?*', async (route) => {
+      const response = await route.fetch();
+      const json = await response.json();
+      if (json.diff?.path === name && json.diff.images?.after) {
+        json.diff.images.before = {
+          ...json.diff.images.after,
+          base64: before,
+          byteLength: Buffer.from(before, 'base64').length,
+        };
+      }
+      await route.fulfill({ response, json });
+    });
+    await app.open(daemon.authUrl);
+    await app.selectWorktree(live.id);
+    await app.setScope('working');
+    await app.openFile(name);
+    await page.getByRole('combobox', { name: 'Image comparison' }).selectOption('difference');
+    const afterImage = page.getByRole('img', { name: 'After', exact: true });
+    await expect
+      .poll(() => afterImage.evaluate((node: HTMLImageElement) => node.naturalWidth))
+      .toBe(24);
+    const screenshot = await afterImage.locator('..').locator('..').screenshot();
+    const pixels = await page.evaluate(async (encoded) => {
+      const image = new Image();
+      image.src = `data:image/png;base64,${encoded}`;
+      await image.decode();
+      const canvas = document.createElement('canvas');
+      canvas.width = image.naturalWidth;
+      canvas.height = image.naturalHeight;
+      const context = canvas.getContext('2d');
+      if (!context) throw new Error('Canvas is unavailable');
+      context.drawImage(image, 0, 0);
+      return {
+        width: canvas.width,
+        data: context.getImageData(0, 0, canvas.width, canvas.height).data,
+      };
+    }, screenshot.toString('base64'));
+    const pixel = (x: number, y: number) => {
+      const offset = (y * pixels.width + x) * 4;
+      return [...pixels.data.slice(offset, offset + 4)];
+    };
+    expect(pixel(5, 5)).toEqual([0, 0, 0, 255]);
+    expect(pixel(20, 20)).not.toEqual([0, 0, 0, 255]);
+  } finally {
+    await unlink(file).catch(() => {});
+  }
+});
