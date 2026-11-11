@@ -181,7 +181,7 @@ async function main() {
 
     // Commit that edit: HEAD moves, the diff against the merge base is unchanged.
     mark = events.length;
-    const env = { cwd: target.path, env: fixtures.env.vars };
+    const env = { cwd: target.path, env: fixtures.env };
     await runGit(['add', '-A'], env);
     await runGit(['commit', '-q', '-m', 'cache commit'], env);
     result.commitEvent = await waitChanged(target.id, mark);
@@ -199,7 +199,7 @@ async function main() {
       mark = events.length;
       await runGit(['update-ref', 'refs/heads/main', head], {
         cwd: main.path,
-        env: fixtures.env.vars,
+        env: fixtures.env,
       });
       await sleep(1200);
       const afterMove = await timed('branch inbox after main moved', branchInbox);
