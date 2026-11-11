@@ -1,0 +1,79 @@
+{
+  "dataset": {
+    "worktrees": 30,
+    "filesPerWorktree": 200,
+    "inboxGroups": 30,
+    "mountedRowsAtLoad": 46
+  },
+  "load": {
+    "fcp": 72,
+    "domContentLoaded": 46,
+    "readyAt": 445.3999999985099,
+    "longTasks": {
+      "n": 0,
+      "p50": 0,
+      "p95": 0,
+      "max": 0
+    }
+  },
+  "jNavigation": {
+    "perPressToNextFrame": {
+      "n": 200,
+      "p50": 33.3,
+      "p95": 34.6,
+      "max": 123.4
+    },
+    "longTasks": {
+      "n": 1,
+      "p50": 92,
+      "p95": 92,
+      "max": 92
+    }
+  },
+  "scroll": {
+    "listHeightPx": 156900,
+    "frameDelta": {
+      "n": 261,
+      "p50": 16.6,
+      "p95": 17.2,
+      "max": 20.5
+    },
+    "framesOver50ms": 0,
+    "longTasks": {
+      "n": 0,
+      "p50": 0,
+      "p95": 0,
+      "max": 0
+    },
+    "mountedRowsAfterScroll": 46
+  },
+  "worktreeSwitchJ": {
+    "wallClock": {
+      "n": 30,
+      "p50": 34,
+      "p95": 37,
+      "max": 37
+    },
+    "longTasks": {
+      "n": 0,
+      "p50": 0,
+      "p95": 0,
+      "max": 0
+    }
+  },
+  "liveRefreshInbox": {
+    "mutateToIdle": {
+      "n": 10,
+      "p50": 96,
+      "p95": 192.5,
+      "max": 192.5
+    },
+    "longTasks": {
+      "n": 0,
+      "p50": 0,
+      "p95": 0,
+      "max": 0
+    }
+  },
+  "pageErrors": []
+}
