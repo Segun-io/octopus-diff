@@ -42,6 +42,7 @@ import {
 import { ContextMenu, useContextMenu } from '../ContextMenu.tsx';
 import { CopyButton } from '../CopyButton.tsx';
 import { COPY_TEST_IDS, fileCopyItems, separated, worktreeCopyItems } from '../copyMenu.ts';
+import { ImageDiff } from './ImageDiff.tsx';
 
 const DiffRenderer = lazy(() =>
   import('./DiffRenderer.tsx').then((m) => ({ default: m.DiffRenderer })),
@@ -516,6 +517,7 @@ function DiffBody({
   suspicious: boolean;
   onLoadAnyway: () => void;
 }) {
+  if (diff.images) return <ImageDiff images={diff.images} />;
   switch (display.kind) {
     case 'binary':
       return (

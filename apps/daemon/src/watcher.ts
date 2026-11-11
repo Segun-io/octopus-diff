@@ -300,6 +300,23 @@ export function compactIgnores(entries: readonly string[]): string[] {
   return out;
 }
 
+/**
+ * Adds `<glob>/**` after every glob entry so a directory's contents are ignored on every backend.
+ * `@parcel/watcher` matches globs against each event path: inotify (Linux) never watches an
+ * ignored directory, so its contents are dropped too, but FSEvents (macOS) watches the whole tree
+ * and drops only the paths a glob matches, so `**\/node_modules` let every file inside a nested
+ * `node_modules` through (an install in a monorepo meant a refresh storm). Plain paths are matched
+ * as prefixes on every backend and pass through unchanged.
+ */
+export function withDescendants(entries: readonly string[]): string[] {
+  const out: string[] = [];
+  for (const entry of entries) {
+    out.push(entry);
+    if (/[*?[\]{}!]/.test(entry) && !entry.endsWith('/**')) out.push(`${entry}/**`);
+  }
+  return out;
+}
+
 function isLockFile(p: string): boolean {
   return p.endsWith('.lock');
 }
@@ -781,7 +798,9 @@ export class WatcherService {
     const nested = [...this.#worktrees.values()]
       .map((other) => other.info.root)
       .filter((r) => r !== root && isSameOrInside(root, r));
-    const ignore = compactIgnores([...this.#baseIgnores, ...buildIgnores, ...nested]);
+    const ignore = withDescendants(
+      compactIgnores([...this.#baseIgnores, ...buildIgnores, ...nested]),
+    );
     try {
       const link = this.#link((error) => this.#onWorktreeError(st, error));
       const sub = await this.#subscribe(
@@ -1131,7 +1150,7 @@ export class WatcherService {
           if (error) link.fail(error);
           else this.#onGitEvents(project, events);
         },
-        { ignore: [...GIT_DIR_IGNORES] },
+        { ignore: withDescendants(GIT_DIR_IGNORES) },
       );
       const failedEarly = link.attach(sub);
       if (!current()) {

@@ -25,6 +25,7 @@ import {
 import type { GitContext, RepoInfo } from './context.js';
 import { LruCache, mapLimit } from './fs-utils.js';
 import { hashParts, PATCH_HASH_LENGTH, PatchHasher, STATE_HASH_LENGTH } from './hash.js';
+import { imageComparison } from './images.js';
 import { DiffOutputParser, type NumstatEntry, type RawEntry } from './parse/diff-output.js';
 import { type ChunkKind, PatchSplitter } from './parse/patch.js';
 import { parseStatusV2, type StatusEntry, type StatusResult } from './parse/status.js';
@@ -1023,6 +1024,7 @@ export async function getFileDiff(
     }
     return {
       ...identity,
+      images: await imageComparison(ctx, repo, plan, entry, identity),
       ...present(shownChunk, identity.binary, limit, view.full),
       byteLength: canonical?.bytes ?? null,
     };
@@ -1046,6 +1048,9 @@ export async function getFileDiff(
   if (!info) throw notFound();
   return {
     ...untrackedIdentity(info),
+    ...(info.binary
+      ? { images: await imageComparison(ctx, repo, plan, null, untrackedIdentity(info), info.key) }
+      : {}),
     ...(await untrackedPatch(ctx, repo, info, attributes.get(info.key), limit, view.full)),
   };
 }

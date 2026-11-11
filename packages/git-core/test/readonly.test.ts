@@ -280,7 +280,8 @@ describe('read-only proof', () => {
     expect(statusAfter).toEqual(statusBefore);
     // Exercises every read path (hundreds of git processes): ~2.5 s on a 12-core machine, over
     // the 5 s default on a 4-core CI runner that runs the other packages' tests at the same time.
-  }, 30_000);
+    // ~13 s alone on macOS (git spawns are slower there); the full parallel suite can double it.
+  }, 60_000);
 });
 
 describe('read-only proof: split index (documented exception)', () => {

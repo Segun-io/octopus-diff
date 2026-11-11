@@ -226,9 +226,22 @@ export const ChangedFileSchema = GitChangedFileSchema.extend({
 });
 export type ChangedFile = z.infer<typeof ChangedFileSchema>;
 
+/** Bounded raster preview; SVG/HTML are never embedded. */
+export const ImagePreviewSchema = z.object({
+  mime: z.enum(['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/bmp']),
+  base64: z.string().max(14_000_000),
+  byteLength: Count,
+});
+export const ImageComparisonSchema = z.object({
+  before: ImagePreviewSchema.nullable(),
+  after: ImagePreviewSchema.nullable(),
+  warning: z.string().optional(),
+});
+
 /** One file's diff as produced by git-core. */
 export const GitFileDiffSchema = z.object({
   ...fileIdentityShape,
+  images: ImageComparisonSchema.optional(),
   /**
    * Raw unified diff for this one file (`diff --git` header included), possibly produced with
    * `-w` or a custom context when requested. Empty when `tooLarge` or for a binary file.

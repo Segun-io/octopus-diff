@@ -1938,3 +1938,52 @@ contract, daemon or git-core change.
      would still blow it. Best of up to three attempts, each on fresh daemons; samples and the budget are
      recorded in `bulk-review-bench.json`. Warm `all` (the UI flow) keeps its fixed 2 s. Checked under a
      simulated slow runner (one core shared with three busy loops): inbox 1777 ms, bulk 1677 ms, budget 2421 ms.
+
+## macOS: the test suite and the watcher's ignore globs (session, 2026-11-09)
+
+164. **The unit tests pass on macOS, and nested ignored directories are ignored there too.** CI only ran on
+     Linux; on macOS (git 2.54, Node 26) 26 unit tests failed. Causes and fixes:
+     (a) `os.tmpdir()` is under `/var`, a symlink to `/private/var`, while git and FSEvents report resolved
+     paths: the daemon's `tempDir()` and the forge tests' temp dirs are now realpaths (git-core's and the
+     fixtures' already were). (b) APFS refuses file names that are not valid UTF-8 (`EILSEQ`): git-core's
+     `RAW_NAMES_SUPPORTED` and the fixtures' `supportsRawFileNames()` probe the temp dir; where it is false
+     the raw-name steps are skipped and the kitchen-sink scenario leaves the `non-utf8-filename` case out
+     (`generator.test` asserts it is present wherever the probe passes, so Linux still covers it; e2e
+     03-scopes checks it when present). (c) **Real bug, macOS only:** `@parcel/watcher` matches ignore globs
+     against each event path. inotify never watches an ignored directory, so its contents were dropped too,
+     but FSEvents watches the whole tree and dropped only the directory itself: every file written inside a
+     nested `node_modules` / `dist` / … (`**/{…}`) and inside a submodule's `objects/` (F3's glob) reached
+     the daemon and refreshed the worktree, e.g. a refresh storm during `pnpm install` in a monorepo.
+     `withDescendants()` adds `<glob>/**` after every glob entry of both subscriptions (plain paths are
+     prefix-matched on every backend). `watcher.test` now writes into a nested `node_modules` and a nested
+     extra ignore; without the fix it and F3 fail on macOS. (d) Test-only FSEvents differences: it replays
+     directories created just before a subscription (F3 and the ignore test let them settle first), and it
+     coalesces a delete immediately followed by a re-create into an `update` of the root and keeps watching
+     the path, so F1 lets the delete arrive before re-creating the folder on macOS (no degraded state is
+     needed there: the relist sees the new inode, as the "inode changed" test checks). (e) git-core's
+     read-only proof takes ~13 s alone on macOS: its timeout is 30 → 60 s. A `test-macos` CI job runs build
+     + unit tests on `macos-latest`, one package at a time (`--workspace-concurrency=1`): on an 8-core Mac
+     the default `pnpm test` (packages side by side, each vitest on every core) still times out git-heavy
+     tests and the watch host's 500 ms answer; one at a time, all 1021 unit tests pass in ~2 min.
+
+## 2026-11-11 — Image comparisons for documentation
+
+User-requested: replace the binary placeholder for PNG, JPEG, GIF, WebP and BMP with
+before/after previews, overlay and difference views. The existing file-diff response gains an optional
+`images` field; no route or existing field changes. Git-core reads raw blob ids selected by the
+scope's diff, through the existing read-only runner, and bounded regular files for working content.
+Only raster signatures are embedded, at most 10 MiB per side; unsupported binaries keep their
+placeholder. SVG remains unsupported. New and deleted images show the available side. No new
+dependencies. This requires coordinated changes in contracts, git-core and web as one integration
+fix requested by the user. No daemon changes are needed because its response preserves diff fields.
+
+
+## 2026-11-11 — Restore the project package manager lockfile format
+
+PR preparation found the local lockfile in pnpm 8's format 6, incompatible with
+the project's pinned pnpm 12.16.1 and frozen CI installation. Regenerate it with
+pnpm 12.16.1 and verify a frozen install. This restores format 9 and resolves
+compatible development tooling updates (Vite 8.3.7, React Vite plugin 6.3.0,
+Testing Library user-event 14.6.9 and Rolldown 1.2.18). No package manifest changes
+or new dependencies. Regenerate both credit outputs with the corrected lockfile
+and repeat validation against its exact dependency set.

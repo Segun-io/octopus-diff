@@ -177,16 +177,16 @@ Used to build, lint and test octopus-diff; not shipped.
 | `@tailwindcss/vite` | 4.3.5 | MIT | apps/web | https://github.com/tailwindlabs/tailwindcss |
 | `@testing-library/dom` | 10.4.2 | MIT | apps/web | https://github.com/testing-library/dom-testing-library |
 | `@testing-library/react` | 16.3.3 | MIT | apps/web | https://github.com/testing-library/react-testing-library |
-| `@testing-library/user-event` | 14.6.8 | MIT | apps/web | https://github.com/testing-library/user-event |
+| `@testing-library/user-event` | 14.6.9 | MIT | apps/web | https://github.com/testing-library/user-event |
 | `@types/node` | 26.6.6 | MIT | root | https://github.com/DefinitelyTyped/DefinitelyTyped |
 | `@types/react` | 19.3.0 | MIT | apps/web | https://github.com/DefinitelyTyped/DefinitelyTyped |
 | `@types/react-dom` | 19.3.0 | MIT | apps/web | https://github.com/DefinitelyTyped/DefinitelyTyped |
-| `@vitejs/plugin-react` | 6.2.1 | MIT | apps/web | https://github.com/vitejs/vite-plugin-react |
+| `@vitejs/plugin-react` | 6.3.0 | MIT | apps/web | https://github.com/vitejs/vite-plugin-react |
 | `esbuild` | 0.28.2 | MIT | apps/cli | https://github.com/evanw/esbuild |
 | `jsdom` | 31.0.0 | MIT | apps/web | https://github.com/jsdom/jsdom |
 | `tsx` | 4.23.15 | MIT | root | https://github.com/privatenumber/tsx |
 | `typescript` | 7.0.2 | Apache-2.0 | root | https://github.com/microsoft/TypeScript |
-| `vite` | 8.3.6 | MIT | apps/web | https://github.com/vitejs/vite |
+| `vite` | 8.3.7 | MIT | apps/web | https://github.com/vitejs/vite |
 | `vitest` | 5.1.0 | MIT | root | https://github.com/vitest-dev/vitest |
 
 ## Programs octopus-diff runs

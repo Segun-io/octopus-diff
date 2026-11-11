@@ -1,10 +1,28 @@
-import { mkdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { type IsolatedGitEnv, runGit } from './git.js';
 import type { Rng } from './random.js';
 
 /** Fixed commit clock: 2026-01-01T00:00:00Z plus one minute per commit, for deterministic shas. */
 const BASE_EPOCH = 1_767_225_600;
+
+/**
+ * Whether the file system under `parentDir` accepts file names that are not valid UTF-8. Linux file
+ * systems take any bytes; APFS (macOS) refuses them with EILSEQ, so scenarios leave the
+ * `non-utf8-filename` case out there.
+ */
+export async function supportsRawFileNames(parentDir: string): Promise<boolean> {
+  const dir = await mkdtemp(join(parentDir, 'raw-name-probe-'));
+  try {
+    await writeFile(Buffer.concat([Buffer.from(`${dir}/`), Buffer.from([0x78, 0xff])]), '');
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EILSEQ') return false;
+    throw error;
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
 
 export class BuildContext {
   readonly env: IsolatedGitEnv;

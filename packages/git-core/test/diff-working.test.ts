@@ -11,7 +11,7 @@ import {
   listFiles,
   locator,
 } from './helpers/core.js';
-import { createFixture, type Fixture, lines } from './helpers/fixture.js';
+import { createFixture, type Fixture, lines, RAW_NAMES_SUPPORTED } from './helpers/fixture.js';
 
 const NON_UTF8 = Buffer.from([0x63, 0x61, 0x66, 0xe9, 0x2e, 0x74, 0x78, 0x74]); // "caf\xe9.txt"
 const NON_UTF8_UNTRACKED = Buffer.from([0x6e, 0x65, 0x77, 0xff, 0x2e, 0x74, 0x78, 0x74]);
@@ -41,7 +41,7 @@ describe('working / staged / unstaged scopes', () => {
       },
     });
     fx.write(path.join(repo, 'bin.dat'), Buffer.from([0, 1, 2, 3, 0, 5]));
-    fx.writeRaw(repo, NON_UTF8, '');
+    if (RAW_NAMES_SUPPORTED) fx.writeRaw(repo, NON_UTF8, '');
     fx.git(repo, ['add', '-A']);
     fx.git(repo, ['commit', '-q', '-m', 'second']);
 
@@ -68,7 +68,7 @@ describe('working / staged / unstaged scopes', () => {
     fx.symlink('keep.txt', path.join(repo, 'tc.txt'));
     fx.write(path.join(repo, 'bin.dat'), Buffer.from([0, 1, 2, 3, 0, 6, 7]));
     fx.write(path.join(repo, 'space name.txt'), 'y\n');
-    fx.writeRaw(repo, NON_UTF8, 'now has content\n');
+    if (RAW_NAMES_SUPPORTED) fx.writeRaw(repo, NON_UTF8, 'now has content\n');
     // Untracked.
     fx.write(path.join(repo, 'untracked.txt'), lines(4, 'u'));
     fx.write(path.join(repo, 'untracked-noeol.txt'), 'no newline');
@@ -76,7 +76,7 @@ describe('working / staged / unstaged scopes', () => {
     fx.write(path.join(repo, 'untracked.bin'), Buffer.from([1, 0, 2]));
     fx.symlink('keep.txt', path.join(repo, 'untracked-link'));
     fx.write(path.join(repo, 'sub dir', 'deep.txt'), 'deep\n');
-    fx.writeRaw(repo, NON_UTF8_UNTRACKED, 'a\nb\n');
+    if (RAW_NAMES_SUPPORTED) fx.writeRaw(repo, NON_UTF8_UNTRACKED, 'a\nb\n');
     fx.git(path.join(repo), ['init', '-q', 'nested-repo']);
 
     core = createGitCore(fx.coreOptions());
@@ -165,10 +165,9 @@ describe('working / staged / unstaged scopes', () => {
     expect(paths).not.toContain('keep.txt');
     expect(paths).not.toContain('dir/nested.txt');
     const odd = files.filter((f) => f.rawPath !== undefined);
-    expect(odd.map((f) => Buffer.from(f.rawPath as string, 'base64'))).toEqual([
-      NON_UTF8,
-      NON_UTF8_UNTRACKED,
-    ]);
+    expect(odd.map((f) => Buffer.from(f.rawPath as string, 'base64'))).toEqual(
+      RAW_NAMES_SUPPORTED ? [NON_UTF8, NON_UTF8_UNTRACKED] : [],
+    );
     for (const f of odd) expect(f.path).toContain('�');
   });
 
@@ -280,7 +279,7 @@ describe('working / staged / unstaged scopes', () => {
     expect(nested).toMatchObject({ status: 'untracked', patch: '' });
   });
 
-  it('handles non-UTF-8 paths through rawPath', async () => {
+  it.skipIf(!RAW_NAMES_SUPPORTED)('handles non-UTF-8 paths through rawPath', async () => {
     const files = await listFiles(core, wt, { kind: 'working' });
     const tracked = files.find((f) => f.rawPath === NON_UTF8.toString('base64'));
     const untracked = files.find((f) => f.rawPath === NON_UTF8_UNTRACKED.toString('base64'));

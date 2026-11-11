@@ -12,12 +12,16 @@ import {
   readStatus,
   removeFixtureRoot,
   SPECIAL_CASES,
+  supportsRawFileNames,
 } from '../src/index.js';
 
 let set: FixtureSet;
+/** False on APFS (macOS), which refuses non-UTF-8 file names. */
+let rawNames: boolean;
 
 beforeAll(async () => {
   set = await generateFixtures({ seed: 42 });
+  rawNames = await supportsRawFileNames(set.root);
 }, 120_000);
 
 afterAll(async () => {
@@ -38,6 +42,10 @@ describe('fixture layout', () => {
     const covered = new Set(set.manifest.projects.flatMap((p) => Object.keys(p.cases)));
     for (const name of SPECIAL_CASES) {
       if (name === 'conflict') continue;
+      if (name === 'non-utf8-filename' && !rawNames) {
+        expect(covered).not.toContain(name);
+        continue;
+      }
       expect(covered, `special case ${name}`).toContain(name);
     }
     expect(covered).toContain('conflict');
@@ -172,6 +180,8 @@ describe('kitchen-sink special cases', () => {
   });
 
   it('non-UTF-8 and unicode filenames', () => {
+    expect(file('docs/ünïcødé ✓.md').status).toBe('modified');
+    if (!rawNames) return; // APFS: the non-UTF-8 case is left out (covered on Linux CI)
     const latin = set.manifest.projects.find((p) => p.name === 'kitchen-sink')?.cases[
       'non-utf8-filename'
     ];
@@ -179,7 +189,6 @@ describe('kitchen-sink special cases', () => {
     const f = file(latin?.path ?? '');
     expect(f.rawPath).toBe(latin?.rawPath);
     expect(f.path).toContain('�');
-    expect(file('docs/ünïcødé ✓.md').status).toBe('modified');
   });
 
   it('symlink, typechange, submodule', () => {
