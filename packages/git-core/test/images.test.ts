@@ -85,3 +85,20 @@ it('bounds image reads and keeps a useful message for oversized files', async ()
   expect(diff.images?.after).toBeNull();
   expect(diff.images?.warning).toContain('10 MiB');
 });
+
+it('previews untracked images even when attributes force a textual diff', async () => {
+  fx.write(path.join(repo, '.gitattributes'), '*.png diff\n');
+  fx.write(path.join(repo, 'new.png'), png);
+  const diff = await core.getFileDiff(wt, { kind: 'working' }, { path: 'new.png' });
+  expect(diff.binary).toBe(false);
+  expect(diff.images?.after?.base64).toBe(png.toString('base64'));
+});
+
+it('previews selected images when untracked content inspection exceeds its cap', async () => {
+  await core.dispose();
+  core = createGitCore(fx.coreOptions({ maxUntrackedFiles: 1 }));
+  fx.write(path.join(repo, 'new.png'), png);
+  fx.write(path.join(repo, 'another.txt'), 'more files than the inspection budget');
+  const diff = await core.getFileDiff(wt, { kind: 'working' }, { path: 'new.png' });
+  expect(diff.images?.after?.base64).toBe(png.toString('base64'));
+});

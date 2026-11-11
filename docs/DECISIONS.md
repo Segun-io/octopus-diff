@@ -1987,3 +1987,14 @@ compatible development tooling updates (Vite 8.3.7, React Vite plugin 6.3.0,
 Testing Library user-event 14.6.9 and Rolldown 1.2.18). No package manifest changes
 or new dependencies. Regenerate both credit outputs with the corrected lockfile
 and repeat validation against its exact dependency set.
+
+## 2026-11-11 — Image preview review fixes
+
+Preview selected untracked raster images independently of Git's text/binary
+classification: attributes and the untracked inspection cap must not disable a
+bounded signature-checked preview. In difference mode, composite each image
+onto its own identical opaque white background before blending the two layers;
+this makes identical translucent pixels render black. Track decode errors and
+reported dimensions by the actual image source so a repaired file recovers on
+refresh without switching files. Add regression coverage for attributes, the
+inspection cap, repaired sources and browser-rendered translucent pixels.
