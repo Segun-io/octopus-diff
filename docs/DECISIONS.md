@@ -2071,3 +2071,28 @@ and repeat validation against its exact dependency set.
      The first load's duplicate inbox requests the issue mentions do not occur in the production build (one
      `inbox?scope=branch`, one `inbox?scope=working`, measured); the two requests are what #10 (paint without
      waiting for the inbox) is about, not a dedupe bug.
+171. **gzip and ETag/304 on the JSON API (GitHub #28).** `apps/daemon/src/http-cache.ts`, mounted in `app.ts`
+     after the token check (so Host/Origin/token/CSP behaviour is untouched and a 304 is only ever sent to an
+     authenticated client). (a) **gzip level 1**, no dependency, for every 200 JSON `GET` of at least 1 KiB
+     when `Accept-Encoding` allows it, with `Vary: Accept-Encoding` on every JSON `GET`. Measured on a 9.3 MB
+     list: gzip1 20 ms / 7.1x, gzip4 33 ms / 7.2x, brotli q2 26 ms / 7.8x, q4 40 ms / 7.3x, q5 72 ms: brotli
+     buys a few percent for more CPU, so gzip 1. Node's zlib runs on the libuv pool; the event loop is not
+     blocked. SSE (`text/event-stream`), error bodies, POSTs and small bodies are untouched. (b) **ETag =
+     weak SHA-1 of the uncompressed body** on `/api/projects`, `/api/inbox` and `/api/worktrees/:id/files`
+     (3.8 ms per 9 MB). Not `stateHash`: the inbox and project bodies carry review marks, forge data and
+     project fields outside any worktree's `stateHash` (and the inbox spans many worktrees), so a state id
+     would either go stale or need an invalidation list that every new field must join; a hash of what is
+     about to be sent cannot be wrong. The daemon still builds the body (#27's caches make that cheap); what
+     is saved is transfer, and the gzip is skipped on a 304. The one volatile field, the inbox's trailing
+     `"generatedAt"`, is left out of the hash (without that no two inbox answers ever shared an ETag; the web
+     app does not read it). Weak, so one tag serves both encodings. If-None-Match is compared weakly and
+     understands lists and `*`. (c) **`Cache-Control: no-cache` instead of `no-store` on those three routes
+     only** (diffs, commits, settings, everything else stay `no-store`): a browser never keeps a `no-store`
+     response, so it would never send `If-None-Match` and the ETag would only help non-browser clients.
+     `no-cache` stores the listing (file paths and counts, no file contents) in the browser's private cache and
+     revalidates on every use; the bearer token is still checked before any 304. The security-header
+     middleware keeps `no-cache` only when this middleware set it. `auth.test.ts` now asserts `no-store` on
+     `/api/settings` and `no-cache` on `/api/projects`. Browsers decode `Content-Encoding` and replay a 304
+     from their cache themselves; the web client needed no change. Cost: gzip1 + hash +
+     response copy measured at under 50 ms per 10 MB in `http-cache.test.ts` (best of 7 against the same route
+     without the middleware).
