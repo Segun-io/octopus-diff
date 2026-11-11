@@ -265,12 +265,17 @@ describe('auth v2 and request safety', () => {
   });
 
   it('sets security headers and never CORS headers', async () => {
-    const res = await http(daemon, '/api/projects', { headers: { origin: daemon.url } });
+    const res = await http(daemon, '/api/settings', { headers: { origin: daemon.url } });
     expect(res.headers.get('x-content-type-options')).toBe('nosniff');
     expect(res.headers.get('referrer-policy')).toBe('no-referrer');
     expect(res.headers.get('cache-control')).toBe('no-store');
     expect(res.headers.get('content-security-policy')).toContain("default-src 'none'");
     expect(res.headers.get('access-control-allow-origin')).toBeNull();
+    // The project listing is the exception to `no-store`: `no-cache` + ETag (DECISIONS #164).
+    const projects = await http(daemon, '/api/projects', { headers: { origin: daemon.url } });
+    expect(projects.headers.get('cache-control')).toBe('no-cache');
+    expect(projects.headers.get('content-security-policy')).toContain("default-src 'none'");
+    expect(projects.headers.get('access-control-allow-origin')).toBeNull();
     const preflight = await http(daemon, '/api/projects', {
       method: 'OPTIONS',
       headers: { origin: 'https://evil.example', 'access-control-request-method': 'PUT' },

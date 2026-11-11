@@ -50,6 +50,7 @@ import { ApiError, toApiError } from './errors.js';
 import type { EventHub } from './events.js';
 import type { ForgeService } from './forges.js';
 import { listDirs } from './fs-browse.js';
+import { httpCache, REVALIDATE_CACHE_CONTROL } from './http-cache.js';
 import type { RepositoryInfoService } from './repositories.js';
 import type { ReviewControls } from './review-controls.js';
 import {
@@ -208,7 +209,10 @@ export function createApp(deps: AppDeps): Hono {
           isHtml && !isApiPath(pathname) ? currentUiCsp() : API_CSP,
         );
       }
-      if (isApiPath(pathname) || !headers.has('Cache-Control'))
+      // API answers are `no-store`, except the three listings `httpCache` revalidates (`no-cache`
+      // + ETag: a `no-store` response is never kept, so a browser could never send If-None-Match).
+      const revalidated = headers.get('Cache-Control') === REVALIDATE_CACHE_CONTROL;
+      if ((isApiPath(pathname) && !revalidated) || !headers.has('Cache-Control'))
         headers.set('Cache-Control', 'no-store');
       // Auth v2 has no cookie; drop the v1 cookie (it held the token) wherever it shows up.
       if (getCookie(c, AUTH_COOKIE_NAME) !== undefined) {
@@ -288,6 +292,14 @@ export function createApp(deps: AppDeps): Hono {
       new ApiError('unauthorized', authorization ? 'invalid token' : 'missing token'),
     );
   });
+
+  // gzip for JSON answers; ETag / 304 for the project, inbox and file listings (http-cache.ts).
+  // After the token check above, so only an authenticated client is ever answered 304.
+  const routeRegExp = (name: RouteName) =>
+    new RegExp(`^${ROUTES[name].path.replace(/:[A-Za-z]+/g, '[^/]+')}$`);
+  onApi(
+    httpCache({ revalidate: (['listProjects', 'inbox', 'listFiles'] as const).map(routeRegExp) }),
+  );
 
   route('listProjects', async (c) => {
     const body: ProjectsResponse = { projects: await core.listProjects() };
