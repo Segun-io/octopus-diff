@@ -81,6 +81,8 @@ if (!LAYOUTS.includes(args.layout as string)) {
   throw new Error(`--layout must be one of ${LAYOUTS.join(', ')}`);
 }
 const LAYOUT = args.layout as 'small' | LargeLayoutName;
+/** How long one edit may take to show up. The 100k-file layout needs minutes while the UI refetches. */
+const EDIT_WAIT_MS = LAYOUT === 'large' ? 300_000 : LAYOUT === 'small' ? 10_000 : 60_000;
 
 /** PLAN §8.10 targets, the warm reload (#26) and the startup spawns per worktree (#26). */
 const TARGETS = {
@@ -275,7 +277,7 @@ async function firstPaint(page: Page, url: string): Promise<{ ms: number; fcp: n
   await page.goto(url);
   await page
     .locator(`[data-testid="${TEST_IDS.app}"][data-ready="true"]`)
-    .waitFor({ timeout: 120_000 });
+    .waitFor({ timeout: 600_000 });
   const ms = performance.now() - started;
   const fcp = await page.evaluate(
     () => performance.getEntriesByName('first-contentful-paint')[0]?.startTime ?? null,
@@ -510,7 +512,7 @@ async function main() {
                 return el && el.getAttribute('data-additions') !== prev ? Date.now() : false;
               },
               { sel: selector, prev: before },
-              { polling: 'raf', timeout: 10_000 },
+              { polling: 'raf', timeout: EDIT_WAIT_MS },
             )
             .then((handle) => handle.jsonValue() as Promise<number>)
             .catch(() => null)
@@ -519,7 +521,7 @@ async function main() {
       const started = Date.now();
       await appendFile(join(target.path, 'README.md'), `bench edit ${i}\n`);
       const sseAt = await new Promise<number | null>((resolve) => {
-        const deadline = Date.now() + 10_000;
+        const deadline = Date.now() + EDIT_WAIT_MS;
         const check = () => {
           const hit = events
             .slice(mark)
@@ -546,7 +548,7 @@ async function main() {
       );
       // Let the work this edit caused (the UI refetches too) finish, so the next sample does not
       // queue behind it: no git spawn for 1 s.
-      await settled(daemon.spawnFile);
+      await settled(daemon.spawnFile, 1000, EDIT_WAIT_MS);
       sample.window[1] = Date.now();
     }
     sub.close();
