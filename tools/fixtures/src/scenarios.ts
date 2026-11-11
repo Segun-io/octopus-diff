@@ -277,7 +277,11 @@ export interface KitchenSinkOptions {
 }
 
 function pngBytes(rng: Rng, size: number): Buffer {
-  const header = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0x0d]);
+  // A decodable 1 × 1 PNG, followed by deterministic padding to vary the binary content.
+  const header = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aWQAAAABJRU5ErkJggg==',
+    'base64',
+  );
   const body = Buffer.alloc(size);
   for (let i = 0; i < size; i++) body[i] = rng.int(0, 255);
   body[0] = 0; // guarantee a NUL early so git treats it as binary

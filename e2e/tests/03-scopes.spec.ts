@@ -277,7 +277,15 @@ test.describe('§8.4 scopes (UI)', () => {
     await app.setScope('working');
 
     await app.openFile('assets/logo.png');
-    await expect(app.placeholder('binary')).toBeVisible();
+    await expect(app.diffViewer.getByRole('combobox', { name: 'Image comparison' })).toBeVisible();
+    for (const side of ['Before', 'After']) {
+      const image = app.diffViewer.getByRole('img', { name: side, exact: true });
+      await expect(image).toBeVisible();
+      await expect
+        .poll(() => image.evaluate((node: HTMLImageElement) => node.naturalWidth))
+        .toBe(1);
+    }
+    await expect(app.placeholder('binary')).toHaveCount(0);
 
     await app.openFile('generated/huge.sql');
     await expect(app.placeholder('too-large')).toBeVisible();

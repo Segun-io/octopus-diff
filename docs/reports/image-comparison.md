@@ -49,3 +49,22 @@ images at the top left and is a visual comparison rather than a numeric pixel sc
 Daemon already spreads the git-core response, and its CSP permits data images.
 The installed CLI must be rebuilt, repackaged and restarted; reload the app after
 restarting. Pre-existing working tree edits were preserved.
+
+## CI regression follow-up (2026-11-11)
+
+The full Linux browser run exposed an outdated assertion in `03-scopes.spec.ts`:
+`assets/logo.png` was still expected to show the binary placeholder. Update the
+assertion to require the comparison controls and both decoded image versions.
+The kitchen-sink PNG fixture contained only a PNG signature and random bytes;
+replace its prefix with a complete 1 × 1 PNG while retaining deterministic
+padding for binary changes.
+
+Follow-up validation:
+- `pnpm lint` and `pnpm typecheck`: passed.
+- `pnpm --filter @octopus-diff/fixtures build`: passed.
+- `pnpm --filter @octopus-diff/fixtures test`: 47 passed, 1 skipped (31.84 s).
+- Playwright `03-scopes.spec.ts 15-images.spec.ts`, using the installed Chrome
+  configuration: 8 passed (33.4 s). The previously failing test passed; read-only
+  proof: 12 control repositories, 842 lock polls, zero violations.
+- The full browser suite was not repeated locally for this follow-up; CI will
+  run it again after the commit is pushed.
