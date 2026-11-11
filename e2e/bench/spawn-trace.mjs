@@ -1,9 +1,10 @@
 // Preload for perf profiling (`node --import ./spawn-trace.mjs`): wraps child_process.spawn and
 // writes one JSON line per finished child to $OCTOPUS_SPAWN_TRACE:
-//   { t0, t1, ms, sub, args, cwd, code }
+//   { t0, t1, ms, cmd, sub, args, cwd, code }
 // t0/t1 are epoch milliseconds (fractional). `sub` is the git subcommand (global options and
-// `-c key=value` pins skipped); `args` the next few arguments, enough to tell calls apart.
-// Used by e2e/bench/profile.ts only; the daemon itself is unchanged.
+// `-c key=value` pins skipped); `args` the next few arguments, enough to tell calls apart; `cmd`
+// the executable's base name (`git`, `gh`, ...).
+// Used by e2e/bench/profile.ts and bench.ts only; the daemon itself is unchanged.
 import childProcess from 'node:child_process';
 import { openSync, writeSync } from 'node:fs';
 import { syncBuiltinESMExports } from 'node:module';
@@ -35,7 +36,7 @@ if (file) {
       const t1 = now();
       writeSync(
         fd,
-        `${JSON.stringify({ t0, t1, ms: Math.round((t1 - t0) * 100) / 100, sub, args: rest, cwd: cwd === undefined ? null : String(cwd), code })}\n`,
+        `${JSON.stringify({ t0, t1, ms: Math.round((t1 - t0) * 100) / 100, cmd: String(command).split('/').pop(), sub, args: rest, cwd: cwd === undefined ? null : String(cwd), code })}\n`,
       );
     });
     return child;
