@@ -184,6 +184,96 @@ describe('SSE → cache invalidation', () => {
     for (const fn of unsubscribe) fn();
   });
 
+  it("fetches the changed worktree's file list once per edit, though the inbox patch and the open file list both want it (#27)", async () => {
+    const { backend, qc, a } = seeded();
+    const requests: string[] = [];
+    const mockFetch = createMockFetch(backend);
+    const api = createApiClient({
+      baseUrl: 'http://mock.local',
+      fetch: (input, init) => {
+        requests.push(String(input));
+        return mockFetch(input, init);
+      },
+    });
+    const scope = { kind: 'branch', includeWorking: true } as const;
+    const wid = a.worktree.id;
+    // The toolbar default: the inbox, the file pane and the scope select all use "All on branch".
+    // The file pane and the scope select share one query key, so they are one observer's worth.
+    const unsubscribe = [
+      new QueryObserver(qc, { queryKey: queryKeys.projects(), queryFn: () => api.listProjects() }),
+      new QueryObserver(qc, {
+        queryKey: queryKeys.inbox(scope),
+        queryFn: () => api.inbox({ scope }),
+      }),
+      new QueryObserver(qc, {
+        queryKey: queryKeys.files(wid, scope),
+        queryFn: () => api.listFiles(wid, { scope }),
+      }),
+      new QueryObserver(qc, {
+        queryKey: queryKeys.files(wid, scope),
+        queryFn: () => api.listFiles(wid, { scope }),
+      }),
+    ].map((observer) => observer.subscribe(() => {}));
+    await qc.refetchQueries({ queryKey: queryKeys.inbox(scope) });
+    await qc.refetchQueries({ queryKey: queryKeys.files(wid, scope) });
+    requests.length = 0;
+
+    backend.mutate(wid, 'edit');
+    const stateHash = backend.listFiles(wid, scope).stateHash;
+    const effects = collectEventEffects(
+      qc,
+      { type: 'worktree.changed', projectId: a.project.id, worktreeId: wid, stateHash },
+      emptyEffects(),
+      { reconnect: false },
+    );
+    await flushEffects(qc, effects, api);
+    const filesRequests = requests.filter((r) => r.includes(`/api/worktrees/${wid}/files`));
+    expect(filesRequests).toHaveLength(1);
+    expect(requests.some((r) => r.includes('/api/inbox'))).toBe(false);
+    // The inbox entry and the file list agree on the new state.
+    const fresh = qc.getQueryData<FilesResponse>(queryKeys.files(wid, scope));
+    expect(fresh?.stateHash).toBe(stateHash);
+    const entry = qc
+      .getQueryData<InboxResponse>(queryKeys.inbox(scope))
+      ?.entries.find((e) => e.worktree.id === wid);
+    expect(entry?.files ?? []).toEqual(fresh?.files ?? []);
+    for (const fn of unsubscribe) fn();
+  });
+
+  it('fetches the file list once for the patch when no file query is open', async () => {
+    const { backend, qc, a } = seeded();
+    const requests: string[] = [];
+    const mockFetch = createMockFetch(backend);
+    const api = createApiClient({
+      baseUrl: 'http://mock.local',
+      fetch: (input, init) => {
+        requests.push(String(input));
+        return mockFetch(input, init);
+      },
+    });
+    const wid = a.worktree.id;
+    const scope = { kind: 'working' } as const;
+    const unsubscribe = [
+      new QueryObserver(qc, { queryKey: queryKeys.projects(), queryFn: () => api.listProjects() }),
+      new QueryObserver(qc, {
+        queryKey: queryKeys.inbox(scope),
+        queryFn: () => api.inbox({ scope }),
+      }),
+    ].map((observer) => observer.subscribe(() => {}));
+    requests.length = 0;
+    backend.mutate(wid, 'edit');
+    const stateHash = backend.listFiles(wid, scope).stateHash;
+    const effects = collectEventEffects(
+      qc,
+      { type: 'worktree.changed', projectId: a.project.id, worktreeId: wid, stateHash },
+      emptyEffects(),
+      { reconnect: false },
+    );
+    await flushEffects(qc, effects, api);
+    expect(requests.filter((r) => r.includes(`/api/worktrees/${wid}/files`))).toHaveLength(1);
+    for (const fn of unsubscribe) fn();
+  });
+
   it('keeps the effective review policy on a patched inbox entry (review-disabled stays disabled)', async () => {
     const { backend, qc, a } = seeded();
     const mockFetch = createMockFetch(backend);
