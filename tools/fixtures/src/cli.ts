@@ -6,6 +6,7 @@ import {
   readManifestFile,
   removeFixtureRoot,
 } from './generator.js';
+import { generateLargeFixtures, LARGE_LAYOUTS, type LargeLayoutName } from './large.js';
 import { findWorktree } from './manifest.js';
 import { startAgentSimulator } from './simulator.js';
 
@@ -14,6 +15,9 @@ const USAGE = `octopus-diff-fixtures — scratch repositories for octopus-diff (
 Usage:
   octopus-diff-fixtures generate [--seed N] [--no-acceptance] [--bench] [--repos N] [--worktrees N] [--json]
       Builds fixtures and prints the fixture root and manifest path (or the manifest with --json).
+  octopus-diff-fixtures large [--layout large|large-ci] [--json]
+      Builds the large monorepo layout (issue #26: ~100k files, stale-index and untracked-heavy
+      worktrees; large-ci is the ~20k-file variant) and prints its paths.
   octopus-diff-fixtures simulate --manifest <path> [--worktrees live,live-agent] [--duration S] [--seed N]
       Runs the agent simulator against mutable fixture worktrees.
   octopus-diff-fixtures cleanup <fixture-root>
@@ -57,6 +61,32 @@ async function main(argv: string[]): Promise<number> {
       process.stdout.write(
         `fixtures: ${set.manifest.projects.length} repositories, ${worktrees} worktrees in ${Date.now() - started} ms\n` +
           `root:     ${set.root}\nmanifest: ${set.manifestPath}\n` +
+          `git env:  GIT_CONFIG_GLOBAL=${set.env.configPath} GIT_CONFIG_NOSYSTEM=1\n` +
+          `cleanup:  octopus-diff-fixtures cleanup ${set.root}\n`,
+      );
+    }
+    return 0;
+  }
+  if (command === 'large') {
+    const { values } = parseArgs({
+      args: rest,
+      options: {
+        layout: { type: 'string', default: 'large-ci' },
+        json: { type: 'boolean', default: false },
+      },
+    });
+    if (!(values.layout in LARGE_LAYOUTS)) {
+      throw new Error(`--layout must be one of ${Object.keys(LARGE_LAYOUTS).join(', ')}`);
+    }
+    const set = await generateLargeFixtures({ layout: values.layout as LargeLayoutName });
+    if (values.json) {
+      process.stdout.write(
+        `${JSON.stringify({ root: set.root, projectPath: set.projectPath, options: set.options, worktrees: set.worktrees, git: set.env.vars, generationMs: set.generationMs }, null, 2)}\n`,
+      );
+    } else {
+      process.stdout.write(
+        `large fixtures (${values.layout}): ${set.options.files} tracked files, ${set.worktrees.length} worktrees in ${set.generationMs} ms\n` +
+          `root:     ${set.root}\nproject:  ${set.projectPath}\n` +
           `git env:  GIT_CONFIG_GLOBAL=${set.env.configPath} GIT_CONFIG_NOSYSTEM=1\n` +
           `cleanup:  octopus-diff-fixtures cleanup ${set.root}\n`,
       );
