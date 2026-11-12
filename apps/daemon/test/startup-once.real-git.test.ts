@@ -141,4 +141,39 @@ describe.skipIf(!GIT_CORE_IMPLEMENTED)('startup: summaries once, review on deman
     // The bookmark was seeded at the startup HEAD, so the commit is one to review.
     expect(review).toMatchObject({ newCommits: 1, unreviewedFiles: 1, historyRewritten: false });
   });
+
+  it('a commit made after startup counts as new in a repository with no default branch', async () => {
+    // Only `develop`: nothing is detected as the default branch, so the bookmark must still be seeded
+    // at the startup HEAD (the review range falls back to HEAD without a default ref).
+    const fx = await makeRealGitFixture();
+    const repo = await makeRealRepo(fx, 'solo', { 'a.txt': 'one\n' });
+    fx.git(repo, 'branch', '-m', 'develop');
+    await writeFile(path.join(repo, 'a.txt'), 'one\nuncommitted\n');
+    const { git } = countingGitCore(fx);
+    const daemon = await startDaemon({
+      host: '127.0.0.1',
+      port: 0,
+      token: TEST_TOKEN,
+      stateDir: await tempDir(),
+      logLevel: process.env.OCTOPUS_DIFF_TEST_LOGS ? 'debug' : 'silent',
+      gitCore: git,
+      projects: [repo],
+      watch: { debounceMs: 150 },
+      internal: { forges: false },
+    });
+    onCleanup(() => daemon.close());
+    const api = client(daemon);
+    await api.listProjects();
+    fx.git(repo, 'add', '-A');
+    fx.git(repo, 'commit', '-q', '-m', 'agent: edit');
+    const review = await eventually(
+      async () => {
+        const { projects } = await api.listProjects();
+        return projects[0]?.worktrees[0]?.summary?.review;
+      },
+      8000,
+      50,
+    );
+    expect(review).toMatchObject({ newCommits: 1, historyRewritten: false });
+  });
 });

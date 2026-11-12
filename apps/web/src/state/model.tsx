@@ -198,7 +198,7 @@ function useBuildAppModel(): AppModel {
   // While its batches are still landing (#10) the Inbox shows less than an "all" request covers.
   const inboxUnfiltered =
     view.kind === 'inbox' &&
-    !isPartialInbox(inboxData) &&
+    !isPartialInbox(scope) &&
     !hasSidebarFilters(filters) &&
     showsReviewed &&
     groups.length === inboxEntries.length;

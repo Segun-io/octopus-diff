@@ -149,3 +149,10 @@ None added or removed. No lockfile change, so `pnpm credits` was not needed (the
   branch; regenerate them after the merge.
 - The web's `experimental_streamedQuery` is marked experimental in TanStack Query 5.107. It is used in one place
   (`inboxQueryOptions`) and could be swapped for a manual `setQueryData` loop if the API changes.
+
+## PR review round 1 (Greptile on #57)
+
+Both findings were valid.
+
+- **Unseen files get reviewed (web).** "Partial inbox" was a flag on the response object (a `WeakSet`). A review mark or an event patch writes the cache with a new object, and React Query's structural sharing does not keep the identity of what is written, so the copy counted as complete while batches were still missing and bulk "all" could mark files in projects not shown yet. The flag now lives by query key (`isPartialInbox(scope)`), is set while a streamed inbox has batches to come, and is cleared just before the last batch is written (so the render that shows the complete data already sees it clear) or when the stream ends or fails. Regression test: `inbox-stream.test.ts` "a review mark made while batches are still landing keeps the inbox partial" (it failed with an identity-based fix too, which is how the structural-sharing cause showed up).
+- **New commits disappear when the repository has no default branch (daemon).** `#seedBookmark` skipped attached branches when no default branch was detected, so a commit made before the project was opened became the first bookmark and counted as zero new commits. `readReviewRange` itself starts at HEAD in that case (no default ref), so the seed now does too. Regression test: `startup-once.real-git.test.ts` "a commit made after startup counts as new in a repository with no default branch" (a repo whose only branch is `develop`; fails without the change). Known edge: if a default branch is detected only after registration (a `main` appears later), a feature branch seeded at HEAD keeps that start.

@@ -3,6 +3,7 @@ import { QueryClient } from '@tanstack/react-query';
 import { describe, expect, it } from 'vitest';
 import { MockBackend } from '../mock/backend.ts';
 import { createMockFetch } from '../mock/router.ts';
+import { applyReviewToCaches } from '../src/api/cache.ts';
 import { inboxBatches, inboxQueryOptions, isPartialInbox, queryKeys } from '../src/api/queries.ts';
 
 /** The inbox fills in project batches after the first paint (#10). */
@@ -47,25 +48,29 @@ describe('inbox batches (#10)', () => {
       queryKey: queryKeys.projects(),
       queryFn: () => api.listProjects(),
     });
-    const seen: InboxResponse[] = [];
+    const seen: Array<{ data: InboxResponse; partial: boolean }> = [];
     const options = inboxQueryOptions(api, queryClient, { kind: 'working' });
     const unsubscribe = queryClient.getQueryCache().subscribe((event) => {
       if (event.type !== 'updated' || event.query.queryKey[0] !== 'inbox') return;
       const data = event.query.state.data as InboxResponse | undefined;
-      if (data && seen.at(-1) !== data) seen.push(data);
+      if (data && seen.at(-1)?.data !== data) {
+        seen.push({ data, partial: isPartialInbox({ kind: 'working' }) });
+      }
     });
     const final = await queryClient.fetchQuery(options);
     unsubscribe();
 
     const expected = backend.inbox({ kind: 'working' }, false);
     expect(ids(final)).toEqual(ids(expected));
-    expect(isPartialInbox(final)).toBe(false);
+    expect(isPartialInbox({ kind: 'working' })).toBe(false);
     expect(inboxRequests.length).toBeGreaterThan(1);
     expect(inboxRequests.every((u) => u.includes('projectIds='))).toBe(true);
     // It filled in: earlier states were partial and smaller.
-    const partial = seen.filter((d) => isPartialInbox(d));
+    const partial = seen.filter((s) => s.partial);
     expect(partial.length).toBeGreaterThan(0);
-    for (const d of partial) expect(d.entries.length).toBeLessThan(final.entries.length);
+    for (const s of partial) expect(s.data.entries.length).toBeLessThan(final.entries.length);
+    // The render that shows the complete data already sees the flag clear.
+    expect(seen.at(-1)?.partial).toBe(false);
 
     // A refetch is one request, and the data is replaced once it is in.
     inboxRequests.length = 0;
@@ -74,6 +79,39 @@ describe('inbox batches (#10)', () => {
     expect(inboxRequests[0]).not.toContain('projectIds=');
     const after = queryClient.getQueryData<InboxResponse>(options.queryKey);
     expect(ids(after)).toEqual(ids(expected));
-    expect(isPartialInbox(after)).toBe(false);
+    expect(isPartialInbox({ kind: 'working' })).toBe(false);
+  });
+
+  it('a review mark made while batches are still landing keeps the inbox partial', async () => {
+    // A cache patch replaces the data with a new object; bulk "all" must still see it as incomplete.
+    const { api, queryClient } = harness('large');
+    await queryClient.fetchQuery({
+      queryKey: queryKeys.projects(),
+      queryFn: () => api.listProjects(),
+    });
+    const options = inboxQueryOptions(api, queryClient, { kind: 'working' });
+    let patched = false;
+    let partialAfterMark: boolean | null = null;
+    const unsubscribe = queryClient.getQueryCache().subscribe((event) => {
+      if (patched || event.type !== 'updated' || event.query.queryKey[0] !== 'inbox') return;
+      const data = event.query.state.data as InboxResponse | undefined;
+      if (!data || !isPartialInbox({ kind: 'working' })) return;
+      const entry = data.entries.find((e) => e.files.length > 0);
+      const file = entry?.files[0];
+      if (!entry || !file) return;
+      patched = true;
+      applyReviewToCaches(queryClient, {
+        projectId: entry.project.id,
+        scopeKind: 'working',
+        path: file.path,
+        patchHash: file.patchHash,
+        reviewed: !file.reviewed,
+      });
+      partialAfterMark = isPartialInbox({ kind: 'working' });
+    });
+    await queryClient.fetchQuery(options);
+    unsubscribe();
+    expect(patched).toBe(true);
+    expect(partialAfterMark).toBe(true);
   });
 });

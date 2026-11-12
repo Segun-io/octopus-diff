@@ -129,12 +129,35 @@ const INBOX_BATCH_PARALLEL = 1;
 /** About this many batches per inbox: big enough to stream, few enough to stay cheap. */
 const INBOX_BATCHES = 12;
 
-/** Inbox answers that are still being filled in (more batches to come). */
-const partialInboxes = new WeakSet<InboxResponse>();
+/**
+ * Inbox scopes that are still being filled in (more batches to come), by query key. Kept by key and
+ * not on the response object: cache patches (a review mark, an event patch) replace the data with a
+ * new object, and React Query's structural sharing does not keep the identity of what is written.
+ * The flag is cleared just before the last batch is written, so the render that shows the complete
+ * data already sees it clear.
+ */
+const partialInboxKeys = new Set<string>();
 
 /** True while a streamed inbox is still missing batches (bulk "all" must not act on it yet). */
-export function isPartialInbox(data: InboxResponse | undefined): boolean {
-  return data !== undefined && partialInboxes.has(data);
+export function isPartialInbox(scope: DiffScope): boolean {
+  return partialInboxKeys.has(JSON.stringify(queryKeys.inbox(inboxScopeFor(scope))));
+}
+
+/** Marks `key` partial while `source` still has batches to give; always cleared when it ends. */
+async function* trackPartial(
+  key: string,
+  source: AsyncGenerator<{ response: InboxResponse; last: boolean }>,
+  streamed: boolean,
+): AsyncGenerator<{ response: InboxResponse; last: boolean }> {
+  if (streamed) partialInboxKeys.add(key);
+  try {
+    for await (const item of source) {
+      if (item.last) partialInboxKeys.delete(key);
+      yield item;
+    }
+  } finally {
+    partialInboxKeys.delete(key);
+  }
 }
 
 /**
@@ -213,16 +236,14 @@ async function* streamInbox(
 /** Adds a batch's entries; a worktree already present (an event patched it) is replaced. */
 function mergeInbox(
   acc: InboxResponse,
-  { response, last }: { response: InboxResponse; last: boolean },
+  { response }: { response: InboxResponse; last: boolean },
 ): InboxResponse {
   const ids = new Set(response.entries.map((e) => e.worktree.id));
-  const merged: InboxResponse = {
+  return {
     scope: response.scope,
     entries: [...acc.entries.filter((e) => !ids.has(e.worktree.id)), ...response.entries],
     generatedAt: response.generatedAt,
   };
-  if (!last) partialInboxes.add(merged);
-  return merged;
 }
 
 /**
@@ -240,7 +261,12 @@ export function inboxQueryOptions(api: ApiClient, queryClient: QueryClient, scop
         if (queryClient.getQueryData(queryKey) !== undefined) {
           return streamInbox(api, inboxScope, null);
         }
-        return streamInbox(api, inboxScope, inboxBatches(await currentProjects(api, queryClient)));
+        const batches = inboxBatches(await currentProjects(api, queryClient));
+        return trackPartial(
+          JSON.stringify(queryKey),
+          streamInbox(api, inboxScope, batches),
+          batches !== null,
+        );
       },
       reducer: mergeInbox,
       initialValue: { scope: inboxScope, entries: [], generatedAt: new Date(0).toISOString() },

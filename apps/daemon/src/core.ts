@@ -1007,7 +1007,8 @@ export class DaemonCore {
   }
 
   /**
-   * First sight of a worktree that starts its bookmark at HEAD (the default branch, or detached):
+   * First sight of a worktree that starts its bookmark at HEAD (the default branch, detached, or a
+   * repository with no default branch):
    * stores HEAD now, from the summary, without a git process. Its review state is computed later
    * (#10), and commits made before that must still count as new. Other branches start at the
    * merge base with the default branch, which their own commits do not move.
@@ -1017,11 +1018,14 @@ export class DaemonCore {
     if (!head || !FULL_SHA.test(head) || !this.#git.readReviewRange) return;
     const defaultBranch = this.#defaultBranch(project);
     const branch = summary.branch;
+    // No default branch (none detected, none set: a local repository with only `develop`): the
+    // review range falls back to HEAD too (`readReviewRange`: no default ref, so the initial
+    // bookmark is HEAD), so the attached branch starts at HEAD here as well.
     const startsAtHead =
       summary.detached ||
       (branch !== null &&
-        defaultBranch !== null &&
-        (branch === defaultBranch ||
+        (defaultBranch === null ||
+          branch === defaultBranch ||
           (defaultBranch.includes('/') &&
             defaultBranch.slice(defaultBranch.indexOf('/') + 1) === branch)));
     if (!startsAtHead) return;
