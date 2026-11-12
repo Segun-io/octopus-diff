@@ -360,6 +360,9 @@ function isCacheableScope(scope: DiffScope): boolean {
   return !(scope.kind === 'review' && !scope.base);
 }
 
+/** Lists that were built again because a refresh landed meanwhile (`#listedAt`; tests). */
+export const listsRetried = { count: 0 };
+
 /** The scope whose base is the project's default branch (what "All on branch" measures). */
 const DEFAULT_BASE_SCOPE: DiffScope = { kind: 'branch' };
 
@@ -1753,8 +1756,26 @@ export class DaemonCore {
     scope: DiffScope,
     want: Want = {},
   ): Promise<GitChangedFile[]> {
+    return (await this.#gitFilesAt(project, entry, scope, want)).files;
+  }
+
+  /**
+   * `#gitFiles` with the summary it was listed for. The summary and git-core's state hash are read
+   * once, before anything is awaited, and the list is cached under and asked for that state only:
+   * a refresh that lands meanwhile cannot make the list another state's (Greptile on PR #91). A
+   * caller pairing the list with summary fields (`stateHash`, `untrackedOmitted`, HEAD) takes them
+   * from `summary`, not from `entry.summary` read later.
+   */
+  async #gitFilesAt(
+    project: ProjectEntry,
+    entry: WorktreeEntry,
+    scope: DiffScope,
+    want: Want = {},
+  ): Promise<{ files: GitChangedFile[]; summary: WorktreeSummary | null }> {
+    const summary = entry.summary;
+    const gitStateHash = entry.gitStateHash;
     const key = this.#filesKey(entry.worktree.id, scope);
-    const stateHash = scope.kind === 'commit' ? 'immutable' : (entry.summary?.stateHash ?? null);
+    const stateHash = scope.kind === 'commit' ? 'immutable' : (summary?.stateHash ?? null);
     const base = (await this.#branchBase(project, scope)) ?? null;
     const attrs = await this.#attributesStamp(project);
     const cacheable =
@@ -1769,18 +1790,18 @@ export class DaemonCore {
       ) {
         this.#filesCache.delete(key);
         this.#filesCache.set(key, cached);
-        return cached.files;
+        return { files: cached.files, summary };
       }
     }
     const flightKey = `${key}\u0000${stateHash ?? ''}\u0000${base ?? ''}\u0000${attrs}`;
-    return this.#filesInflight.run(flightKey, want.signal, (signal) =>
+    const files = await this.#filesInflight.run(flightKey, want.signal, (signal) =>
       this.#git
         .listChangedFiles(this.#locator(entry), scope, {
           defaultBranch: this.#defaultBranch(project),
           // The list of the summary state this cache entry is for: git-core may update its last
           // list from the paths that changed since (#40).
-          ...(this.#incremental && entry.gitStateHash !== null && stateHash !== null
-            ? { summaryState: entry.gitStateHash }
+          ...(this.#incremental && gitStateHash !== null && stateHash !== null
+            ? { summaryState: gitStateHash }
             : {}),
           ...callOptions(want, signal),
         })
@@ -1808,6 +1829,7 @@ export class DaemonCore {
           return files;
         }),
     );
+    return { files, summary };
   }
 
   /**
@@ -1825,10 +1847,11 @@ export class DaemonCore {
     files: GitChangedFile[],
     required = false,
     want: Want = {},
+    /** The summary the list was built for (`#gitFilesAt`); default the current one. */
+    summary: WorktreeSummary | null = entry.summary,
   ): Promise<Labels> {
     const plain: Labels = { files, known: false, integrationRef: null, n: null };
     const read = this.#git.readFileOrigins;
-    const summary = entry.summary;
     if (!read || !summary) return plain;
     const base = originBaseOf(scope, summary.headSha);
     if (base === undefined) return plain;
@@ -1893,8 +1916,56 @@ export class DaemonCore {
     scope: DiffScope,
     want: Want = {},
   ): Promise<LabeledFile[]> {
-    const files = await this.#gitFiles(project, entry, scope, want);
-    return (await this.#labelFiles(project, entry, scope, files, false, want)).files;
+    return (await this.#labeledFilesAt(project, entry, scope, want)).files;
+  }
+
+  /** `#labeledFiles` with the summary the list was built for (`#gitFilesAt`). */
+  async #labeledFilesAt(
+    project: ProjectEntry,
+    entry: WorktreeEntry,
+    scope: DiffScope,
+    want: Want = {},
+  ): Promise<{ files: LabeledFile[]; summary: WorktreeSummary | null }> {
+    const listed = await this.#gitFilesAt(project, entry, scope, want);
+    const labels = await this.#labelFiles(
+      project,
+      entry,
+      scope,
+      listed.files,
+      false,
+      want,
+      listed.summary,
+    );
+    return { files: labels.files, summary: listed.summary };
+  }
+
+  /**
+   * A list and the summary it was built for, resolving the scope first. A refresh that lands while
+   * the scope is resolved or the list is built means the list may be of another state than the one
+   * the caller started with: then it is done once more, and the result is always labelled with the
+   * summary it was built for, never with one read before or after (Greptile on PR #91).
+   */
+  async #listedAt(
+    project: ProjectEntry,
+    entry: WorktreeEntry,
+    scope: DiffScope,
+    want: Want = {},
+  ): Promise<{
+    resolved: { scope: DiffScope; review: ReviewComputed | null };
+    files: LabeledFile[];
+    summary: WorktreeSummary | null;
+  }> {
+    for (let attempt = 0; ; attempt++) {
+      const before = entry.summary?.stateHash ?? null;
+      const resolved = await raceSignal(this.#resolveScope(project, entry, scope), want.signal);
+      const listed = await this.#labeledFilesAt(project, entry, resolved.scope, want);
+      const used = listed.summary?.stateHash ?? null;
+      const now = entry.summary?.stateHash ?? null;
+      if ((used === before && used === now) || attempt >= 1) {
+        listsRetried.count += attempt;
+        return { resolved, ...listed };
+      }
+    }
   }
 
   #summaryOrThrow(entry: WorktreeEntry): string {
@@ -1916,11 +1987,13 @@ export class DaemonCore {
     const { project, entry } = this.#requireWorktree(worktreeId);
     const want: Want = { signal, priority: 'interactive' };
     await raceSignal(this.#ensureSummary(entry), signal);
-    const stateHash = this.#summaryOrThrow(entry);
+    this.#summaryOrThrow(entry);
+    // The list, its stateHash and its omission notice all come from the summary the list was
+    // built for (Greptile on PR #91).
+    const { resolved, files, summary } = await this.#listedAt(project, entry, scope, want);
+    const stateHash = summary?.stateHash ?? this.#summaryOrThrow(entry);
     // The summary of that stateHash says which untracked files no list holds (#43).
-    const omitted = entry.summary?.untrackedOmitted;
-    const resolved = await raceSignal(this.#resolveScope(project, entry, scope), signal);
-    const files = await this.#labeledFiles(project, entry, resolved.scope, want);
+    const omitted = summary?.untrackedOmitted;
     return {
       worktreeId,
       scope: resolved.scope,
@@ -2060,8 +2133,9 @@ export class DaemonCore {
     const results = await Promise.all(
       candidates.map(async (c): Promise<InboxEntry | null> => {
         try {
-          const resolved = await this.#resolveScope(c.project, c.entry, scope);
-          const gitFiles = await this.#labeledFiles(c.project, c.entry, resolved.scope);
+          const listed = await this.#listedAt(c.project, c.entry, scope);
+          const resolved = listed.resolved;
+          const gitFiles = listed.files;
           let files = this.#attachReviewedFor(
             c.project.row.id,
             resolved.scope,
@@ -2073,7 +2147,8 @@ export class DaemonCore {
           return {
             project: this.#toProject(c.project.row),
             worktree: c.entry.worktree,
-            summary: c.summary,
+            // The row's summary is the one its files were listed for (Greptile on PR #91).
+            summary: listed.summary ?? c.summary,
             files,
             ...(c.review ? { review: c.review } : {}),
           };
@@ -2570,8 +2645,8 @@ export class DaemonCore {
       },
       changedFiles: async (worktreeId, scope) => {
         const { project, entry } = this.#requireWorktree(worktreeId);
-        const resolved = await this.#resolveScope(project, entry, scope);
-        return this.#labeledFiles(project, entry, resolved.scope);
+        const { files, summary } = await this.#listedAt(project, entry, scope);
+        return { files, summary };
       },
       moveBookmark: (worktreeId, to) => this.moveBookmark(worktreeId, to),
       restoreBookmark: (move) => this.restoreBookmark(move),
