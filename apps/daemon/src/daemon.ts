@@ -19,7 +19,7 @@ import type { Hono } from 'hono';
 import { createApp } from './app.js';
 import { DaemonCore } from './core.js';
 import { EventHub } from './events.js';
-import { type ForgeClientLike, ForgeService } from './forges.js';
+import { type ForgeClientLike, ForgeService, type ForgeServiceOptions } from './forges.js';
 import { createLogger } from './logger.js';
 import { ensurePrivateDir, resolveDirs } from './paths.js';
 import { RepositoryInfoService } from './repositories.js';
@@ -62,14 +62,23 @@ export interface DaemonInternals {
   /** Forge integration: replace the gh/glab client (tests), or `false` to not start it. */
   forges?:
     | false
-    | {
-        client?: ForgeClientLike;
-        pollMs?: number;
-        debounceMs?: number;
-        minRefetchMs?: number;
-        followUpMs?: readonly number[];
-        readSshConfig?: () => Promise<string | null>;
-      };
+    | (Pick<
+        ForgeServiceOptions,
+        | 'pollMs'
+        | 'idlePollMs'
+        | 'hotPollMs'
+        | 'attentionMs'
+        | 'focusStaleMs'
+        | 'checkAgainSkipMs'
+        | 'checkAgainMaxPoints'
+        | 'budgetLimits'
+        | 'maxCacheEntries'
+        | 'cacheMaxAgeMs'
+        | 'debounceMs'
+        | 'minRefetchMs'
+        | 'followUpMs'
+        | 'readSshConfig'
+      > & { client?: ForgeClientLike });
 }
 
 export interface DaemonOptions extends StartDaemonOptions {
