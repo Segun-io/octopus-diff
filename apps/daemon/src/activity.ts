@@ -262,8 +262,14 @@ export function diffSnapshots(
     }
     if (draft) files.push(draft);
   }
+  // Sources of renames and copies in the new snapshot: they did not come back, they moved.
+  const sources = new Set<string>();
+  for (const c of cur.entries.values()) {
+    if (c.oldPath !== undefined) sources.add(c.oldRawPath ?? c.oldPath);
+  }
   for (const [key, p] of prev.entries) {
     if (cur.entries.has(key)) continue;
+    if (sources.has(key) && head === null && !coarse) continue;
     if (coarse) {
       coarseChanged = true;
       continue;

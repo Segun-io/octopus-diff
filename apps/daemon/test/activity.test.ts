@@ -175,6 +175,18 @@ describe('diffSnapshots: files', () => {
     ]);
   });
 
+  it('the source of a staged rename is not restored', () => {
+    // `rm a; echo > b; git add -A`: `.D a` and `?? b` become `R. b <- a`.
+    const drafts = diff(
+      state([
+        { path: 'a.ts', xy: '.D', sig: 'missing' },
+        { path: 'b.ts', xy: '??', hH: null, hI: null, sig: 's7' },
+      ]),
+      state([{ path: 'b.ts', xy: 'R.', oldPath: 'a.ts', hI: B, sig: 's7' }]),
+    );
+    expect(drafts.filter((d) => d.path === 'a.ts')).toEqual([]);
+  });
+
   it('an index-only change (git add) is not activity', () => {
     expect(diff(state([{ path: 'a.ts', xy: '.M' }]), state([{ path: 'a.ts', xy: 'M.' }]))).toEqual(
       [],
