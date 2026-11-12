@@ -155,6 +155,10 @@ describe('read-only proof harness', () => {
     const proof = await startReadOnlyProof({ env: set.env, targets: beta, strictEvents: false });
     const lock = join(beta[0]?.commonDir ?? '', 'index.lock');
     await writeFile(lock, '');
+    // Held for a moment, not removed in the same tick: macOS's FSEvents merges a create and a delete
+    // that close together into nothing, which made this test flake there (the file still lives for
+    // far less than a poll interval, so it is the watcher that has to see it).
+    await new Promise((resolve) => setTimeout(resolve, 150));
     await rm(lock);
     const report = await proof.finish();
     expect(report.events.some((e) => e.kind === 'lock' && e.path === 'index.lock')).toBe(true);
