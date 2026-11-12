@@ -219,3 +219,11 @@ None added or removed (`pnpm credits` not needed; `pnpm lint` runs `credits:chec
   `ForgeService.focusChanged`.
 - `apps/daemon/test/forge-sim.ts` is a test helper (fake client, synthetic fleets, fake-clock `advance`) for any
   later scheduler tests.
+
+## PR review round 1 (Greptile on #62)
+
+All three findings were valid.
+
+- **Automatic polls spent the reserved points.** The project-in-view poll (`#hotTick`) used the `event` ceiling and the open Overview's reload went through `#guarded`, which always used `interactive`, so both kept spending after the background ceiling was reached and the Overview timer kept running below 500 remaining points. Both timers now use `background`; explicit opens, refreshes and focus lookups keep `interactive` / `event` (`#guarded` and `repository()` take an optional priority). Test: with the background share used up, neither the poll nor the reload goes out in five minutes (it fails without the change).
+- **Visible pages got idle polling.** A visible Inbox or folder Overview selects no worktree, so the focus report `{ worktreeId: null }` looked like a hidden tab and the daemon slowed its forge polling while someone watched. `FocusRequest` gets an optional `visible` (own `contracts:` commit, additive); the web sends `visible: !hidden`, and its de-duplication key now includes visibility (a visible empty tab and a hidden one were the same key, so the switch was never reported). Older clients keep the old inference. Tests: schema, the web hook (visible with nothing selected; hiding is reported) and the daemon route.
+- **Later pushes erased earlier lookups.** A second push replaced `followBranches`, so a branch still waiting for its request was forgotten and its follow-ups skipped when the new branch already had one. The set is now kept across pushes and pruned when a request is found or the branch is gone (`#stillWaiting`). Test: feat-0 pushed, feat-1 pushed shortly after with its request already there, then feat-0's request appears: the follow-up still finds it (fails without the change).

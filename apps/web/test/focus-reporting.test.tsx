@@ -30,7 +30,11 @@ describe('useFocusReporting keep-alive (#8)', () => {
     renderHook(() => useFocusReporting('w1', 'p1'), { wrapper });
     await vi.advanceTimersByTimeAsync(300);
     expect(setFocus).toHaveBeenCalledTimes(1);
-    expect(setFocus).toHaveBeenLastCalledWith({ worktreeId: 'w1', projectId: 'p1' });
+    expect(setFocus).toHaveBeenLastCalledWith({
+      worktreeId: 'w1',
+      projectId: 'p1',
+      visible: true,
+    });
     await vi.advanceTimersByTimeAsync(FOCUS_KEEPALIVE_MS + 300);
     expect(setFocus).toHaveBeenCalledTimes(2);
     await vi.advanceTimersByTimeAsync(FOCUS_KEEPALIVE_MS + 300);
@@ -45,9 +49,22 @@ describe('useFocusReporting keep-alive (#8)', () => {
     vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden');
     document.dispatchEvent(new Event('visibilitychange'));
     await vi.advanceTimersByTimeAsync(300);
-    expect(setFocus).toHaveBeenLastCalledWith({ worktreeId: null });
+    expect(setFocus).toHaveBeenLastCalledWith({ worktreeId: null, visible: false });
     expect(setFocus).toHaveBeenCalledTimes(2);
     await vi.advanceTimersByTimeAsync(3 * FOCUS_KEEPALIVE_MS);
+    expect(setFocus).toHaveBeenCalledTimes(2);
+  });
+
+  it('a visible tab with nothing selected says it is visible, and hiding it is reported', async () => {
+    const { setFocus, wrapper } = setup();
+    renderHook(() => useFocusReporting(null), { wrapper });
+    await vi.advanceTimersByTimeAsync(300);
+    // The Inbox or a folder Overview selects no worktree, but someone is looking at it (PR #62 review).
+    expect(setFocus).toHaveBeenLastCalledWith({ worktreeId: null, visible: true });
+    vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden');
+    document.dispatchEvent(new Event('visibilitychange'));
+    await vi.advanceTimersByTimeAsync(300);
+    expect(setFocus).toHaveBeenLastCalledWith({ worktreeId: null, visible: false });
     expect(setFocus).toHaveBeenCalledTimes(2);
   });
 });

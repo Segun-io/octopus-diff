@@ -469,7 +469,8 @@ export class ForgeService {
     if (this.#closed || hot === null || !this.#attentive() || !this.enabled) return;
     void this.refresh([hot], {
       minAgeMs: Math.max(this.#o.hotPollMs / 2, this.#o.minRefetchMs),
-      priority: 'event',
+      // A timer, not a person: it spends the background share only (and nothing once that is used).
+      priority: 'background',
     }).catch(() => {});
     if (this.#hotOverview) void this.#revalidateRepository(hot).catch(() => {});
   }
@@ -489,7 +490,7 @@ export class ForgeService {
     const before = JSON.stringify(
       [...this.#repositories].find(([key]) => key.startsWith(prefix))?.[1].value,
     );
-    await this.repository(projectId, { ttlMs: REPOSITORY_HOT_TTL_MS });
+    await this.repository(projectId, { ttlMs: REPOSITORY_HOT_TTL_MS, priority: 'background' });
     const after = JSON.stringify(
       [...this.#repositories].find(([key]) => key.startsWith(prefix))?.[1].value,
     );
@@ -610,9 +611,13 @@ export class ForgeService {
   #stillWaiting(projectId: string): boolean {
     const cache = this.#projects.get(projectId);
     if (!cache?.forge) return false;
-    for (const branch of cache.followBranches) {
+    let waiting = false;
+    for (const branch of [...cache.followBranches]) {
       const head = cache.heads.get(branch);
-      if (!head) continue;
+      if (!head) {
+        cache.followBranches.delete(branch); // the branch is gone
+        continue;
+      }
       if (
         pickChangeRequest(
           cache.requests.get(head.headBranch) ?? [],
@@ -620,10 +625,12 @@ export class ForgeService {
           cache.forge.repository,
         ) === null
       ) {
-        return true;
+        waiting = true;
+      } else {
+        cache.followBranches.delete(branch); // found: no more lookups for it
       }
     }
-    return false;
+    return waiting;
   }
 
   /** Looks the project up again later (forced: the 15 s spacing must not swallow it). */
@@ -898,7 +905,8 @@ export class ForgeService {
       cache.fetchedAt = this.#o.now().toISOString();
       set('ok', null);
       if (pushed) {
-        cache.followBranches = new Set(pushedBranches);
+        // Branches still waiting for a request from an earlier push stay on the list.
+        cache.followBranches = new Set([...cache.followBranches, ...pushedBranches]);
         if (this.#stillWaiting(projectId)) this.#followUp(projectId);
       }
     } catch (error) {
@@ -1035,16 +1043,18 @@ export class ForgeService {
 
   /**
    * Admits one single-object query (detail, conversation, repository) against the budget. These
-   * run because someone opened or refreshed something, so they use the user's ceiling; a refusal
+   * run because someone opened or refreshed something, so they use the user's ceiling (a timer, such
+   * as the open Overview's reload, passes `background` and gets only the background share); a refusal
    * surfaces as the entry's error, with the last good data kept.
    */
   async #guarded<T>(
     forge: ForgeTargetLike,
     kind: ForgeQueryKind,
     run: () => Promise<T>,
+    priority: ForgePriority = 'interactive',
   ): Promise<T> {
     const points = estimateQueryPoints(forge.kind, kind);
-    const verdict = this.#budget.decide(forge.kind, forge.host, 'interactive', points);
+    const verdict = this.#budget.decide(forge.kind, forge.host, priority, points);
     if (!verdict.ok) throw new ForgeBudgetError(verdict.message);
     this.#budget.spend(forge.kind, forge.host, points);
     try {
@@ -1244,7 +1254,7 @@ export class ForgeService {
    */
   async repository(
     projectId: string,
-    options: { force?: boolean; ttlMs?: number } = {},
+    options: { force?: boolean; ttlMs?: number; priority?: ForgePriority } = {},
   ): Promise<RepositoryForgeResponse> {
     const items = await this.#o.core.listProjects();
     const item = items.find((i) => i.project.id === projectId);
@@ -1300,7 +1310,7 @@ export class ForgeService {
       options.ttlMs ?? FORGE_REPOSITORY_TTL_MS,
       requestsSignature(cache),
       options.force ?? false,
-      () => this.#guarded(forge, 'repository', () => fetchRepository(forge)),
+      () => this.#guarded(forge, 'repository', () => fetchRepository(forge), options.priority),
     );
     if (entry.value === null) {
       return empty('error', entry.error ?? 'Not loaded yet.', forge);

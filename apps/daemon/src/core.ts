@@ -94,8 +94,9 @@ export interface CoreOptions {
    */
   onGitChange?: (projectId: string) => void;
   /**
-   * Called on every `PUT /api/focus`: `visible` is false when the UI reports nothing focused (its
-   * tab is hidden), else `projectId` is the project of the focused worktree or the open Overview
+   * Called on every `PUT /api/focus`: `visible` is the client's word (`FocusRequest.visible`), or for
+   * older clients false when nothing is focused; `projectId` is the project of the focused worktree
+   * or the open Overview
    * (`overview`: the project's Overview itself is open).
    * The forge service paces its polling by it (DECISIONS #197).
    */
@@ -1119,7 +1120,7 @@ export class DaemonCore {
    * The focused worktree (watch priority) and the project the user has open: a focused worktree
    * opens its project, and so does `projectId` (its Overview). Opening computes review states.
    */
-  setFocus(worktreeId: string | null, projectId: string | null = null): void {
+  setFocus(worktreeId: string | null, projectId: string | null = null, visible?: boolean): void {
     this.#watcher.setFocus(worktreeId);
     let project: ProjectEntry | undefined;
     if (worktreeId !== null) {
@@ -1132,8 +1133,9 @@ export class DaemonCore {
     }
     project ??= projectId === null ? undefined : this.#projects.get(projectId);
     if (project) this.#openProject(project);
+    // `visible` is the client's own word; older clients are inferred (nothing selected = hidden).
     this.#onFocus?.(
-      worktreeId !== null || projectId !== null,
+      visible ?? (worktreeId !== null || projectId !== null),
       project?.row.id ?? null,
       projectId !== null,
     );

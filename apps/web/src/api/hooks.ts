@@ -161,15 +161,16 @@ export function useFocusReporting(worktreeId: string | null, projectId: string |
       const hidden = typeof document !== 'undefined' && document.visibilityState === 'hidden';
       const next = hidden ? null : worktreeId;
       const nextProject = hidden ? null : projectId;
-      const key = `${next ?? ''}\u0000${nextProject ?? ''}`;
+      // A visible tab with nothing selected (the Inbox, a folder Overview) is not a hidden tab.
+      const key = `${hidden ? 'h' : 'v'}\u0000${next ?? ''}\u0000${nextProject ?? ''}`;
       if (key === last.current) return;
       if (timer !== undefined) clearTimeout(timer);
       timer = setTimeout(() => {
         last.current = key;
         const request =
           nextProject === null
-            ? { worktreeId: next }
-            : { worktreeId: next, projectId: nextProject };
+            ? { worktreeId: next, visible: !hidden }
+            : { worktreeId: next, projectId: nextProject, visible: !hidden };
         api.setFocus(request).catch(() => {
           last.current = undefined;
         });

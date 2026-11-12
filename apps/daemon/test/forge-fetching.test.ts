@@ -172,6 +172,28 @@ describe('adaptive polling', () => {
   });
 });
 
+describe('automatic timers use the background share (PR #62 review)', () => {
+  it('the project-in-view poll and the Overview reload stop at the background ceiling', async () => {
+    const { service, client } = build(1, 1, {
+      budgetLimits: { background: 1, event: 50, interactive: 100 },
+      hotPollMs: 30_000,
+      pollMs: 3_600_000,
+      idlePollMs: 3_600_000,
+    });
+    await service.refresh(['p0']); // the batch spends the one background point
+    await service.repository('p0'); // opened by a person: the user's share
+    expect(client.batch.queries).toBe(1);
+    expect(client.repository.queries).toBe(1);
+    service.start();
+    service.focusChanged(true, 'p0', true);
+    await advance(5 * 60_000);
+    await service.close();
+    // Timers only: the background share is used up, so neither poll nor reload went out.
+    expect(client.batch.queries).toBe(1);
+    expect(client.repository.queries).toBe(1);
+  });
+});
+
 describe('Check again', () => {
   it('spends at most its allowance per call and leaves just-fetched projects alone', async () => {
     const { service, client } = build(10, 1, { checkAgainMaxPoints: 4, checkAgainSkipMs: 5000 });
@@ -272,6 +294,48 @@ describe('pushes', () => {
     expect(client.batch.queries).toBe(4);
     await advance(200_000);
     expect(client.batch.queries).toBe(4);
+    await service.close();
+  });
+});
+
+describe('pushes in quick succession (PR #62 review)', () => {
+  const origin = (branches: Record<string, unknown>) => ({
+    remotes: [
+      { name: 'origin', url: 'git@github.com:org/p0.git', pushUrl: null, ghResolved: null },
+    ],
+    branches: branches as never,
+    pushDefault: null,
+  });
+  const up = (b: string) => ({ remote: 'origin', merge: `refs/heads/${b}`, pushRemote: null });
+
+  it('a second push does not make the first branch lose its follow-up lookups', async () => {
+    const { service, client, configs, emit } = build(1, 2, {
+      followUpMs: [30_000, 90_000],
+      debounceMs: 10,
+      pollMs: 3_600_000,
+      idlePollMs: 3_600_000,
+    });
+    client.withoutRequest.add('feat-0');
+    client.withoutRequest.add('feat-1');
+    service.start();
+    await advance(2000);
+    const start = client.batch.queries;
+
+    // feat-0 is pushed (no request yet), then feat-1 a little later (its request exists at once).
+    configs.set('/tmp/p0/.git', origin({ 'feat-0': up('feat-0') }));
+    emit({ type: 'worktree.changed', projectId: 'p0', worktreeId: 'p0-w0', stateHash: 'a' });
+    await advance(2000);
+    client.withoutRequest.delete('feat-1');
+    configs.set('/tmp/p0/.git', origin({ 'feat-0': up('feat-0'), 'feat-1': up('feat-1') }));
+    emit({ type: 'worktree.changed', projectId: 'p0', worktreeId: 'p0-w1', stateHash: 'b' });
+    await advance(2000);
+    const afterPushes = client.batch.queries;
+    expect(afterPushes).toBeGreaterThan(start);
+
+    // The request for feat-0 appears later: the follow-ups still look for it.
+    client.withoutRequest.delete('feat-0');
+    await advance(40_000);
+    expect(client.batch.queries).toBeGreaterThan(afterPushes);
     await service.close();
   });
 });

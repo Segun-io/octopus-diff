@@ -15,7 +15,7 @@ import {
   RepositoryForgeResponseSchema,
 } from '@octopus-diff/contracts';
 import parcelWatcher from '@parcel/watcher';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { type Daemon, startDaemon } from '../src/daemon.js';
 import { type ForgeClientLike, type ForgeTargetLike, forgeImageHosts } from '../src/forges.js';
 import { API_CSP, UI_CSP, uiCsp } from '../src/security.js';
@@ -482,6 +482,19 @@ describe('request detail and repository routes (fake git-core, fake gh)', () => 
     ]);
     const found = await eventually(async () => prFor(await api.getForges()));
     expect(found.number).toBe(9);
+  });
+
+  it('a visible tab with nothing selected is reported to the forge service as visible (PR #62 review)', async () => {
+    const spy = vi.spyOn(daemon.forges as NonNullable<typeof daemon.forges>, 'focusChanged');
+    await api.setFocus({ worktreeId: null, visible: true });
+    expect(spy).toHaveBeenLastCalledWith(true, null, false);
+    await api.setFocus({ worktreeId: null, visible: false });
+    expect(spy).toHaveBeenLastCalledWith(false, null, false);
+    // An older client says nothing about visibility: nothing selected counts as hidden, as before.
+    await api.setFocus({ worktreeId: null });
+    expect(spy).toHaveBeenLastCalledWith(false, null, false);
+    await api.setFocus({ worktreeId: featId() });
+    expect(spy).toHaveBeenLastCalledWith(true, alpha.projectId, false);
   });
 
   it('the folder Overview route runs no forge query', async () => {
