@@ -62,6 +62,8 @@ export interface ConfigScan {
   overrides: Array<[string, string]>;
   /** Values of `core.attributesFile` in any config scope (last one wins), raw. */
   attributesFiles: string[];
+  /** Values of `core.excludesFile` in any config scope (last one wins), raw (#41). */
+  excludesFiles: string[];
 }
 
 interface ConfigReadRun {
@@ -96,7 +98,8 @@ const CONFIG_RACY_NS = 2_000_000_000n;
 const CONFIG_SCAN_CACHE_MAX = 512;
 /** Keys whose presence means config depends on more than the files we stat (`include*`). */
 const INCLUDE_KEY = /^include(if)?\./;
-const CONFIG_SCAN_REGEX = '^filter\\.|^core\\.attributesfile$|^include\\.|^includeif\\.';
+const CONFIG_SCAN_REGEX =
+  '^filter\\.|^core\\.attributesfile$|^core\\.excludesfile$|^include\\.|^includeif\\.';
 const IMMUTABLE_CACHE_MAX = 20_000;
 const FILTER_KEY = /^filter\.(.+)\.(clean|smudge|process|required)$/;
 const TRUSTED_SCOPES = new Set(['system', 'global', 'command']);
@@ -571,6 +574,7 @@ export class GitContext {
       });
     }
     const attributesFiles: string[] = [];
+    const excludesFiles: string[] = [];
     let includes = false;
     const tokens = output.split('\u0000');
     for (let i = 0; i + 1 < tokens.length; i += 2) {
@@ -580,8 +584,12 @@ export class GitContext {
       else if (token.startsWith('core.attributesfile\n')) {
         attributesFiles.push(token.slice('core.attributesfile\n'.length));
       }
+      if (token === 'core.excludesfile') excludesFiles.push('');
+      else if (token.startsWith('core.excludesfile\n')) {
+        excludesFiles.push(token.slice('core.excludesfile\n'.length));
+      }
     }
-    return { value: { overrides: entries, attributesFiles }, includes };
+    return { value: { overrides: entries, attributesFiles, excludesFiles }, includes };
   }
 }
 

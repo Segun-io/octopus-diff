@@ -129,6 +129,16 @@ async function diffBoth(
 /** What the summary route's reason is on this filesystem. */
 const SUMMARY = FOLDS ? 'case-insensitive' : 'summary';
 
+/**
+ * A summary of the repository as it is. The kernel's timestamps are coarse and the summary records
+ * which ignore files it can vouch for only when they are older than itself, so a test that has just
+ * written files waits a moment first (a real watcher's debounce does the same).
+ */
+async function summarize(repo: string, core: GitCore = fast): Promise<{ stateHash: string }> {
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  return core.getSummary(locator(repo));
+}
+
 /** A repository with `files` committed, `mutate`d, and summarized by the fast core. */
 async function prepare(
   name: string,
@@ -137,7 +147,7 @@ async function prepare(
 ): Promise<{ repo: string; stateHash: string }> {
   const repo = fx.repo(name, { files: files as Record<string, string> });
   mutate(repo);
-  const summary = await fast.getSummary(locator(repo));
+  const summary = await summarize(repo);
   return { repo, stateHash: summary.stateHash };
 }
 
@@ -316,7 +326,7 @@ describe('the summary route gives the whole-scope route’s answer (working scop
       fx.git(repo, ['commit', '-q', '-m', 'raw']);
       fx.writeRaw(repo, name, 'one\ntwo\n');
       fx.writeRaw(repo, Buffer.from([0x79, 0xfe]), 'untracked\n');
-      await fast.getSummary(locator(repo));
+      await summarize(repo);
       const files = await reference.listChangedFiles(locator(repo), WORKING);
       expect(files.filter((f) => f.rawPath !== undefined)).toHaveLength(2);
       for (const file of files.filter((f) => f.rawPath !== undefined)) {
@@ -376,7 +386,7 @@ describe('untracked files: no git process at all', () => {
       writeFileSync(attributes, '*.bin binary\n');
       fx.git(repo, ['config', 'core.attributesFile', attributes]);
       for (let i = 0; i < 5; i++) text(repo, `u${i}.txt`, `${i}\n`);
-      await few.getSummary(locator(repo));
+      await summarize(repo, few);
       const cores = { fast: few, reference: fewReference };
       for (let i = 0; i < 5; i++) {
         const outcome = await diffBoth(repo, WORKING, `u${i}.txt`, undefined, cores);
@@ -411,8 +421,132 @@ describe('untracked files: no git process at all', () => {
     );
     // Written long enough before the next state: it vouches again.
     await new Promise((resolve) => setTimeout(resolve, 250));
-    await fast.getSummary(locator(repo));
+    await summarize(repo);
     expect((await diffBoth(repo, WORKING, 'new.txt')).route).toBe(SUMMARY);
+  });
+});
+
+describe('ignore rules that changed since the summary (PR #93 review, P1)', () => {
+  const REASON = (reason: string): string => (FOLDS ? 'case-insensitive' : reason);
+  /** Long enough that the rule files are older than the state (the clock margin is 100 ms). */
+  const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 250));
+
+  async function untrackedRepo(name: string, setup: (repo: string) => void) {
+    const repo = fx.repo(name, { files: { 'a.txt': 'a\n' } });
+    setup(repo);
+    await settle();
+    await summarize(repo);
+    return repo;
+  }
+
+  it('the reviewer’s repro: a deleted dir/.gitignore that un-ignored keep.log now ignores it', async () => {
+    const repo = await untrackedRepo('ignore-deleted', (r) => {
+      text(r, '.gitignore', '*.log\n');
+      text(r, 'dir/.gitignore', '!keep.log\n');
+      text(r, 'dir/keep.log', 'kept\n');
+    });
+    const listed = await reference.listChangedFiles(locator(repo), WORKING);
+    expect(listed.map((f) => f.path)).toContain('dir/keep.log');
+    // Vouched while nothing moved.
+    expect((await diffBoth(repo, WORKING, 'dir/keep.log')).route).toBe(SUMMARY);
+    rmSync(path.join(repo, 'dir/.gitignore'));
+    await settle();
+    const outcome = await diffBoth(repo, WORKING, 'dir/keep.log');
+    expect(outcome.route).toBe(REASON('ignore-rules'));
+    expect(outcome.result).toEqual({ error: 'not_found' });
+  });
+
+  it('a dir/.gitignore that appeared, a root .gitignore that changed or was deleted', async () => {
+    const repo = await untrackedRepo('ignore-moves', (r) => {
+      text(r, 'dir/one.log', '1\n');
+      text(r, 'dir/two.log', '2\n');
+      text(r, 'three.log', '3\n');
+      text(r, 'root.txt', 'r\n');
+    });
+    for (const file of ['dir/one.log', 'dir/two.log', 'three.log', 'root.txt']) {
+      expect((await diffBoth(repo, WORKING, file)).route, file).toBe(SUMMARY);
+    }
+    text(repo, 'dir/.gitignore', 'one.log\n');
+    text(repo, '.gitignore', '*.log\n');
+    await settle();
+    for (const file of ['dir/one.log', 'dir/two.log', 'three.log', 'root.txt']) {
+      const outcome = await diffBoth(repo, WORKING, file);
+      expect(outcome.route, file).toBe(REASON('ignore-rules'));
+    }
+    expect((await diffBoth(repo, WORKING, 'dir/one.log')).result).toEqual({ error: 'not_found' });
+    // Changed, then deleted again: still not believed until a summary has seen it.
+    text(repo, '.gitignore', 'something-else\n');
+    await settle();
+    expect((await diffBoth(repo, WORKING, 'three.log')).route).toBe(REASON('ignore-rules'));
+    rmSync(path.join(repo, '.gitignore'));
+    await settle();
+    expect((await diffBoth(repo, WORKING, 'three.log')).route).toBe(REASON('ignore-rules'));
+    // A summary that has seen it vouches again.
+    await summarize(repo);
+    expect((await diffBoth(repo, WORKING, 'three.log')).route).toBe(SUMMARY);
+  });
+
+  it('info/exclude and core.excludesFile changing since the summary', async () => {
+    const excludes = path.join(fx.root, 'ignore-global.excludes');
+    writeFileSync(excludes, '*.nothing\n');
+    const repo = await untrackedRepo('ignore-global', (r) => {
+      fx.git(r, ['config', 'core.excludesFile', excludes]);
+      text(r, 'a.log', 'a\n');
+      text(r, 'b.log', 'b\n');
+    });
+    expect((await diffBoth(repo, WORKING, 'a.log')).route).toBe(SUMMARY);
+    // The excludes file's content changes: no stamp covers it, the recorded signature does.
+    writeFileSync(excludes, '*.log\n');
+    await settle();
+    const global = await diffBoth(repo, WORKING, 'a.log');
+    expect(global.route).toBe(REASON('ignore-rules'));
+    expect(global.result).toEqual({ error: 'not_found' });
+    // And once deleted.
+    rmSync(excludes);
+    await settle();
+    expect((await diffBoth(repo, WORKING, 'b.log')).route).toBe(REASON('ignore-rules'));
+    await summarize(repo);
+    expect((await diffBoth(repo, WORKING, 'b.log')).route).toBe(SUMMARY);
+
+    // info/exclude (in the stamp already).
+    writeFileSync(path.join(repo, '.git', 'info', 'exclude'), '*.log\n');
+    await settle();
+    const info = await diffBoth(repo, WORKING, 'a.log');
+    expect(info.route).toBe(REASON('ignore-rules'));
+    expect(info.result).toEqual({ error: 'not_found' });
+  });
+
+  it('an incremental summary elsewhere in the directory does not launder a lost ignore-file event', async () => {
+    const repo = await untrackedRepo('ignore-laundered', (r) => {
+      text(r, '.gitignore', '*.log\n');
+      text(r, 'dir/.gitignore', '!keep.log\n');
+      text(r, 'dir/keep.log', 'kept\n');
+      text(r, 'dir/other.txt', 'o\n');
+    });
+    expect((await diffBoth(repo, WORKING, 'dir/keep.log')).route).toBe(SUMMARY);
+    // The deletion's event is lost; a later edit in the same directory is reported and refreshed.
+    rmSync(path.join(repo, 'dir/.gitignore'));
+    await settle();
+    text(repo, 'dir/other.txt', 'o, edited\n');
+    await settle();
+    const refreshed = await fast.getSummary(locator(repo), { changedPaths: ['dir/other.txt'] });
+    if (!FOLDS) expect(refreshed.refresh?.mode).toBe('incremental');
+    const outcome = await diffBoth(repo, WORKING, 'dir/keep.log');
+    expect(outcome.route).toBe(REASON('ignore-rules'));
+    expect(outcome.result).toEqual({ error: 'not_found' });
+  });
+
+  it('an ignore rule that does not touch the file leaves the route open, and tracked files never care', async () => {
+    const repo = fx.repo('ignore-tracked', { files: { 'a.txt': lines(5), 'keep.log': 'k\n' } });
+    text(repo, 'a.txt', lines(6));
+    text(repo, 'keep.log', 'k, edited\n');
+    await settle();
+    await summarize(repo);
+    // A tracked file that becomes ignored is still a tracked file: its diff does not change.
+    text(repo, '.gitignore', '*.log\n');
+    await settle();
+    expect((await diffBoth(repo, WORKING, 'keep.log')).route).toBe(SUMMARY);
+    expect((await diffBoth(repo, WORKING, 'a.txt')).route).toBe(SUMMARY);
   });
 });
 
@@ -489,7 +623,7 @@ describe('what the summary route refuses (the whole-scope route answers, identic
     fx.commitAll(repo, 'main');
     fx.git(repo, ['merge', 'other'], { allowFail: true });
     text(repo, 'b.txt', lines(4));
-    await fast.getSummary(locator(repo));
+    await summarize(repo);
     expect((await diffBoth(repo, WORKING, 'a.txt')).route).toBe(REASON('conflicts'));
     expect((await diffBoth(repo, WORKING, 'b.txt')).route).toBe(REASON('conflicts'));
   });
@@ -500,20 +634,20 @@ describe('what the summary route refuses (the whole-scope route answers, identic
     fx.git(sub, ['submodule', 'add', '-q', lib, 'vendor/lib']);
     fx.git(sub, ['commit', '-q', '-m', 'sub']);
     text(sub, 'a.txt', lines(4));
-    await fast.getSummary(locator(sub));
+    await summarize(sub);
     expect((await diffBoth(sub, WORKING, 'a.txt')).route).toBe(REASON('submodules'));
 
     const embedded = fx.repo('with-embedded', { files: { 'a.txt': lines(3) } });
     const head = fx.git(lib, ['rev-parse', 'HEAD']).trim();
     fx.git(embedded, ['update-index', '--add', '--cacheinfo', `160000,${head},thing`]);
     text(embedded, 'a.txt', lines(4));
-    await fast.getSummary(locator(embedded));
+    await summarize(embedded);
     expect((await diffBoth(embedded, WORKING, 'a.txt')).route).toBe(REASON('submodules'));
 
     const nested = fx.repo('with-nested', { files: { 'a.txt': lines(3) } });
     fx.repo('with-nested/inner', { files: { 'i.txt': 'i\n' } });
     text(nested, 'a.txt', lines(4));
-    await fast.getSummary(locator(nested));
+    await summarize(nested);
     expect((await diffBoth(nested, WORKING, 'a.txt')).route).toBe(REASON('nested-repository'));
   });
 
@@ -521,7 +655,7 @@ describe('what the summary route refuses (the whole-scope route answers, identic
     const repo = fx.repo('no-state', { files: { 'a.txt': lines(3) } });
     text(repo, 'a.txt', lines(4));
     expect((await diffBoth(repo, WORKING, 'a.txt')).route).toBe(REASON('no-state'));
-    await fast.getSummary(locator(repo));
+    await summarize(repo);
     expect((await diffBoth(repo, WORKING, 'a.txt')).route).toBe(SUMMARY);
 
     // The kill switch: no summary route, and not even a stamp is read.
@@ -570,7 +704,7 @@ describe('the state is checked before it is believed', () => {
     expect(outcome.route).toBe(REASON('stale-signature'));
     expect((outcome.result as { ok: GitFileDiff }).ok.patch).toContain('+two');
     // Once the summary has caught up it vouches again.
-    await fast.getSummary(locator(repo));
+    await summarize(repo);
     expect((await diffBoth(repo, WORKING, 'a.txt')).route).toBe(SUMMARY);
   });
 
@@ -581,11 +715,16 @@ describe('the state is checked before it is believed', () => {
       text(r, 'u3.txt', 'three\n');
     });
     text(repo, 'u1.txt', 'one, edited\n');
+    // An edit in place is a stale signature; a deletion or a replacement also changes the directory,
+    // which the ignore record (a `.gitignore` could have come or gone there) refuses first.
+    expect((await diffBoth(repo, WORKING, 'u1.txt')).route).toBe(REASON('stale-signature'));
     rmSync(path.join(repo, 'u2.txt'));
     rmSync(path.join(repo, 'u3.txt'));
     symlinkSync('a.txt', path.join(repo, 'u3.txt'));
-    for (const file of ['u1.txt', 'u2.txt', 'u3.txt']) {
-      expect((await diffBoth(repo, WORKING, file)).route, file).toBe(REASON('stale-signature'));
+    for (const file of ['u2.txt', 'u3.txt']) {
+      expect(['stale-signature', 'ignore-rules', 'case-insensitive']).toContain(
+        (await diffBoth(repo, WORKING, file)).route,
+      );
     }
   });
 
@@ -600,7 +739,7 @@ describe('the state is checked before it is believed', () => {
     expect(other.route).toBe(REASON('state-mismatch'));
     // A summary of a newer state makes the old hash a mismatch too.
     text(repo, 'a.txt', lines(7));
-    await fast.getSummary(locator(repo));
+    await summarize(repo);
     expect((await diffBoth(repo, WORKING, 'a.txt', { summaryState: stateHash })).route).toBe(
       REASON('state-mismatch'),
     );
@@ -666,7 +805,7 @@ describe('other scopes that read the worktree', () => {
     text(repo, 'quiet.txt', lines(6));
     rmSync(path.join(repo, 'gone.txt'));
     text(repo, 'fresh.txt', 'fresh\n');
-    await fast.getSummary(locator(repo));
+    await summarize(repo);
     const scope: DiffScope = { kind: 'review', base };
     expect((await diffBoth(repo, scope, 'quiet.txt')).route).toBe(SUMMARY);
     expect((await diffBoth(repo, scope, 'fresh.txt')).route).toBe(SUMMARY);
@@ -691,7 +830,7 @@ describe('a failed read leaves nothing behind', () => {
       );
       expect((await diffBoth(repo, WORKING, 'b.txt')).route).toBe(SUMMARY);
       writeFileSync(path.join(repo, 'a.txt'), lines(7));
-      await fast.getSummary(locator(repo));
+      await summarize(repo);
       chmodSync(path.join(repo, 'a.txt'), 0o000);
       try {
         const failed = await diffBoth(repo, WORKING, 'a.txt');
@@ -701,7 +840,7 @@ describe('a failed read leaves nothing behind', () => {
       } finally {
         chmodSync(path.join(repo, 'a.txt'), 0o644);
       }
-      await fast.getSummary(locator(repo));
+      await summarize(repo);
       expect((await diffBoth(repo, WORKING, 'a.txt')).route).toBe(SUMMARY);
     },
   );

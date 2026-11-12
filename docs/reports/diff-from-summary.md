@@ -17,7 +17,8 @@
   anywhere (no rename partner), an untracked file that is not also a tracked entry nor a rename source; against another base than HEAD
   only a modification or untracked file the commits since the base left alone (`diff-tree`, memoized with the lists'). The lstat
   signature (the inspection's `statSig` when untracked) must equal the state's before the read and after it; for an untracked file the
-  ancestors' `.gitignore` files must be older than the state (`Stamp.at`, an internal field). The checks (stamp, HEAD, signature) run
+  ignore rules recorded by the summary (every ancestor `.gitignore`, absent ones included, and `core.excludesFile`) must be unchanged
+  (DECISIONS #334, PR #93 review). The checks (stamp, HEAD, signature) run
   **beside** the one `git diff`, in one round of file system calls, and the file's signature is read once more after it (DECISIONS #332);
   doing them one after the other made a diff opened during a 60-edit burst cost 74-79 ms at p95 instead of 33 ms, because under load each
   round waits in the 4-thread pool behind the summaries' stats. Anything else, and a failed `git diff`, falls back to the old whole
@@ -116,8 +117,8 @@ None added or removed (`pnpm credits:check`: up to date).
   takes the whole route.
 - **A file that moved since the summary** takes the whole route until the summary catches up (about 100 ms after the event in the daemon).
 - **Windows (a different filesystem model), macOS and other case-folding filesystems** never take the route (#288); not measured on macOS.
-- **`.gitignore` just before the state** (within 100 ms) sends an untracked file the whole way; `core.excludesFile` / `core.attributesFile`
-  outside the stamp are as in #285. An untracked file's content is read or not by the state's untracked count, as the lists' hashes are
+- **Ignore rules** (#334): an ignore file written, created or deleted after the summary, or a sibling entry created or deleted in a directory of
+  an untracked file, sends that file the whole way until the next summary; the summary's `.gitignore` records within 30 ms of its stamp are never believed. An untracked file's content is read or not by the state's untracked count, as the lists' hashes are
   (#333 b).
 - **A 300k-line patch** still costs git's own diff (288 ms).
 
@@ -129,3 +130,21 @@ None added or removed (`pnpm credits:check`: up to date).
 - The read-only allowlist and every flag are unchanged: the route issues the `diff` the whole route's narrowed run already issued, and no
   new subcommand. `Stamp` gained an internal `at` field (not part of `stampChange`, not exported from the package index).
 - `incremental: false` / `OCTOPUS_DIFF_INCREMENTAL=0` restores the old three processes (a test asserts it, and that no stamp is read).
+
+## PR #93 review: ignore rules (P1)
+
+- **Bug (Greptile):** `ignoreFileMoved` read a deleted `.gitignore` as unchanged, so after a summary listed `dir/keep.log` (root `*.log`,
+  `dir/.gitignore` = `!keep.log`) deleting `dir/.gitignore` made the file ignored, and the summary route still returned its diff where the
+  whole route says `not_found`. Reproduced first (three new tests failed).
+- **Fix** (DECISIONS #334, #335; `packages/git-core/src/ignore-sources.ts`): the track records the state of the `.gitignore` of every directory
+  above an untracked file (signature, `absent`, or `unstable` within 30 ms of the stamp) and of `core.excludesFile`; the route compares them all
+  and refuses on any appearance, change or removal. Incremental refreshes keep the record (no laundering of a lost event). `ConfigScan` gained
+  `excludesFiles` (additive). Tracked files: ignore rules never apply to them, a test pins it. Attributes: never taken from the state, nothing to record.
+- **Cost:** diff-open on the 100k layout unchanged (modified 16-19 ms, untracked 2 ms, 20 ms in the 30.7k-untracked worktree; 1 / 0 spawns);
+  recording 323 directories for 30k untracked files 27-37 ms inside a full summary of about 1.9 s; an incremental summary 0.4 ms.
+- **Tests:** 5 new golden cases (the repro; appearing, changed and deleted `.gitignore`; `core.excludesFile` and `info/exclude`; an incremental
+  refresh that must not launder; tracked files), fuzz ops for ignore files and the excludes file. Mutations: see #335.
+- **Verification (this follow-up, final code):** `pnpm lint`, `typecheck`, `build` exit 0; `pnpm test` exit 0 (git-core 394 + 1 skipped, daemon 391 + 4
+  skipped, the rest as above); git-core and daemon run once more with the same counts; with `OCTOPUS_DIFF_TEST_FOLDS_CASE=1` git-core 380 + 15
+  skipped, daemon 389 + 6 skipped; `pnpm test:e2e` (1 worker) 102 passed (3.2 min), read-only proof 12 repos, 4692 lock polls, 0 violations;
+  `perf:smoke` exit 0; fuzz seeds 11, 424242, 90210, 5150 at 100 steps pass.

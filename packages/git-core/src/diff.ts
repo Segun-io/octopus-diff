@@ -25,6 +25,7 @@ import {
 import type { GitContext, RepoInfo } from './context.js';
 import { LruCache, mapLimit } from './fs-utils.js';
 import { hashParts, PATCH_HASH_LENGTH, PatchHasher, STATE_HASH_LENGTH } from './hash.js';
+import { excludesFileState, ignoreRulesMoved } from './ignore-sources.js';
 import { imageComparison } from './images.js';
 import {
   changedSince,
@@ -1406,33 +1407,6 @@ function factsOf(track: SummaryTrack): TrackFacts {
   return facts;
 }
 
-/** Ctime or mtime this close to the state's stamp (or after it) counts as written after it. */
-const CLOCK_MARGIN_MS = 100;
-
-/**
- * Has a `.gitignore` in `key`'s directory or above it been written since `stampedAt`? The kernel's
- * timestamps lag the wall clock by a few milliseconds and the stamp is taken just before git
- * reads, hence the margin: a rule file written in the last moments before a summary counts as
- * moved (the whole-scope route then answers), never the other way round.
- */
-async function ignoreFileMoved(root: string, key: string, stampedAt: number): Promise<boolean> {
-  const dirs = [''];
-  for (let slash = key.indexOf('/'); slash >= 0; slash = key.indexOf('/', slash + 1)) {
-    dirs.push(`${key.slice(0, slash)}/`);
-  }
-  const moved = await Promise.all(
-    dirs.map(async (dir) => {
-      try {
-        const info = await lstat(absolutePathBuffer(root, `${dir}.gitignore`));
-        return Math.max(info.ctimeMs, info.mtimeMs) >= stampedAt - CLOCK_MARGIN_MS;
-      } catch {
-        return false;
-      }
-    }),
-  );
-  return moved.some(Boolean);
-}
-
 type FromSummary = { diff: GitFileDiff } | { reason: string };
 
 /**
@@ -1543,9 +1517,17 @@ async function diffFromSummary(
     if (!held) return no('no-inspection');
     const [before, ignored, described] = await Promise.all([
       check(false),
-      // Whether the file is ignored is decided by the `.gitignore` files above it, which no stamp
-      // covers: one written since the state was read may ignore it now.
-      ignoreFileMoved(repo.cwd, key, track.stamp.at),
+      // Whether the file is listed at all is decided by the ignore rules it was listed under: every
+      // `.gitignore` above it (absent ones too) and `core.excludesFile`, recorded by the summary. Any
+      // that appeared, changed or went away since means the whole route (PR #93 review).
+      ignoreRulesMoved(repo.cwd, track.stamp.at, track.ignore, key, async () =>
+        excludesFileState(
+          repo.cwd,
+          (await ctx.configScan(repo)).excludesFiles,
+          ctx.runner.envValue('HOME') || undefined,
+          track.stamp.at,
+        ),
+      ),
       describeUntracked(
         deps,
         repo,

@@ -3677,17 +3677,64 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      gave a p95 of 74-79 ms, because under a burst each round of file system calls waits its turn in the 4-thread pool
      behind the summaries' stats (about 8 rounds); beside the read with only the signature after it, **33 ms** (the old
      route: 34-42 ms; quiet daemon: p50 5-6 ms; no re-check at all: 27 ms).
-333. **Known windows and one internal addition.** (a) An untracked file is ignored or not by the `.gitignore` files above
-     it, which no stamp covers: `Stamp.at` (wall clock before git ran, an internal field of the kept track; not part of
-     `stampChange`) lets the route refuse an untracked file whose ancestor `.gitignore` has a ctime or mtime within 100 ms
-     of it or later (`ignore-rules`; the clock margin covers the kernel's coarse timestamps). (b) Whether an untracked
+333. **Known windows and one internal addition.** (a) Superseded by #334: ignore rules are now recorded and compared, not guessed from a ctime. (b) Whether an untracked
      file's content is read (at most `maxUntrackedFiles` of them) is decided by the state's count of untracked files, as
      the lists' hashes are, so the diff and the list at the same state agree; the whole route counts afresh, so they can
-     differ for a worktree that crosses the threshold between the summary and the open. (c) `core.excludesFile` and
-     `core.attributesFile` outside the stamp (#285's gap) are the same here. (d) Three checks are defense in depth that
+     differ for a worktree that crosses the threshold between the summary and the open. (c) `core.excludesFile` is now recorded too (#334);
+     `core.attributesFile` and `.gitattributes` need nothing (#334). (d) Three checks are defense in depth that
      no test can reach without forging a file's ctime: the predicted status letter, one raw entry, the stat-only test
      (a mutation removing any of them survives; the signature checks come first). Mutations killed: the track blocker,
      the stamp, HEAD, both signature checks, rename partner, rename source, ignore files, committed-since-base, the
      base-deletion rule, tracked-and-untracked, the kill switch, `summaryState`, the untracked `statSig`, the
      content-read clause, the git-failure fallback, added or renamed files vouched; the case probe is killed under
      `OCTOPUS_DIFF_TEST_FOLDS_CASE=1`.
+
+### Ignore rules and the summary route (PR #93 review, P1, 2026-11-12)
+
+334. **An untracked file is vouched for only under the ignore rules it was listed under, recorded and compared.** The
+     review: `ignoreFileMoved` treated a *deleted* `.gitignore` as unchanged (a missing file gave `false`), so with a
+     root `*.log`, a `dir/.gitignore` holding `!keep.log` and an untracked `dir/keep.log`, deleting `dir/.gitignore`
+     made the file ignored (the whole route says `not_found`) while the summary route still returned its diff: the
+     file's own signature had not moved. The ctime heuristic of #333 (a) could never see an absence. Now the track
+     carries `ignore: IgnoreRecord` (`ignore-sources.ts`): for **every directory above an untracked file, the root
+     included, the state of its `.gitignore`: its lstat signature, `absent` (a recorded absence), or `unstable`** (written,
+     or in a directory whose entries changed, within 30 ms of the summary's stamp, so possibly under git's read: never
+     believed), plus the state of the file `core.excludesFile` names (a new `ConfigScan.excludesFiles`, read with the
+     same cached config scan as `core.attributesFile`; additive). A full refresh records afresh (all untracked keys'
+     directories: 323 directories for the 30.7k-untracked worktree, 27-37 ms; the full summary there takes 1.9 s). An
+     incremental refresh **keeps what the last state recorded** and reads only directories of the keys it recomputed, new
+     ones and ones recorded `unstable`: a file that moved without any event must still differ from the record, so a
+     later refresh elsewhere in the directory cannot launder it (test and mutation). The diff route reads the same
+     states again and refuses (`ignore-rules`) on any difference: a `.gitignore` that appeared, changed or disappeared at
+     any level, a moved or deleted excludes file, a directory or the excludes file the record does not hold, or an
+     unstable record. Cost at the diff: one `lstat` per ancestor directory (two when absent) beside the read, in
+     parallel; the 100k bench is unchanged (modified 16-19 ms, untracked 2 ms and 20 ms in the 30.7k-untracked
+     worktree, 1 / 0 spawns), an incremental summary pays 0.4 ms. `.git/info/exclude` and the default global ignore file
+     were already in the `Stamp`, which the route compares (`stampChange` reports `ignore`); the stamp
+     is the mechanism #40 uses for them and it is reused as is. `.gitignore` files are **not** in the stamp: the
+     incremental summary learns of them only from the watcher (a hint naming one is a full refresh) and the
+     reconciliation, so a lost event leaves it blind; the record is therefore stronger than the summary's own view, and
+     the diff route sees the removal case that the incremental summary would miss until the reconciliation. The clock
+     margin is now 30 ms (a jiffy is 10 ms; 100 ms made a new file in a just-written directory fall back, the commonest
+     untracked case); a directory's own times count only for an *absent* `.gitignore` (a creation or deletion updates
+     them), so creating or deleting any sibling entry after the summary sends untracked files of that directory the whole
+     way until the next summary (conservative, ~100 ms in the daemon).
+335. **Same class, other cases (checked, no change needed).** *Tracked files*: a tracked file that becomes ignored is
+     unchanged for git (`status` and `diff` follow the index, ignore rules never apply to tracked paths), so its diff does
+     not change; a test pins it (`.gitignore` gains `*.log` after the summary: the tracked `keep.log` and `a.txt` still
+     take the summary route and equal the whole route). *`.gitattributes` / `core.attributesFile`*: the route never
+     takes attributes from the state. A tracked file is read by `git diff` itself, which reads the attributes as they are
+     (`binary`, `-diff`, `text`/`eol`; textconv and external drivers are off); an untracked file's verdict comes from
+     `readDiffAttributes`, the function the whole route calls, which stats every `.gitattributes` above the file, the
+     info and global sources and the configured file on each call, so an added, changed or removed attribute file is seen
+     (and with content read, the summary's verdict is compared with the fresh one, so a changed verdict is the whole
+     route's). Nothing to record. Tests: `ignore-rules` cases in `diff-from-summary.test.ts` (the repro with the whole
+     route's `not_found`; a new `dir/.gitignore`; a changed and a deleted root `.gitignore`; `core.excludesFile` content
+     changed and deleted; `info/exclude`; an incremental refresh that must not launder a lost event; tracked files), all
+     written failing first, and the fuzz (`diff-from-summary-fuzz.test.ts`, ops in `helpers/fuzz-ops.ts`: `.gitignore`
+     files written (negations included) and deleted at any level, `core.excludesFile` content rewritten silently, a
+     `keep.log` path; some repositories name an excludes file; asked with no summary in between 15% of steps).
+     Mutations killed: rules never compared, the absent-directory probe, the excludes comparison, unstable records
+     believed, previous record not kept, recorded states not compared, the excludes file not recorded; two survive as
+     equivalent mutants (an unrecorded directory or a null excludes record believed: `undefined`/`null` never equal the
+     state read now, so they refuse anyway).

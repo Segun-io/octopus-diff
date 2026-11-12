@@ -44,6 +44,8 @@ export const PATHS = [
   'new\nline.txt',
   'bin.dat',
   'x.log',
+  'keep.log',
+  'dir/keep.log',
   'ign/y.txt',
   'Case.txt',
   'case.txt',
@@ -262,6 +264,39 @@ export const OPS: Array<[number, Op]> = [
       writeFileSync(exclude, pick(r, ['', 'b.txt\n', 'other/\n']));
       void fx;
       return { name: 'info/exclude', touched: [] };
+    },
+  ],
+  [
+    2,
+    (_fx, repo, r) => {
+      // A `.gitignore` in any directory (negations included) written or deleted: whether a path is
+      // listed as untracked changes with no change to the path itself (PR #93 review).
+      const dir = pick(r, ['', 'dir', 'dir/sub', 'other']);
+      const rel = dir === '' ? '.gitignore' : `${dir}/.gitignore`;
+      const full = abs(repo, rel);
+      if (r() < 0.4) {
+        if (!exists(full) || lstatSync(full).isDirectory()) return null;
+        rmSync(full);
+        return { name: `delete ${rel}`, touched: [rel] };
+      }
+      const created = dir === '' ? null : ensureParent(repo, rel);
+      if (created === 'blocked') return null;
+      const rules = pick(r, ['*.log\n', '!keep.log\n', 'keep.log\n', '*.log\n!keep.log\n', '']);
+      writeFileSync(full, rules);
+      return {
+        name: `${rel} = ${JSON.stringify(rules)}`,
+        touched: created ? [created, rel] : [rel],
+      };
+    },
+  ],
+  [
+    1,
+    (_fx, repo, r) => {
+      // The file `core.excludesFile` names (some fuzz repositories set it): no event, no hint.
+      const file = `${repo}.excludes`;
+      if (r() < 0.3) rmSync(file, { force: true });
+      else writeFileSync(file, pick(r, ['*.log\n', '', '!keep.log\n', 'ign/\n']));
+      return { name: 'core.excludesFile content', touched: [], silent: true };
     },
   ],
   // Git operations: the index or HEAD changes (the daemon would see git-dir events and refresh

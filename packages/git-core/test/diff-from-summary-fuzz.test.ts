@@ -56,6 +56,8 @@ function setupRepo(name: string, r: () => number): string {
   fx.git(repo, ['branch', 'side']);
   fx.write(abs(repo, 'side-only.txt'), 'on main\n');
   fx.commitAll(repo, 'third');
+  // Half of the repositories name a global excludes file the ops rewrite.
+  if (r() < 0.5) fx.git(repo, ['config', 'core.excludesFile', `${repo}.excludes`]);
   return repo;
 }
 

@@ -26,6 +26,7 @@ import {
 } from './diff.js';
 import { exists, mapLimit } from './fs-utils.js';
 import { hashParts, STATE_HASH_LENGTH } from './hash.js';
+import { emptyIgnoreRecord, excludesFileState, recordIgnore } from './ignore-sources.js';
 import {
   checkHint,
   foldsCase,
@@ -855,6 +856,29 @@ async function finish(
   for (const info of untrackedInfos) {
     infosByKey.set(info.key, { info, attribute: untracked.attributes.get(info.key) ?? '' });
   }
+  // Under which ignore rules the untracked files were listed (a full refresh records afresh; an
+  // incremental one keeps what the last state recorded and adds the paths it recomputed).
+  let ignore = emptyIgnoreRecord();
+  if (c.stamp.at > 0 && untrackedEntries.length > 0) {
+    const root = repo.cwd;
+    const incremental = c.mode === 'incremental' && previous !== undefined;
+    const keys = incremental
+      ? [...(c.untrackedTouched ?? [])].filter((key) => c.untracked.has(key))
+      : untrackedRaw;
+    ignore = await recordIgnore(
+      root,
+      c.stamp.at,
+      keys,
+      incremental ? previous?.ignore : undefined,
+      async () =>
+        excludesFileState(
+          root,
+          (await ctx.configScan(repo)).excludesFiles,
+          ctx.runner.envValue('HOME') || undefined,
+          c.stamp.at,
+        ),
+    );
+  } else if (c.mode === 'incremental' && previous) ignore = previous.ignore;
   const track: SummaryTrack = {
     version: deps.tracks.nextVersion(),
     stateHash,
@@ -868,6 +892,7 @@ async function finish(
     numstat: c.numstat,
     degraded: c.statusOnly || c.unreadable.size > 0,
     untrackedInfos: infosByKey,
+    ignore,
     readContent: untracked.readContent,
     signatures: signatureByKey,
     defaultBranch: options?.defaultBranch ?? null,

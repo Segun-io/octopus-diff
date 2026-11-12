@@ -5,6 +5,7 @@ import path from 'node:path';
 import { bstrFromUtf8, compareBstr, isValidUtf8 } from './bstr.js';
 import type { RepoInfo } from './context.js';
 import { mapLimit } from './fs-utils.js';
+import type { IgnoreRecord } from './ignore-sources.js';
 import type { NumstatEntry } from './parse/diff-output.js';
 import type { StatusBranch, StatusEntry } from './parse/status.js';
 import type { UntrackedInfo } from './untracked.js';
@@ -114,6 +115,11 @@ export interface SummaryTrack {
   readContent: boolean;
   /** lstat signatures of the paths with worktree changes and of the fully staged paths. */
   signatures: Map<string, string>;
+  /**
+   * The ignore rules the untracked files were listed under: the state of the `.gitignore` of every
+   * directory above one, and of `core.excludesFile` (#41, `ignore-sources.ts`).
+   */
+  ignore: IgnoreRecord;
   /** `SummaryOptions.defaultBranch` the summary used. */
   defaultBranch: string | null;
   /** HEAD's commit date when there is no reflog, by HEAD commit (one `git log` per commit). */
