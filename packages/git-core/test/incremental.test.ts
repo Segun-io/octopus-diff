@@ -133,6 +133,11 @@ describe('incremental summary: spawns per edit', () => {
         fx.write(path.join(repo, 'another.txt'), 'one\ntwo\n');
         const got = await core.getSummary(wt, { snapshot: true, changedPaths: ['another.txt'] });
         expect(got.refresh?.mode).toBe('incremental');
+        // The numstat is speculative (a new path may be a clean tracked file) and nobody awaits it
+        // when the status says untracked: under load it may start after the summary has settled.
+        for (let i = 0; i < 200 && spawns.length < 2; i++) {
+          await new Promise((resolve) => setTimeout(resolve, 10));
+        }
         expect(spawns.map((a) => a[0]).sort()).toEqual(['diff', 'status']);
         for (const args of spawns)
           expect(args.slice(args.indexOf('--'))).toEqual(['--', 'another.txt']);

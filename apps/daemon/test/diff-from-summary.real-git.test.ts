@@ -156,11 +156,10 @@ describe('GET /diff from the summary state (#41)', () => {
     await quiet(spawns);
     const before = spawns().length;
     const response = await api.getDiff(s.repoId, { scope: { kind: 'working' }, path: 'a.txt' });
-    expect(
-      spawns()
-        .slice(before)
-        .map((argv) => argv[0]),
-    ).toEqual(['diff', 'status', 'diff']);
+    // The raw diff and the status side by side (either may start first), then the patch.
+    const old = spawns().slice(before);
+    expect(old.map((argv) => argv[0]).sort()).toEqual(['diff', 'diff', 'status']);
+    expect(old[2]?.[0]).toBe('diff');
     expect(withoutReview(response)).toEqual(await wanted(s.fx, s.repo, 'a.txt'));
   });
 });

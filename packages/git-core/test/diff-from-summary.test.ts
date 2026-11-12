@@ -161,8 +161,11 @@ describe('the summary route gives the whole-scope route’s answer (working scop
       // exactly the argv the whole-scope route's narrowed patch run uses (its third process).
       expect(args.slice(-2)).toEqual(['--', 'a.txt']);
       expect(args).toContain('-U3');
+      // The whole route: the raw diff and the status side by side (either may start first), then
+      // the narrowed patch run.
       const old = referenceSpawns.slice(-3);
-      expect(old.map((a) => a[0])).toEqual(['diff', 'status', 'diff']);
+      expect(old.map((a) => a[0]).sort()).toEqual(['diff', 'diff', 'status']);
+      expect(old[2]?.[0]).toBe('diff');
       expect(args).toEqual(old[2]);
     }
     // The diff and the list (at the same state) agree on the hash the review marks are keyed by.
