@@ -92,6 +92,8 @@ const BODIES = [
 
 interface Step {
   name: string;
+  /** Its events are lost: no hint will ever name what it changed (PR #89 F1). */
+  silent?: boolean;
   /** Worktree paths a watcher would report (null: a git operation; hint stays the paths touched). */
   touched: string[];
 }
@@ -140,7 +142,36 @@ const git = (fx: Fixture, repo: string, args: string[]): void => {
   fx.git(repo, args, { allowFail: true });
 };
 
+/** Paths edited by a silent op in the current seed: a silent restore mostly undoes one of them. */
+const silentlyEdited: string[] = [];
+
 const OPS: Array<[number, Op]> = [
+  [
+    1,
+    (_fx, repo, r) => {
+      // An edit whose events are lost.
+      const rel = pick(r, PATHS);
+      const done = writeFile(repo, rel, pick(r, BODIES)(r));
+      if (done) silentlyEdited.push(rel);
+      return done ? { name: `silent ${done.name}`, touched: [], silent: true } : null;
+    },
+  ],
+  [
+    1,
+    (fx, repo, r) => {
+      // Back to HEAD's content, events lost too: what a list read mid-edit must not keep.
+      const rel = silentlyEdited.length > 0 && r() < 0.8 ? pick(r, silentlyEdited) : pick(r, PATHS);
+      const shown = spawnSync('git', ['show', `HEAD:${rel}`], {
+        cwd: repo,
+        env: { ...process.env, ...fx.env, LC_ALL: 'C' },
+      });
+      if (shown.status !== 0) return null;
+      const done = writeFile(repo, rel, shown.stdout);
+      return done
+        ? { name: `silent restore ${JSON.stringify(rel)}`, touched: [], silent: true }
+        : null;
+    },
+  ],
   [6, (_fx, repo, r) => writeFile(repo, pick(r, PATHS), pick(r, BODIES)(r))],
   [
     2,
@@ -408,6 +439,7 @@ function checkCanonical(repo: string): void {
 
 async function runSeed(seed: number, config: string[][] = []): Promise<{ incremental: number }> {
   const r = prng(seed);
+  silentlyEdited.length = 0;
   const repo = setupRepo(`fuzz-${seed.toString(16)}-${config.length}`, r, config);
   const wt = locator(repo);
   const root = fx.git(repo, ['rev-list', '--max-parents=0', 'HEAD']).trim();
@@ -417,13 +449,24 @@ async function runSeed(seed: number, config: string[][] = []): Promise<{ increme
   const reasons = new Map<string, number>();
   // Baseline: the first summary has no state to update.
   let held = (await inc.getSummary(wt, { snapshot: true })).stateHash;
+  /**
+   * A hint named fewer paths than the step touched (lost events): the incremental state may be
+   * behind the files until a full summary reconciles it. Until then summaries and lists are not
+   * compared; the reconciliation (blind) must then agree with a full core everywhere.
+   */
+  let stale = false;
+  const hints = { exact: 0, more: 0, fewer: 0, reconciled: 0 };
+  /** Review bases listed so far: their cached lists are checked again later. */
+  const bases: string[] = [];
   for (const scope of SCOPES) await inc.listChangedFiles(wt, scope);
   for (let step = 0; step < STEPS; step++) {
     const ops = 1 + Math.floor(r() * 3);
     const touched = new Set<string>();
+    let lost = false;
     for (let i = 0; i < ops; i++) {
       const done = nextOp(r)(fx, repo, r);
       if (!done) continue;
+      if (done.silent) lost = true;
       log.push(`${step}: ${done.name}`);
       for (const p of done.touched) touched.add(p);
       // Lists asked for while this step's events are still pending (PR #89 P1), between its
@@ -434,10 +477,62 @@ async function runSeed(seed: number, config: string[][] = []): Promise<{ increme
         if (roll < 0.2) await inc.listChangedFiles(wt, scope, { summaryState: held });
         else if (roll < 0.3) await inc.listChangedFiles(wt, scope);
       }
+      // And a review list against a base seeded before: an update that reads this step's files.
+      if (bases.length > 0 && r() < 0.3) {
+        const scope: DiffScope = { kind: 'review', base: pick(r, bases) };
+        await inc.listChangedFiles(wt, scope, { summaryState: held });
+      }
     }
     const context = () => `seed 0x${seed.toString(16)} step ${step}\n${log.slice(-12).join('\n')}`;
-    const got = await inc.getSummary(wt, { snapshot: true, changedPaths: [...touched] });
+    // The hint names exactly the touched paths, more (a watcher also reports what did not change
+    // in git's eyes, or paths of other events), or fewer (events lost).
+    const roll = r();
+    let hint = [...touched];
+    if (roll < 0.2) {
+      hints.more++;
+      const extra = 1 + Math.floor(r() * 3);
+      for (let i = 0; i < extra; i++) hint.push(r() < 0.8 ? pick(r, PATHS) : pick(r, DIRS));
+      hint = [...new Set(hint)];
+    } else if (roll < 0.5 && hint.length > 0) {
+      hints.fewer++;
+      const kept = hint.filter(() => r() < 0.4);
+      if (kept.length < hint.length) stale = true;
+      hint = kept;
+    } else hints.exact++;
+    let reconciled = false;
+    let got = await inc.getSummary(wt, { snapshot: true, changedPaths: hint });
+    if (lost) stale = true;
+    if (got.refresh?.mode === 'full') stale = false;
+    if (stale && r() < 0.5) {
+      // The daemon's reconciliation: a full summary, without a hint.
+      hints.reconciled++;
+      got = await inc.getSummary(wt, { snapshot: true });
+      stale = false;
+      reconciled = true;
+    }
     held = got.stateHash;
+    if (stale) {
+      // Lists of the stale state still get asked for and cached, to be checked after reconciling.
+      for (const scope of SCOPES) {
+        if (r() < 0.5) await inc.listChangedFiles(wt, scope, { summaryState: got.stateHash });
+      }
+      // A seed of a review scope against a random commit, reading files whose events were lost
+      // (PR #89 F1: what it read must still be checked after later updates and a blind summary).
+      if (r() < 0.5) {
+        const commits = fx
+          .git(repo, ['rev-list', '--all'], { allowFail: true })
+          .split('\n')
+          .filter(Boolean);
+        if (commits.length > 0) {
+          bases.push(pick(r, commits));
+          if (bases.length > 6) bases.shift();
+          const base = pick(r, bases);
+          await inc.listChangedFiles(wt, { kind: 'review', base }, { summaryState: got.stateHash });
+        }
+      }
+      if (step % 10 === 0) checkCanonical(repo);
+      continue;
+    }
     const want = await full.getSummary(wt, { snapshot: true });
     if (got.refresh?.mode === 'incremental') incremental++;
     const why = got.refresh?.reason ?? got.refresh?.mode ?? 'none';
@@ -467,16 +562,32 @@ async function runSeed(seed: number, config: string[][] = []): Promise<{ increme
         .split('\n')
         .filter(Boolean);
       if (commits.length > 0) {
-        const scope: DiffScope = { kind: 'review', base: pick(r, commits) };
+        // Mostly a base seeded while stale (now updated), sometimes a new one.
+        const base = bases.length > 0 && r() < 0.7 ? pick(r, bases) : pick(r, commits);
+        const scope: DiffScope = { kind: 'review', base };
         const gotFiles = await inc.listChangedFiles(wt, scope, { summaryState: got.stateHash });
         const wantFiles = await full.listChangedFiles(wt, scope);
         expect(gotFiles, `${context()}\nscope review ${scope.base}`).toEqual(wantFiles);
       }
     }
+    // After a reconciliation every review list seeded while stale must be right (PR #89 F1).
+    if (reconciled) {
+      for (const base of new Set(bases)) {
+        const scope: DiffScope = { kind: 'review', base };
+        const gotFiles = await inc.listChangedFiles(wt, scope, { summaryState: got.stateHash });
+        const wantFiles = await full.listChangedFiles(wt, scope);
+        expect(gotFiles, `${context()}\nreconciled, review ${base}`).toEqual(wantFiles);
+      }
+    }
     if (step % 10 === 0) checkCanonical(repo);
   }
   if (process.env.FUZZ_VERBOSE) {
-    console.log(`seed 0x${seed.toString(16)}`, Object.fromEntries(reasons), listRefreshCounts);
+    console.log(
+      `seed 0x${seed.toString(16)}`,
+      Object.fromEntries(reasons),
+      listRefreshCounts,
+      hints,
+    );
   }
   return { incremental };
 }
