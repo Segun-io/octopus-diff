@@ -18,6 +18,7 @@ import {
   classifyHead,
   countDeleted,
   diffSnapshots,
+  HEAD_CLASSIFY_COMMITS,
   type HeadChange,
   type HeadState,
   needsCommits,
@@ -675,6 +676,52 @@ describe('HeadChange shape', () => {
         { sha: mid, subject: 'a' },
         { sha: NEW, subject: 'b' },
       ],
+    });
+  });
+});
+
+describe('long runs of commits (PR #77 review)', () => {
+  /** A linear chain of `n` commits above `base`, newest first (what `git log -n` lists). */
+  const chain = (n: number, base: string | null): CommitInfo[] => {
+    // 4 hex digits repeated: never the same as the OLD / NEW fixtures ('1111...', '2222...').
+    const shas = Array.from({ length: n }, (_, i) =>
+      (i + 1).toString(16).padStart(4, '0').repeat(10),
+    );
+    return shas.map((sha, i) => commit(sha, [shas[i + 1] ?? base ?? ''], `c${i}`));
+  };
+  const newest = (list: CommitInfo[]): string => (list[0] as CommitInfo).sha;
+
+  it('more commits than the list holds is not a reset: moved, or merge for a pull', () => {
+    const list = chain(HEAD_CLASSIFY_COMMITS, '9'.repeat(40));
+    const cur = head({ sha: newest(list) });
+    // The previous HEAD is below the list: it cannot be told from a reset by this list alone.
+    expect(classifyHead(head(), cur, list)).toEqual({ kind: 'head', op: 'moved' });
+    // The tracking branch moved with it (a pull of a long run): a merge, as for a short pull.
+    const pulled = classifyHead(
+      head({ aheadBehindRef: 'origin/main', behind: 40 }),
+      head({ sha: newest(list), aheadBehindRef: 'origin/main', behind: 0 }),
+      list,
+    );
+    expect(pulled).toEqual({ kind: 'head', op: 'merge' });
+  });
+
+  it('a list shorter than its limit that misses the previous HEAD is a reset', () => {
+    const list = chain(HEAD_CLASSIFY_COMMITS - 1, '9'.repeat(40));
+    expect(classifyHead(head(), head({ sha: newest(list) }), list)).toEqual({
+      kind: 'head',
+      op: 'reset',
+    });
+  });
+
+  it('a run that reaches the previous HEAD within the list is still a commit run or a merge label', () => {
+    const short = chain(3, OLD);
+    expect(classifyHead(head(), head({ sha: newest(short) }), short)).toMatchObject({
+      kind: 'commit',
+    });
+    const long = chain(12, OLD);
+    expect(classifyHead(head(), head({ sha: newest(long) }), long)).toEqual({
+      kind: 'head',
+      op: 'merge',
     });
   });
 });

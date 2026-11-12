@@ -170,12 +170,19 @@ export function classifyHead(
       break;
     }
   }
-  if (!reached) return { kind: 'head', op: cur.detached ? 'checkout' : 'reset' };
   // A pull or fast-forward of the upstream lowers `behind`; own commits do not.
   const sameRef = prev.aheadBehindRef !== null && prev.aheadBehindRef === cur.aheadBehindRef;
-  if (sameRef && prev.behind !== null && cur.behind !== null && cur.behind < prev.behind) {
-    return { kind: 'head', op: 'merge' };
+  const pulled = sameRef && prev.behind !== null && cur.behind !== null && cur.behind < prev.behind;
+  if (!reached) {
+    // A full list that never met the previous HEAD says nothing: the run may simply be longer than
+    // the list (a long pull or a rebase of many commits is a `merge`, not a reset). Only a list
+    // that ended before its limit proves the previous HEAD is not an ancestor.
+    if (commits.length >= HEAD_CLASSIFY_COMMITS) {
+      return { kind: 'head', op: pulled ? 'merge' : 'moved' };
+    }
+    return { kind: 'head', op: cur.detached ? 'checkout' : 'reset' };
   }
+  if (pulled) return { kind: 'head', op: 'merge' };
   if (run.length > COMMIT_RUN_MAX) return { kind: 'head', op: 'merge' };
   return {
     kind: 'commit',
