@@ -1909,17 +1909,7 @@ export class DaemonCore {
     return run.join(want.signal);
   }
 
-  /** `#gitFiles` with the origins attached (`#labelFiles`). */
-  async #labeledFiles(
-    project: ProjectEntry,
-    entry: WorktreeEntry,
-    scope: DiffScope,
-    want: Want = {},
-  ): Promise<LabeledFile[]> {
-    return (await this.#labeledFilesAt(project, entry, scope, want)).files;
-  }
-
-  /** `#labeledFiles` with the summary the list was built for (`#gitFilesAt`). */
+  /** `#gitFilesAt` with the origins attached (`#labelFiles`), and the summary it was built for. */
   async #labeledFilesAt(
     project: ProjectEntry,
     entry: WorktreeEntry,
