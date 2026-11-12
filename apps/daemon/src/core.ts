@@ -247,6 +247,14 @@ interface WorktreeEntry {
    * that first summary (live work an agent does), never for every repository at startup.
    */
   firstHash: string | null;
+  /**
+   * Set while a summary refresh waits for the review state it is about to announce (#51): a first
+   * review state that lands then rides on that `worktree.changed` (its row carries `review`), not
+   * on a `review.ready` that would make every client refetch the projects list. `readyHeld` says
+   * one was held back, for the rare refresh that then announces nothing (same state hash).
+   */
+  announcing: boolean;
+  readyHeld: boolean;
 }
 
 /** First review states that land within this window share one `review.ready` per project. */
@@ -1043,6 +1051,8 @@ export class DaemonCore {
       reviewRun: null,
       rangeCache: null,
       firstHash: null,
+      announcing: false,
+      readyHeld: false,
     };
     return entry;
   }
@@ -1189,7 +1199,12 @@ export class DaemonCore {
       // The review state is ready (cached) before clients are told to refetch, when it is
       // wanted; at startup it is not (#10): the summary alone (status + numstat) is enough.
       if (this.#reviewWanted(project, entry)) {
-        await this.#reviewOf(project, entry);
+        entry.announcing = true;
+        try {
+          await this.#reviewOf(project, entry);
+        } finally {
+          entry.announcing = false;
+        }
         if (this.#closed || project.worktrees.get(entry.worktree.id) !== entry) return;
       }
       if (snapshot) {
@@ -1198,7 +1213,11 @@ export class DaemonCore {
       }
       const paths = await this.#cachedPaths(project, entry, summary);
       if (this.#closed || project.worktrees.get(entry.worktree.id) !== entry) return;
-      this.#announce(entry, summary.stateHash, paths);
+      const announced = this.#announce(entry, summary.stateHash, paths);
+      if (entry.readyHeld) {
+        entry.readyHeld = false;
+        if (!announced) this.#noteReviewReady(project.row.id);
+      }
     } catch (error) {
       if (this.#closed || isShutdownError(error)) return;
       if (project.worktrees.get(entry.worktree.id) !== entry) return;
@@ -1209,6 +1228,13 @@ export class DaemonCore {
       this.#announce(entry, `error:${apiError.code}`);
     } finally {
       entry.attempted = true;
+      // A held-back `review.ready` whose refresh ended before announcing (an error) still goes out.
+      if (entry.readyHeld) {
+        entry.readyHeld = false;
+        if (project.worktrees.get(entry.worktree.id) === entry) {
+          this.#noteReviewReady(project.row.id);
+        }
+      }
     }
   }
 
@@ -1304,8 +1330,8 @@ export class DaemonCore {
    * Replayed after a reconnect (`Last-Event-ID`) without them: that client resyncs anyway, and the
    * replay buffer keeps its old size.
    */
-  #announce(entry: WorktreeEntry, stateHash: string, paths?: WorktreeChangedPaths): void {
-    if (entry.lastHash === stateHash) return;
+  #announce(entry: WorktreeEntry, stateHash: string, paths?: WorktreeChangedPaths): boolean {
+    if (entry.lastHash === stateHash) return false;
     entry.lastHash = stateHash;
     const activitySeq = this.#activity.seqOf(entry.worktree.id);
     const slim: ServerEventOf<'worktree.changed'> = {
@@ -1318,7 +1344,7 @@ export class DaemonCore {
     const project = this.#projects.get(entry.projectId);
     if (!project || project.worktrees.get(entry.worktree.id) !== entry) {
       this.#hub.emit(slim);
-      return;
+      return true;
     }
     const full: ServerEventOf<'worktree.changed'> = {
       ...slim,
@@ -1335,6 +1361,7 @@ export class DaemonCore {
       });
       this.#hub.emit(slim);
     }
+    return true;
   }
 
   /**
@@ -1986,7 +2013,10 @@ export class DaemonCore {
           // First review state of this worktree (opened, or asked for by a request): rows that
           // showed plain changes now show their review stage. Later ones ride on the usual
           // events (`worktree.changed`, `review.*`).
-          if (entry.review === null) this.#noteReviewReady(project.row.id);
+          if (entry.review === null) {
+            if (entry.announcing) entry.readyHeld = true;
+            else this.#noteReviewReady(project.row.id);
+          }
           entry.review = review;
         }
         return review;

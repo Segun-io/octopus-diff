@@ -149,6 +149,7 @@ describe('event deltas (#51)', () => {
     await api.addProject({ path: s.other });
     await quiet(spawns);
 
+    const startMark = events.events.length;
     const perEdit: string[][] = [];
     let last: Changed | undefined;
     for (let i = 0; i < 3; i++) {
@@ -165,6 +166,14 @@ describe('event deltas (#51)', () => {
       expect(list.length, list.join(', ')).toBeLessThanOrEqual(SPAWNS_PER_EDIT_BEFORE[i] ?? 0);
     });
     if (!last) throw new Error('no event');
+    // The first edit computed the worktree's first review state: it rides on the row
+    // (`summary.review`), not on a `review.ready` that would make every client refetch projects.
+    await sleep(200);
+    const first = events.events
+      .slice(startMark)
+      .find((e): e is Changed => e.type === 'worktree.changed' && e.worktreeId === s.repoId);
+    expect(first?.summary?.review).toBeDefined();
+    expect(events.events.slice(startMark).filter((e) => e.type === 'review.ready')).toEqual([]);
 
     // The row is exactly what /api/projects now says about the worktree.
     const { projects } = await api.listProjects();
