@@ -1,0 +1,141 @@
+# incremental-summary report (roadmap #40, step 23)
+
+## Shipped
+
+- **Incremental summaries in git-core** (`packages/git-core/src/incremental.ts`, `summary.ts`). `getSummary` with
+  `SummaryOptions.changedPaths` (the watcher's paths) keeps each worktree's last state (`SummaryTrack`: status
+  entries, numstat lines, lstat signatures, untracked inspections) and runs `git status … -- <region>` and
+  `git diff --numstat <HEAD> -- <region>` (side by side) for a region of the hinted paths, every rename candidate and
+  every changed file whose signature moved without an event. The result is merged by path and goes through the same
+  `finish` step as a full refresh: same counts, `changedFiles`, additions/deletions, `activityAt`, snapshot and state
+  hash. Spawn-free guards first (`Stamp`: index, ignore, config, attribute, sparse-checkout and `.gitmodules`
+  files), and the limited status's own `--branch` header must equal the last one (HEAD, branch, upstream,
+  ahead/behind). Refused hints refresh in full and say why (`SummaryResult.refresh.reason`), see DECISIONS #276-#278.
+- **State hash unchanged in meaning and bytes.** Both modes hash a canonical rebuild of the status text in git's
+  own order (changed by path, unmerged by path, untracked by path) and numstat lines by path; the fuzz asserts the
+  rebuild equals git's raw output (DECISIONS #275).
+- **File lists follow the summary** (`packages/git-core/src/diff.ts` `listFromSummary`). With
+  `ScopeOptions.summaryState` (the held summary state), a list of a worktree-reading scope (working, review,
+  branch + working) is either updated from the journal of changed keys (one `diff -p` limited to them plus the
+  list's rename candidates) or seeded with one diff limited to the summary's status paths plus the base's
+  `diff-tree` paths; flags and untracked rows come from the summary's status and inspections (DECISIONS #279).
+- **Daemon** (`apps/daemon/src/watcher.ts`, `core.ts`, `daemon.ts`). The watcher keeps native event paths per
+  worktree through the debounce and passes them on, null after anything else (poll, focus, git-dir events,
+  re-subscribes, too many paths). The core turns them into `changedPaths`, gives a failed refresh's paths back as a
+  full refresh, passes `summaryState` to lists, and reconciles with a full refresh 30 s after the first incremental
+  one (DECISIONS #280, #281). Merge-noise labels of an uncommitted-only list skip the per-file work (#283).
+- **Kill switch / A/B:** `OCTOPUS_DIFF_INCREMENTAL=0`, `git.incremental: false` or `internal.incremental: false`
+  (#282); bench `--no-incremental`.
+- **Bench** (`e2e/bench/bench.ts`): `--no-incremental`, a "Git spawns to SSE" column (write → `worktree.changed`),
+  the edit windows in `--keep-trace`, and two budgets on later edits of a worktree: spawns to SSE ≤ 3 (enforced) and
+  edit → SSE p95 < 120 ms (report only, the 100k-file target). `docs/bench/README.md` documents them.
+
+## Verification
+
+All from the repository root on this machine (12-core WSL2, Node 26, git 2.53).
+
+- `pnpm lint`: exit 0 (biome, 1 info in an existing file; credits up to date).
+- `pnpm typecheck`: exit 0.
+- `pnpm build`: exit 0.
+- `pnpm test`: exit 0. contracts 107, forge 101 (5 skipped), fixtures 58, web 416, git-core 323, daemon 386
+  (3 skipped), e2e unit 7, cli 139, scripts 34.
+- `pnpm test:e2e`: exit 0, **100 passed (3.1 min)**, including `07-readonly` and the read-only proof (12 control repos,
+  4532 lock polls, 0 violations). The subcommand allowlist is unchanged.
+- CI-only steps run locally: `pnpm --filter @octopus-diff/web perf:smoke` exit 0; CLI smoke (`--version`, `doctor`:
+  0 problems, 1 warning); package job (`pack:tarball`, `npm install` of the tarball in an empty directory, its
+  `--version` and `doctor`: 0 problems).
+- New tests:
+  - `packages/git-core/test/incremental-fuzz.test.ts`: four seeds × 120 steps plus a `core.ignorecase=true` seed
+    (600 steps, about 20 s). Operations: writes (text, binary), deletes, renames, chmod, touch, symlinks,
+    `mkdir`/`rm -rf` of directories, `.gitignore` and `info/exclude` edits, `git add`, `add -N`, `reset`,
+    `rm --cached`, `mv`, `commit`, `checkout -f`, `symbolic-ref HEAD`, `stash push/pop` (conflicts included), over
+    paths with spaces, Unicode, a newline, case variants and nesting. After every step the incremental summary
+    (hint = exactly the paths the step touched) equals a full one field for field (snapshot included), and the
+    working, review and branch + working lists, and a review list against a random commit (seeded), equal full lists.
+    Every tenth step: the canonical status rebuild equals git's raw output. Seeds print on failure
+    (`FUZZ_SEED`, `FUZZ_STEPS`, `FUZZ_VERBOSE`, `FUZZ_DUMP`). 16 more seeds × 250 steps also pass.
+  - `packages/git-core/test/incremental.test.ts` (20): spawns per edit (status + numstat limited to the path; an
+    untracked file's edit: status only; a list update: one diff limited to the path; the kill switch), every refusal
+    reason that can be set up on Linux (no state, index, HEAD without an index write, upstream move, ignore and
+    attribute files, `info/exclude`, directories, sparse checkout, nested repository, submodule, invalid paths), a
+    lost event (stale incremental result, repaired by a full refresh, incremental again after), a missed edit of an
+    already-changed file repaired from its signature, a deleted directory, a staged rename edited on one side, and
+    `keysInRegion` against `Region.has`.
+  - `apps/daemon/test/incremental.real-git.test.ts` (3, real daemon, real watcher, a git wrapper logging argv):
+    an edit costs ≤ 3 git processes, each `-- a.txt`, and the event's counts equal a full summary's; a watcher that
+    drops one file's events is repaired by the reconciliation with no new event; `incremental: false` runs every
+    status unlimited. `watch-paths.test.ts` (3): paths reach `onWorktreeDirty` relative and `/`-separated; focus,
+    git-dir events and path-less callers give null; more than 256 paths give null. `incremental-core.test.ts` (1,
+    fake git-core): paths become `changedPaths`, focus does not, a failed refresh makes the next one full.
+  - Mutation checks (each killed by the tests above unless noted): no rename candidates, region without
+    prefix matching, no status-header check, index stamp ignored, no missed-signature repair, list without rename
+    candidates, journal ignoring signatures, no canonical sort, directories not refused, ignore files allowed,
+    conflicts not refused, list reusing rows inside the region, seed without the committed paths, seed without the
+    status paths, list stamp unchecked, hint never passed, reconciliation never armed, watcher dropping paths,
+    paths kept for git events, no `summaryState`, a failed refresh keeping no hint. Survivor: the journal reset on a
+    HEAD move alone (redundant with the list's HEAD check; removing both is killed).
+- Bench (edit → SSE per worktree role):
+  | Run (this machine) | main | stale-index | untracked-heavy | git spawns to SSE |
+  |---|---|---|---|---|
+  | 100k files, UI open (`bench --layout large`, committed `results-large.*`) | 63-71 ms | 62-67 ms | 100-111 ms | 3 |
+  | 100k files, `--no-ui`, later edits (`results-large-edits.*`) | 55-62 ms | 58-63 ms | 94-105 ms | 3 |
+  | 100k files, `--no-ui`, first edit of each worktree (first review state) | 525 ms | 247 ms | 305 ms | 3-4 |
+  | 100k files, `--no-ui --no-incremental` (`results-large-edits-full.*`) | 1138-1244 ms | 111.9-122.8 **s** | 3.6-3.8 s | 4-7 |
+  | 20k files, UI open (`--layout large-ci`, committed) | 25-29 ms | 25-29 ms | 34-42 ms | 3 |
+  | 20k files before this branch (committed `results-large-ci.md` on main) | 481 ms p50 | 5512 ms p50 | 700 ms p50 | 22-38 per edit |
+
+  The 100k layout builds in about 10 s here, so it was measured directly (the 183 s caveat in the bench README was
+  the old cold paint: 169 ms now, 45 ms warm). New budgets: spawns to SSE on later edits **3 (≤ 3, PASS)** on
+  large and large-ci; edit → SSE p95 on later edits **109 ms** (100k, UI) and **34 ms** (20k), report only.
+  `pnpm --filter @octopus-diff/e2e bench` (30 × 3, UI): every budget passes (cold paint 139 ms, warm 72 ms, edit →
+  SSE p95 19 ms, burst diff p95 34 ms, 0 projects requests per edit, idle CPU 0.40 %); committed. Idle CPU on the
+  100k layout reads 8.5 % (report only; 0.05 % in the old run, whose 183 s paint kept the idle window after all
+  startup work): the idle window now starts while startup work and the focused worktree's 30 s fallback poll (a
+  full refresh of 100k files) run; not traced, so this explanation is unverified. On large-ci it went down,
+  10.19 % → 2.18 %.
+  Per-spawn costs at 100k files (trace): pathspec-limited `status` 20-25 ms, `diff --numstat` 14-17 ms,
+  `diff -p` 14-17 ms; full `status` 150-470 ms, full numstat up to 970 ms with a stale index, full `diff -p` of
+  the stale worktree about 5 s on 20k files and over 100 s on 100k.
+
+## Decisions
+
+DECISIONS #272-#284: the two `contracts:` commits (#272, #273); the incremental summary (#274); the state hash
+(#275); refusals, and renames and deleted directories not forcing a full refresh (a deviation from the brief, #276);
+case-folding filesystems (#277); conflicts (#278); file lists (#279); watcher paths (#280); reconciliation (#281);
+kill switch (#282); origins of uncommitted-only lists (#283); spawns per edit (#284). PLAN §5.6 has a paragraph.
+
+## Contract changes
+
+Two separate `contracts:` commits, additive only: `SummaryOptions.changedPaths`, `SummaryResult.refresh`
+(`SummaryRefresh`), `GitCoreOptions.incremental` (78b7068); `ScopeOptions.summaryState` (77915a8).
+
+## Dependencies
+
+None added or removed (`pnpm credits:check`: up to date).
+
+## Known gaps
+
+- **First review state.** The first edit of a worktree in a daemon session computes its first review state, whose
+  list needs every changed file's patch (seeded, limited to the changed paths: 247 ms on the stale-index worktree,
+  305 ms with 30k untracked files, 525 ms with a 300k-line rewrite). The event waits for it (#265). Later edits:
+  see the table in Verification. Announcing before the first review state would remove it; not done (web behaviour of #51).
+- **macOS, Windows and case-folding mounts refresh in full** (#277). A fold-aware region is the follow-up.
+- **Conflicts, submodules, nested repositories and sparse checkouts refresh in full** (#276, #278).
+- **Hashing 30k untracked records costs ~15 ms per refresh** (SHA-256 over ~3.6 MB). Section digests would remove
+  it at the price of one changed state hash per worktree on upgrade (#275, proposal).
+- **A new file costs two processes** (status and a speculative numstat), since the last state cannot tell a new
+  file from a clean tracked one; an edit of an untracked file costs one.
+- **Config scan TTL.** One `git config` every 60 s at most (#29) can land on an edit: 4 processes then.
+- **Custom `core.excludesFile` / `core.attributesFile` or config includes** are not in the stamp; their edits wait for
+  the reconciliation (30 s).
+
+## Notes for integration
+
+- Merge order does not matter; the `contracts:` commits are separate. DECISIONS numbers #272-#284 may need renumbering.
+- `apps/web` is untouched. The event and row shapes are unchanged; `SummaryResult.refresh` is stripped like
+  `snapshot` and never reaches a payload.
+- The read-only allowlist is unchanged: `status` and `diff` take `--`-separated literal pathspecs as before, and
+  `diff-tree -r -z --name-only --no-renames --no-commit-id --end-of-options <a> <b> --` is the call file origins
+  already make.
+- This branch regenerated `docs/bench/results.*`, `results-large-ci.*`, `results-large.*` and added
+  `results-large-edits*.{md,json}`; re-run them after rebasing if other perf work lands first.

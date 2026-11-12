@@ -3298,3 +3298,89 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      worktree. Without it (any other caller, tests, `getFileDiff`), `listChangedFiles` stays what it was: a full
      status and diff of the worktree as it is now. Found by `review-fixes.test.ts` (F8): with no summary between an
      edit of `.gitattributes` and a list, the journal was empty and the cached list came back stale.
+274. **git-core: an incremental summary merges pathspec-limited records into the last state.** `getSummary` with
+     `changedPaths` keeps the worktree's last state (`SummaryTrack` in `packages/git-core/src/incremental.ts`: status
+     entries, numstat lines, lstat signatures, untracked inspections, per worktree, 256 worktrees) and runs
+     `git status … -- <region>` and `git diff --numstat <HEAD> -- <region>` (literal pathspecs after `--`,
+     `GIT_LITERAL_PATHSPECS=1`, the single runner) for a region of: the hinted paths, every rename candidate of the
+     last state (anything but a plain modification on both sides of the index, both paths of a rename: a rename pairs a
+     deletion with an addition anywhere, so the limited run sees git's whole candidate set and pairs the same way),
+     and every already-changed file whose lstat signature moved without an event. Records inside the region are
+     replaced, the rest kept. Spawn-free checks first (`Stamp`: stat of the index, `info/exclude` and the global
+     excludes, the config and attribute files, sparse-checkout and `.gitmodules`); HEAD, branch, upstream and its
+     ahead/behind come from the limited status's own `--branch` header, which must equal the last one. numstat runs
+     alongside the status unless every hinted path is a known untracked file. Everything global (default-branch
+     ahead/behind, the operation in progress, HEAD's activity time, untracked attributes) is recomputed exactly as a
+     full refresh does: it is the same `finish` step.
+275. **The state hash is rebuilt canonically, in git's order.** Both modes hash the status text rebuilt from its
+     header and entries (changed entries by path, then unmerged ones by path, then untracked by path: git's own
+     order, so the bytes and the hash are what they were; `incremental-fuzz.test.ts` asserts it against raw output)
+     and the numstat lines by destination path, **only those of paths git status reports**. The last part changes the
+     hash once for a worktree with stat-dirty binary files git status does not report (their `-\t-` lines were noise
+     that moved the hash on a `touch`); nothing else changes. No new scheme was needed: a full and an incremental
+     refresh of the same state produce the same bytes. Considered and not done: section digests (`summary-v3`),
+     which would cut the ~15 ms of SHA-256 per refresh of a 30k-untracked worktree but change every state hash once
+     (rows hidden "until it changes" would come back); a proposal for the lead.
+276. **When a hint is refused (a full refresh, `SummaryRefresh.reason`).** No last state; `incremental: false`; a
+     hint with more than 256 paths, a path that is invalid, inside a `.git`, not UTF-8, or a `.gitignore`,
+     `.gitattributes` or `.gitmodules`; a hinted path that is now a directory (its contents may predate the events);
+     a stamp change (`index`, `ignore-rules`, `config`); a different `defaultBranch`; more than 1000 pathspecs or
+     256 KB of them; an empty region (no pathspec would mean the whole tree); a changed status header (`head`); any
+     output outside the region, a parse error or a failed numstat (unreadable files, F7, are the full refresh's
+     business); and states that are never updated: unmerged paths (#278), submodules or gitlinks, a nested
+     repository (an untracked `dir/` entry), a sparse checkout, a degraded numstat, a case-insensitive or
+     Unicode-normalising filesystem (#277). **Deviation from the brief:** renames and deleted directories do not force
+     a full refresh. A file rename reaches the watcher as a delete plus a create, both paths are in the hint, and the
+     rename candidates make git pair it as a full run would; editors save by renaming a temp file, so forcing a full
+     refresh there would undo the work. A deleted directory is covered by its path: a literal pathspec matches
+     everything below it (`Region.has` implements the same rule, byte for byte). Both are fuzzed.
+277. **Case-insensitive and normalising filesystems refresh in full.** git matches literal pathspecs byte for byte
+     even with `core.ignorecase` (tested), and `GIT_ICASE_PATHSPECS` is refused together with the global literal
+     setting. A watcher can name a file in another case or Unicode form than the index, so an update could miss it.
+     macOS and Windows are therefore never incremental. On Linux, `foldsCase` probes `<root>/.git` against
+     `<root>/.GIT` (same inode: a case-folding mount such as a WSL `/mnt` drive or ciopfs). `core.ignorecase=true` on
+     a case-sensitive filesystem is fuzzed and agrees. Follow-up: a fold-aware region for macOS.
+278. **Unmerged paths refresh in full (found by the fuzz).** With an unmerged path in the index, `git status` can pair
+     a worktree deletion with it as a rename and then print neither the rename nor the deletion (an `u` line has no
+     room for one): a full status lists no entry for the deleted file, `status -- <it>` lists `.D`. A deletion that no
+     state shows cannot be a rename candidate, so the "every addition and deletion is in the last state" argument
+     fails while conflicts exist. Seed 0x5eed03 step 112 reproduced it (a stash pop with conflicts).
+279. **File lists of the scopes that read the worktree follow the summary.** `ScopeOptions.summaryState` (#273) asks
+     for the list of the summary state the caller holds. git-core keeps the last list per worktree and scope (64)
+     and a journal of the keys whose summary records changed, per summary version (64 entries; null when HEAD, the
+     config/attribute stamp or the untracked read mode changed, or an attributes file is among them). It then
+     either **updates** the cached list (one `diff --raw --numstat -p` limited to the journal's paths since the list
+     plus the list's own rename candidates: every non-modified row) or **seeds** it: one diff limited to the
+     summary's status paths plus, against another commit than HEAD, the paths `diff-tree -r --name-only
+     --no-renames <base> HEAD` lists (memoized). Everywhere else base, HEAD, index and file agree, and every addition
+     or deletion is inside, so the rows are a full list's. Flags and untracked rows come from the summary's status and
+     inspections (no `git status`, no lstat per untracked file). Refused: no or a stale summary state, a stamp change
+     since it, unmerged rows, unreadable files, non-UTF-8 pathspecs, more than 1000 paths. The allowlist is
+     untouched: `diff-tree` already runs with exactly these flags for file origins.
+280. **Daemon: watcher paths become the hint; anything else refreshes in full.** `WatcherService` keeps the
+     worktree-relative paths its native events named through the debounce (at most 256, `MAX_PENDING_PATHS`) and
+     hands them to `onWorktreeDirty(id, reason, paths)`; `paths` is null as soon as anything without paths asked: a
+     poll (the polling fallback has no paths), focus, git-dir events (HEAD, index, refs, `info/`, config), a
+     re-subscribe after an error or a burst of new directories (`watch-subtree.ts`), a folder that came back, an
+     ignore-rules recheck, an event on the root itself, the superproject of a nested repository. `DaemonCore` turns
+     it into `changedPaths` (`#takeHint`), gives a failed refresh's paths back as "refresh in full", and asks lists for
+     `summaryState: entry.gitStateHash` (git-core's own hash, before `withBase`). A daemon restart starts with full
+     refreshes (no state).
+281. **Daemon: reconciliation 30 s after the first incremental refresh.** The fallback poll alone cannot reconcile a
+     busy worktree: every refresh re-arms it, so it never fires while an agent keeps writing. `#armReconcile` starts a
+     timer (`CORE_DEFAULTS.reconcileMs`, 30 s; `internal.incremental.reconcileMs`) at the first incremental refresh
+     after a full one; it refreshes in full and is cleared by any full refresh. A lost event costs at most 30 s of
+     staleness (test: a watcher that drops one file's events; the repair arrives with no new event).
+282. **Kill switch.** `DaemonInternals.incremental: false`, `StartDaemonOptions.git.incremental: false`, or
+     `OCTOPUS_DIFF_INCREMENTAL=0` in the daemon's environment: no hints, no `summaryState`, git-core created with
+     `incremental: false`. The bench's `--no-incremental` uses the first two (A/B).
+283. **Daemon: no per-file origins for a list of uncommitted files only.** Every such file is own when no operation is
+     in progress (`readFileOrigins`' rules need a committed file, or a staged one during a merge), so `#labelFiles`
+     asks git-core without the files (for the integration base and ref, which the review state still carries) and
+     keeps the list as it is. With 30k untracked files, validating them took 23 ms of every edit's review state.
+284. **What one edit costs now.** status and numstat (side by side) for the summary, one `diff -p` for the review
+     state's list: 3 git processes, each limited to the edited path. Extra, and not per edit: the config scan's
+     60 s TTL (#29), a `rev-parse` of a new review base (memoized), and the worktree's **first** review state in a
+     daemon session, which seeds its list with one diff of every changed file (patches are what a review state is
+     made of: 247 ms on the stale-index worktree, 525 ms on the one with a 300k-line rewrite). The event still waits
+     for that first review state (#265); announcing before it is a possible follow-up.
