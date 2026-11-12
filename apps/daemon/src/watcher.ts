@@ -155,7 +155,17 @@ export interface WatcherServiceOptions {
   subscribe?: SubscribeFn;
   /** Home and temp directories for the watch guard (tests). Default: the real ones. */
   guardDirs?: GuardDirs;
-  onWorktreeDirty: (worktreeId: string, reason: DirtyReason) => void;
+  /**
+   * A worktree needs a refresh. `paths` (worktree-relative, `/`-separated) are the files the
+   * native watcher reported since the last call, when every trigger in between was such an
+   * event; null when anything else asked (a poll, focus, git-dir events, a re-subscribe after
+   * which events may have been missed, too many paths): then only a full refresh is right (#40).
+   */
+  onWorktreeDirty: (
+    worktreeId: string,
+    reason: DirtyReason,
+    paths: readonly string[] | null,
+  ) => void;
   onWorktreeListDirty: (projectId: string, reason: 'git' | 'timer' | 'missing') => void;
   /**
    * A watched worktree folder was deleted, or replaced at the same path: its git dir may have
@@ -202,6 +212,8 @@ interface WorktreeState {
   poll: NodeJS.Timeout | undefined;
   /** When this worktree last fired a refresh (any reason); 0 = never. */
   lastFireAt: number;
+  /** Paths reported since the last refresh fired; `full` once anything without paths asked. */
+  pending: { paths: Set<string>; full: boolean } | null;
   /** Re-subscribe after the subscription reported an error. */
   retry: ErrorRetry;
   /** Directories created under the root (see `watch-subtree.ts`); null when not used. */
@@ -277,6 +289,31 @@ const IS_WSL =
 
 function isGlobOrPath(entry: string): boolean {
   return /[*?[\]{}!/\\]/.test(entry);
+}
+
+/** Paths kept per worktree between two refreshes; more means a full refresh (#40). */
+export const MAX_PENDING_PATHS = 256;
+
+/**
+ * Records that `owner` saw an event at absolute path `p`, as a worktree-relative `/` path; an
+ * event on the root itself or outside it makes the owner's refresh a full one (null).
+ */
+function addOwnerPath(
+  owners: Map<WorktreeState, string[] | null>,
+  owner: WorktreeState,
+  p: string,
+): void {
+  const rel = path.relative(owner.info.root, p);
+  const usable = rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel);
+  const list = owners.get(owner);
+  if (list === null) return;
+  if (!usable) {
+    owners.set(owner, null);
+    return;
+  }
+  const posix = path.sep === '/' ? rel : rel.split(path.sep).join('/');
+  if (list) list.push(posix);
+  else owners.set(owner, [posix]);
 }
 
 /** Expands plain names (`dist`) to "at any depth" globs; globs and paths pass through. */
@@ -573,10 +610,22 @@ export class WatcherService {
     return this.#focus;
   }
 
-  /** Schedules a debounced refresh of one worktree. */
-  markDirty(worktreeId: string, reason: DirtyReason): void {
+  /**
+   * Schedules a debounced refresh of one worktree. `paths`: the worktree-relative files a native
+   * event named (only with reason `fs`); without them the refresh is a full one (#40).
+   */
+  markDirty(worktreeId: string, reason: DirtyReason, paths?: readonly string[]): void {
     const st = this.#worktrees.get(worktreeId);
     if (!st || this.#closed) return;
+    st.pending ??= { paths: new Set(), full: false };
+    if (reason !== 'fs' || paths === undefined) st.pending.full = true;
+    else if (!st.pending.full) {
+      for (const p of paths) st.pending.paths.add(p);
+      if (st.pending.paths.size > MAX_PENDING_PATHS) {
+        st.pending.full = true;
+        st.pending.paths.clear();
+      }
+    }
     const now = Date.now();
     if (
       this.#opts.leadingEdge &&
@@ -825,6 +874,7 @@ export class WatcherService {
       pendingReason: 'fs',
       poll: undefined,
       lastFireAt: 0,
+      pending: null,
       retry: newRetry(),
       subtrees: null,
       resub: new ResubscribeGate(this.#opts.newSubtreeGapMs),
@@ -1119,7 +1169,7 @@ export class WatcherService {
       owner.build.nested.clear();
       if (path.dirname(event.path) === owner.info.root) this.#scheduleIgnoreCheck(owner);
     }
-    const owners = new Set<WorktreeState>();
+    const owners = new Map<WorktreeState, string[] | null>();
     const deferred: Array<{ owner: WorktreeState; path: string }> = [];
     const created = new Map<WorktreeState, string[]>();
     const removed = new Map<WorktreeState, string[]>();
@@ -1140,7 +1190,7 @@ export class WatcherService {
         else removed.set(owner, [event.path]);
       }
       if (verdict === 'unknown') deferred.push({ owner, path: event.path });
-      else owners.add(owner);
+      else addOwnerPath(owners, owner, event.path);
     }
     // Deletions first: a path created again in this delivery must not be trusted from before.
     for (const [owner, paths] of removed) owner.subtrees?.noteRemoved(paths);
@@ -1192,7 +1242,7 @@ export class WatcherService {
 
   /** Reads the nested `.gitignore` files that events under build directories depend on. */
   async #resolveDeferred(items: Array<{ owner: WorktreeState; path: string }>): Promise<void> {
-    const owners = new Set<WorktreeState>();
+    const owners = new Map<WorktreeState, string[] | null>();
     for (const { owner, path: p } of items) {
       if (this.#closed || this.#worktrees.get(owner.info.worktreeId) !== owner) continue;
       const rel = path.relative(owner.info.root, p).split(path.sep).join('/');
@@ -1205,7 +1255,7 @@ export class WatcherService {
         }
       }
       // Still unknown (the cache was cleared meanwhile): keep the event, a refresh is harmless.
-      if (this.#buildVerdict(owner, p) !== 'drop') owners.add(owner);
+      if (this.#buildVerdict(owner, p) !== 'drop') addOwnerPath(owners, owner, p);
     }
     this.#markOwnersDirty(owners, 'fs');
   }
@@ -1238,10 +1288,16 @@ export class WatcherService {
    * Marks worktrees dirty, plus the worktrees of *other* projects that contain them: a nested
    * repository is often a submodule, whose changes alter its superproject's status (F3).
    */
-  #markOwnersDirty(owners: Iterable<WorktreeState>, reason: DirtyReason): void {
-    const ids = new Set<string>();
-    for (const owner of owners) {
-      ids.add(owner.info.worktreeId);
+  #markOwnersDirty(
+    owners: Iterable<WorktreeState> | Map<WorktreeState, string[] | null>,
+    reason: DirtyReason,
+  ): void {
+    /** Worktree id → the paths its events named (null: refresh in full). */
+    const ids = new Map<string, string[] | null>();
+    const entries: Array<[WorktreeState, string[] | null]> =
+      owners instanceof Map ? [...owners] : [...owners].map((owner) => [owner, null]);
+    for (const [owner, paths] of entries) {
+      ids.set(owner.info.worktreeId, paths);
       if (owner.info.bare) continue;
       for (const other of this.#worktrees.values()) {
         if (
@@ -1250,11 +1306,13 @@ export class WatcherService {
           other.info.root !== owner.info.root &&
           isSameOrInside(other.info.root, owner.info.root)
         ) {
-          ids.add(other.info.worktreeId);
+          // The superproject of a nested repository or submodule: its status of the nested
+          // tree is not a path-by-path thing, so it refreshes in full.
+          ids.set(other.info.worktreeId, null);
         }
       }
     }
-    for (const id of ids) this.markDirty(id, reason);
+    for (const [id, paths] of ids) this.markDirty(id, reason, paths ?? undefined);
   }
 
   /** The deepest watched worktree root that contains `p` (handles nested worktrees). */
@@ -1529,8 +1587,11 @@ export class WatcherService {
     if (this.#closed || this.#worktrees.get(st.info.worktreeId) !== st) return;
     st.lastFireAt = Date.now();
     this.#schedulePoll(st.info.worktreeId);
+    const pending = st.pending;
+    st.pending = null;
+    const paths = reason === 'fs' && pending !== null && !pending.full ? [...pending.paths] : null;
     try {
-      this.#onDirty(st.info.worktreeId, reason);
+      this.#onDirty(st.info.worktreeId, reason, paths);
     } catch (error) {
       this.#log.error('worktree refresh callback failed', {
         worktreeId: st.info.worktreeId,

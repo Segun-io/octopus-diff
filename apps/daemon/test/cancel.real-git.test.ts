@@ -119,6 +119,8 @@ describe.runIf(process.platform !== 'win32')('aborted requests stop git (#44, re
 
   it('an aborted /files leaves no git child', async () => {
     const ctx = await setup();
-    await abortWhileRunning(ctx, 'status', `/api/worktrees/${ctx.worktreeId}/files?scope=working`);
+    // Since #40 the list of the summary's state comes from the summary's own status: the
+    // request's git process is the (pathspec-limited) diff.
+    await abortWhileRunning(ctx, 'diff', `/api/worktrees/${ctx.worktreeId}/files?scope=working`);
   });
 });

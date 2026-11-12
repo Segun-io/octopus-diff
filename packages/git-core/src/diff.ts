@@ -26,6 +26,17 @@ import type { GitContext, RepoInfo } from './context.js';
 import { LruCache, mapLimit } from './fs-utils.js';
 import { hashParts, PATCH_HASH_LENGTH, PatchHasher, STATE_HASH_LENGTH } from './hash.js';
 import { imageComparison } from './images.js';
+import {
+  changedSince,
+  keysInRegion,
+  Region,
+  readStamp,
+  regionOfKeys,
+  type SummaryTrack,
+  stampChange,
+  type TrackStore,
+  trackBlocker,
+} from './incremental.js';
 import { DiffOutputParser, type NumstatEntry, type RawEntry } from './parse/diff-output.js';
 import { type ChunkKind, PatchSplitter } from './parse/patch.js';
 import { parseStatusV2, type StatusEntry, type StatusResult } from './parse/status.js';
@@ -588,6 +599,12 @@ export interface DiffDeps {
   ctx: GitContext;
   untrackedCache: UntrackedCache;
   attributeCache: AttributeCache;
+  /** The last summary state per worktree (#40). */
+  tracks: TrackStore;
+  /** The last list per worktree and scope that reads the worktree (#40). */
+  lists: ListCache;
+  /** `GitCoreOptions.incremental` (default true). */
+  incremental: boolean;
 }
 
 /**
@@ -770,6 +787,417 @@ export async function readDiffAttributes(
 // listChangedFiles
 // ---------------------------------------------------------------------------------------------
 
+/** A listed file with its bstr key (and rename source), so a list can be updated by path. */
+interface ListRow {
+  key: string;
+  /** Rename or copy source (bstr), else null. */
+  oldKey: string | null;
+  file: GitChangedFile;
+}
+
+/** The last list of a scope that reads the worktree, for incremental updates (#40). */
+export interface ListEntry {
+  /** `SummaryTrack.version` the list is at least as new as (-1: no summary yet). */
+  version: number;
+  /** HEAD commit of that summary. */
+  headSha: string | null;
+  readContent: boolean;
+  /** Sorted by key. */
+  rows: ListRow[];
+  /** `rows`' keys, in the same order (binary search). */
+  keys: string[];
+  /**
+   * Keys of rows the summary state at `version` does not explain (a row read from the files
+   * while their event was pending): re-diffed on every later use until they agree (PR #89 P1).
+   */
+  recheck: string[];
+  /** Paths that differ between the scope's base and HEAD (null: not computed, base is HEAD). */
+  committed: ReadonlySet<string> | null;
+  /**
+   * The pathspecs this list read from the files, with each one's lstat signature just before
+   * (PR #89 P1). After a full ("blind") summary, the ones whose file moved since are re-diffed:
+   * a file read mid-edit and changed back before any summary shows in no record.
+   */
+  late: Map<string, string>;
+  /** A full list: it read everything, so after a blind summary it is computed again. */
+  lateAll: boolean;
+}
+export type ListCache = LruCache<string, ListEntry>;
+
+/** How file lists of worktree-reading scopes were computed, process-wide (tests, diagnostics). */
+export const listRefreshCounts = { incremental: 0, seeded: 0, full: 0, uncached: 0 };
+
+/**
+ * Read signatures one cached list keeps at most (`ListEntry.late`): above, the list is served
+ * but not cached (each full summary would check that many files).
+ */
+export const listLimits = { maxLateSignatures: 20_000 };
+
+export function createListCache(): ListCache {
+  return new LruCache<string, ListEntry>(64);
+}
+
+/** Rows of the tracked entries of one diff run (all of the scope, or a pathspec-limited part). */
+async function trackedRows(
+  ctx: GitContext,
+  repo: RepoInfo,
+  plan: ScopePlan,
+  run: DiffRun,
+  index: StatusIndex | null,
+): Promise<ListRow[]> {
+  const numstat = new Map(run.numstat.map((entry) => [entry.path, entry]));
+  const combinedKeys = run.raw.filter((entry) => entry.combined).map((entry) => entry.path);
+  const combinedChunks = await collectCombinedChunks(ctx, repo, plan, combinedKeys);
+  const rows: ListRow[] = [];
+  const seen = new Set<string>();
+  for (const candidate of run.raw) {
+    if (seen.has(candidate.path)) continue;
+    seen.add(candidate.path);
+    const entry = pickEntry(run.raw, candidate.path) ?? candidate;
+    const chunk = entry.combined ? combinedChunks.get(entry.path) : run.chunks.get(entry.path);
+    if (isStatOnly(entry, chunk, numstat.get(entry.path))) continue;
+    const conflicted = entry.combined || (index?.conflicted.has(entry.path) ?? false);
+    const identity = trackedIdentity(
+      entry,
+      numstat.get(entry.path),
+      chunk?.hash ?? fallbackPatchHash(entry),
+      conflicted,
+    );
+    const renamed = entry.status === 'R' || entry.status === 'C';
+    rows.push({
+      key: entry.path,
+      oldKey: renamed ? entry.srcPath : null,
+      file: { ...identity, ...flagsFor(plan, index, entry.path) },
+    });
+  }
+  return rows;
+}
+
+function untrackedRows(infos: readonly UntrackedInfo[]): ListRow[] {
+  return infos.map((info) => ({
+    key: info.key,
+    oldKey: null,
+    file: { ...untrackedIdentity(info), staged: false, unstaged: true },
+  }));
+}
+
+function sortRows(rows: ListRow[]): ListRow[] {
+  return rows.sort((a, b) => compareBstr(a.key, b.key));
+}
+
+/** Two key-sorted row lists merged (a stable merge: `a` first on equal keys). */
+function mergeRows(a: readonly ListRow[], b: readonly ListRow[]): ListRow[] {
+  if (b.length === 0) return [...a];
+  const out: ListRow[] = [];
+  let j = 0;
+  for (const row of a) {
+    while (j < b.length && (b[j] as ListRow).key < row.key) out.push(b[j++] as ListRow);
+    out.push(row);
+  }
+  while (j < b.length) out.push(b[j++] as ListRow);
+  return out;
+}
+
+/**
+ * Rows a summary state does not explain: a tracked row whose path (or old path) is neither a
+ * status path nor, against another base than HEAD, a path that differs between base and HEAD;
+ * an untracked row the state does not list. Such a row was read from the files after the state
+ * (its event pending). The journal re-diffs only paths whose records change between two states,
+ * so a file clean in both would keep the row for ever: the list re-checks these keys instead.
+ * `committed` null with such a tracked row: unknown, every unexplained key is returned.
+ */
+function unexplainedKeys(
+  track: SummaryTrack,
+  rows: readonly ListRow[],
+  committed: ReadonlySet<string> | null,
+): string[] {
+  const statusPaths = new Set<string>();
+  for (const entry of track.tracked.values()) {
+    statusPaths.add(entry.path);
+    if (entry.kind === 'renamed') statusPaths.add(entry.origPath);
+  }
+  const explained = (key: string): boolean =>
+    statusPaths.has(key) || (committed?.has(key) ?? false);
+  const out = new Set<string>();
+  for (const row of rows) {
+    if (row.file.status === 'untracked') {
+      if (!track.untracked.has(row.key) && !track.untracked.has(`${row.key}/`)) out.add(row.key);
+      continue;
+    }
+    if (!explained(row.key)) out.add(row.key);
+    if (row.oldKey !== null && !explained(row.oldKey)) out.add(row.oldKey);
+  }
+  return [...out].sort(compareBstr);
+}
+
+/** A path's lstat signature for `ListEntry.late`; a directory never matches (its files may move). */
+async function readSignature(root: string, key: string): Promise<string> {
+  const sig = await lstatSignature(root, key);
+  if (sig === 'missing') return sig;
+  const mode = Number(sig.split(':')[4]);
+  return (mode & 0o170000) === 0o040000 ? 'dir' : sig;
+}
+
+/** The paths that differ between a plan's base and HEAD, or null when its base is HEAD. */
+async function committedOf(
+  ctx: GitContext,
+  repo: RepoInfo,
+  plan: ScopePlan,
+  headSha: string | null,
+): Promise<ReadonlySet<string> | null | undefined> {
+  const base = plan.revArgs[0];
+  if (plan.revArgs.length !== 1 || base === undefined) return undefined;
+  if (base === 'HEAD' || base === headSha) return null;
+  if (headSha === null || !FULL_OID.test(base)) return undefined;
+  return committedKeys(ctx, repo, base, headSha);
+}
+
+/**
+ * After a full summary: drops the worktree's cached lists that the new state does not explain
+ * (another HEAD, or any unexplained row), so the next list is seeded from the state.
+ */
+export function dropStaleLists(deps: DiffDeps, cwd: string, track: SummaryTrack): void {
+  const prefix = `${cwd}\u0000`;
+  deps.lists.deleteWhere(
+    (key, entry) =>
+      key.startsWith(prefix) &&
+      (entry.headSha !== track.branch.oid ||
+        unexplainedKeys(track, entry.rows, entry.committed).length > 0),
+  );
+}
+
+/** Drops every cached list of a worktree (`SummaryOptions.forgetState`). */
+export function forgetLists(deps: DiffDeps, cwd: string): void {
+  const prefix = `${cwd}\u0000`;
+  deps.lists.deleteWhere((key) => key.startsWith(prefix));
+}
+
+function listKeyOf(repo: RepoInfo, plan: ScopePlan): string {
+  return [repo.cwd, plan.kind, plan.findCopies ? 'C' : '', ...plan.revArgs].join('\u0000');
+}
+
+/** git status of the summary state (`SummaryTrack`), as `readStatus` would have parsed it. */
+function trackStatus(track: SummaryTrack): StatusResult {
+  return {
+    branch: track.branch,
+    header: track.header,
+    entries: [...track.tracked.values(), ...track.untracked.values()],
+  };
+}
+
+/** Paths (bstr) that differ between two commits, memoized by their ids (`diff-tree`, no renames). */
+async function committedKeys(
+  ctx: GitContext,
+  repo: RepoInfo,
+  from: string,
+  to: string,
+): Promise<ReadonlySet<string>> {
+  if (from === to) return new Set();
+  const key = `list-names\u0000${repo.commonDir}\u0000${from}\u0000${to}`;
+  const names = await ctx.memo(key, async () => {
+    const result = await ctx.git(repo, [
+      'diff-tree',
+      '-r',
+      '-z',
+      '--name-only',
+      '--no-renames',
+      '--no-commit-id',
+      '--end-of-options',
+      from,
+      to,
+      '--',
+    ]);
+    return new Set(
+      bstrFromBuffer(result.stdout)
+        .split('\u0000')
+        .filter((name) => name.length > 0),
+    );
+  });
+  return names ?? new Set();
+}
+
+const FULL_OID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+
+/**
+ * A list of a scope that reads the worktree, from the summary state the caller holds (#40):
+ *
+ * - **update**: the cached list, re-diffed for the paths whose summary records changed since it
+ *   was computed (`changedSince`) plus the list's rename candidates (every added, deleted,
+ *   renamed or type-changed file: a rename pairs a deletion with an addition anywhere);
+ * - **seed** (no usable cached list): one diff limited to the paths that can differ at all, the
+ *   summary's status paths plus, against another commit than HEAD, the paths that differ between
+ *   it and HEAD (`diff-tree`, memoized). Everywhere else the base, HEAD, the index and the file
+ *   agree (git status compares contents), so a full diff would show nothing there, and every
+ *   addition or deletion is inside, so renames pair the same way. A stale index costs nothing.
+ *
+ * File flags and untracked files come from the summary's status (no `git status`). Null when
+ * it cannot be done (the caller lists in full).
+ */
+async function listFromSummary(
+  deps: DiffDeps,
+  repo: RepoInfo,
+  plan: ScopePlan,
+  key: string,
+): Promise<GitChangedFile[] | null> {
+  const { ctx } = deps;
+  const track = deps.tracks.get(repo.cwd);
+  if (!track || trackBlocker(track) || plan.revArgs.length !== 1) return null;
+  const headSha = track.branch.oid;
+  if (headSha === null) return null;
+  // The summary's state is what the list is built for: an index, ignore, config or attributes
+  // file that changed since (no summary yet) means another state.
+  const stamp = await readStamp(repo, (name) => ctx.runner.envValue(name) || undefined);
+  if (stampChange(track.stamp, stamp)) return null;
+  const listed = deps.lists.get(key);
+  const cached = listed && listed.version >= 0 && listed.headSha === headSha ? listed : undefined;
+  const since = cached ? changedSince(track, cached.version) : null;
+  const update = cached !== undefined && since !== null && !(since.blind && cached.lateAll);
+  const changed = since?.paths ?? new Set<string>();
+  // After a full summary, the files this list read that moved since it read them.
+  const moved: string[] = [];
+  if (update && since.blind && cached.late.size > 0) {
+    const late = [...cached.late];
+    const now = await mapLimit(late, 32, ([k]) => readSignature(repo.cwd, k));
+    for (const [i, [k, sig]] of late.entries()) {
+      if (sig === 'dir' || now[i] !== sig) moved.push(k);
+    }
+  }
+  if (update && changed.size === 0 && cached.recheck.length === 0 && moved.length === 0) {
+    return cached.rows.map((row) => row.file);
+  }
+
+  const specs = new Set<string>();
+  if (update) {
+    for (const k of changed) specs.add(k);
+    for (const k of cached.recheck) specs.add(k);
+    for (const k of moved) specs.add(k);
+    for (const row of cached.rows) {
+      if (row.file.status === 'conflicted') return null;
+      if (row.file.status === 'untracked' || row.file.status === 'modified') continue;
+      specs.add(row.key);
+      if (row.oldKey !== null) specs.add(row.oldKey);
+    }
+  } else {
+    for (const entry of track.tracked.values()) {
+      if (entry.kind === 'unmerged') return null;
+      specs.add(entry.path);
+      if (entry.kind === 'renamed') specs.add(entry.origPath);
+    }
+    const base = plan.revArgs[0] as string;
+    if (base !== 'HEAD' && base !== headSha) {
+      if (!FULL_OID.test(base)) return null;
+      for (const k of await committedKeys(ctx, repo, base, headSha)) specs.add(k);
+    }
+  }
+  const status = trackStatus(track);
+  const index = indexStatus(status);
+  let fresh: ListRow[] = [];
+  // Nothing tracked can differ (a seed of a clean tree, or only untracked files changed).
+  const region = specs.size === 0 ? new Region([]) : regionOfKeys(specs);
+  if (!region) return null;
+  // Signatures before the diff reads the files: a write during it shows as a move later. Only of
+  // paths the state does not sign itself (a changed file's signature is in its records already):
+  // a file that differs between base and HEAD or was named by a hint, clean in the worktree.
+  const toSign = region.specs.filter((k) => !track.signatures.has(k));
+  const lateSigs = await mapLimit(toSign, 32, (k) => readSignature(repo.cwd, k));
+  if (region.size > 0) {
+    let run: DiffRun;
+    try {
+      run = await runScopeDiff(ctx, repo, plan, {
+        head: true,
+        patch: true,
+        pathspecs: region.specs.map(bstrToUtf8),
+      });
+    } catch (error) {
+      // An unreadable file (F7) and the other fallbacks are the full list's business.
+      if (isGitCoreError(error, 'git_failed')) return null;
+      throw error;
+    }
+    if (run.raw.some((entry) => entry.combined)) return null;
+    fresh = await trackedRows(ctx, repo, plan, run, index);
+    for (const row of fresh) {
+      if (!region.has(row.key) || (row.oldKey !== null && !region.has(row.oldKey))) return null;
+    }
+  }
+  // Rows of a list with tens of thousands of untracked files: the region's ones found by binary
+  // search, the rest kept in order.
+  const inRegion = update ? new Set(keysInRegion(cached.keys, region)) : new Set<string>();
+  const kept = update
+    ? cached.rows.filter(
+        (row) => !inRegion.has(row.key) && (row.oldKey === null || !region.has(row.oldKey)),
+      )
+    : [];
+  const trackedKeys = new Set<string>();
+  for (const row of [...kept, ...fresh]) {
+    if (row.file.status !== 'untracked') trackedKeys.add(row.key);
+  }
+  const attributes = plan.includeUntracked
+    ? await readDiffAttributes(deps, repo, index.untracked, status.entries)
+    : new Map<string, DiffAttribute>();
+  const inspect = inspectOptions(ctx, repo, index.untracked.length, attributes);
+  if (update && inspect.readContent !== cached.readContent) return null;
+  // An update re-inspects the region's untracked files only (binary search, no scan of all).
+  const keys = !plan.includeUntracked
+    ? []
+    : update
+      ? keysInRegion(track.untrackedOrder, region).filter((raw) => {
+          const key = raw.endsWith('/') ? raw.slice(0, -1) : raw;
+          return !trackedKeys.has(key);
+        })
+      : untrackedKeys(index, trackedKeys);
+  // The summary inspected every untracked file with these same options (count, verdicts): its
+  // inspections are the list's, without an lstat each (30k untracked files: about a second).
+  const reuse = track.readContent === inspect.readContent;
+  const missing: string[] = [];
+  const known = new Map<string, UntrackedInfo>();
+  for (const raw of keys) {
+    const key = raw.endsWith('/') ? raw.slice(0, -1) : raw;
+    const held = reuse ? track.untrackedInfos.get(key) : undefined;
+    if (held && held.attribute === (attributes.get(key) ?? '')) known.set(raw, held.info);
+    else missing.push(raw);
+  }
+  const inspected = await inspectUntracked(repo.cwd, missing, deps.untrackedCache, inspect);
+  for (const [i, raw] of missing.entries()) known.set(raw, inspected[i] as UntrackedInfo);
+  const infos = keys.map((raw) => known.get(raw) as UntrackedInfo);
+  const rows = mergeRows(kept, sortRows([...fresh, ...untrackedRows(infos)]));
+  if (update) listRefreshCounts.incremental++;
+  else listRefreshCounts.seeded++;
+  // The rows kept from the cached list keep what was known about how they were read (PR #89 F1);
+  // the region's paths get the signatures just taken.
+  const late = new Map<string, string>();
+  if (update) {
+    for (const [k, sig] of cached.late) {
+      if (!region.has(k) && !track.signatures.has(k)) late.set(k, sig);
+    }
+  }
+  for (const [i, k] of toSign.entries()) late.set(k, lateSigs[i] as string);
+  const latest = deps.lists.get(key);
+  // Stored only for the track it was built from: a summary (or a forgetState) during the list
+  // makes it a list of no current state (PR #89 F2).
+  if (deps.tracks.get(repo.cwd) !== track) return rows.map((row) => row.file);
+  if (late.size > listLimits.maxLateSignatures) {
+    // Too many paths to check after every full summary: served, not kept.
+    deps.lists.delete(key);
+    listRefreshCounts.uncached++;
+  } else if (!latest || latest.version <= track.version) {
+    const committed = (await committedOf(ctx, repo, plan, headSha)) ?? null;
+    if (deps.tracks.get(repo.cwd) === track) {
+      deps.lists.set(key, {
+        version: track.version,
+        headSha,
+        readContent: inspect.readContent,
+        rows,
+        keys: rows.map((row) => row.key),
+        recheck: unexplainedKeys(track, rows, committed),
+        committed,
+        late,
+        lateAll: false,
+      });
+    }
+  }
+  return rows.map((row) => row.file);
+}
+
 export async function listChangedFiles(
   deps: DiffDeps,
   worktree: WorktreeLocator,
@@ -781,10 +1209,20 @@ export async function listChangedFiles(
   const scope = parseScope(scopeInput);
   const repo = await ctx.repo(worktree.path);
   const plan = await planScope(ctx, repo, scope, options);
-  // No caching, not even for branch/commit scopes: tree-to-tree diffs still read
-  // `.gitattributes` from the worktree (binary, diff drivers), which can differ per worktree
-  // and change over time.
+  // No caching across worktrees, not even for branch/commit scopes: tree-to-tree diffs still
+  // read `.gitattributes` from the worktree (binary, diff drivers), which can differ per
+  // worktree and change over time. Scopes that read the worktree keep their last list per
+  // worktree, updated from the summary's changed paths (#40).
   if (plan.empty) return [];
+  const incremental = deps.incremental && plan.vsWorktree && plan.statusBased;
+  const key = listKeyOf(repo, plan);
+  const held = options?.summaryState;
+  if (incremental && held !== undefined && deps.tracks.get(repo.cwd)?.stateHash === held) {
+    const listed = await listFromSummary(deps, repo, plan, key);
+    if (listed) return listed;
+  }
+  /** The summary state this list is at least as new as (its status runs after). */
+  const track = incremental ? deps.tracks.get(repo.cwd) : undefined;
 
   const statusPromise = plan.statusBased ? readStatus(ctx, repo) : Promise.resolve(null);
   const attributesPromise = statusPromise.then((snapshot) => {
@@ -822,56 +1260,51 @@ export async function listChangedFiles(
     attributesPromise,
   ]);
   const index = status ? indexStatus(status) : null;
-  const numstat = new Map(run.numstat.map((entry) => [entry.path, entry]));
-  const combinedKeys = run.raw.filter((entry) => entry.combined).map((entry) => entry.path);
-  const combinedChunks = await collectCombinedChunks(ctx, repo, plan, combinedKeys);
-
-  const rows: Array<{ key: string; file: GitChangedFile }> = [];
-  const trackedKeys = new Set<string>();
-  for (const candidate of run.raw) {
-    if (trackedKeys.has(candidate.path)) continue;
-    trackedKeys.add(candidate.path);
-    const entry = pickEntry(run.raw, candidate.path) ?? candidate;
-    const chunk = entry.combined ? combinedChunks.get(entry.path) : run.chunks.get(entry.path);
-    if (isStatOnly(entry, chunk, numstat.get(entry.path))) continue;
-    const conflicted = entry.combined || (index?.conflicted.has(entry.path) ?? false);
-    const identity = trackedIdentity(
-      entry,
-      numstat.get(entry.path),
-      chunk?.hash ?? fallbackPatchHash(entry),
-      conflicted,
-    );
-    rows.push({
-      key: entry.path,
-      file: { ...identity, ...flagsFor(plan, index, entry.path) },
-    });
-  }
+  const rows = await trackedRows(ctx, repo, plan, run, index);
+  const trackedKeys = new Set(rows.map((row) => row.key));
 
   for (const key of [...unreadable].sort(compareBstr)) {
     const entry = index?.tracked.get(key);
     if (trackedKeys.has(key) || !entry || !index) continue;
     trackedKeys.add(key);
     const identity = unreadableIdentity(plan, entry, await lstatSignature(repo.cwd, key));
-    rows.push({ key, file: { ...identity, ...flagsFor(plan, index, key) } });
+    rows.push({ key, oldKey: null, file: { ...identity, ...flagsFor(plan, index, key) } });
   }
 
+  let readContent = false;
   if (plan.includeUntracked && index) {
     const keys = untrackedKeys(index, trackedKeys);
-    const infos = await inspectUntracked(
-      repo.cwd,
-      keys,
-      deps.untrackedCache,
-      inspectOptions(ctx, repo, index.untracked.length, attributes),
-    );
-    for (const info of infos) {
-      rows.push({
-        key: info.key,
-        file: { ...untrackedIdentity(info), staged: false, unstaged: true },
-      });
-    }
+    const inspect = inspectOptions(ctx, repo, index.untracked.length, attributes);
+    readContent = inspect.readContent;
+    const infos = await inspectUntracked(repo.cwd, keys, deps.untrackedCache, inspect);
+    rows.push(...untrackedRows(infos));
   }
 
-  rows.sort((a, b) => compareBstr(a.key, b.key));
+  sortRows(rows);
+  if (incremental) listRefreshCounts.full++;
+  if (incremental && unreadable.size === 0) {
+    const previous = deps.lists.get(key);
+    const version = track?.version ?? -1;
+    if (track && (!previous || previous.version <= version)) {
+      // Read from the files as they are now, which may be past the state: rows that state does
+      // not explain are re-checked on every later use.
+      const committed = await committedOf(ctx, repo, plan, track.branch.oid);
+      // Only for the track it read (see listFromSummary).
+      if (committed !== undefined && deps.tracks.get(repo.cwd) === track) {
+        deps.lists.set(key, {
+          version,
+          headSha: track.branch.oid,
+          readContent,
+          rows,
+          keys: rows.map((row) => row.key),
+          recheck: unexplainedKeys(track, rows, committed),
+          committed,
+          late: new Map(),
+          lateAll: true,
+        });
+      }
+    }
+  }
   return rows.map((row) => row.file);
 }
 

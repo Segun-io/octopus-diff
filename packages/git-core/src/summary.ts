@@ -4,6 +4,7 @@ import {
   type InProgressOperation,
   isGitCoreError,
   type SummaryOptions,
+  type SummaryRefresh,
   type SummaryResult,
   type WorktreeLocator,
   type WorktreeSummary,
@@ -13,20 +14,48 @@ import { aheadBehind as countAheadBehind } from './commits.js';
 import type { GitContext, RepoInfo } from './context.js';
 import type { DiffDeps } from './diff.js';
 import {
+  dropStaleLists,
   findUnreadable,
+  forgetLists,
   inspectOptions,
   lstatSignature,
   pathspecsExcluding,
   readDiffAttributes,
   readStatus,
+  STATUS_ARGS,
 } from './diff.js';
 import { exists, mapLimit } from './fs-utils.js';
 import { hashParts, STATE_HASH_LENGTH } from './hash.js';
-import { DiffOutputParser } from './parse/diff-output.js';
-import type { StatusEntry } from './parse/status.js';
+import {
+  checkHint,
+  foldsCase,
+  keysInRegion,
+  mergeSorted,
+  type NumstatRecord,
+  nextJournal,
+  type Region,
+  readStamp,
+  regionFor,
+  type Stamp,
+  type SummaryTrack,
+  stampChange,
+  trackBlocker,
+} from './incremental.js';
+import { DiffOutputParser, DiffParseError } from './parse/diff-output.js';
+import {
+  parseStatusV2,
+  type StatusBranch,
+  type StatusEntry,
+  StatusParseError,
+} from './parse/status.js';
 import { DIFF_PINS, resolveDefaultBranch } from './scope.js';
 import { buildSnapshot, emptySnapshot, snapshotCap } from './snapshot.js';
-import { absolutePathBuffer, inspectUntracked, nestedRepoHead } from './untracked.js';
+import {
+  absolutePathBuffer,
+  inspectUntracked,
+  nestedRepoHead,
+  type UntrackedInfo,
+} from './untracked.js';
 
 const STAT_CONCURRENCY = 32;
 
@@ -124,28 +153,43 @@ function sigMtimeMs(sig: string): number | null {
   return Number(BigInt(field) / 1_000_000n);
 }
 
+/** `sigMtimeMs` of an untracked file's inspection, once per inspection (they are reused). */
+const infoMtimes = new WeakMap<UntrackedInfo, number | null>();
+function infoMtimeMs(info: UntrackedInfo): number | null {
+  let ms = infoMtimes.get(info);
+  if (ms === undefined) {
+    ms = sigMtimeMs(info.statSig);
+    infoMtimes.set(info, ms);
+  }
+  return ms;
+}
+
 /**
  * When HEAD last moved in this worktree: the mtime of its reflog (`<gitDir>/logs/HEAD`, appended
  * on every commit, checkout, reset, merge or pull). Without a reflog (disabled, bare repos), the
- * HEAD commit's committer date. Null on an unborn branch without a reflog.
+ * HEAD commit's committer date (`known` reuses it for the same commit). Null on an unborn branch
+ * without a reflog.
  */
 async function headActivityMs(
   ctx: GitContext,
   repo: RepoInfo,
   headSha: string | null,
-): Promise<number | null> {
+  known: { sha: string; ms: number | null } | null = null,
+): Promise<{ ms: number | null; commit: { sha: string; ms: number | null } | null }> {
   try {
-    return (await lstat(path.join(repo.gitDir, 'logs', 'HEAD'))).mtimeMs;
+    return { ms: (await lstat(path.join(repo.gitDir, 'logs', 'HEAD'))).mtimeMs, commit: null };
   } catch {
     // No reflog: fall back to the commit date below.
   }
-  if (!headSha) return null;
+  if (!headSha) return { ms: null, commit: null };
+  if (known?.sha === headSha) return { ms: known.ms, commit: known };
   try {
     const out = await ctx.git(repo, ['log', '-1', '--format=%ct', headSha, '--']);
     const seconds = Number(out.stdout.toString('utf8').trim());
-    return Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : null;
+    const ms = Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : null;
+    return { ms, commit: { sha: headSha, ms } };
   } catch (error) {
-    if (isGitCoreError(error, 'git_failed')) return null;
+    if (isGitCoreError(error, 'git_failed')) return { ms: null, commit: null };
     throw error;
   }
 }
@@ -190,21 +234,350 @@ async function bareSummary(
     inProgress: null,
     stateHash: hashParts(['bare-v1', headSha, branch], STATE_HASH_LENGTH),
     updatedAt: new Date().toISOString(),
-    activityAt: activityAt(await headActivityMs(ctx, repo, headSha), []),
+    activityAt: activityAt((await headActivityMs(ctx, repo, headSha)).ms, []),
+  };
+}
+
+/** The stamp of a summary that keeps no state (`incremental: false`): never compared. */
+const UNSTAMPED: Stamp = {
+  index: 'unstamped',
+  ignore: 'unstamped',
+  config: 'unstamped',
+  sparse: true,
+  submodules: true,
+  gitlinks: true,
+};
+
+/** Everything a summary is computed from: a full status, or the last state with a hint merged in. */
+interface Collected {
+  mode: 'full' | 'incremental';
+  stamp: Stamp;
+  header: string[];
+  branch: StatusBranch;
+  tracked: Map<string, StatusEntry>;
+  untracked: Map<string, StatusEntry>;
+  /** Keys of `untracked`, sorted. */
+  untrackedOrder: string[];
+  /**
+   * Incremental: untracked keys the refresh recomputed (removed from the last state, or listed by
+   * the limited status). Every other untracked key keeps its record. Null for a full refresh.
+   */
+  untrackedTouched: Set<string> | null;
+  /** Relevant numstat records by destination path (see `relevantRecords`). */
+  numstat: Map<string, NumstatRecord[]>;
+  unreadable: Set<string>;
+  statusOnly: boolean;
+  /** Incremental: the pathspecs whose records were recomputed. Null for a full refresh. */
+  region: Region | null;
+  /** Incremental: lstat signatures taken before git ran, by path. */
+  presigs: Map<string, string> | null;
+  previous: SummaryTrack | undefined;
+}
+
+/** Paths git status reports as changed (tracked entries and rename sources). */
+function statusPathsOf(tracked: ReadonlyMap<string, StatusEntry>): Set<string> {
+  const out = new Set<string>();
+  for (const entry of tracked.values()) {
+    out.add(entry.path);
+    if (entry.kind === 'renamed') out.add(entry.origPath);
+  }
+  return out;
+}
+
+/**
+ * numstat records that describe a change git status reports. Stat-dirty but unchanged binary
+ * files still get a `-\t-` line (see diff.ts isStatOnly); git status, which compares content,
+ * does not report them, so they are neither counted nor part of the state.
+ */
+function relevantRecords(
+  output: string,
+  statusPaths: ReadonlySet<string>,
+  into: Map<string, NumstatRecord[]>,
+  region: Region | null,
+): boolean {
+  const parser = new DiffOutputParser();
+  parser.write(output);
+  parser.end();
+  for (const entry of parser.numstat) {
+    if (!statusPaths.has(entry.path) && !(entry.srcPath && statusPaths.has(entry.srcPath))) {
+      continue;
+    }
+    if (region && (!region.has(entry.path) || (entry.srcPath && !region.has(entry.srcPath)))) {
+      return false;
+    }
+    const list = into.get(entry.path);
+    if (list) list.push(entry);
+    else into.set(entry.path, [entry]);
+  }
+  return true;
+}
+
+function splitEntries(entries: readonly StatusEntry[]): {
+  tracked: Map<string, StatusEntry>;
+  untracked: Map<string, StatusEntry>;
+} {
+  const tracked = new Map<string, StatusEntry>();
+  const untracked = new Map<string, StatusEntry>();
+  for (const entry of entries) {
+    if (entry.kind === 'ignored') continue;
+    if (entry.kind === 'untracked') untracked.set(entry.path, entry);
+    else tracked.set(entry.path, entry);
+  }
+  return { tracked, untracked };
+}
+
+async function collectFull(
+  deps: DiffDeps,
+  repo: RepoInfo,
+  previous: SummaryTrack | undefined,
+): Promise<Collected> {
+  const { ctx } = deps;
+  // Without incremental refreshes nothing is kept, so nothing is stamped either: the kill switch
+  // gives the old calls exactly (no index scan, PR #89 F3).
+  const stamp = deps.incremental ? await readStamp(repo, envOf(ctx)) : UNSTAMPED;
+  const status = await readStatus(ctx, repo);
+  const { tracked, untracked } = splitEntries(status.entries);
+  const numstat = new Map<string, NumstatRecord[]>();
+  let unreadable = new Set<string>();
+  let statusOnly = false;
+  if (tracked.size > 0) {
+    const result = await trackedNumstat(ctx, repo, status.branch.oid, status.entries);
+    unreadable = result.unreadable;
+    statusOnly = result.statusOnly;
+    relevantRecords(result.output, statusPathsOf(tracked), numstat, null);
+  }
+  return {
+    mode: 'full',
+    stamp,
+    header: status.header,
+    branch: status.branch,
+    tracked,
+    untracked,
+    untrackedOrder: [...untracked.keys()].sort(compareBstr),
+    untrackedTouched: null,
+    numstat,
+    unreadable,
+    statusOnly,
+    region: null,
+    presigs: null,
+    previous,
   };
 }
 
 /**
- * Cheap summary: one `git status`, plus `git diff --numstat` only when tracked files changed.
+ * The last state with the hinted paths recomputed by `git status -- <region>` and, when the
+ * region holds tracked changes, `git diff --numstat HEAD -- <region>` (see incremental.ts for
+ * why that equals a full refresh). A string: the reason it cannot be used.
+ */
+async function collectIncremental(
+  deps: DiffDeps,
+  repo: RepoInfo,
+  previous: SummaryTrack | undefined,
+  hint: readonly string[],
+  options: SummaryOptions | undefined,
+): Promise<Collected | string> {
+  const { ctx } = deps;
+  if (!previous) return 'no-state';
+  const check = checkHint(hint);
+  if (!check.ok) return check.reason;
+  const blocker = trackBlocker(previous);
+  if (blocker) return blocker;
+  if (previous.defaultBranch !== (options?.defaultBranch ?? null)) return 'default-branch';
+  const root = repo.toplevel ?? repo.cwd;
+  if (await foldsCase(root)) return 'case-insensitive';
+  const stamp = await readStamp(repo, envOf(ctx));
+  const stampChanged = stampChange(previous.stamp, stamp);
+  if (stampChanged) return stampChanged;
+  // A directory appeared (or a file became one): what is inside may predate the events.
+  const kinds = await mapLimit(check.keys, STAT_CONCURRENCY, async (key) => {
+    try {
+      return (await lstat(absolutePathBuffer(root, key))).isDirectory();
+    } catch {
+      return false;
+    }
+  });
+  if (kinds.some(Boolean)) return 'directory';
+  // A path inside a nested repository (its own `.git` in an ancestor directory): the
+  // superproject sees that repository as one entry whose state no event of ours describes.
+  const ancestors = new Set<string>();
+  for (const key of check.keys) {
+    for (let slash = key.indexOf('/'); slash >= 0; slash = key.indexOf('/', slash + 1)) {
+      ancestors.add(key.slice(0, slash));
+    }
+  }
+  const nested = await mapLimit([...ancestors], STAT_CONCURRENCY, (dir) =>
+    lstat(absolutePathBuffer(root, `${dir}/.git`)).then(
+      () => true,
+      () => false,
+    ),
+  );
+  if (nested.some(Boolean)) return 'nested-repository';
+  // A changed file whose event never came still shows in its signature: recompute it too.
+  const presigs = new Map<string, string>();
+  const missed: string[] = [];
+  const known = [...previous.signatures.keys()];
+  const sigs = await mapLimit(known, STAT_CONCURRENCY, (key) => lstatSignature(root, key));
+  for (const [i, key] of known.entries()) {
+    const value = sigs[i] as string;
+    presigs.set(key, value);
+    if (value !== previous.signatures.get(key)) missed.push(key);
+  }
+  const region = regionFor(previous, [...check.keys, ...missed]);
+  if (!region) return 'too-many-candidates';
+  // No pathspec at all would mean the whole worktree to git.
+  if (region.size === 0) return 'empty-hint';
+  const pathspecs = region.specs.map(bstrToUtf8);
+
+  // numstat runs alongside the status unless the hint names only known untracked files and the
+  // region holds nothing tracked (a new file being written); otherwise after it, when needed.
+  // Its commit is the last state's HEAD, which the status header then confirms.
+  type Numstat = { ok: true; output: string } | { ok: false };
+  const runNumstat = (): Promise<Numstat> =>
+    ctx
+      .git(repo, [
+        'diff',
+        ...DIFF_PINS,
+        '--numstat',
+        '-z',
+        previous.branch.oid ?? repo.emptyTree,
+        '--',
+        ...pathspecs,
+      ])
+      .then(
+        (run): Numstat => ({ ok: true, output: bstrFromBuffer(run.stdout) }),
+        (error: unknown): Numstat => {
+          // An unreadable file (F7) and its fallbacks are the full refresh's business.
+          if (isGitCoreError(error, 'git_failed')) return { ok: false };
+          throw error;
+        },
+      );
+  let likelyTracked = check.keys.some((key) => !previous.untracked.has(key));
+  for (const entry of previous.tracked.values()) {
+    if (likelyTracked) break;
+    likelyTracked =
+      region.has(entry.path) || (entry.kind === 'renamed' && region.has(entry.origPath));
+  }
+  const early = likelyTracked ? runNumstat() : null;
+  // Settled by whoever awaits it below; an early return must not leave a rejection unhandled.
+  early?.catch(() => {});
+
+  const result = await ctx.git(repo, [...STATUS_ARGS, '--', ...pathspecs]);
+  let status: ReturnType<typeof parseStatusV2>;
+  try {
+    status = parseStatusV2(bstrFromBuffer(result.stdout));
+  } catch (error) {
+    if (error instanceof StatusParseError) return 'parse';
+    throw error;
+  }
+  // HEAD, the branch, the upstream or its ahead/behind moved: many paths may have changed.
+  if (status.header.join('\u0000') !== previous.header.join('\u0000')) return 'head';
+  const tracked = new Map<string, StatusEntry>();
+  for (const [key, entry] of previous.tracked) {
+    if (region.has(key) || (entry.kind === 'renamed' && region.has(entry.origPath))) continue;
+    tracked.set(key, entry);
+  }
+  // Tens of thousands of untracked files: found by binary search, not by a scan per refresh.
+  const untracked = new Map(previous.untracked);
+  const removed = new Set(keysInRegion(previous.untrackedOrder, region));
+  for (const key of removed) untracked.delete(key);
+  const listed: string[] = [];
+  let regionTracked = false;
+  for (const entry of status.entries) {
+    if (entry.kind === 'ignored') continue;
+    // Anything outside the pathspecs means git matched differently than assumed.
+    if (!region.has(entry.path)) return 'outside-region';
+    if (entry.kind === 'renamed' && !region.has(entry.origPath)) return 'outside-region';
+    if (entry.kind === 'untracked') {
+      if (entry.path.endsWith('/')) return 'nested-repository';
+      if (!untracked.has(entry.path)) listed.push(entry.path);
+      untracked.set(entry.path, entry);
+    } else {
+      if (tracked.has(entry.path)) return 'outside-region';
+      tracked.set(entry.path, entry);
+      regionTracked = true;
+    }
+  }
+  const numstat = new Map<string, NumstatRecord[]>();
+  for (const [key, records] of previous.numstat) {
+    if (region.has(key) || records.some((r) => r.srcPath !== null && region.has(r.srcPath))) {
+      continue;
+    }
+    numstat.set(key, records);
+  }
+  if (regionTracked) {
+    const run = await (early ?? runNumstat());
+    if (!run.ok) return 'numstat-failed';
+    const output = run.output;
+    try {
+      if (!relevantRecords(output, statusPathsOf(tracked), numstat, region)) {
+        return 'outside-region';
+      }
+    } catch (error) {
+      if (error instanceof DiffParseError) return 'parse';
+      throw error;
+    }
+  }
+  listed.sort(compareBstr);
+  return {
+    mode: 'incremental',
+    stamp,
+    header: status.header,
+    branch: status.branch,
+    tracked,
+    untracked,
+    untrackedOrder: mergeSorted(previous.untrackedOrder, removed, listed),
+    untrackedTouched: new Set([...removed, ...listed]),
+    numstat,
+    unreadable: new Set(),
+    statusOnly: false,
+    region,
+    presigs,
+    previous,
+  };
+}
+
+function envOf(ctx: GitContext): (name: string) => string | undefined {
+  return (name) => ctx.runner.envValue(name) || undefined;
+}
+
+/**
+ * The status output rebuilt from its header and entries (changed entries by path, unmerged ones
+ * by path, then untracked by path): git's own `status --porcelain=v2 -z` output when it is sorted the same way.
+ */
+export function canonicalStatusOutput(
+  header: readonly string[],
+  entries: readonly StatusEntry[],
+): string {
+  return [...header, ...entries.map((entry) => entry.line)]
+    .map((token) => `${token}\u0000`)
+    .join('');
+}
+
+function serializeRecord(record: NumstatRecord): string {
+  const counts = `${record.added ?? '-'}\t${record.deleted ?? '-'}\t`;
+  return record.srcPath === null
+    ? `${counts}${record.path}\u0000`
+    : `${counts}\u0000${record.srcPath}\u0000${record.path}\u0000`;
+}
+
+/**
+ * Cheap summary: one `git status`, plus `git diff --numstat` only when tracked files changed;
+ * with `options.changedPaths`, both limited to those paths when the last state allows it (#40).
  * Without a usable upstream, ahead/behind is counted against the default branch (resolved from
  * the ref files), shared per project and commit (`commits.ts`: one `for-each-ref` per project,
  * or `rev-list --count` on old git).
  *
- * stateHash covers the raw status output (which includes HEAD/index object ids of every
- * changed entry, the branch, upstream and ahead/behind), the numstat output, the
- * ahead/behind reference, the in-progress operation, and the lstat signature (size, mtime,
- * ctime, inode, mode) of every file with worktree changes and every untracked file. The last
- * part matters: modifying an already-modified file again does not change `git status`.
+ * stateHash covers the status output (which includes HEAD/index object ids of every changed
+ * entry, the branch, upstream and ahead/behind), the numstat output, the ahead/behind
+ * reference, the in-progress operation, and the lstat signature (size, mtime, ctime, inode,
+ * mode) of every file with worktree changes and every untracked file. The last part matters:
+ * modifying an already-modified file again does not change `git status`.
+ *
+ * Both outputs are hashed in a canonical form rebuilt from the per-path records (the header,
+ * changed, unmerged and untracked entries, each by path; numstat lines by destination path, only
+ * those of paths git status reports), so a full and an incremental refresh of the same state
+ * give the same hash. For git's own output, sorted by path the same way, the canonical form is
+ * the output itself (asserted in `test/incremental-fuzz.test.ts`).
  */
 export async function getSummary(
   deps: DiffDeps,
@@ -217,17 +590,67 @@ export async function getSummary(
   const repo = await ctx.repo(worktree.path);
   if (repo.bare) {
     const summary = await bareSummary(ctx, repo, worktree);
-    return snapshotLimit === null ? summary : { ...summary, snapshot: emptySnapshot() };
+    const refresh: SummaryRefresh = { mode: 'full', reason: null, pathspecs: 0 };
+    return snapshotLimit === null
+      ? { ...summary, refresh }
+      : { ...summary, snapshot: emptySnapshot(), refresh };
   }
+  const hint = options?.changedPaths;
+  return deps.tracks.serial(repo.cwd, async () => {
+    let reason: string | null = null;
+    if (options?.forgetState) {
+      deps.tracks.delete(repo.cwd);
+      forgetLists(deps, repo.cwd);
+      reason = 'forget';
+    }
+    const previous = deps.tracks.get(repo.cwd);
+    let collected: Collected | null = null;
+    if (hint !== undefined && deps.incremental && reason === null) {
+      const attempt = await collectIncremental(deps, repo, previous, hint, options);
+      if (typeof attempt === 'string') reason = attempt;
+      else collected = attempt;
+    }
+    collected ??= await collectFull(deps, repo, previous);
+    const { result, track } = await finish(deps, repo, worktree, options, collected, snapshotLimit);
+    if (deps.incremental) {
+      deps.tracks.set(repo.cwd, track);
+      // A full refresh is the ground truth: lists it does not explain are seeded again.
+      if (collected.mode === 'full') dropStaleLists(deps, repo.cwd, track);
+    }
+    return {
+      ...result,
+      refresh: {
+        mode: collected.mode,
+        reason,
+        pathspecs: collected.region?.size ?? 0,
+      },
+    };
+  });
+}
 
-  const status = await readStatus(ctx, repo);
-  const { branch } = status;
+async function finish(
+  deps: DiffDeps,
+  repo: RepoInfo,
+  worktree: WorktreeLocator,
+  options: SummaryOptions | undefined,
+  c: Collected,
+  snapshotLimit: number | null,
+): Promise<{ result: SummaryResult; track: SummaryTrack }> {
+  const { ctx } = deps;
+  const { branch, previous, region } = c;
   const headSha = branch.oid;
+  const byPath = (a: StatusEntry, b: StatusEntry): number => compareBstr(a.path, b.path);
+  // git's order: changed entries by path, then unmerged ones by path, then untracked by path.
+  const changed = [...c.tracked.values()].filter((entry) => entry.kind !== 'unmerged');
+  const unmerged = [...c.tracked.values()].filter((entry) => entry.kind === 'unmerged');
+  const trackedEntries = [...changed.sort(byPath), ...unmerged.sort(byPath)];
+  const untrackedEntries = c.untrackedOrder.map((key) => c.untracked.get(key) as StatusEntry);
+  const entries: StatusEntry[] = [...trackedEntries, ...untrackedEntries];
 
   let staged = 0;
   let unstaged = 0;
   let conflicted = 0;
-  const untrackedRaw: string[] = [];
+  const untrackedRaw: string[] = untrackedEntries.map((entry) => entry.path);
   const dirtyKeys: string[] = [];
   /** dirtyKeys entries that are submodules (gitlinks) in the worktree. */
   const gitlinkKeys = new Set<string>();
@@ -237,16 +660,10 @@ export async function getSummary(
    * refresh does not drop it from the activity time.
    */
   const stagedOnlyKeys: string[] = [];
-  /** Paths git status reports as changed (incl. rename sources). */
-  const statusPaths = new Set<string>();
-  let tracked = 0;
-  for (const entry of status.entries) {
-    if (entry.kind !== 'untracked' && entry.kind !== 'ignored') statusPaths.add(entry.path);
-    if (entry.kind === 'renamed') statusPaths.add(entry.origPath);
+  for (const entry of trackedEntries) {
     switch (entry.kind) {
       case 'ordinary':
       case 'renamed':
-        tracked += 1;
         if (entry.x !== '.') staged += 1;
         if (entry.y !== '.') {
           unstaged += 1;
@@ -257,12 +674,8 @@ export async function getSummary(
         }
         break;
       case 'unmerged':
-        tracked += 1;
         conflicted += 1;
         dirtyKeys.push(entry.path);
-        break;
-      case 'untracked':
-        untrackedRaw.push(entry.path);
         break;
       default:
         break;
@@ -272,9 +685,6 @@ export async function getSummary(
   const upstream = branch.upstream ? bstrToUtf8(branch.upstream) : null;
   const branchName = branch.head ? bstrToUtf8(branch.head) : null;
   const hasUpstreamCounts = upstream !== null && branch.ahead !== null && branch.behind !== null;
-
-  const numstatPromise =
-    tracked > 0 ? trackedNumstat(ctx, repo, headSha, status.entries) : Promise.resolve(null);
 
   const aheadBehindPromise = (async (): Promise<{
     ref: string | null;
@@ -306,59 +716,63 @@ export async function getSummary(
     };
   })();
 
-  const untrackedKeysSorted = [...untrackedRaw].sort(compareBstr);
-  const untrackedPromise = readDiffAttributes(deps, repo, untrackedKeysSorted, status.entries).then(
-    async (attributes) => ({
-      attributes,
-      infos: await inspectUntracked(
-        repo.cwd,
-        untrackedKeysSorted,
-        deps.untrackedCache,
-        inspectOptions(ctx, repo, untrackedRaw.length, attributes),
-      ),
-    }),
+  /** A signature measured before git ran, for a path the incremental refresh did not touch. */
+  const signatureOf = (key: string, gitlink: boolean): Promise<string> => {
+    const early = region && !region.has(key) ? c.presigs?.get(key) : undefined;
+    return early !== undefined ? Promise.resolve(early) : dirtySignature(repo.cwd, key, gitlink);
+  };
+  const untrackedPromise = readDiffAttributes(deps, repo, untrackedRaw, entries).then(
+    async (attributes) => {
+      const inspect = inspectOptions(ctx, repo, untrackedRaw.length, attributes);
+      const touched = c.untrackedTouched;
+      const reuse =
+        touched !== null && previous !== undefined && previous.readContent === inspect.readContent;
+      const fresh: string[] = [];
+      const kept = new Map<string, UntrackedInfo>();
+      for (const raw of untrackedRaw) {
+        const key = raw.endsWith('/') ? raw.slice(0, -1) : raw;
+        const old = reuse && !touched.has(raw) ? previous.untrackedInfos.get(key) : undefined;
+        if (old && old.attribute === (attributes.get(key) ?? '')) kept.set(raw, old.info);
+        else fresh.push(raw);
+      }
+      const inspected = await inspectUntracked(repo.cwd, fresh, deps.untrackedCache, inspect);
+      const byRaw = new Map<string, UntrackedInfo>();
+      for (const [i, raw] of fresh.entries()) byRaw.set(raw, inspected[i] as UntrackedInfo);
+      const infos = untrackedRaw.map((raw) => (kept.get(raw) ?? byRaw.get(raw)) as UntrackedInfo);
+      return { attributes, infos, readContent: inspect.readContent, fresh: reuse ? fresh : null };
+    },
   );
-  const [numstatResult, aheadBehind, inProgress, signatures, untracked, headMs, stagedSigs] =
-    await Promise.all([
-      numstatPromise,
-      aheadBehindPromise,
-      detectInProgress(repo.gitDir),
-      mapLimit(dirtyKeys, STAT_CONCURRENCY, (key) =>
-        dirtySignature(repo.cwd, key, gitlinkKeys.has(key)),
-      ),
-      untrackedPromise,
-      headActivityMs(ctx, repo, headSha),
-      mapLimit(stagedOnlyKeys, STAT_CONCURRENCY, (key) => lstatSignature(repo.cwd, key)),
-    ]);
+  const [aheadBehind, inProgress, signatures, untracked, headMs, stagedSigs] = await Promise.all([
+    aheadBehindPromise,
+    detectInProgress(repo.gitDir),
+    mapLimit(dirtyKeys, STAT_CONCURRENCY, (key) => signatureOf(key, gitlinkKeys.has(key))),
+    untrackedPromise,
+    headActivityMs(ctx, repo, headSha, previous?.headCommitMs ?? null),
+    mapLimit(stagedOnlyKeys, STAT_CONCURRENCY, (key) => signatureOf(key, false)),
+  ]);
   const untrackedInfos = untracked.infos;
 
   let additions = 0;
   let deletions = 0;
   const trackedPaths = new Set<string>();
-  const numstatOutput = numstatResult?.output ?? '';
+  const recordKeys = [...c.numstat.keys()].sort(compareBstr);
+  const numstatParts: string[] = [];
   /** Per-path counts for the snapshot (only collected when one was asked for). */
   const snapshotCounts = new Map<string, { added: number | null; deleted: number | null }>();
-  if (numstatResult?.statusOnly) {
+  if (c.statusOnly) {
     // Degraded (F7): every tracked status entry counts as one changed file.
-    for (const entry of status.entries) {
-      if (entry.kind !== 'untracked' && entry.kind !== 'ignored') trackedPaths.add(entry.path);
-    }
-  } else if (numstatResult) {
-    for (const key of numstatResult.unreadable) trackedPaths.add(key);
-    const parser = new DiffOutputParser();
-    parser.write(numstatOutput);
-    parser.end();
-    for (const entry of parser.numstat) {
-      // Stat-dirty but unchanged binary files still get a `-\t-` numstat line (see
-      // diff.ts isStatOnly); git status, which compares content, does not report them.
-      if (!statusPaths.has(entry.path) && !(entry.srcPath && statusPaths.has(entry.srcPath))) {
-        continue;
-      }
-      trackedPaths.add(entry.path);
-      additions += entry.added ?? 0;
-      deletions += entry.deleted ?? 0;
-      if (snapshotLimit !== null) {
-        snapshotCounts.set(entry.path, { added: entry.added, deleted: entry.deleted });
+    for (const entry of trackedEntries) trackedPaths.add(entry.path);
+  } else {
+    for (const key of c.unreadable) trackedPaths.add(key);
+    for (const key of recordKeys) {
+      for (const entry of c.numstat.get(key) ?? []) {
+        numstatParts.push(serializeRecord(entry));
+        trackedPaths.add(entry.path);
+        additions += entry.added ?? 0;
+        deletions += entry.deleted ?? 0;
+        if (snapshotLimit !== null) {
+          snapshotCounts.set(entry.path, { added: entry.added, deleted: entry.deleted });
+        }
       }
     }
   }
@@ -369,25 +783,41 @@ export async function getSummary(
     additions += info.lines ?? 0;
   }
 
+  // The untracked parts of the hashed text are rebuilt only when an untracked record changed (the
+  // same bytes either way: `canonicalStatusOutput(c.header, entries)`).
+  const untrackedSame =
+    c.untrackedTouched !== null &&
+    c.untrackedTouched.size === 0 &&
+    untracked.fresh !== null &&
+    untracked.fresh.length === 0 &&
+    previous?.untrackedText !== undefined;
+  const untrackedText =
+    untrackedSame && previous?.untrackedText
+      ? previous.untrackedText
+      : {
+          lines: canonicalStatusOutput([], untrackedEntries),
+          infos: untrackedInfos
+            .map((info) => {
+              const attribute = untracked.attributes.get(info.key) ?? '';
+              return `${info.key}\u0000${info.statSig}\u0000${attribute}`;
+            })
+            .join('\u0000'),
+        };
+  const statusOutput = canonicalStatusOutput(c.header, trackedEntries) + untrackedText.lines;
   const stateHash = hashParts(
     [
       'summary-v2',
-      status.output,
-      numstatOutput,
+      statusOutput,
+      numstatParts.join(''),
       aheadBehind.ref,
       aheadBehind.oid,
       aheadBehind.ahead,
       aheadBehind.behind,
       inProgress,
       dirtyKeys.map((key, i) => `${key}\u0000${signatures[i]}`).join('\u0000'),
-      untrackedInfos
-        .map((info) => {
-          const attribute = untracked.attributes.get(info.key) ?? '';
-          return `${info.key}\u0000${info.statSig}\u0000${attribute}`;
-        })
-        .join('\u0000'),
-      numstatResult?.statusOnly ? 'status-only' : null,
-      [...(numstatResult?.unreadable ?? [])].sort(compareBstr).join('\u0000'),
+      untrackedText.infos,
+      c.statusOnly ? 'status-only' : null,
+      [...c.unreadable].sort(compareBstr).join('\u0000'),
     ],
     STATE_HASH_LENGTH,
   );
@@ -409,26 +839,60 @@ export async function getSummary(
     inProgress,
     stateHash,
     updatedAt: new Date().toISOString(),
-    activityAt: activityAt(headMs, [
+    activityAt: activityAt(headMs.ms, [
       ...signatures.map(sigMtimeMs),
       ...stagedSigs.map(sigMtimeMs),
-      ...untrackedInfos.map((info) => sigMtimeMs(info.statSig)),
+      ...untrackedInfos.map(infoMtimeMs),
     ]),
   };
-  if (snapshotLimit === null) return summary;
 
   // The signatures computed above for the stateHash and activityAt: no new lstat, no new git.
   const signatureByKey = new Map<string, string>();
   for (const [i, key] of stagedOnlyKeys.entries()) signatureByKey.set(key, stagedSigs[i] as string);
   for (const [i, key] of dirtyKeys.entries()) signatureByKey.set(key, signatures[i] as string);
+  const infosByKey = new Map<string, { info: UntrackedInfo; attribute: string }>();
+  for (const info of untrackedInfos) {
+    infosByKey.set(info.key, { info, attribute: untracked.attributes.get(info.key) ?? '' });
+  }
+  const track: SummaryTrack = {
+    version: deps.tracks.nextVersion(),
+    stateHash,
+    stamp: c.stamp,
+    header: c.header,
+    branch,
+    tracked: c.tracked,
+    untracked: c.untracked,
+    untrackedOrder: c.untrackedOrder,
+    untrackedText,
+    numstat: c.numstat,
+    degraded: c.statusOnly || c.unreadable.size > 0,
+    untrackedInfos: infosByKey,
+    readContent: untracked.readContent,
+    signatures: signatureByKey,
+    defaultBranch: options?.defaultBranch ?? null,
+    headCommitMs: headMs.commit,
+    fullAt: c.mode === 'full' ? Date.now() : (previous?.fullAt ?? Date.now()),
+    journal: [],
+  };
+  // Incremental: untracked records changed only where the refresh recomputed them.
+  track.journal = nextJournal(
+    previous,
+    track,
+    c.untrackedTouched && untracked.fresh ? [...c.untrackedTouched, ...untracked.fresh] : null,
+    c.mode === 'incremental' ? c.region : null,
+  );
+  if (snapshotLimit === null) return { result: summary, track };
   return {
-    ...summary,
-    snapshot: buildSnapshot({
-      entries: status.entries,
-      signatureOf: (key) => signatureByKey.get(key),
-      counts: snapshotCounts,
-      untracked: untrackedInfos,
-      cap: snapshotLimit,
-    }),
+    result: {
+      ...summary,
+      snapshot: buildSnapshot({
+        entries,
+        signatureOf: (key) => signatureByKey.get(key),
+        counts: snapshotCounts,
+        untracked: untrackedInfos,
+        cap: snapshotLimit,
+      }),
+    },
+    track,
   };
 }

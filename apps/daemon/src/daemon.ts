@@ -49,6 +49,12 @@ export interface DaemonInternals {
   maxWaitMs?: number;
   /** Refresh a quiet worktree on its first watcher event, then debounce (default true). */
   leadingEdge?: boolean;
+  /**
+   * Incremental refreshes from the watcher's paths (#40, default true; `CoreOptions.incremental`).
+   * `false` (or `OCTOPUS_DIFF_INCREMENTAL=0` in the environment, or `git.incremental: false`)
+   * computes every summary and file list in full.
+   */
+  incremental?: boolean | { reconcileMs?: number };
   /** Poll interval of the focused worktree when native watching is unavailable (default 5 s). */
   pollDegradedFocusedMs?: number;
   /** Replaces `@parcel/watcher`'s subscribe (simulate inotify failures). */
@@ -168,8 +174,20 @@ export const startDaemon = (async (options: DaemonOptions = {}): Promise<Daemon>
     internal.heartbeatMs !== undefined ? { heartbeatMs: internal.heartbeatMs } : {},
   );
   const ownsGitCore = options.gitCore === undefined;
+  // Kill switch (#40): any of the three turns incremental refreshes off, in git-core too.
+  const incremental =
+    internal.incremental === false ||
+    options.git?.incremental === false ||
+    /^(0|false|no|off)$/i.test(process.env.OCTOPUS_DIFF_INCREMENTAL ?? '')
+      ? false
+      : (internal.incremental ?? true);
   const gitCore: GitCore =
-    options.gitCore ?? createGitCore({ ...options.git, logger: options.git?.logger ?? logger });
+    options.gitCore ??
+    createGitCore({
+      ...options.git,
+      incremental: incremental !== false,
+      logger: options.git?.logger ?? logger,
+    });
   const version = options.version ?? DEFAULT_VERSION;
   const settings = new SettingsService({
     store,
@@ -200,6 +218,7 @@ export const startDaemon = (async (options: DaemonOptions = {}): Promise<Daemon>
     ...(internal.relistMs !== undefined ? { relistMs: internal.relistMs } : {}),
     ...(internal.maxWaitMs !== undefined ? { maxWaitMs: internal.maxWaitMs } : {}),
     ...(internal.leadingEdge !== undefined ? { leadingEdge: internal.leadingEdge } : {}),
+    incremental,
     ...(internal.pollDegradedFocusedMs !== undefined
       ? { pollDegradedFocusedMs: internal.pollDegradedFocusedMs }
       : {}),

@@ -74,6 +74,8 @@ export type StatusEntry =
 export interface StatusResult {
   branch: StatusBranch;
   entries: StatusEntry[];
+  /** The raw `# ...` header tokens, in output order (without their NUL). */
+  header: string[];
 }
 
 export class StatusParseError extends Error {
@@ -94,6 +96,7 @@ export function parseStatusV2(output: string): StatusResult {
     behind: null,
   };
   const entries: StatusEntry[] = [];
+  const header: string[] = [];
   const tokens = splitNul(output);
 
   for (let i = 0; i < tokens.length; i += 1) {
@@ -103,6 +106,7 @@ export function parseStatusV2(output: string): StatusResult {
     switch (tag) {
       case '#': {
         parseHeader(token, branch);
+        header.push(token);
         break;
       }
       case '1': {
@@ -177,7 +181,7 @@ export function parseStatusV2(output: string): StatusResult {
         throw new StatusParseError(`unknown status entry: ${token}`);
     }
   }
-  return { branch, entries };
+  return { branch, entries, header };
 }
 
 function parseHeader(token: string, branch: StatusBranch): void {

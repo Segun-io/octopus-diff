@@ -15,7 +15,7 @@ dir, except `profile:real`, which reads your repositories and never writes to th
 | `pnpm --filter @octopus-diff/web build` then `pnpm --filter @octopus-diff/web perf` | Render bench in Chromium on the large mock dataset (30 worktrees × 200 files; no daemon). Starts its own mock + `vite preview` (fresh every run, about 15 s). `SCOPE=review`, `MOCK_MERGE_NOISE=0`, `PERF_OUT=<file>`, `BASE_URL` for a server you started (must serve `MOCK_DATASET=large`) | `web-perf.json` |
 | `pnpm --filter @octopus-diff/web perf:smoke` | Same script, fewer iterations (about 8 s); structural checks only. Runs in the CI `e2e` job | exit code |
 
-Options for `bench`: `--idle-seconds N`, `--iterations N`, `--no-ui`, `--out <dir>`, `--strict`, `--after-fetch`, `--to-review` (both small layout only), `--keep-trace <dir>` (keeps the raw spawn trace, one JSON line per git process with its full argv, and the phase windows in epoch ms, for diagnosis; the fixtures are still deleted). pnpm 12 forwards
+Options for `bench`: `--idle-seconds N`, `--iterations N`, `--no-ui`, `--out <dir>`, `--strict`, `--after-fetch`, `--to-review` (both small layout only), `--no-incremental` (#40: the daemon with every summary and file list in full, the A/B), `--keep-trace <dir>` (keeps the raw spawn trace, one JSON line per git process with its full argv, and the phase windows and edits (`edits`: write time and SSE time) in epoch ms, for diagnosis; the fixtures are still deleted). pnpm 12 forwards
 arguments as they are (no `--` needed; a literal `--` is tolerated). Build first (`pnpm build`).
 
 ## Budgets and the exit code
@@ -32,12 +32,27 @@ arguments as they are (no `--` needed; a literal `--` is tolerated). Build first
 | Diff opened during a 60-edit burst, p95 | < 100 ms | small | enforced (#44) |
 | Browser traffic per edit (worktree view, worst edit) | < 100 KB | small | enforced (#51) |
 | `/api/projects` requests per edit (worst edit) | 0 | small | enforced (#51) |
+| Git spawns from the write to SSE, later edits of a worktree | ≤ 3 | every layout with a worktree edited twice | enforced (#40) |
+| Edit → SSE p95, later edits of a worktree | < 120 ms | the 100k-file target | report only (#40) |
 
 A *tracked* budget is known to fail today. It prints `FAIL (tracked: #n)` and does not turn the run red. When the
 issue lands, delete the entry from `TRACKED` in `e2e/bench/bench.ts` (the bench prints `PASS (tracked …; remove it)`
 once it passes), so the budget is enforced from then on. `--strict` counts tracked budgets as failures.
 
 `--after-fetch` is judged by the same budgets as the plain 30 × 3 run (cold paint, warm reload, idle CPU, refresh, startup spawns per worktree); the fetch figures are report-only (no new budget). Its fixtures come from `addBenchOrigins` in `tools/fixtures/src/merge-noise.ts`, an opt-in: `generateFixtures({ bench })` and every other bench stay without remotes. The labels cost shows up as the live-fetch table: `merge-base` + `diff-tree` are the label work (about 3.3 per linked worktree, at most 2 at once); `status` and `diff` are the summary refreshes the moved ref triggers in every worktree.
+
+## Spawns per edit and incremental refreshes (issue #40)
+
+The *Edit → SSE by worktree role* table has two spawn columns: **to SSE** (processes started between the write and
+the worktree's `worktree.changed`: the summary and the review state the event waits for) and **per edit** (until
+the daemon is quiet again, the UI's refetches included). Since #40 one edit is `status` and `diff --numstat` side by
+side, then one `diff -p` for the review state's list, all three limited to the edited path. The first edit of a
+worktree in a daemon session also computes its first review state (one diff of every changed file); later edits do
+not. `--no-incremental` gives the old numbers for comparison: `results-large-edits.{md,json}` (incremental) and
+`results-large-edits-full.{md,json}` (`--no-incremental`) are that A/B on the 100k layout with `--no-ui
+--idle-seconds 1 --iterations 15` (12 for the full run), 2026-11-12. Reading the large layouts: run them with `--no-ui`
+for the edit numbers (the UI's cold paint of the 8 MB inbox alone takes minutes there), and see the stale-index
+row, whose full refresh re-hashes every file.
 
 ## Traffic per edit (issue #51)
 

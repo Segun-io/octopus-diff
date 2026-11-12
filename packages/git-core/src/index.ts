@@ -54,5 +54,7 @@ export { MIN_GIT_VERSION, parseGitVersion } from './version.js';
 
 /** The real implementation (the Phase 0 placeholder exported `false`). */
 export const GIT_CORE_IMPLEMENTED: boolean = true;
+// Tests in other packages ask the same probe whether a worktree gets incremental refreshes (#40).
+export { foldsCase } from './incremental.js';
 export { parseRemoteConfig, REMOTE_CONFIG_REGEX, rewriteUrl } from './remotes.js';
 export { readRepositoryInfo, stripUrlCredentials } from './repository.js';

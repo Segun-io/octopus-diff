@@ -16,9 +16,16 @@ import {
 import { readBlob } from './blob.js';
 import { readBranchBase } from './branch-base.js';
 import { GitContext } from './context.js';
-import { createAttributeCache, type DiffDeps, getFileDiff, listChangedFiles } from './diff.js';
+import {
+  createAttributeCache,
+  createListCache,
+  type DiffDeps,
+  getFileDiff,
+  listChangedFiles,
+} from './diff.js';
 import { detectDefaultBranch, listWorktrees, resolveProject, scan } from './discovery.js';
 import { readFileOrigins } from './file-origins.js';
+import { TrackStore } from './incremental.js';
 import { LOG_FORMAT, parseLog } from './parse/log.js';
 import { readRemoteConfig } from './remotes.js';
 import { readRepositoryInfo } from './repository.js';
@@ -149,6 +156,9 @@ export const createGitCore: CreateGitCore = (options: GitCoreOptions = {}): GitC
     ctx,
     untrackedCache: createUntrackedCache(),
     attributeCache: createAttributeCache(),
+    tracks: new TrackStore(),
+    lists: createListCache(),
+    incremental: options.incremental !== false,
   };
   const reviewDeps: ReviewDeps = { ctx, commitCache: createCommitDetailsCache() };
   let disposed = false;
@@ -249,6 +259,8 @@ export const createGitCore: CreateGitCore = (options: GitCoreOptions = {}): GitC
       reviewDeps.commitCache.clear();
       deps.untrackedCache.clear();
       deps.attributeCache.clear();
+      deps.tracks.clear();
+      deps.lists.clear();
       ctx.clearCaches();
       await runner.dispose();
     },

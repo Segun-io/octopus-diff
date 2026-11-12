@@ -340,6 +340,14 @@ All git access goes through **one runner** in `packages/git-core`:
   refetching the projects list. `stateHash` covers git's state of the worktree and the default branch's
   commit (DECISIONS #168): a branch scope's diff follows both. File lists (every scope, `branch` included) are cached
   by `(worktree, scope, stateHash, base commit)` and single-flight (DECISIONS #166–#169). Fallback poll (30 s focused / 5 min others) in case watchers miss events.
+- Incremental refresh (DECISIONS #283-#295): the watcher's paths since the last refresh go to git-core as
+  `changedPaths`; it runs `status` and `diff --numstat` limited to them plus every rename candidate (literal
+  pathspecs) and merges the result into the worktree's last state; the state hash is the same bytes a full refresh
+  hashes. The review state's list follows from the paths whose records changed (`ScopeOptions.summaryState`): one
+  edit costs 3 git processes, each limited to the path. Anything the watcher cannot vouch for (polls, focus, git-dir
+  events, re-subscribes, directories, ignore/attribute/submodule files, conflicts, submodules, sparse checkouts,
+  case-folding filesystems, too many paths) refreshes in full, and a full refresh reconciles 30 s after the first
+  incremental one. Kill switch: `OCTOPUS_DIFF_INCREMENTAL=0` (or `git.incremental: false`).
 - Must degrade gracefully on inotify limits (WSL, big trees): log a clear warning and fall back to polling.
 - A subscription that reports an error is dropped (never unsubscribed) and re-made with a backoff; polling covers
   the gap (DECISIONS #131).

@@ -118,4 +118,13 @@ export class LruCache<K, V> {
   clear(): void {
     this.map.clear();
   }
+
+  delete(key: K): void {
+    this.map.delete(key);
+  }
+
+  /** Drops every entry `drop` says so for. */
+  deleteWhere(drop: (key: K, value: V) => boolean): void {
+    for (const [key, value] of [...this.map]) if (drop(key, value)) this.map.delete(key);
+  }
 }
