@@ -411,7 +411,12 @@ describe('untracked files: no git process at all', () => {
     expect(outcome.route).toBe(FOLDS ? 'case-insensitive' : 'tracked-and-untracked');
   });
 
-  it('a .gitignore written just before the state was read is checked by the whole route', async () => {
+  // Timing by nature: the file must be younger than the clock margin (30 ms) when the state is
+  // read; a loaded runner can take longer between the write and the summary and then (correctly)
+  // trust the file. A few retries make the freshness window likely without weakening the claim.
+  it('a .gitignore written just before the state was read is checked by the whole route', {
+    retry: 5,
+  }, async () => {
     const repo = fx.repo('ignore-fresh', { files: { 'a.txt': 'a\n' } });
     text(repo, 'new.txt', 'new\n');
     text(repo, '.gitignore', 'ignored.txt\n');
