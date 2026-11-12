@@ -48,4 +48,26 @@ describe('DaemonCore hints (#40)', () => {
       (await after(() => watcher.markDirty(main.id, 'fs', ['again.txt'])))?.changedPaths,
     ).toEqual(['again.txt']);
   }, 20_000);
+
+  it('Refresh refreshes in full and forgets git-core state, even with watcher paths pending', async () => {
+    const fake = new FakeGitCore();
+    const repo = await fake.createRepo(await tempDir(), 'r');
+    const main = repo.worktrees[0];
+    if (!main) throw new Error('fixture');
+    const daemon = await startTestDaemon({ fake, stateDir: await tempDir() });
+    await client(daemon).addProject({ path: repo.mainPath });
+    await eventually(() => daemon.core.watcher.isWatched(main.id), 5000);
+    await sleep(300);
+    // A slow summary is running; the watcher's next paths wait for the refresh after it.
+    fake.methodDelay.set('getSummary', 400);
+    const before = fake.callCount('getSummary');
+    daemon.core.watcher.markDirty(main.id, 'fs', ['a.txt']);
+    await eventually(() => fake.callCount('getSummary') > before, 5000);
+    daemon.core.watcher.markDirty(main.id, 'fs', ['b.txt']);
+    await sleep(250); // past the debounce: b.txt is the queued refresh's hint
+    await client(daemon).refreshWorktree(main.id);
+    const last = fake.lastScopeOptions as SummaryOptions | undefined;
+    expect(last?.changedPaths).toBeUndefined();
+    expect(last?.forgetState).toBe(true);
+  }, 20_000);
 });

@@ -293,6 +293,8 @@ interface WorktreeEntry {
   gitStateHash: string | null;
   /** Full refresh after an incremental one (`CORE_DEFAULTS.reconcileMs`). */
   reconcile: NodeJS.Timeout | null;
+  /** The next summary passes `forgetState` (an explicit Refresh). */
+  forgetState: boolean;
 }
 
 /** First review states that land within this window share one `review.ready` per project. */
@@ -1112,6 +1114,7 @@ export class DaemonCore {
       hint: null,
       gitStateHash: null,
       reconcile: null,
+      forgetState: false,
     };
     return entry;
   }
@@ -1300,15 +1303,19 @@ export class DaemonCore {
       // paths since the last refresh, git-core may limit its git calls to them (#40); a refresh
       // that fails gives them back as "refresh in full".
       const changedPaths = this.#takeHint(entry);
+      const forgetState = entry.forgetState;
+      entry.forgetState = false;
       let result: Awaited<ReturnType<GitCore['getSummary']>>;
       try {
         result = await this.#git.getSummary(this.#locator(entry), {
           defaultBranch: this.#defaultBranch(project),
           snapshot: true,
           ...(changedPaths ? { changedPaths } : {}),
+          ...(forgetState ? { forgetState } : {}),
         });
       } catch (error) {
         this.#noteHint(entry, null);
+        if (forgetState) entry.forgetState = true;
         throw error;
       }
       const { snapshot, refresh, ...gitSummary } = result;
@@ -1571,6 +1578,10 @@ export class DaemonCore {
     const { project, entry } = this.#requireWorktree(worktreeId);
     this.#invalidateWorktreeFiles(worktreeId);
     void this.#relist(project);
+    // An explicit refresh trusts nothing kept (#40 review): a full summary, with git-core's state
+    // and file lists of the worktree dropped first, whatever paths the watcher holds.
+    this.#noteHint(entry, null);
+    entry.forgetState = true;
     await this.#refresh(entry);
     if (entry.summary) {
       const review = await this.#reviewOf(project, entry);

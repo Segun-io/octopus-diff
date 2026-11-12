@@ -220,6 +220,47 @@ describe('incremental refresh in the daemon (#40)', () => {
     sameState(repaired.summary, truth);
   });
 
+  it('Refresh is a full refresh that forgets the kept state, whatever the watcher has pending', async () => {
+    const s = await setup();
+    const dropping: SubscribeFn = (dir, fn, opts) =>
+      parcelWatcher.subscribe(
+        dir,
+        (error, evts) =>
+          fn(
+            error,
+            evts.filter((e) => !e.path.endsWith('lost.txt')),
+          ),
+        opts,
+      );
+    // No reconciliation during the test: only Refresh can repair the lost event.
+    const { daemon, spawns } = await startCounting(s.fx, {
+      subscribe: dropping,
+      incremental: { reconcileMs: 600_000 },
+    });
+    const api = client(daemon);
+    const events = recordEvents(daemon);
+    await events.opened;
+    await api.addProject({ path: s.repo });
+    await quiet(spawns);
+    const mark = events.events.length;
+    await appendFile(path.join(s.repo, 'lost.txt'), 'nobody saw me\n');
+    await sleep(50);
+    await appendFile(path.join(s.repo, 'a.txt'), 'seen\n');
+    const first = await changedAfter(events, mark, s.repoId);
+    const truth = await fullSummary(s.fx, s.repo);
+    expect(first.summary?.counts.untracked).toBe(truth.counts.untracked - 1);
+    await quiet(spawns);
+    // An edit whose paths the watcher still holds when the user presses Refresh.
+    daemon.core.watcher.markDirty(s.repoId, 'fs', ['a.txt']);
+    const before = spawns().length;
+    const { summary } = await api.refreshWorktree(s.repoId);
+    sameState(summary, await fullSummary(s.fx, s.repo));
+    const statuses = spawns()
+      .slice(before)
+      .filter((argv) => argv[0] === 'status');
+    expect(statuses.some((argv) => !argv.includes('--'))).toBe(true);
+  });
+
   it('incremental: false runs every status over the whole worktree', async () => {
     const s = await setup();
     const { daemon, spawns } = await startCounting(s.fx, { incremental: false });
