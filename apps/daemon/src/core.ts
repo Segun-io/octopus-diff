@@ -1302,8 +1302,16 @@ export class DaemonCore {
     return this.#git.listCommits(this.#locator(entry), { limit });
   }
 
-  async inbox(scope: DiffScope, onlyUnreviewed: boolean): Promise<InboxResponse> {
-    const projects = [...this.#projects.values()].filter((p) => !p.missing);
+  /** Dirty worktrees' files in `scope`, of every project or only of `projectIds` (#10). */
+  async inbox(
+    scope: DiffScope,
+    onlyUnreviewed: boolean,
+    projectIds?: readonly string[],
+  ): Promise<InboxResponse> {
+    const only = projectIds ? new Set(projectIds) : null;
+    const projects = [...this.#projects.values()].filter(
+      (p) => !p.missing && (only === null || only.has(p.row.id)),
+    );
     await this.#awaitInitial(projects);
     const candidates: Array<{
       project: ProjectEntry;
@@ -1340,6 +1348,7 @@ export class DaemonCore {
       bases.set(project.row.id, await this.#branchBase(project, scope));
     const hash = createHash('sha1')
       .update(`${scopeKey(scope)}\u0000${onlyUnreviewed}`)
+      .update(`\u0000${only ? [...only].sort().join(',') : '*'}`)
       .update(`\u0000${[...bases.values()].join('\u0001')}`);
     for (const c of candidates) {
       hash.update(
