@@ -189,6 +189,14 @@ describe('event deltas (#51)', () => {
     expect(last.summary).toEqual(row?.summary);
     expect(last.error).toBeNull();
     expect(last.review).toEqual(row?.review);
+    // `rev` orders rows (#51 review): the event's row and the list's agree while nothing moved, and a
+    // second read of an unchanged list keeps it (the projects ETag still matches).
+    expect(last.rev).toBeTypeOf('number');
+    expect(row?.rev).toBe(last.rev);
+    const again = (await api.listProjects()).projects
+      .flatMap((p) => p.worktrees)
+      .find((w) => w.worktree.id === s.repoId);
+    expect(again?.rev).toBe(last.rev);
     expect(last.summary?.stateHash).toBe(last.stateHash);
 
     // The paths are the list the daemon already had for this state (the review state's), and
@@ -267,6 +275,62 @@ describe('event deltas (#51)', () => {
       headers: { authorization: `Bearer ${daemon.token}` },
     });
     expect(res.status).toBe(400);
+  });
+});
+
+describe('a first review state slower than the projects wait (#51 review)', () => {
+  it('the later event carries the review with a higher rev, and review.ready still goes out', async () => {
+    const s = await setup();
+    let slowMs = 0;
+    const core = createGitCore({ env: s.fx.env });
+    const gitCore = new Proxy(core, {
+      get(target, prop, receiver) {
+        if (prop === 'readReviewRange') {
+          return async (...args: Parameters<NonNullable<typeof core.readReviewRange>>) => {
+            if (slowMs > 0) await sleep(slowMs);
+            return target.readReviewRange?.(...args);
+          };
+        }
+        return Reflect.get(target, prop, receiver);
+      },
+    });
+    const daemon = await startDaemon({
+      host: '127.0.0.1',
+      port: 0,
+      token: TEST_TOKEN,
+      stateDir: await tempDir(),
+      logLevel: 'silent',
+      gitCore,
+      internal: { initialSummaryWaitMs: 100 },
+      watch: { debounceMs: 50, enabled: true },
+    });
+    onCleanup(() => daemon.close());
+    const api = client(daemon);
+    const events = recordEvents(daemon);
+    await events.opened;
+    await api.addProject({ path: s.repo });
+    await sleep(500);
+    const rowOf = async () =>
+      (await api.listProjects()).projects
+        .flatMap((p) => p.worktrees)
+        .find((w) => w.worktree.id === s.repoId);
+    const before = await rowOf();
+    // The project was never opened: the edit computes the worktree's first review state, slowly.
+    slowMs = 1500;
+    const mark = events.events.length;
+    await appendFile(path.join(s.repo, 'a.txt'), 'slow review\n');
+    // A projects answer (its review wait is 100 ms) shows the new state without the review.
+    const early = await eventually(async () => {
+      const row = await rowOf();
+      return row?.summary?.stateHash !== before?.summary?.stateHash ? row : undefined;
+    }, 5000);
+    expect(early?.summary?.review).toBeUndefined();
+    const changed = await changedAfter(events, mark, s.repoId);
+    expect(changed.stateHash).toBe(early?.summary?.stateHash);
+    expect(changed.summary?.review).toBeDefined();
+    expect(changed.rev).toBeGreaterThan(early?.rev ?? Number.POSITIVE_INFINITY);
+    // The held-back first `review.ready` is not dropped: that client already holds this hash.
+    await eventually(() => events.events.slice(mark).find((e) => e.type === 'review.ready'), 3000);
   });
 });
 

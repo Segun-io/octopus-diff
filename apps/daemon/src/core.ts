@@ -255,6 +255,20 @@ interface WorktreeEntry {
    */
   announcing: boolean;
   readyHeld: boolean;
+  /**
+   * A projects answer showed this row while `announcing` (its review state not ready yet): the
+   * held `review.ready` must still go out, for a client that took that answer and whose cached
+   * hash then equals the announcement's (#51 review).
+   */
+  servedEarly: boolean;
+  /** `WorktreeListItem.rev` of the row's current state, and what it was computed from (`#row`). */
+  rowRev: number;
+  rowSeen: {
+    summary: WorktreeSummary | null;
+    error: ApiErrorInfo | null;
+    review: ReviewComputed | null;
+    worktree: Worktree;
+  } | null;
 }
 
 /** First review states that land within this window share one `review.ready` per project. */
@@ -448,6 +462,8 @@ export class DaemonCore {
   /** Projects whose review state became available since the last `review.ready` (batched). */
   readonly #reviewReady = new Set<string>();
   #reviewReadyTimer: NodeJS.Timeout | null = null;
+  /** Last `WorktreeListItem.rev` handed out: strictly increasing, seeded with the start time in ms. */
+  #rev = Date.now();
   #gitVersion: string | null = null;
   #timers: NodeJS.Timeout[] = [];
   #closed = false;
@@ -1053,6 +1069,9 @@ export class DaemonCore {
       firstHash: null,
       announcing: false,
       readyHeld: false,
+      servedEarly: false,
+      rowRev: 0,
+      rowSeen: null,
     };
     return entry;
   }
@@ -1078,8 +1097,24 @@ export class DaemonCore {
     return { project: this.#toProject(entry.row), worktrees };
   }
 
-  /** A worktree's row of `GET /api/projects` (and of `worktree.changed`, #51). */
+  /**
+   * A worktree's row of `GET /api/projects` (and of `worktree.changed`, #51). `rev` moves when the
+   * row's state moved since it was last read (any of summary, error, review state, worktree is
+   * another object): reads are ordered, so a higher `rev` is a later state (#51 review).
+   */
   #row(project: ProjectEntry, e: WorktreeEntry): WorktreeListItem {
+    const seen = e.rowSeen;
+    if (
+      !seen ||
+      seen.summary !== e.summary ||
+      seen.error !== e.error ||
+      seen.review !== e.review ||
+      seen.worktree !== e.worktree
+    ) {
+      e.rowSeen = { summary: e.summary, error: e.error, review: e.review, worktree: e.worktree };
+      e.rowRev = ++this.#rev;
+    }
+    if (e.announcing && e.review === null) e.servedEarly = true;
     const review = this.#policy(project, e);
     const summary = e.summary && e.review ? { ...e.summary, review: e.review.info } : e.summary;
     return {
@@ -1087,6 +1122,7 @@ export class DaemonCore {
       summary,
       error: e.error,
       ...(review ? { review } : {}),
+      rev: e.rowRev,
     };
   }
 
@@ -1200,6 +1236,7 @@ export class DaemonCore {
       // wanted; at startup it is not (#10): the summary alone (status + numstat) is enough.
       if (this.#reviewWanted(project, entry)) {
         entry.announcing = true;
+        entry.servedEarly = false;
         try {
           await this.#reviewOf(project, entry);
         } finally {
@@ -1216,8 +1253,11 @@ export class DaemonCore {
       const announced = this.#announce(entry, summary.stateHash, paths);
       if (entry.readyHeld) {
         entry.readyHeld = false;
-        if (!announced) this.#noteReviewReady(project.row.id);
+        // Nothing announced, or a projects answer already gave a client this state hash without
+        // the review (it would drop the announcement as nothing new): `review.ready` still goes out.
+        if (!announced || entry.servedEarly) this.#noteReviewReady(project.row.id);
       }
+      entry.servedEarly = false;
     } catch (error) {
       if (this.#closed || isShutdownError(error)) return;
       if (project.worktrees.get(entry.worktree.id) !== entry) return;
