@@ -1142,7 +1142,8 @@ export class DaemonCore {
 
   /**
    * What a branch scope diffs against: `<ref>=<commit>` of its base (the scope's `base`, else the
-   * project's default branch), read from the ref files (no git process, #27). A branch scope's
+   * project's default branch, then also `+<remote ref>=<commit>`), read from the ref files (no git
+   * process, #27, #30). A branch scope's
    * file list depends on HEAD, the working tree and this commit, and nothing else: a default
    * branch that moves changes the merge base without touching the worktree's own state.
    * `undefined`: not a branch scope. `null`: unknown (git-core cannot say), so not cacheable.
@@ -1159,7 +1160,11 @@ export class DaemonCore {
         { id: project.row.id, commonDir: project.row.commonDir },
         scope.base ? { base: scope.base } : { defaultBranch: name },
       );
-      return base ? `${base.ref}=${base.oid}` : null;
+      if (!base) return null;
+      // The default branch counts with its remote-tracking ref (#30): either one moving changes the merge base.
+      return base.remote
+        ? `${base.ref}=${base.oid}+${base.remote.ref}=${base.remote.oid}`
+        : `${base.ref}=${base.oid}`;
     } catch (error) {
       if (!isShutdownError(error)) this.#log.debug('branch base unreadable', { error });
       return null;
