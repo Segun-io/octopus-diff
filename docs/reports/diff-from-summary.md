@@ -200,3 +200,20 @@ untracked file 2 ms (20 ms in the untracked-heavy worktree) / 0 spawns; a file t
 - **Verification (round 5):** lint, typecheck, build exit 0; `pnpm test` exit 0 (git-core 440 + 1 skipped, daemon 410 + 4 skipped; both run twice more, same counts); folding mode git-core 425 + 16 skipped, daemon
   408 + 6 skipped; `pnpm test:e2e` 102 passed (3.2 min), read-only proof 12 repos, 4751 lock polls, 0 violations; `perf:smoke` exit 0; 100k diff-open: tracked 15-16 ms / 1 spawn, untracked 2 ms
   (20 ms in the untracked-heavy worktree) / 0 spawns, 300k-line rewrite 277 ms, a cap-omitted file 394 ms / 2 spawns (the whole route, unchanged).
+
+## macOS CI: `untracked-heavy.test.ts` "a first summary runs it side by side above the index size" (`{ alongside: false, numstats: 0 }`)
+
+- **Diagnostics (commit "every assertion ... carries the probe's counts"):** every assertion of the numstat-alongside tests (`shape()`, counts, additions, `toEqual` against the
+  full core, the HEAD race) now carries `probe.why(summary)` (counts, refresh mode and every logged git call), so the next macOS failure says whether the status saw `a.txt` clean or the
+  log lost its lines.
+- **Reading `collectFull`:** with no kept state the numstat starts alongside the status only when `deps.incremental` and the index's size (the `size` field of the stamp's `stat`) is at least
+  `speculateIndexBytes` (1 in this test) **and** `readHeadFromFiles` returns a commit; it is then spawned before the status and always awaited (even when the status says clean). `numstats: 0` therefore
+  needs either no speculation (an index that `stat` cannot see, a HEAD the files cannot tell) **and** a status that reports `a.txt` clean (otherwise the after-status numstat would make it 1, not 0),
+  or a log that lost the line. Nothing in that path depends on `foldsCase`, ctimes or inode numbers (the ctime rules only decide whether a second numstat runs after the first), and the status cannot
+  call `a.txt` clean (its size changed from 2 to 4 bytes, no racy-clean ambiguity). That leaves the log: the wrapper wrote `echo "start $*"`, and macOS `/bin/sh` (bash in POSIX mode) interprets backslash
+  escapes in `echo`'s data by default, so a `\c` (or similar) in a logged argument truncates or alters the line and `l.includes('--numstat')` would miss a numstat that ran. I could not find a
+  backslash in the numstat's own argv (the config scan's regex has them, and that line is not the numstat), so **I am not convinced this is the cause**; it is the only mechanism in the test's own code
+  that could lose a logged spawn, and it is real for other wrappers. Not reproducible on Linux (dash/bash echo; folding mode too).
+- **Wrapper change (separate commit):** every git-logging wrapper in git-core and daemon tests now appends with `printf '... %s\n' "$*"` (the data is never a format): `untracked-heavy`, `lanes`,
+  `runner`, `diff-from-summary-races`, `cancel.real-git`, `event-deltas.real-git`, `activity.real-git`. Suites run in both modes: git-core lanes + runner + untracked-heavy + races 72 passed (61 + 11 skipped
+  in folding mode), daemon cancel + event-deltas + activity 14 passed; full git-core 440 + 1 skipped (425 + 16 skipped folding), daemon 410 + 4 skipped (408 + 6 skipped folding); lint and typecheck exit 0.
