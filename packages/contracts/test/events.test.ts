@@ -131,6 +131,7 @@ describe('server events', () => {
       },
       error: null,
       review: { enabled: true, source: 'default' },
+      rev: 1_768_000_000_123,
       paths: {
         scope: { kind: 'review', base: sha },
         files: [{ path: 'a.txt', patchHash: 'p' }],
@@ -154,6 +155,9 @@ describe('server events', () => {
       worktreeId: id,
       stateHash: 'x',
     });
+    // `rev` is an optional non-negative integer (#51 review).
+    expect(parseServerEvent({ data: JSON.stringify({ ...delta, rev: -1 }) })).toBeNull();
+    expect(parseServerEvent({ data: JSON.stringify({ ...delta, rev: 1.5 }) })).toBeNull();
     // The list is bounded.
     const tooMany = {
       ...delta,

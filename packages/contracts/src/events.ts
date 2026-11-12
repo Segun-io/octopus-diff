@@ -68,13 +68,19 @@ export const WorktreeChangedEventSchema = z.object({
    * (`WorktreeListItem`: `worktree`, `summary` with its `review`, `error`, the effective `review`
    * policy), so a client replaces that row in its projects list instead of refetching the list.
    * Present together (`worktree` and `summary` are the feature test); absent from older daemons and
-   * from events replayed after a reconnect (`Last-Event-ID`: the client resyncs anyway). Drop a row
-   * whose `summary.updatedAt` is older than the one already held (a list fetched later).
+   * from events replayed after a reconnect (`Last-Event-ID`: the client resyncs anyway). Order rows
+   * by `rev` (below); without one, drop a row whose `summary.updatedAt` is older than the one held.
    */
   worktree: WorktreeListItemSchema.shape.worktree.optional(),
   summary: WorktreeListItemSchema.shape.summary.optional(),
   error: WorktreeListItemSchema.shape.error.optional(),
   review: WorktreeListItemSchema.shape.review,
+  /**
+   * The row's `rev` (see `WorktreeListItem.rev`): apply the row when it is higher than the cached
+   * row's, even when `stateHash` is the same (the review state can land after a projects answer
+   * already showed the summary), and never let a projects answer with a lower `rev` undo it.
+   */
+  rev: WorktreeListItemSchema.shape.rev,
   /**
    * The changed files the daemon already listed for this state, with their patch hashes (see
    * `WorktreeChangedPathsSchema`). Absent when it had no list for this `stateHash` (nothing asked

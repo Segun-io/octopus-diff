@@ -3233,3 +3233,14 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      sidebar's. A sidebar-target bulk (a folder or project from the menu) may then expect an inbox row's hash that
      lags by one refetch. The daemon then skips that worktree and the toast says so: conservative, and the next click
      works. This is the one change outside `apps/web/src/api` and `mock`.
+
+### Event deltas: review follow-up (PR #85, 2026-11-12)
+
+267. **Contract (additive): `rev` on rows.** `WorktreeListItem.rev` (so on every `/api/projects` row) and
+     `worktree.changed.rev`: the order in which the daemon observed the row's state. Of two rows of the same worktree,
+     the higher `rev` is the later state, whatever changed (summary, error, review state, worktree). It is needed
+     because `summary.updatedAt` cannot order a row whose summary is null (a failed refresh), so an old projects
+     answer could undo an error or a recovery (review P1). An integer, strictly increasing per process and seeded
+     with the start time in ms, so a restarted daemon normally starts above the old one. Clients still compare only
+     within one run and forget remembered rows on a reconnect. Equal `rev` means the same state. It moves only when
+     the row's state changes, so the projects ETag keeps matching while nothing changes.
