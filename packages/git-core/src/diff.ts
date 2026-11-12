@@ -28,6 +28,7 @@ import { hashParts, PATCH_HASH_LENGTH, PatchHasher, STATE_HASH_LENGTH } from './
 import { imageComparison } from './images.js';
 import {
   changedSince,
+  Region,
   readStamp,
   regionOfKeys,
   type SummaryTrack,
@@ -805,7 +806,7 @@ export interface ListEntry {
 export type ListCache = LruCache<string, ListEntry>;
 
 /** How file lists of worktree-reading scopes were computed, process-wide (tests, diagnostics). */
-export const listRefreshCounts = { incremental: 0, full: 0 };
+export const listRefreshCounts = { incremental: 0, seeded: 0, full: 0 };
 
 export function createListCache(): ListCache {
   return new LruCache<string, ListEntry>(64);
@@ -872,13 +873,55 @@ function trackStatus(track: SummaryTrack): StatusResult {
   };
 }
 
+/** Paths (bstr) that differ between two commits, memoized by their ids (`diff-tree`, no renames). */
+async function committedKeys(
+  ctx: GitContext,
+  repo: RepoInfo,
+  from: string,
+  to: string,
+): Promise<ReadonlySet<string>> {
+  if (from === to) return new Set();
+  const key = `list-names\u0000${repo.commonDir}\u0000${from}\u0000${to}`;
+  const names = await ctx.memo(key, async () => {
+    const result = await ctx.git(repo, [
+      'diff-tree',
+      '-r',
+      '-z',
+      '--name-only',
+      '--no-renames',
+      '--no-commit-id',
+      '--end-of-options',
+      from,
+      to,
+      '--',
+    ]);
+    return new Set(
+      bstrFromBuffer(result.stdout)
+        .split('\u0000')
+        .filter((name) => name.length > 0),
+    );
+  });
+  return names ?? new Set();
+}
+
+const FULL_OID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+
 /**
- * The cached list updated for the paths whose summary records changed since it was computed
- * (`changedSince`): one `git diff --raw --numstat -p` limited to them plus the list's rename
- * candidates (every added, deleted, renamed or type-changed file: a rename pairs a deletion with
- * an addition anywhere), with file flags from the summary's status. Null when it cannot be done.
+ * A list of a scope that reads the worktree, from the summary state the caller holds (#40):
+ *
+ * - **update**: the cached list, re-diffed for the paths whose summary records changed since it
+ *   was computed (`changedSince`) plus the list's rename candidates (every added, deleted,
+ *   renamed or type-changed file: a rename pairs a deletion with an addition anywhere);
+ * - **seed** (no usable cached list): one diff limited to the paths that can differ at all, the
+ *   summary's status paths plus, against another commit than HEAD, the paths that differ between
+ *   it and HEAD (`diff-tree`, memoized). Everywhere else the base, HEAD, the index and the file
+ *   agree (git status compares contents), so a full diff would show nothing there, and every
+ *   addition or deletion is inside, so renames pair the same way. A stale index costs nothing.
+ *
+ * File flags and untracked files come from the summary's status (no `git status`). Null when
+ * it cannot be done (the caller lists in full).
  */
-async function updateList(
+async function listFromSummary(
   deps: DiffDeps,
   repo: RepoInfo,
   plan: ScopePlan,
@@ -886,61 +929,91 @@ async function updateList(
 ): Promise<GitChangedFile[] | null> {
   const { ctx } = deps;
   const track = deps.tracks.get(repo.cwd);
-  const cached = deps.lists.get(key);
-  if (!track || !cached || cached.version < 0 || cached.headSha !== track.branch.oid) return null;
-  if (trackBlocker(track)) return null;
-  // The summary's state is what the list is updated to: an index, ignore, config or attributes
+  if (!track || trackBlocker(track) || plan.revArgs.length !== 1) return null;
+  const headSha = track.branch.oid;
+  if (headSha === null) return null;
+  // The summary's state is what the list is built for: an index, ignore, config or attributes
   // file that changed since (no summary yet) means another state.
   const stamp = await readStamp(repo, (name) => ctx.runner.envValue(name) || undefined);
   if (stampChange(track.stamp, stamp)) return null;
-  const changed = changedSince(track, cached.version);
-  if (changed === null) return null;
-  if (changed.size === 0) return cached.rows.map((row) => row.file);
-  const specs = new Set(changed);
-  for (const row of cached.rows) {
-    if (row.file.status === 'conflicted') return null;
-    if (row.file.status === 'untracked' || row.file.status === 'modified') continue;
-    specs.add(row.key);
-    if (row.oldKey !== null) specs.add(row.oldKey);
+  const listed = deps.lists.get(key);
+  const cached = listed && listed.version >= 0 && listed.headSha === headSha ? listed : undefined;
+  const changed = cached ? changedSince(track, cached.version) : null;
+  const update = cached !== undefined && changed !== null;
+  if (update && changed.size === 0) return cached.rows.map((row) => row.file);
+
+  const specs = new Set<string>();
+  if (update) {
+    for (const k of changed) specs.add(k);
+    for (const row of cached.rows) {
+      if (row.file.status === 'conflicted') return null;
+      if (row.file.status === 'untracked' || row.file.status === 'modified') continue;
+      specs.add(row.key);
+      if (row.oldKey !== null) specs.add(row.oldKey);
+    }
+  } else {
+    for (const entry of track.tracked.values()) {
+      if (entry.kind === 'unmerged') return null;
+      specs.add(entry.path);
+      if (entry.kind === 'renamed') specs.add(entry.origPath);
+    }
+    const base = plan.revArgs[0] as string;
+    if (base !== 'HEAD' && base !== headSha) {
+      if (!FULL_OID.test(base)) return null;
+      for (const k of await committedKeys(ctx, repo, base, headSha)) specs.add(k);
+    }
   }
-  const region = regionOfKeys(specs);
-  if (!region) return null;
   const status = trackStatus(track);
   const index = indexStatus(status);
-  let run: DiffRun;
-  try {
-    run = await runScopeDiff(ctx, repo, plan, {
-      head: true,
-      patch: true,
-      pathspecs: region.specs.map(bstrToUtf8),
-    });
-  } catch (error) {
-    // An unreadable file (F7) and the other fallbacks are the full list's business.
-    if (isGitCoreError(error, 'git_failed')) return null;
-    throw error;
+  let fresh: ListRow[] = [];
+  // Nothing tracked can differ (a seed of a clean tree, or only untracked files changed).
+  const region = specs.size === 0 ? new Region([]) : regionOfKeys(specs);
+  if (!region) return null;
+  if (region.size > 0) {
+    let run: DiffRun;
+    try {
+      run = await runScopeDiff(ctx, repo, plan, {
+        head: true,
+        patch: true,
+        pathspecs: region.specs.map(bstrToUtf8),
+      });
+    } catch (error) {
+      // An unreadable file (F7) and the other fallbacks are the full list's business.
+      if (isGitCoreError(error, 'git_failed')) return null;
+      throw error;
+    }
+    if (run.raw.some((entry) => entry.combined)) return null;
+    fresh = await trackedRows(ctx, repo, plan, run, index);
+    for (const row of fresh) {
+      if (!region.has(row.key) || (row.oldKey !== null && !region.has(row.oldKey))) return null;
+    }
   }
-  if (run.raw.some((entry) => entry.combined)) return null;
-  const fresh = await trackedRows(ctx, repo, plan, run, index);
-  for (const row of fresh) {
-    if (!region.has(row.key) || (row.oldKey !== null && !region.has(row.oldKey))) return null;
-  }
-  const kept = cached.rows.filter(
-    (row) => !region.has(row.key) && (row.oldKey === null || !region.has(row.oldKey)),
-  );
+  const kept = update
+    ? cached.rows.filter(
+        (row) => !region.has(row.key) && (row.oldKey === null || !region.has(row.oldKey)),
+      )
+    : [];
   const trackedKeys = new Set<string>();
-  for (const row of [...kept, ...fresh])
+  for (const row of [...kept, ...fresh]) {
     if (row.file.status !== 'untracked') trackedKeys.add(row.key);
-  const attributes = await readDiffAttributes(deps, repo, index.untracked, status.entries);
+  }
+  const attributes = plan.includeUntracked
+    ? await readDiffAttributes(deps, repo, index.untracked, status.entries)
+    : new Map<string, DiffAttribute>();
   const inspect = inspectOptions(ctx, repo, index.untracked.length, attributes);
-  if (inspect.readContent !== cached.readContent) return null;
-  const keys = untrackedKeys(index, trackedKeys).filter((raw) => region.has(raw));
+  if (update && inspect.readContent !== cached.readContent) return null;
+  const keys = plan.includeUntracked
+    ? untrackedKeys(index, trackedKeys).filter((raw) => !update || region.has(raw))
+    : [];
   const infos = await inspectUntracked(repo.cwd, keys, deps.untrackedCache, inspect);
   const rows = sortRows([...kept, ...fresh, ...untrackedRows(infos)]);
-  listRefreshCounts.incremental++;
-  if (cached.version <= track.version) {
+  if (update) listRefreshCounts.incremental++;
+  else listRefreshCounts.seeded++;
+  const latest = deps.lists.get(key);
+  if (!latest || latest.version <= track.version) {
     deps.lists.set(key, {
       version: track.version,
-      headSha: track.branch.oid,
+      headSha,
       readContent: inspect.readContent,
       rows,
     });
@@ -968,8 +1041,8 @@ export async function listChangedFiles(
   const key = listKeyOf(repo, plan);
   const held = options?.summaryState;
   if (incremental && held !== undefined && deps.tracks.get(repo.cwd)?.stateHash === held) {
-    const updated = await updateList(deps, repo, plan, key);
-    if (updated) return updated;
+    const listed = await listFromSummary(deps, repo, plan, key);
+    if (listed) return listed;
   }
   /** The summary state this list is at least as new as (its status runs after). */
   const track = incremental ? deps.tracks.get(repo.cwd) : undefined;

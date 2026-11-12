@@ -5,11 +5,12 @@
  * per-file snapshot must agree. The file lists of the scopes that read the worktree are checked
  * the same way. A failure prints the seed and the steps so far: rerun with FUZZ_SEED=<seed>.
  *
- * Git config is isolated (helpers/fixture.ts). Steps per seed: FUZZ_STEPS (default 90).
+ * Git config is isolated (helpers/fixture.ts). Steps per seed: FUZZ_STEPS (default 120).
  */
 import { spawnSync } from 'node:child_process';
 import {
   chmodSync,
+  cpSync,
   existsSync,
   lstatSync,
   lutimesSync,
@@ -30,7 +31,7 @@ import { canonicalStatusOutput } from '../src/summary.js';
 import { locator } from './helpers/core.js';
 import { createFixture, type Fixture } from './helpers/fixture.js';
 
-const STEPS = Number(process.env.FUZZ_STEPS ?? 90);
+const STEPS = Number(process.env.FUZZ_STEPS ?? 120);
 const SEEDS = process.env.FUZZ_SEED
   ? [Number(process.env.FUZZ_SEED)]
   : [0x5eed01, 0x5eed02, 0x5eed03, 0x5eed04];
@@ -408,6 +409,13 @@ async function runSeed(seed: number, config: string[][] = []): Promise<{ increme
     if (got.refresh?.mode === 'incremental') incremental++;
     const why = got.refresh?.reason ?? got.refresh?.mode ?? 'none';
     reasons.set(why, (reasons.get(why) ?? 0) + 1);
+    if (
+      process.env.FUZZ_DUMP &&
+      JSON.stringify(comparable(got)) !== JSON.stringify(comparable(want))
+    ) {
+      cpSync(repo, process.env.FUZZ_DUMP, { recursive: true });
+      console.log('dumped', process.env.FUZZ_DUMP, JSON.stringify(got.refresh), [...touched]);
+    }
     expect(comparable(got), `${context()}\nrefresh ${JSON.stringify(got.refresh)}`).toEqual(
       comparable(want),
     );
@@ -417,6 +425,20 @@ async function runSeed(seed: number, config: string[][] = []): Promise<{ increme
       const gotFiles = await inc.listChangedFiles(wt, scope, { summaryState: got.stateHash });
       const wantFiles = await full.listChangedFiles(wt, scope);
       expect(gotFiles, `${context()}\nscope ${scope.kind}`).toEqual(wantFiles);
+    }
+    // A review scope against a random commit of the history: mostly a list never asked for (seeded
+    // from the summary's paths and the commit's diff-tree), sometimes one cached before.
+    if (r() < 0.3) {
+      const commits = fx
+        .git(repo, ['rev-list', '--all'], { allowFail: true })
+        .split('\n')
+        .filter(Boolean);
+      if (commits.length > 0) {
+        const scope: DiffScope = { kind: 'review', base: pick(r, commits) };
+        const gotFiles = await inc.listChangedFiles(wt, scope, { summaryState: got.stateHash });
+        const wantFiles = await full.listChangedFiles(wt, scope);
+        expect(gotFiles, `${context()}\nscope review ${scope.base}`).toEqual(wantFiles);
+      }
     }
     if (step % 10 === 0) checkCanonical(repo);
   }

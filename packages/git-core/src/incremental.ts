@@ -31,7 +31,7 @@ import type { UntrackedInfo } from './untracked.js';
  *   under it, which is what `Region.has` implements, byte for byte.
  *
  * Everything else (a hint that names a directory or an ignore, attribute or submodule file,
- * nested repositories, submodules, sparse checkouts, case-insensitive or normalising
+ * unmerged paths, nested repositories, submodules, sparse checkouts, case-insensitive or normalising
  * filesystems, too many paths, a degraded numstat, any output outside P) falls back to a full
  * refresh. The daemon also reconciles with a full refresh on a timer and whenever the watcher
  * may have missed events (polling, overflow, re-subscribe, git-dir events).
@@ -213,7 +213,10 @@ export function trackBlocker(track: SummaryTrack): string | null {
   if (track.stamp.sparse) return 'sparse-checkout';
   if (track.stamp.submodules) return 'submodules';
   for (const entry of track.tracked.values()) {
-    if (entry.kind === 'unmerged') continue;
+    // With an unmerged path, git status can pair a deletion with it (a worktree-side rename) and
+    // then print neither the rename nor the deletion (an unmerged line cannot show one): that
+    // deletion is in no state, so it is no rename candidate either. Conflicts refresh in full.
+    if (entry.kind === 'unmerged') return 'conflicts';
     if (entry.kind === 'ordinary' || entry.kind === 'renamed') {
       if (
         entry.modeHead === '160000' ||
