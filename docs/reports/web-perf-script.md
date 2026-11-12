@@ -26,7 +26,7 @@ Issue #68 "Web perf script is broken again (times out on main)". Branch `fix/web
   `load.inboxCompleteAt`, `dataset.{mode,server}`. `PERF_OUT=<absolute file>` also writes the JSON.
 - `perf:smoke` (`PERF_SMOKE=1`: 20 `j`, 8 `J`, 3 refreshes, ~8 s) as a step of the CI `e2e` job, and a "when and how to
   run it" section in `docs/bench/README.md`. `docs/bench/web-perf.json` refreshed (it was the #26 run).
-- DECISIONS **#209** (another session working on `e2e/` may also have taken #209: renumber whichever lands second).
+- DECISIONS **#212**.
 
 ## Root causes
 
@@ -94,7 +94,7 @@ Machine: 12-core WSL2, Node 26.13, Chromium headless 1440x900. From the repo roo
 
 ## Decisions
 
-#209 (above).
+#212 (above).
 
 ## Contract changes
 
@@ -121,5 +121,5 @@ inside `pnpm lint`).
 - `.github/workflows/ci.yml` is outside the web stream's paths (WS5): the single added step is `pnpm --filter
   @octopus-diff/web perf:smoke` after `pnpm test:e2e`. Drop it if you do not want a perf step in CI; the script and
   the README section stand on their own.
-- DECISIONS #209 may collide with the `e2e/` session's entry; renumber whichever merges second.
+- DECISIONS #212 (renumbered from #209 when #70 took #209-#211).
 - `PERF_OUT` must be an absolute path (pnpm runs the script from `apps/web`).

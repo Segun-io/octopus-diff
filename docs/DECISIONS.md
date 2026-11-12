@@ -2666,7 +2666,7 @@ Numbers: #209 and up (other sessions may also have used #209; renumber at merge)
 
 Number: #209 (another session working on `e2e/` may also have taken #209: renumber whichever lands second).
 
-209. **`scripts/perf.ts` starts its own mock and measures in the page.** The failures in #68 were not UI regressions:
+212. **`scripts/perf.ts` starts its own mock and measures in the page.** The failures in #68 were not UI regressions:
      the documented command (`preview:mock`, no `MOCK_DATASET`) serves the 10-worktree `demo` dataset, where the
      script's load wait (before #67's scope-aware wait) and its `J` step (a worktree with no files has no `file-item`)
      can never be met. The script now starts the mock (`large`, no simulator, merge noise on) and `vite preview` of
