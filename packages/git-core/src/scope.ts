@@ -5,9 +5,10 @@ import {
   RefNameSchema,
   type ScopeOptions,
 } from '@octopus-diff/contracts';
-import { commitParents, mergeBase, verifyCommit } from './commits.js';
+import { commitParents, verifyCommit } from './commits.js';
 import type { GitContext, RepoInfo } from './context.js';
 import { detectDefaultBranchRef, type ResolvedRef, resolveRefName } from './discovery.js';
+import { integrationBase, remoteTrackingOf } from './integration-base.js';
 import { OID, readHeadFromFiles } from './ref-files.js';
 
 /**
@@ -191,7 +192,9 @@ export async function planScope(
           ? worktreeAgainst('branch', 'HEAD')
           : { ...base, kind: 'branch', revArgs: [], empty: true };
       }
-      const mb = await mergeBase(ctx, repo, head, baseRef.oid);
+      // The default branch's remote-tracking ref counts too (#30); an explicit `base` is taken as is.
+      const remote = scope.base === undefined ? await remoteTrackingOf(ctx, repo, baseRef) : null;
+      const mb = await integrationBase(ctx, repo, head, baseRef, remote);
       if (!mb) {
         throw new GitCoreError('not_found', `no merge base between HEAD and ${baseRef.name}`);
       }
