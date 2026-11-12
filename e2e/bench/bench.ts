@@ -98,7 +98,6 @@ const TARGETS = {
  * turn the run red until the issue lands (then delete the entry). `--strict` ignores this list.
  */
 export const TRACKED: Readonly<Record<string, string>> = {
-  warmReload: '#27 (cache the branch-scope inbox and files)',
   startupSpawns: '#10 and #29 (compute each summary once; per-project git metadata)',
 };
 
