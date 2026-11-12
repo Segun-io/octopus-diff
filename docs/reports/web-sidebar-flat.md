@@ -53,12 +53,11 @@ Run from the repo root on this machine (Node 26):
 
 - `pnpm lint`: **pass** (Biome 484 files, `credits: up to date (144 shipped packages, 16 dev tools)`).
 - `pnpm typecheck`: **pass** (all packages including `e2e`).
-- `pnpm --filter @octopus-diff/web test`: **27 files, 360+ tests pass** (see the final numbers in the hand-off
-  message; before this work 26 files / 359 tests).
+- `pnpm --filter @octopus-diff/web test`: **27 files, 372 tests pass** (before this work 26 files / 359 tests).
 - `pnpm build`: **pass**.
 - `PERF_SMOKE=1 pnpm --filter @octopus-diff/web perf` (preview of the build, 30 worktrees x 200 files): all checks
   ok, 0 page errors (`virtualised list ... 46 / 46` is the file list; the sidebar's own check is `data-total`).
-- `pnpm test:e2e`: see "e2e" below.
+- `pnpm test:e2e`: 82 passed, 16 failed (expected, see "e2e" below).
 
 ### How the virtual list is tested in jsdom
 
@@ -90,7 +89,20 @@ instead; the J/K test walks the DOM order).
 
 ## e2e (`pnpm test:e2e`)
 
-E2E_PLACEHOLDER
+Run in two parts (the suite has `workers: 1` and each broken spec waits out its 90 s timeout, so the full run exceeds
+the 900 s I allowed it; `tests/12`-`19` were run separately with `playwright test tests/12 ... tests/19`):
+**82 passed, 16 failed** of 98. Every failure is a spec that looks for an element that no longer exists or for the
+old placement, none is a runtime error of the app:
+
+- `01-projects` (add by path / scan root; sidebar shows every worktree...), `18-onboarding` (2): `app.projectItem(name)`.
+- `02-inbox-diff` (UI inbox lists every dirty worktree; selecting a file shows its patch), `04-live-updates` (sidebar
+  counts follow external edits in the inbox view), `06-keyboard` (`/`, `g i`, `?`), `07-readonly` (`app.selectInbox()`,
+  3 min timeout), `11-ui-bulk-review` (3: inbox with filter / inbox-wide / project via context menu), `19-merge-noise`
+  (`:252`): `app.inbox` / `selectInbox()` click `inbox-item`.
+- `14-ui-forge-details` (2): `projectNameButton(name)` = `project-item ... button[title]`.
+- `15-ui-status-flow` (`:70`, "Hide until it changes"): expects `data-section="settled"`, now `hidden`.
+
+All other specs pass.
 
 What needs updating in `e2e/` (not edited here, it is another stream's; no test id was renamed, the elements are gone):
 
