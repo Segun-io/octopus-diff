@@ -867,6 +867,7 @@ async function finish(
     previous,
     track,
     c.untrackedTouched && untracked.fresh ? [...c.untrackedTouched, ...untracked.fresh] : null,
+    c.mode === 'incremental' ? c.region : null,
   );
   if (snapshotLimit === null) return { result: summary, track };
   return {

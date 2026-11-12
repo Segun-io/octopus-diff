@@ -114,7 +114,16 @@ export interface SummaryTrack {
   /** Wall clock of the last full refresh. */
   fullAt: number;
   /** Paths whose records changed, per version (null: unknown, e.g. HEAD moved). */
-  journal: Array<{ version: number; paths: Set<string> | null }>;
+  journal: Array<{
+    version: number;
+    paths: Set<string> | null;
+    /**
+     * A full refresh: `paths` are the records that differ, but a file changed and changed back
+     * since the previous state leaves none (an incremental refresh also names its whole region,
+     * the watcher's paths among it). Lists then check the files they read themselves.
+     */
+    blind: boolean;
+  }>;
 }
 
 /** Parsed and validated path hint (bstr keys), or why it cannot be used. */
@@ -612,10 +621,17 @@ export function nextJournal(
   previous: SummaryTrack | undefined,
   next: SummaryTrack,
   untrackedCandidates: Iterable<string> | null = null,
+  region: Region | null = null,
 ): SummaryTrack['journal'] {
-  if (!previous) return [{ version: next.version, paths: null }];
+  if (!previous) return [{ version: next.version, paths: null, blind: true }];
   const journal = previous.journal.slice(-(MAX_JOURNAL - 1));
-  journal.push({ version: next.version, paths: changedKeys(previous, next, untrackedCandidates) });
+  let paths = changedKeys(previous, next, untrackedCandidates);
+  if (paths !== null && region !== null) {
+    // Every path the watcher named, even one whose record is back where it was.
+    for (const spec of region.specs) paths.add(spec);
+    if (paths.size > MAX_JOURNAL_PATHS) paths = null;
+  }
+  journal.push({ version: next.version, paths, blind: region === null });
   return journal;
 }
 
@@ -623,17 +639,22 @@ export function nextJournal(
  * Paths that changed after version `since` (exclusive) up to the track's version, or null when
  * the journal cannot tell (a gap, an unknown entry, or too many paths).
  */
-export function changedSince(track: SummaryTrack, since: number): Set<string> | null {
-  if (since === track.version) return new Set();
+export function changedSince(
+  track: SummaryTrack,
+  since: number,
+): { paths: Set<string>; blind: boolean } | null {
+  if (since === track.version) return { paths: new Set(), blind: false };
   if (since > track.version) return null;
   const first = track.journal[0];
   if (!first || first.version > since + 1) return null;
   const out = new Set<string>();
+  let blind = false;
   for (const entry of track.journal) {
     if (entry.version <= since) continue;
     if (entry.paths === null) return null;
+    blind ||= entry.blind;
     for (const key of entry.paths) out.add(key);
     if (out.size > MAX_JOURNAL_PATHS) return null;
   }
-  return out;
+  return { paths: out, blind };
 }

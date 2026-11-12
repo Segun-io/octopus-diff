@@ -125,28 +125,143 @@ describe('P1: no phantom rows in cached lists', () => {
     }
   });
 
-  it('a full summary drops a cached list it does not explain (the next list is seeded)', async () => {
-    const { repo, a, original } = repoAB('drop-stale');
+  it('repro A with the revert event lost: the unexplained row is re-checked on every use', async () => {
+    const { repo, a, original } = repoAB('phantom-lost');
     const core = createGitCore(fx.coreOptions());
     try {
       const wt = locator(repo);
       await core.getSummary(wt);
       writeFileSync(a, `${original}pending\n`);
-      await core.listChangedFiles(wt, { kind: 'working' }); // cached with a row v1 does not explain
+      await core.listChangedFiles(wt, { kind: 'working' });
       writeFileSync(a, original);
-      const s2 = await core.getSummary(wt); // full
-      const seeded = listRefreshCounts.seeded;
+      // The watcher lost a.txt's events; only b.txt is named.
+      appendFileSync(path.join(repo, 'b.txt'), 'more\n');
+      const s2 = await core.getSummary(wt, { changedPaths: ['b.txt'] });
+      expect(s2.refresh?.mode).toBe('incremental');
       const got = await core.listChangedFiles(
         wt,
         { kind: 'working' },
         { summaryState: s2.stateHash },
       );
-      expect(listRefreshCounts.seeded).toBe(seeded + 1);
       expect(shape(got)).toEqual(['modified b.txt']);
     } finally {
       await core.dispose();
     }
   });
+
+  it('a short-lived untracked file whose delete event was lost', async () => {
+    const { repo } = repoAB('untracked-lost');
+    const core = createGitCore(fx.coreOptions());
+    try {
+      const wt = locator(repo);
+      await core.getSummary(wt);
+      const tmp = path.join(repo, 'tmp.txt');
+      writeFileSync(tmp, 'short-lived\n');
+      await core.listChangedFiles(wt, { kind: 'working' });
+      const { rmSync } = await import('node:fs');
+      rmSync(tmp);
+      appendFileSync(path.join(repo, 'b.txt'), 'more\n');
+      const s2 = await core.getSummary(wt, { changedPaths: ['b.txt'] });
+      const got = await core.listChangedFiles(
+        wt,
+        { kind: 'working' },
+        { summaryState: s2.stateHash },
+      );
+      expect(shape(got)).toEqual(['modified b.txt']);
+    } finally {
+      await core.dispose();
+    }
+  });
+
+  it('the same held state asked again after a revert: the unexplained row is re-checked', async () => {
+    const { repo, a, original } = repoAB('phantom-same-state');
+    const core = createGitCore(fx.coreOptions());
+    try {
+      const wt = locator(repo);
+      const s1 = await core.getSummary(wt);
+      writeFileSync(a, `${original}pending\n`);
+      await core.listChangedFiles(wt, { kind: 'working' }); // full, cached at s1's version
+      writeFileSync(a, original);
+      const got = await core.listChangedFiles(
+        wt,
+        { kind: 'working' },
+        { summaryState: s1.stateHash },
+      );
+      expect(shape(got)).toEqual(['modified b.txt']);
+    } finally {
+      await core.dispose();
+    }
+  });
+
+  it('a full summary drops a cached list it does not explain (the next list is seeded)', async () => {
+    const { repo, a, original } = repoAB('drop-stale');
+    const core = createGitCore(fx.coreOptions());
+    try {
+      const wt = locator(repo);
+      const list = (state: string) =>
+        core.listChangedFiles(wt, { kind: 'working' }, { summaryState: state });
+      await core.getSummary(wt);
+      writeFileSync(a, `${original}edit\n`);
+      const s2 = await core.getSummary(wt, { changedPaths: ['a.txt'] });
+      await list(s2.stateHash);
+      writeFileSync(a, original);
+      const s3 = await core.getSummary(wt, { changedPaths: ['a.txt'] });
+      writeFileSync(a, `${original}edit again\n`); // pending: the update re-diffs a.txt
+      await list(s3.stateHash); // cached at s3 with a row s3 does not explain
+      writeFileSync(a, original);
+      const s4 = await core.getSummary(wt); // full: a.txt is clean, the cached row is not
+      const seeded = listRefreshCounts.seeded;
+      const got = await list(s4.stateHash);
+      expect(listRefreshCounts.seeded).toBe(seeded + 1);
+      expect(shape(got)).toEqual(await fullList(repo));
+    } finally {
+      await core.dispose();
+    }
+  });
+
+  for (const [reader, next] of [
+    ['seeded', 'incremental'],
+    ['seeded', 'full'],
+    ['full', 'incremental'],
+    ['full', 'full'],
+  ] as const) {
+    it(`a committed file read mid-edit by a ${reader} list, changed back before a ${next} summary`, async () => {
+      // The path is one the review scope lists anyway (changed since the base), so it is
+      // "explained"; only when the list read it tells whether the row is the state's.
+      const repo = fx.repo(`midedit-${reader}-${next}`, {
+        files: { 'c.txt': 'c\n', 'd.txt': 'd\n' },
+      });
+      const base = fx.git(repo, ['rev-parse', 'HEAD']).trim();
+      writeFileSync(path.join(repo, 'c.txt'), 'c changed in a commit\n');
+      fx.commitAll(repo, 'change c');
+      const scope = { kind: 'review' as const, base };
+      const core = createGitCore(fx.coreOptions());
+      try {
+        const wt = locator(repo);
+        const s1 = await core.getSummary(wt);
+        const c = path.join(repo, 'c.txt');
+        writeFileSync(c, 'c changed in a commit\nand edited\n'); // pending
+        // The first list of the scope reads c.txt from the file, mid-edit: seeded from the held
+        // state, or a full list (no state held).
+        const seen = await core.listChangedFiles(
+          wt,
+          scope,
+          reader === 'seeded' ? { summaryState: s1.stateHash } : undefined,
+        );
+        expect(seen.find((f) => f.path === 'c.txt')?.additions).toBe(2);
+        writeFileSync(c, 'c changed in a commit\n'); // back to HEAD's content
+        const s2 =
+          next === 'incremental'
+            ? await core.getSummary(wt, { changedPaths: ['c.txt'] })
+            : await core.getSummary(wt);
+        expect(s2.refresh?.mode).toBe(next);
+        const got = await core.listChangedFiles(wt, scope, { summaryState: s2.stateHash });
+        expect(got).toEqual(await reference.listChangedFiles(wt, scope));
+      } finally {
+        await core.dispose();
+      }
+    });
+  }
 
   it('forgetState drops the kept state and lists (an explicit refresh)', async () => {
     const { repo, a, original } = repoAB('forget');

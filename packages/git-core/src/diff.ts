@@ -813,6 +813,14 @@ export interface ListEntry {
   recheck: string[];
   /** Paths that differ between the scope's base and HEAD (null: not computed, base is HEAD). */
   committed: ReadonlySet<string> | null;
+  /**
+   * The pathspecs this list read from the files, with each one's lstat signature just before
+   * (PR #89 P1). After a full ("blind") summary, the ones whose file moved since are re-diffed:
+   * a file read mid-edit and changed back before any summary shows in no record.
+   */
+  late: Map<string, string>;
+  /** A full list: it read everything, so after a blind summary it is computed again. */
+  lateAll: boolean;
 }
 export type ListCache = LruCache<string, ListEntry>;
 
@@ -914,6 +922,14 @@ function unexplainedKeys(
     if (row.oldKey !== null && !explained(row.oldKey)) out.add(row.oldKey);
   }
   return [...out].sort(compareBstr);
+}
+
+/** A path's lstat signature for `ListEntry.late`; a directory never matches (its files may move). */
+async function readSignature(root: string, key: string): Promise<string> {
+  const sig = await lstatSignature(root, key);
+  if (sig === 'missing') return sig;
+  const mode = Number(sig.split(':')[4]);
+  return (mode & 0o170000) === 0o040000 ? 'dir' : sig;
 }
 
 /** The paths that differ between a plan's base and HEAD, or null when its base is HEAD. */
@@ -1028,9 +1044,19 @@ async function listFromSummary(
   if (stampChange(track.stamp, stamp)) return null;
   const listed = deps.lists.get(key);
   const cached = listed && listed.version >= 0 && listed.headSha === headSha ? listed : undefined;
-  const changed = cached ? changedSince(track, cached.version) : null;
-  const update = cached !== undefined && changed !== null;
-  if (update && changed.size === 0 && cached.recheck.length === 0) {
+  const since = cached ? changedSince(track, cached.version) : null;
+  const update = cached !== undefined && since !== null && !(since.blind && cached.lateAll);
+  const changed = since?.paths ?? new Set<string>();
+  // After a full summary, the files this list read that moved since it read them.
+  const moved: string[] = [];
+  if (update && since.blind && cached.late.size > 0) {
+    const late = [...cached.late];
+    const now = await mapLimit(late, 32, ([k]) => readSignature(repo.cwd, k));
+    for (const [i, [k, sig]] of late.entries()) {
+      if (sig === 'dir' || now[i] !== sig) moved.push(k);
+    }
+  }
+  if (update && changed.size === 0 && cached.recheck.length === 0 && moved.length === 0) {
     return cached.rows.map((row) => row.file);
   }
 
@@ -1038,6 +1064,7 @@ async function listFromSummary(
   if (update) {
     for (const k of changed) specs.add(k);
     for (const k of cached.recheck) specs.add(k);
+    for (const k of moved) specs.add(k);
     for (const row of cached.rows) {
       if (row.file.status === 'conflicted') return null;
       if (row.file.status === 'untracked' || row.file.status === 'modified') continue;
@@ -1062,6 +1089,8 @@ async function listFromSummary(
   // Nothing tracked can differ (a seed of a clean tree, or only untracked files changed).
   const region = specs.size === 0 ? new Region([]) : regionOfKeys(specs);
   if (!region) return null;
+  // Signatures before the diff reads the files: a write during it shows as a move later.
+  const lateSigs = await mapLimit(region.specs, 32, (k) => readSignature(repo.cwd, k));
   if (region.size > 0) {
     let run: DiffRun;
     try {
@@ -1135,6 +1164,8 @@ async function listFromSummary(
       keys: rows.map((row) => row.key),
       recheck: unexplainedKeys(track, rows, committed),
       committed,
+      late: new Map(region.specs.map((k, i) => [k, lateSigs[i] as string])),
+      lateAll: false,
     });
   }
   return rows.map((row) => row.file);
@@ -1240,6 +1271,8 @@ export async function listChangedFiles(
           keys: rows.map((row) => row.key),
           recheck: unexplainedKeys(track, rows, committed),
           committed,
+          late: new Map(),
+          lateAll: true,
         });
       }
     }
