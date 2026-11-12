@@ -463,7 +463,7 @@ function checkCanonical(repo: string): void {
 async function runSeed(
   seed: number,
   config: string[][] = [],
-  cores: { inc: GitCore; full: GitCore } = { inc, full },
+  cores: { inc: GitCore; full: GitCore; uncapped?: GitCore } = { inc, full },
   planShapes = false,
 ): Promise<{ incremental: number; hinted: number; omitted: number; omittedIncremental: number }> {
   const r = prng(seed);
@@ -577,6 +577,25 @@ async function runSeed(
     const want = await cores.full.getSummary(wt, { snapshot: true });
     if (got.refresh?.mode === 'incremental') incremental++;
     if (got.untrackedOmitted) omitted++;
+    if (got.untrackedOmitted && cores.uncapped) {
+      // The omission's numbers agree with each other and with an uncapped list (PR #91 review):
+      // directory counts never exceed the total, and each is the untracked rows under it.
+      const omission = got.untrackedOmitted;
+      const counts = omission.directories.map((d) => d.count);
+      expect(
+        counts.reduce((a, b) => a + b, 0),
+        context(),
+      ).toBeLessThanOrEqual(omission.count);
+      const rows = (await cores.uncapped.listChangedFiles(wt, { kind: 'working' })).filter(
+        (f) => f.status === 'untracked',
+      );
+      for (const dir of omission.directories) {
+        if (dir.rawPath !== undefined) continue;
+        const under = rows.filter((f) => f.path.startsWith(`${dir.path}/`)).length;
+        expect(dir.count, `${context()}\n${dir.path}`).toBe(under);
+        expect(dir.count, `${context()}\n${dir.path}`).toBeGreaterThan(0);
+      }
+    }
     if (got.untrackedOmitted && got.refresh?.mode === 'incremental') omittedIncremental++;
     const why = got.refresh?.reason ?? got.refresh?.mode ?? 'none';
     reasons.set(why, (reasons.get(why) ?? 0) + 1);
@@ -683,8 +702,14 @@ describe('incremental summary fuzz', () => {
       const cappedFull = createGitCore(
         fx.coreOptions({ maxListedUntracked: cap, incremental: false }),
       );
+      const uncapped = createGitCore(fx.coreOptions({ maxListedUntracked: 100_000 }));
       try {
-        const result = await runSeed(seed, [], { inc: cappedInc, full: cappedFull }, true);
+        const result = await runSeed(
+          seed,
+          [],
+          { inc: cappedInc, full: cappedFull, uncapped },
+          true,
+        );
         // The capped mode must really be exercised, and incrementally.
         expect(result.omitted).toBeGreaterThan(STEPS / 10);
         if (FOLDS) expect(result.incremental).toBe(0);
@@ -696,6 +721,7 @@ describe('incremental summary fuzz', () => {
       } finally {
         await cappedInc.dispose();
         await cappedFull.dispose();
+        await uncapped.dispose();
       }
     }, 120_000);
   }

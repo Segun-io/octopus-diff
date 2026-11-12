@@ -256,8 +256,11 @@ export function ignoreLineFor(path: string, ctx: IgnoreContext | null = null): s
 }
 
 /** Would a line for one of the plan's reported directories be broader than the directory? */
-export function wantsIgnoreContext(plan: UntrackedPlan): boolean {
-  for (const dir of reported(plan).map(([key]) => key)) {
+export function wantsIgnoreContext(
+  plan: UntrackedPlan,
+  duplicates: readonly string[] = [],
+): boolean {
+  for (const dir of reported(plan, duplicates).map(([key]) => key)) {
     const parts = dir.split('/');
     if (
       parts.some((part, i) => ANY_DEPTH.has(part) || (OUTPUT.has(part) && i < parts.length - 1))
@@ -268,9 +271,27 @@ export function wantsIgnoreContext(plan: UntrackedPlan): boolean {
   return false;
 }
 
-/** The directories the contract reports: the biggest, at most `UNTRACKED_OMITTED_DIRS_MAX`. */
-function reported(plan: UntrackedPlan): Array<[string, number]> {
-  return [...plan.dirs]
+/**
+ * The directories the contract reports: the biggest, at most `UNTRACKED_OMITTED_DIRS_MAX`, with
+ * their counts less `duplicates` (omitted raw keys the summary counts as tracked changes instead,
+ * e.g. after `git rm --cached`), so they add up to at most the omission's count (Greptile on PR
+ * #91). A directory left with none is not reported.
+ */
+function reported(plan: UntrackedPlan, duplicates: readonly string[]): Array<[string, number]> {
+  const counts = new Map(plan.dirs);
+  for (const raw of duplicates) {
+    const key = stripSlash(raw);
+    for (let slash = key.indexOf('/'); slash >= 0; slash = key.indexOf('/', slash + 1)) {
+      const dir = key.slice(0, slash);
+      const n = counts.get(dir);
+      if (n !== undefined) {
+        counts.set(dir, n - 1);
+        break;
+      }
+    }
+  }
+  return [...counts]
+    .filter(([, n]) => n > 0)
     .sort((a, b) => b[1] - a[1] || compareBstr(a[0], b[0]))
     .slice(0, UNTRACKED_OMITTED_DIRS_MAX);
 }
@@ -279,13 +300,15 @@ function reported(plan: UntrackedPlan): Array<[string, number]> {
  * The contract's description of a plan (the biggest directories, with ignore lines). `count`:
  * the omitted files as the summary counts them (a path that is also a tracked change counts as
  * that), default the plan's. `ctx`: what broader lines would cover (see `ignoreLineFor`).
+ * `duplicates`: the omitted raw keys left out of `count`, left out of the directories' counts too.
  */
 export function omissionOf(
   plan: UntrackedPlan,
   count = plan.omitted,
   ctx: IgnoreContext | null = null,
+  duplicates: readonly string[] = [],
 ): UntrackedOmission {
-  const directories = reported(plan).map(([key, count]): UntrackedOmittedDirectory => {
+  const directories = reported(plan, duplicates).map(([key, count]): UntrackedOmittedDirectory => {
     const decoded = decodeRepoPath(key);
     const generated = isGenerated(decoded.path);
     return decoded.rawPath === undefined

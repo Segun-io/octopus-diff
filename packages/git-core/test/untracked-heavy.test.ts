@@ -1,7 +1,8 @@
-import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import {
   type GitCore,
+  type SummaryResult,
   SummarySnapshotSchema,
   UntrackedOmissionSchema,
   WorktreeSummarySchema,
@@ -502,6 +503,11 @@ describe('summaries and lists above the cap (#43)', () => {
     expect(summary.changedFiles).toBe(1 + CAP + 5);
     expect(summary.untrackedOmitted?.count).toBe(CAP + 5);
     expect(summary.changedFiles).toBe(reference.changedFiles);
+    // The directory's count leaves the tracked row out too (Greptile on PR #91, P2): the notice
+    // must not say 25 files are not listed, then 26 in build/.
+    expect(summary.untrackedOmitted?.directories).toEqual([
+      { path: 'build', count: CAP + 5, ignoreLine: '/build/', generated: true },
+    ]);
   });
 });
 
@@ -532,6 +538,7 @@ describe('numstat alongside the status of a full summary (#43)', () => {
     const lines = (): string[] => readFileSync(log, 'utf8').split('\n').filter(Boolean);
     return {
       core: c,
+      lines,
       reset: () => writeFileSync(log, ''),
       slow: (on: boolean) => (on ? writeFileSync(slow, '') : rmSync(slow, { force: true })),
       /** Did a numstat start before the status ended (side by side)? And how many numstats? */
@@ -612,8 +619,12 @@ describe('numstat alongside the status of a full summary (#43)', () => {
     const repo = fx.repo('speculate-cold', { files: { 'a.txt': 'a\n' } });
     fx.write(path.join(repo, 'a.txt'), 'a\nb\n');
     const wt = locator(repo);
-    const saved = summaryLimits.speculateIndexBytes;
+    const saved = { ...summaryLimits };
     summaryLimits.speculateIndexBytes = 1;
+    // a.txt was written just now: with the default margin its numstat record could predate an
+    // edit during the summary, so it is diffed again (asserted below); without a margin its ctime,
+    // older than the summary's start, is the proof.
+    summaryLimits.settleMs = 0;
     const probe = loggingCore('speculate-cold');
     const off = loggingCore('speculate-off', { incremental: false });
     try {
@@ -623,16 +634,228 @@ describe('numstat alongside the status of a full summary (#43)', () => {
       expect(probe.shape()).toMatchObject({ alongside: true, numstats: 1 });
       expect(probe.shape().commits).toEqual([fx.git(repo, ['rev-parse', 'HEAD']).trim()]);
       expect(cold.additions).toBe(1);
+      // The default margin, a new core (no kept state): a numstat of a.txt alone after the status.
+      summaryLimits.settleMs = saved.settleMs;
+      const fresh = loggingCore('speculate-cold-margin');
+      try {
+        fresh.slow(true);
+        const again = await fresh.core.getSummary(wt);
+        expect(fresh.shape()).toMatchObject({ alongside: true, numstats: 2 });
+        expect(
+          fresh
+            .lines()
+            .filter((l) => l.startsWith('start') && l.includes('--numstat'))
+            .at(-1),
+        ).toMatch(/-- a\.txt$/);
+        expect(again.additions).toBe(1);
+      } finally {
+        fresh.slow(false);
+        await fresh.core.dispose();
+      }
       // The kill switch keeps the old calls exactly: never side by side.
       await off.core.getSummary(wt);
       await off.core.getSummary(wt);
       expect(off.shape()).toMatchObject({ alongside: false, numstats: 2 });
     } finally {
-      summaryLimits.speculateIndexBytes = saved;
+      Object.assign(summaryLimits, saved);
       probe.slow(false);
       off.slow(false);
       await probe.core.dispose();
       await off.core.dispose();
     }
+  });
+
+  // Greptile on PR #91 (P1): numstat runs alongside the status, so the pair is no snapshot. A file
+  // edited after the numstat read it but before the status did must not lose its counts, now or in
+  // the incremental refreshes after.
+  describe('edits while numstat and status run', () => {
+    /**
+     * A git wrapper: while `armed` exists, the first numstat runs git, then holds its output until
+     * `release`; every status waits for `edited` before it starts. The test edits in between.
+     */
+    function racingCore(name: string) {
+      const dir = path.join(fx.root, `${name}.race`);
+      mkdirSync(dir, { recursive: true });
+      const f = (n: string) => path.join(dir, n);
+      const wrapper = path.join(dir, 'git.sh');
+      writeFileSync(
+        wrapper,
+        [
+          '#!/bin/sh',
+          'numstat=0; status=0',
+          'for a in "$@"; do',
+          '  [ "$a" = "--numstat" ] && numstat=1',
+          '  [ "$a" = "status" ] && status=1',
+          'done',
+          `if [ $numstat = 1 ] && [ -e '${f('armed')}' ] && [ ! -e '${f('held')}' ]; then`,
+          `  : > '${f('held')}'`,
+          `  git "$@" > '${f('out')}'; rc=$?`,
+          `  : > '${f('diff-done')}'`,
+          `  while [ ! -e '${f('release')}' ]; do sleep 0.01; done`,
+          `  cat '${f('out')}'; exit $rc`,
+          'fi',
+          `if [ $status = 1 ] && [ -e '${f('armed')}' ]; then`,
+          `  while [ ! -e '${f('edited')}' ]; do sleep 0.01; done`,
+          'fi',
+          'exec git "$@"',
+          '',
+        ].join('\n'),
+      );
+      chmodSync(wrapper, 0o755);
+      const waitFor = async (n: string) => {
+        const deadline = Date.now() + 10_000;
+        while (!existsSync(f(n))) {
+          if (Date.now() > deadline) throw new Error(`no ${n}`);
+          await new Promise((resolve) => setTimeout(resolve, 10));
+        }
+      };
+      return {
+        core: createGitCore(fx.coreOptions({ gitBinary: wrapper })),
+        arm: () => {
+          for (const n of ['held', 'diff-done', 'release', 'edited', 'out'])
+            rmSync(f(n), { force: true });
+          writeFileSync(f('armed'), '');
+        },
+        disarm: () => rmSync(f('armed'), { force: true }),
+        /** Waits until the held numstat has read the files, runs `edit`, lets status and numstat go. */
+        during: async (edit: () => void) => {
+          await waitFor('diff-done');
+          edit();
+          writeFileSync(f('edited'), '');
+          writeFileSync(f('release'), '');
+        },
+      };
+    }
+
+    const comparable = (summary: SummaryResult) => {
+      const { updatedAt: _u, refresh: _r, ...rest } = summary;
+      return rest;
+    };
+
+    it('an edit after the numstat read but before the status counts, and stays counted', async () => {
+      const repo = fx.repo('race', {
+        files: { 'a.txt': 'a\n', 'b.txt': 'b\n', 'c.txt': 'c\n', 'd.txt': 'd\n' },
+      });
+      const wt = locator(repo);
+      const race = racingCore('race');
+      try {
+        fx.write(path.join(repo, 'a.txt'), 'a\na2\n');
+        await race.core.getSummary(wt, { snapshot: true });
+        // The kept state had tracked changes: the next full summary runs numstat alongside.
+        race.arm();
+        const running = race.core.getSummary(wt, { snapshot: true });
+        await race.during(() => {
+          fx.write(path.join(repo, 'a.txt'), 'a\na2\na3\na4\n'); // already dirty, edited again
+          fx.write(path.join(repo, 'b.txt'), 'b\nb2\nb3\n'); // newly dirty
+          rmSync(path.join(repo, 'd.txt')); // deleted
+        });
+        const got = await running;
+        race.disarm();
+        const want = await full.getSummary(wt, { snapshot: true });
+        expect(comparable(got)).toEqual(comparable(want));
+        expect(got).toMatchObject({ changedFiles: 3, additions: 5, deletions: 1 });
+        // An incremental refresh of another file keeps the totals right.
+        fx.write(path.join(repo, 'c.txt'), 'c\nc2\n');
+        const next = await race.core.getSummary(wt, { snapshot: true, changedPaths: ['c.txt'] });
+        expect(comparable(next)).toEqual(comparable(await full.getSummary(wt, { snapshot: true })));
+        expect(next).toMatchObject({ changedFiles: 4, additions: 6, deletions: 1 });
+      } finally {
+        race.disarm();
+        await race.core.dispose();
+      }
+    });
+
+    it('a file edited after the numstat read it is diffed again by the next incremental refresh', async () => {
+      const repo = fx.repo('race-late', { files: { 'a.txt': 'a\n', 'b.txt': 'b\n' } });
+      const wt = locator(repo);
+      const race = racingCore('race-late');
+      try {
+        // A clean kept state: the next full summary runs numstat after the status, held here.
+        await race.core.getSummary(wt);
+        fx.write(path.join(repo, 'a.txt'), 'a\na2\n');
+        race.arm();
+        writeFileSync(path.join(fx.root, 'race-late.race', 'edited'), '');
+        const running = race.core.getSummary(wt);
+        await race.during(() => fx.write(path.join(repo, 'a.txt'), 'a\na2\na3\na4\n'));
+        await running;
+        race.disarm();
+        // a.txt's event is lost: the next refresh names b.txt only, yet a.txt's counts are right,
+        // because the kept state did not keep a.txt's newer signature as if it had been read.
+        fx.write(path.join(repo, 'b.txt'), 'b\nb2\n');
+        const next = await race.core.getSummary(wt, { changedPaths: ['b.txt'] });
+        expect(comparable(next)).toEqual(comparable(await full.getSummary(wt)));
+        expect(next).toMatchObject({ changedFiles: 2, additions: 4 });
+      } finally {
+        race.disarm();
+        await race.core.dispose();
+      }
+    });
+
+    it('a commit inside a submodule while the status runs is never trusted from ctimes', async () => {
+      const repo = fx.repo('race-sub', { files: { 'a.txt': 'a\n' } });
+      const sub = path.join(repo, 'sub');
+      mkdirSync(sub);
+      fx.git(sub, ['init', '-q']);
+      fx.write(path.join(sub, 's.txt'), 's\n');
+      fx.commitAll(sub, 'sub one');
+      fx.git(repo, ['add', 'sub']);
+      fx.git(repo, ['commit', '-q', '-m', 'add sub']);
+      const wt = locator(repo);
+      const saved = summaryLimits.settleMs;
+      // No margin: every file is "old" by ctime, so only the gitlink rule keeps sub unproven.
+      summaryLimits.settleMs = 0;
+      const race = racingCore('race-sub');
+      try {
+        fx.write(path.join(repo, 'a.txt'), 'a\na2\n');
+        await race.core.getSummary(wt);
+        race.arm();
+        const running = race.core.getSummary(wt);
+        await race.during(() => {
+          fx.write(path.join(sub, 's.txt'), 's\ns2\n');
+          fx.commitAll(sub, 'sub two');
+        });
+        const got = await running;
+        race.disarm();
+        expect(comparable(got)).toEqual(comparable(await full.getSummary(wt)));
+        expect(got.changedFiles).toBe(2);
+      } finally {
+        summaryLimits.settleMs = saved;
+        race.disarm();
+        await race.core.dispose();
+      }
+    });
+
+    it('repeated edits while summaries run agree with a full summary', async () => {
+      const repo = fx.repo('race-loop', {
+        files: Object.fromEntries(range(6).map((i) => [`f${i}.txt`, `${i}\n`])),
+      });
+      const wt = locator(repo);
+      const race = racingCore('race-loop');
+      try {
+        fx.write(path.join(repo, 'f0.txt'), '0\nchanged\n');
+        await race.core.getSummary(wt);
+        for (const round of range(8)) {
+          race.arm();
+          const running = race.core.getSummary(wt);
+          await race.during(() => {
+            const target = path.join(repo, `f${(round * 5) % 6}.txt`);
+            fx.write(target, `${round}\n`.repeat(1 + (round % 3)));
+            if (round % 4 === 3) fx.write(path.join(repo, 'f0.txt'), '0\n');
+          });
+          const got = await running;
+          race.disarm();
+          expect(comparable(got), `round ${round}`).toEqual(comparable(await full.getSummary(wt)));
+          const other = `f${(round + 1) % 6}.txt`;
+          fx.write(path.join(repo, other), `other ${round}\n`);
+          const next = await race.core.getSummary(wt, { changedPaths: [other] });
+          expect(comparable(next), `round ${round}, after`).toEqual(
+            comparable(await full.getSummary(wt)),
+          );
+        }
+      } finally {
+        race.disarm();
+        await race.core.dispose();
+      }
+    });
   });
 });

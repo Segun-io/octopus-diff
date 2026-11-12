@@ -206,7 +206,10 @@ const PLAIN = new Set(['.', 'M']);
  * of a rename), and the paths of signatures that changed without an event (a missed one).
  * Null when they cannot be passed as literal UTF-8 argv or are too many.
  */
-export function regionFor(track: SummaryTrack, keys: Iterable<string>): Region | null {
+export function regionFor(
+  track: Pick<SummaryTrack, 'tracked'>,
+  keys: Iterable<string>,
+): Region | null {
   const specs = new Set<string>(keys);
   for (const entry of track.tracked.values()) {
     if (!isRenameCandidate(entry)) continue;

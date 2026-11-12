@@ -160,7 +160,14 @@ async function trackedNumstat(
  * Index size above which a first summary runs numstat alongside its status (#43): about 30k
  * files. Mutable for tests.
  */
-export const summaryLimits = { speculateIndexBytes: 4 * 1024 * 1024 };
+export const summaryLimits = {
+  speculateIndexBytes: 4 * 1024 * 1024,
+  /**
+   * A path whose ctime is older than the summary's start by this much cannot have changed while
+   * numstat and the status ran (covers coarse ctime granularity and small clock steps).
+   */
+  settleMs: 2000,
+};
 
 /** The index's size from its stamp signature (`size:mtimeNs:…`), 0 when unknown. */
 function indexBytes(stamp: Stamp): number {
@@ -176,8 +183,9 @@ function plainNumstat(
   ctx: GitContext,
   repo: RepoInfo,
   commit: string,
+  pathspecs: readonly string[] = [],
 ): Promise<{ ok: true; output: string } | { ok: false }> {
-  return ctx.git(repo, ['diff', ...DIFF_PINS, '--numstat', '-z', commit, '--']).then(
+  return ctx.git(repo, ['diff', ...DIFF_PINS, '--numstat', '-z', commit, '--', ...pathspecs]).then(
     (run) => ({ ok: true as const, output: bstrFromBuffer(run.stdout) }),
     (error: unknown) => {
       if (isGitCoreError(error, 'git_failed')) return { ok: false as const };
@@ -311,6 +319,13 @@ interface Collected {
   region: Region | null;
   /** Incremental: lstat signatures taken before git ran, by path. */
   presigs: Map<string, string> | null;
+  /**
+   * Full refresh with a kept state: each signed path's signature after the status and before the
+   * numstat whose records are used. A path whose signature in `finish` differs changed after
+   * those reads: the kept state gets `UNSETTLED` for it, so the next incremental refresh diffs it
+   * again (the summary's own hash uses the real signature). Null: no such check.
+   */
+  expected: Map<string, string> | null;
   previous: SummaryTrack | undefined;
 }
 
@@ -391,6 +406,18 @@ async function collectFull(
   } else if (deps.incremental && indexBytes(stamp) >= summaryLimits.speculateIndexBytes) {
     speculated = (await readHeadFromFiles(repo.gitDir, repo.commonDir))?.sha;
   }
+  const root = repo.toplevel ?? repo.cwd;
+  // Running side by side, numstat and the status read the files at different moments (Greptile on
+  // PR #91): what they say about a path agrees only if the file did not change meanwhile. Proof
+  // per path, checked once both are done: its signature before numstat started equals the one
+  // after (paths the kept state signs), or its ctime is older than `startedAt` minus a margin
+  // (any later change would have moved it). Paths without proof get a numstat of their own,
+  // after the status.
+  const startedAt = Date.now();
+  const before =
+    speculated !== undefined && previous !== undefined
+      ? await signPaths(root, [...previous.signatures.keys()], gitlinksOf(previous.tracked))
+      : new Map<string, SignedPath>();
   const early =
     speculated === undefined ? null : plainNumstat(ctx, repo, speculated ?? repo.emptyTree);
   early?.catch(() => {});
@@ -399,11 +426,43 @@ async function collectFull(
   const numstat = new Map<string, NumstatRecord[]>();
   let unreadable = new Set<string>();
   let statusOnly = false;
+  /** Signatures after the status, before the numstat whose records are kept (kept states only). */
+  let expected: Map<string, string> | null = null;
   if (tracked.size > 0) {
+    const signed = signedKeys(tracked.values());
     const ready = early && speculated === status.branch.oid ? await early : null;
-    const result = ready?.ok
+    // Taken after the status (and the early numstat) and before any numstat that runs now.
+    const after = deps.incremental
+      ? await signPaths(root, [...signed.keys, ...signed.sources], signed.gitlinks)
+      : null;
+    if (after) expected = new Map([...after].map(([key, value]) => [key, value.sig]));
+    let result: TrackedNumstat | null = ready?.ok
       ? { output: ready.output, unreadable, statusOnly }
-      : await trackedNumstat(ctx, repo, status.branch.oid, status.entries);
+      : null;
+    if (result && after) {
+      const cutoff = startedAt - summaryLimits.settleMs;
+      const unproven = [...after]
+        .filter(([key, now]) => {
+          if (before.get(key)?.sig === now.sig) return false;
+          if (signed.gitlinks.has(key)) return true;
+          return now.changedMs === null || now.changedMs >= cutoff;
+        })
+        .map(([key]) => key);
+      if (unproven.length > 0) {
+        speculationChecks.rerun++;
+        // Limited runs equal a full one only where incremental refreshes are allowed (#287-#289):
+        // conflicts, submodules or gitlinks and sparse checkouts get the whole numstat again.
+        const limitedOk =
+          !stamp.sparse &&
+          !stamp.submodules &&
+          !stamp.gitlinks &&
+          ![...tracked.values()].some((entry) => entry.kind === 'unmerged');
+        result = limitedOk
+          ? await recheckNumstat(ctx, repo, tracked, status.branch.oid, result, unproven)
+          : null;
+      } else speculationChecks.trusted++;
+    }
+    result ??= await trackedNumstat(ctx, repo, status.branch.oid, status.entries);
     unreadable = result.unreadable;
     statusOnly = result.statusOnly;
     relevantRecords(result.output, statusPathsOf(tracked), numstat, null);
@@ -425,7 +484,132 @@ async function collectFull(
     statusOnly,
     region: null,
     presigs: null,
+    expected,
     previous,
+  };
+}
+
+/** A kept signature no file has: the next incremental refresh diffs the path again. */
+const UNSETTLED = 'unsettled';
+
+/** How full summaries that ran numstat alongside the status used it (tests, diagnostics). */
+export const speculationChecks = { trusted: 0, rerun: 0 };
+
+interface SignedPath {
+  sig: string;
+  /**
+   * When the path last changed for sure, in ms: its ctime, or for a missing path the ctime of its
+   * nearest existing directory (removing a file changes it). Null when unknown.
+   */
+  changedMs: number | null;
+}
+
+/** `sigCtimeMs` of an lstat signature (`size:mtimeNs:ctimeNs:…`). */
+function sigCtimeMs(sig: string): number | null {
+  const field = sig.split(':', 3)[2];
+  if (!field || !/^\d+$/.test(field)) return null;
+  return Number(BigInt(field) / 1_000_000n);
+}
+
+async function signPaths(
+  root: string,
+  keys: readonly string[],
+  gitlinks: ReadonlySet<string>,
+): Promise<Map<string, SignedPath>> {
+  const unique = [...new Set(keys)];
+  const signed = await mapLimit(unique, STAT_CONCURRENCY, async (key): Promise<SignedPath> => {
+    const sig = await dirtySignature(root, key, gitlinks.has(key));
+    if (sig !== 'missing') return { sig, changedMs: sigCtimeMs(sig) };
+    for (let dir = path.posix.dirname(key); ; dir = path.posix.dirname(dir)) {
+      const up = dir === '.' ? 'missing' : await lstatSignature(root, dir);
+      if (up !== 'missing') return { sig, changedMs: sigCtimeMs(up) };
+      if (dir === '.' || dir === '/') {
+        try {
+          return { sig, changedMs: (await lstat(root)).ctimeMs };
+        } catch {
+          return { sig, changedMs: null };
+        }
+      }
+    }
+  });
+  return new Map(unique.map((key, i) => [key, signed[i] as SignedPath]));
+}
+
+/** Paths `finish` signs (worktree-dirty tracked paths, fully staged ones) and rename sources. */
+function signedKeys(entries: Iterable<StatusEntry>): {
+  keys: string[];
+  sources: string[];
+  gitlinks: Set<string>;
+} {
+  const keys: string[] = [];
+  const sources: string[] = [];
+  const gitlinks = new Set<string>();
+  for (const entry of entries) {
+    if (entry.kind === 'unmerged') keys.push(entry.path);
+    if (entry.kind !== 'ordinary' && entry.kind !== 'renamed') continue;
+    if (entry.y !== '.' || entry.x !== '.') keys.push(entry.path);
+    if (entry.y !== '.' && entry.modeWorktree === '160000') gitlinks.add(entry.path);
+    if (entry.kind === 'renamed') sources.push(entry.origPath);
+  }
+  return { keys, sources, gitlinks };
+}
+
+function gitlinksOf(tracked: ReadonlyMap<string, StatusEntry>): Set<string> {
+  const out = new Set<string>();
+  for (const entry of tracked.values()) {
+    if (
+      (entry.kind === 'ordinary' || entry.kind === 'renamed') &&
+      entry.modeWorktree === '160000'
+    ) {
+      out.add(entry.path);
+    }
+  }
+  return out;
+}
+
+/**
+ * The early numstat with the paths it cannot vouch for diffed again, after the status: one numstat
+ * limited to them and every rename candidate (so renames pair as in a full run), whose records
+ * replace the early ones inside that region. Anything unusual (too many or non-UTF-8 paths, a
+ * failed run, output outside the region): the whole numstat again, after the status.
+ */
+async function recheckNumstat(
+  ctx: GitContext,
+  repo: RepoInfo,
+  tracked: Map<string, StatusEntry>,
+  headSha: string | null,
+  early: TrackedNumstat,
+  paths: readonly string[],
+): Promise<TrackedNumstat | null> {
+  const region = regionFor({ tracked }, paths);
+  if (!region || region.size === 0) return null;
+  const limited = await plainNumstat(
+    ctx,
+    repo,
+    headSha ?? repo.emptyTree,
+    region.specs.map(bstrToUtf8),
+  );
+  if (!limited.ok) return null;
+  const statusPaths = statusPathsOf(tracked);
+  const outside = new Map<string, NumstatRecord[]>();
+  relevantRecords(early.output, statusPaths, outside, null);
+  const inside = new Map<string, NumstatRecord[]>();
+  try {
+    if (!relevantRecords(limited.output, statusPaths, inside, region)) return null;
+  } catch (error) {
+    if (error instanceof DiffParseError) return null;
+    throw error;
+  }
+  const records: NumstatRecord[] = [];
+  for (const [key, list] of outside) {
+    if (region.has(key) || list.some((r) => r.srcPath !== null && region.has(r.srcPath))) continue;
+    records.push(...list);
+  }
+  for (const list of inside.values()) records.push(...list);
+  return {
+    output: records.map(serializeRecord).join(''),
+    unreadable: early.unreadable,
+    statusOnly: false,
   };
 }
 
@@ -597,6 +781,7 @@ async function collectIncremental(
     statusOnly: false,
     region,
     presigs,
+    expected: null,
     previous,
   };
 }
@@ -931,11 +1116,14 @@ async function finish(
   // Omitted untracked files count as changed files (git status lists them); their lines are
   // unknown and stay out of `additions`. A path that is also a tracked change counts once.
   let omittedCount = plan?.omitted ?? 0;
+  /** Omitted raw keys counted as tracked changes instead (left out of every omitted count). */
+  const omittedDuplicates: string[] = [];
   if (plan !== null) {
     for (const key of trackedPaths) {
       const raw = c.untracked.has(key) ? key : c.untracked.has(`${key}/`) ? `${key}/` : null;
-      if (raw !== null && isOmitted(plan, raw)) omittedCount -= 1;
+      if (raw !== null && isOmitted(plan, raw)) omittedDuplicates.push(raw);
     }
+    omittedCount -= omittedDuplicates.length;
     untrackedChanged += omittedCount;
   }
 
@@ -998,13 +1186,14 @@ async function finish(
           untrackedOmitted: omissionOf(
             plan,
             omittedCount,
-            wantsIgnoreContext(plan)
+            wantsIgnoreContext(plan, omittedDuplicates)
               ? await ignoreContext(
                   deps,
                   repo,
                   untrackedInfos.map((info) => info.key),
                 )
               : null,
+            omittedDuplicates,
           ),
         }
       : {}),
@@ -1021,6 +1210,13 @@ async function finish(
   const signatureByKey = new Map<string, string>();
   for (const [i, key] of stagedOnlyKeys.entries()) signatureByKey.set(key, stagedSigs[i] as string);
   for (const [i, key] of dirtyKeys.entries()) signatureByKey.set(key, signatures[i] as string);
+  // The kept state never holds a signature newer than the reads its records came from.
+  const keptSignatures = new Map(signatureByKey);
+  if (c.expected) {
+    for (const [key, sig] of keptSignatures) {
+      if (c.expected.get(key) !== sig) keptSignatures.set(key, UNSETTLED);
+    }
+  }
   const infosByKey = new Map<string, { info: UntrackedInfo; attribute: string }>();
   for (const info of untrackedInfos) {
     infosByKey.set(info.key, { info, attribute: untracked.attributes.get(info.key) ?? '' });
@@ -1040,7 +1236,7 @@ async function finish(
     untrackedInfos: infosByKey,
     readContent: untracked.readContent,
     untrackedPlan: plan,
-    signatures: signatureByKey,
+    signatures: keptSignatures,
     defaultBranch: options?.defaultBranch ?? null,
     headCommitMs: headMs.commit,
     fullAt: c.mode === 'full' ? Date.now() : (previous?.fullAt ?? Date.now()),
