@@ -76,6 +76,15 @@ async function main(): Promise<void> {
         ['modified', pick((f) => f.status === 'modified' && f.path.startsWith('apps/'))],
         ['untracked', pick((f) => f.status === 'untracked')],
         ['huge (rewrite)', pick((f) => f.path === 'docs/generated/huge.txt')],
+        // Above the cap (#43) an untracked file is not listed: the whole route reads it.
+        ...(worktree.role === 'untracked-heavy'
+          ? ([
+              [
+                'omitted by the cap',
+                { path: 'scratch/many/pkg0/d0/f0.txt', patchHash: '' } as GitChangedFile,
+              ],
+            ] as Array<[string, GitChangedFile]>)
+          : []),
       ];
       for (const [label, file] of targets) {
         if (!file) continue;
@@ -87,7 +96,7 @@ async function main(): Promise<void> {
           const t = performance.now();
           const diff = await reader.getFileDiff(locator, { kind: 'working' }, { path: file.path });
           times.push(performance.now() - t);
-          if (diff.patchHash !== file.patchHash)
+          if (file.patchHash !== '' && diff.patchHash !== file.patchHash)
             throw new Error(`patchHash differs for ${file.path}`);
           spawned = spawns.length;
         }

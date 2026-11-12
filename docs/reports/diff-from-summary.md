@@ -168,3 +168,10 @@ Conflicts: DECISIONS (kept #305-#327, then #330-#339), PLAN §5.6 (both paragrap
 `helpers/fuzz-ops.ts` structure: `useUniverse`, plan path shapes, caps 1 and 2, directory-count invariants; titles and thresholds identical to
 main's). Semantic checks (DECISIONS #339): omitted untracked files take the whole route (test + mutation), `unsettled` signatures refuse,
 capped seeds added to the diff fuzz.
+
+Verification after the merge: lint, typecheck, build exit 0; `pnpm test` exit 0 (git-core 429 + 1 skipped, daemon 398 + 4 skipped, web 455, e2e unit 8; git-core and
+daemon run twice more with the same counts); folding mode git-core 414 + 16 skipped, daemon 396 + 6 skipped; `pnpm test:e2e` 102 passed (3.5 min), read-only proof
+12 repos, 4894 lock polls, 0 violations; `perf:smoke` exit 0; `incremental-fuzz` (9 tests, as on main) and seeds 777 and 4242 at 150 steps (caps 1 and 2) pass.
+Diff-open, 100k layout after the merge (the untracked-heavy worktree now lists 700 files under the cap): modified 15 ms / 1 spawn in all three worktrees; a listed
+untracked file 2 ms (20 ms in the untracked-heavy worktree) / 0 spawns; a file the cap omitted 271 ms / 2 spawns (the whole route, unchanged from before this work:
+`diff --raw` and `status`; the summary has nothing to serve it from); the 300k-line rewrite 278 ms.
