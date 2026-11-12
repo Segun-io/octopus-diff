@@ -96,10 +96,13 @@ export function ActivityStrip({ worktreeId }: { worktreeId: string }) {
   // Follow latest change: the newest entry that names a file selects it, once per update (a
   // coalesced entry has a new `seq`). Turning it off forgets, so turning it on selects again.
   const newestFile = rows.find(isFileEntry);
-  const followed = useRef<number | null>(null);
+  // What was followed: the daemon run and the sequence number. A restarted daemon counts from
+  // zero again, so a bare `seq` would skip the first change of the new run.
+  const followed = useRef<string | null>(null);
   const newestPath = newestFile?.path;
   const newestRaw = newestFile?.rawPath;
   const newestSeq = newestFile?.seq;
+  const feedRun = feed?.run ?? '';
   const newestListed = newestPath !== undefined && exists(newestPath, newestRaw);
   // biome-ignore lint/correctness/useExhaustiveDependencies: `exists` and `select` only read what the listed deps already carry
   useEffect(() => {
@@ -107,13 +110,13 @@ export function ActivityStrip({ worktreeId }: { worktreeId: string }) {
       followed.current = null;
       return;
     }
-    if (newestSeq === undefined || newestPath === undefined || followed.current === newestSeq) {
-      return;
-    }
+    if (newestSeq === undefined || newestPath === undefined) return;
+    const identity = `${feedRun}\u0000${newestSeq}`;
+    if (followed.current === identity) return;
     if (!newestListed) return; // not in the list (yet): try again when the list catches up
-    followed.current = newestSeq;
+    followed.current = identity;
     select(newestPath, newestRaw);
-  }, [follow, newestSeq, newestPath, newestRaw, newestListed]);
+  }, [follow, feedRun, newestSeq, newestPath, newestRaw, newestListed]);
 
   const note = feed ? watchNote(feed.watch) : null;
   const latest = rows[0];
@@ -149,7 +152,7 @@ export function ActivityStrip({ worktreeId }: { worktreeId: string }) {
         </button>
         {!open && latest && (
           <span className="min-w-0 flex-1 truncate text-muted" aria-live="off">
-            {summaryOf(latest)} · {ago(latest.updatedAt, now)}
+            {escapeSuspicious(summaryOf(latest))} · {ago(latest.updatedAt, now)}
           </span>
         )}
         {note && (

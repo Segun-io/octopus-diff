@@ -47,23 +47,42 @@ export class MockActivity {
   }
 
   /**
+   * The entry a draft folds into, by the daemon's rules: walking back from the newest, stop at one
+   * older than the window, at a commit or bulk entry, and (for a file) at a HEAD move; a file
+   * entry for another path is skipped, the first one for this path folds only when the kind is
+   * the same (an edit, a delete and a second edit stay three rows).
+   */
+  private coalesceTarget(
+    entries: readonly ActivityEntry[],
+    draft: ActivityDraft,
+    nowMs: number,
+  ): ActivityEntry | undefined {
+    if (draft.kind === 'commit' || draft.kind === 'bulk') return undefined;
+    const key = draft.rawPath ?? draft.path;
+    if (draft.kind !== 'head' && key === undefined) return undefined;
+    for (let i = entries.length - 1; i >= 0; i--) {
+      const e = entries[i] as ActivityEntry;
+      if (nowMs - Date.parse(e.updatedAt) > ACTIVITY_COALESCE_MS) return undefined;
+      if (e.kind === 'commit' || e.kind === 'bulk') return undefined;
+      if (draft.kind === 'head') {
+        if (e.kind !== 'head') continue;
+        return e.op === draft.op ? e : undefined;
+      }
+      if (e.kind === 'head') return undefined;
+      if ((e.rawPath ?? e.path) !== key) continue;
+      return e.kind === draft.kind ? e : undefined;
+    }
+    return undefined;
+  }
+
+  /**
    * Records a draft. A repeat of the same path and kind within `ACTIVITY_COALESCE_MS` updates the
    * earlier entry (same `id`, new `seq`, moved to the end), like the daemon.
    */
   record(worktreeId: string, draft: ActivityDraft, nowMs: number): ActivityEntry {
     const ring = this.ring(worktreeId);
     const at = new Date(nowMs).toISOString();
-    const prev =
-      draft.path === undefined
-        ? undefined
-        : [...ring.entries]
-            .reverse()
-            .find(
-              (e) =>
-                e.kind === draft.kind &&
-                e.path === draft.path &&
-                nowMs - Date.parse(e.updatedAt) <= ACTIVITY_COALESCE_MS,
-            );
+    const prev = this.coalesceTarget(ring.entries, draft, nowMs);
     const seq = ++this.seq;
     ring.seq = seq;
     if (prev) {
@@ -78,7 +97,21 @@ export class MockActivity {
       const old = ring.entries.shift();
       if (old) ring.droppedSeq = Math.max(ring.droppedSeq, old.seq);
     }
+    this.pruneBlobs(worktreeId, ring.entries);
     return entry;
+  }
+
+  /** How many saved contents a worktree holds (tests: expired ones are dropped). */
+  blobCount(worktreeId: string): number {
+    return this.blobs.get(worktreeId)?.size ?? 0;
+  }
+
+  /** Drops saved content that no entry of the feed holds any more (it cannot be served). */
+  private pruneBlobs(worktreeId: string, entries: readonly ActivityEntry[]): void {
+    const map = this.blobs.get(worktreeId);
+    if (!map) return;
+    const held = new Set(entries.map((e) => e.oid).filter((oid) => oid != null));
+    for (const oid of map.keys()) if (!held.has(oid)) map.delete(oid);
   }
 
   /** Remembers a removed file's content under its blob id (the route's allow-list). */
@@ -111,7 +144,10 @@ export class MockActivity {
 
   /** `GET /api/worktrees/:id/blob/:oid`: text only, and only for an oid of the worktree's feed. */
   blob(worktreeId: string, oid: string, maxBytes: number): BlobRead | null {
-    const content = this.blobs.get(worktreeId)?.get(oid);
+    // Only an oid some entry of the worktree's feed still holds (the daemon's allow-list): a
+    // deletion that left the ring is gone, and so is its saved content.
+    const held = this.rings.get(worktreeId)?.entries.some((e) => e.oid === oid) ?? false;
+    const content = held ? this.blobs.get(worktreeId)?.get(oid) : undefined;
     if (content === undefined) return null;
     const size = new TextEncoder().encode(content).length;
     if (size > maxBytes) return { oid, kind: 'too_large', size, maxBytes, content: null };

@@ -14,6 +14,7 @@ import {
 } from '@octopus-diff/contracts';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { MockActivity } from '../mock/activity.ts';
 import { MockBackend } from '../mock/backend.ts';
 import { createMockFetch } from '../mock/router.ts';
 import { App } from '../src/App.tsx';
@@ -238,6 +239,59 @@ describe('the mock live-view routes (shaped like the daemon)', () => {
       await get(`/api/worktrees/${id}/activity?after=1&run=other`)
     ).json()) as ActivityResponse;
     expect(stale.dropped).toBe(true);
+  });
+
+  it('folds like the daemon: an edit, a delete and a second edit stay three rows (PR #80 review)', () => {
+    const a = new MockActivity();
+    const edit = (path: string) => ({ kind: 'modified' as const, path, xy: '.M' });
+    a.record('w', edit('a.ts'), 1000);
+    a.record('w', { kind: 'deleted', path: 'a.ts', xy: '.D' }, 2000);
+    a.record('w', edit('a.ts'), 3000);
+    expect(a.read('w', 0).entries.map((e) => [e.kind, e.count])).toEqual([
+      ['modified', 1],
+      ['deleted', 1],
+      ['modified', 1],
+    ]);
+    // A change to another file in between does not stop a repeat from folding...
+    const b = new MockActivity();
+    b.record('w', edit('a.ts'), 1000);
+    b.record('w', edit('b.ts'), 2000);
+    b.record('w', edit('a.ts'), 3000);
+    expect(b.read('w', 0).entries.map((e) => [e.path, e.count])).toEqual([
+      ['b.ts', 1],
+      ['a.ts', 2],
+    ]);
+    // ...a commit, a HEAD move or a bulk entry does.
+    for (const wall of [
+      { kind: 'commit' as const, commits: [{ sha: '1'.repeat(40), subject: 's' }] },
+      { kind: 'head' as const, op: 'checkout' as const },
+      { kind: 'bulk' as const, pathCount: 60 },
+    ]) {
+      const c = new MockActivity();
+      c.record('w', edit('a.ts'), 1000);
+      c.record('w', wall, 2000);
+      c.record('w', edit('a.ts'), 3000);
+      expect(c.read('w', 0).entries.map((e) => e.kind)).toEqual([
+        'modified',
+        wall.kind,
+        'modified',
+      ]);
+    }
+  });
+
+  it("stops serving a deletion's content once the entry left the feed (PR #80 review)", () => {
+    const a = new MockActivity();
+    a.ringSize = 2;
+    const oid = 'a'.repeat(40);
+    a.keepBlob('w', oid, 'gone\n');
+    a.record('w', { kind: 'deleted', path: 'x.ts', xy: '.D', deleted: 1, oid }, 1000);
+    expect(a.blob('w', oid, 1024)?.content).toBe('gone\n');
+    // Two newer entries push it out of a ring of two: the daemon's allow-list no longer has it.
+    a.record('w', { kind: 'modified', path: 'y.ts', xy: '.M' }, 2000);
+    a.record('w', { kind: 'modified', path: 'z.ts', xy: '.M' }, 3000);
+    expect(a.blob('w', oid, 1024)).toBeNull();
+    // ...and the saved content is dropped, not kept for ever.
+    expect(a.blobCount('w')).toBe(0);
   });
 });
 
@@ -580,6 +634,45 @@ describe('the Activity strip', () => {
       ).toBe(true),
     );
     expect(h.store.getState().selected?.path).toBe('src/auth/session.ts');
+  });
+
+  it('follows the first change of a restarted daemon, whose sequence starts at 1 again (PR #80 review)', async () => {
+    const h = setup();
+    const id = await open('feat/auth');
+    await agent(h, id, 'edit', 'src/auth/token.ts'); // seq 1 of the first run
+    await waitFor(() => expect(rows()).toHaveLength(1));
+    fireEvent.click(screen.getByTestId(ACTIVITY_TEST_IDS.follow));
+    await waitFor(() => expect(h.store.getState().selected?.path).toBe('src/auth/token.ts'));
+    await act(async () => {
+      h.backend.activity.restart();
+    });
+    // seq 1 of the new run, a different file: it must not be taken for the change already followed.
+    await agent(h, id, 'edit', 'src/auth/session.ts');
+    expect(h.backend.activity.seqOf(id)).toBe(1);
+    await waitFor(() => expect(h.store.getState().selected?.path).toBe('src/auth/session.ts'));
+  });
+
+  it('escapes hidden direction controls in the collapsed bar, as in the rows (PR #80 review)', async () => {
+    const h = setup({ activityOpen: false });
+    const id = await open('feat/auth');
+    const project = h.backend.projects.find((p) => p.worktrees.some((w) => w.worktree.id === id));
+    await act(async () => {
+      h.backend.activity.record(
+        id,
+        { kind: 'modified', path: 'evil\u202Efdp.exe', xy: '.M', added: 1, deleted: 0 },
+        Date.now(),
+      );
+      h.backend.emit({
+        type: 'worktree.changed',
+        projectId: project?.project.id as string,
+        worktreeId: id,
+        stateHash: 'x',
+        activitySeq: h.backend.activity.seqOf(id),
+      });
+    });
+    const bar = await screen.findByTestId(ACTIVITY_TEST_IDS.strip);
+    await waitFor(() => expect(bar.textContent).toContain('evil'));
+    expect(bar.textContent).not.toContain('\u202E');
   });
 });
 

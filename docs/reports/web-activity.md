@@ -94,3 +94,11 @@ None added or removed (`pnpm credits:check` passes inside `pnpm lint`; the lockf
 - `EventEffects` has a new field `activity` (a `Set`); `emptyEffects()` fills it. Tests that build effects by hand must too.
 - Prefs gain `activityOpen` (default false; `normalizePrefs` fills it, no version bump). `UiState` gains `followLatest`.
 - A `pnpm install --frozen-lockfile` from the root is needed in a fresh worktree before `pnpm lint` / `typecheck`.
+
+## PR #80 review (Greptile)
+
+- The collapsed bar escapes its text (`escapeSuspicious`), like the rows.
+- Follow latest remembers `(run, seq)`, not `seq`: a restarted daemon counts from 1 again and its first change was skipped.
+- The mock folds like the daemon (`coalesceTarget`): an edit, a delete and a second edit stay three rows; a commit, HEAD move or bulk entry ends the search; a different file in between does not.
+- The mock serves a deletion's content only while a feed entry holds its oid, and drops saved content when an entry leaves the ring.
+- `shots.ts`: the `activity` state is in `MUTATING_STATES` (runs after every other shot, seeds its changes once, puts the watch mode back to native at the end), so no other shot starts from its changes.
