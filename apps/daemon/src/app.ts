@@ -386,7 +386,7 @@ export function createApp(deps: AppDeps): Hono {
   route('getActivity', (c) => {
     const worktreeId = idParam(c, 'worktreeId');
     const query = parseWith(ActivityQuerySchema, c.req.query(), 'query');
-    return c.json(core.activity(worktreeId, query.after));
+    return c.json(core.activity(worktreeId, query.after, query.run));
   });
 
   route('getBlob', async (c) => {

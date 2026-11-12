@@ -49,6 +49,11 @@ export interface SnapshotState {
   total: number;
   truncated: boolean;
   head: HeadState;
+  /**
+   * The summary's `stateHash`: it covers the whole worktree, including paths beyond a truncated
+   * snapshot's cap, which neither `total` nor the retained entries can show changing.
+   */
+  stateHash?: string;
 }
 
 export function entryKey(e: Pick<SummarySnapshotEntry, 'path' | 'rawPath'>): string {
@@ -58,7 +63,14 @@ export function entryKey(e: Pick<SummarySnapshotEntry, 'path' | 'rawPath'>): str
 export function snapshotState(
   summary: Pick<
     WorktreeSummary,
-    'headSha' | 'branch' | 'detached' | 'inProgress' | 'aheadBehindRef' | 'ahead' | 'behind'
+    | 'headSha'
+    | 'branch'
+    | 'detached'
+    | 'inProgress'
+    | 'aheadBehindRef'
+    | 'ahead'
+    | 'behind'
+    | 'stateHash'
   >,
   snapshot: SummarySnapshot,
 ): SnapshotState {
@@ -68,6 +80,7 @@ export function snapshotState(
     entries,
     total: snapshot.total,
     truncated: snapshot.truncated,
+    stateHash: summary.stateHash,
     head: {
       sha: summary.headSha,
       branch: summary.branch,
@@ -240,7 +253,14 @@ export function diffSnapshots(
   const files: ActivityDraft[] = [];
   const left: string[] = [];
   const coarse = prev.truncated || cur.truncated;
-  let coarseChanged = prev.total !== cur.total;
+  // A truncated snapshot cannot see an edit to a path beyond its cap: neither `total` nor a retained
+  // entry moves, but the whole-worktree state hash does.
+  let coarseChanged =
+    prev.total !== cur.total ||
+    (coarse &&
+      prev.stateHash !== undefined &&
+      cur.stateHash !== undefined &&
+      prev.stateHash !== cur.stateHash);
   for (const [key, c] of cur.entries) {
     const p = prev.entries.get(key);
     if (coarse) {
@@ -481,6 +501,8 @@ export interface ActivityRead {
   seq: number;
   dropped: boolean;
   live: boolean;
+  /** Identifies this daemon run (see `ActivityQuery.run`). */
+  run: string;
 }
 
 /**
@@ -626,12 +648,23 @@ export class ActivityStore {
     }
   }
 
-  /** Entries with `seq > after`, oldest first. */
-  read(worktreeId: string, after: number): ActivityRead {
+  /** The run identifier a client sends back with its cursor (this store's start time). */
+  get run(): string {
+    return String(this.#epoch);
+  }
+
+  /**
+   * Entries with `seq > after`, oldest first. A cursor from an earlier run is stale: when the
+   * client says which run it came from (`run`) a different one is certain; otherwise it is
+   * guessed from the counters, and a cursor beyond this worktree's own newest `seq` cannot have
+   * come from this run either (the daemon-wide counter alone misses it when other worktrees have
+   * advanced past the old cursor).
+   */
+  read(worktreeId: string, after: number, run?: string): ActivityRead {
     const ring = this.#rings.get(worktreeId);
-    // An `after` beyond this daemon's sequence comes from an earlier run.
-    const stale = after > this.#seq;
-    if (!ring) return { entries: [], seq: 0, dropped: stale, live: false };
+    const stale =
+      (run !== undefined && run !== this.run) || after > this.#seq || after > (ring?.seq ?? 0);
+    if (!ring) return { entries: [], seq: 0, dropped: stale, live: false, run: this.run };
     const from = stale ? 0 : after;
     const entries: ActivityEntry[] = [];
     for (const item of ring.items) if (item.seq > from) entries.push(item.toEntry(this.#epoch));
@@ -640,6 +673,7 @@ export class ActivityStore {
       seq: ring.seq,
       dropped: stale || after < ring.droppedSeq,
       live: ring.state !== null,
+      run: this.run,
     };
   }
 

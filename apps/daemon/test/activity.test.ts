@@ -360,6 +360,23 @@ describe('diffSnapshots: folding and labels', () => {
     expect(diff(prev, more)).toEqual([{ kind: 'bulk', truncated: true, pathCount: 3001 }]);
   });
 
+  it('a truncated snapshot sees an edit beyond its cap through the state hash (PR #77 review)', () => {
+    // 3000 changed paths, 2000 kept: an edit to a path that did not make the cut changes neither
+    // `total` nor a retained entry, only the whole-worktree state hash.
+    const at1 = state([{ path: 'a' }], {}, { total: 3000, truncated: true, stateHash: 'h1' });
+    const same = state([{ path: 'a' }], {}, { total: 3000, truncated: true, stateHash: 'h1' });
+    const edited = state([{ path: 'a' }], {}, { total: 3000, truncated: true, stateHash: 'h2' });
+    expect(diff(at1, same)).toEqual([]);
+    expect(diff(at1, edited)).toEqual([{ kind: 'bulk', truncated: true, pathCount: 3000 }]);
+    // A snapshot without a hash (older caller) behaves as before.
+    const noHash = state([{ path: 'a' }], {}, { total: 3000, truncated: true });
+    expect(diff(noHash, edited)).toEqual([]);
+    // Not truncated: the hash is not a signal on its own (the entries say what changed).
+    const small1 = state([{ path: 'a' }], {}, { stateHash: 'h1' });
+    const small2 = state([{ path: 'a' }], {}, { stateHash: 'h2' });
+    expect(diff(small1, small2)).toEqual([]);
+  });
+
   it('labels merge noise from the review state, and a bulk of base files', () => {
     const origins = new Map<string, OriginLabel>([
       ['a.ts', { origin: 'base', originVia: 'in-progress' }],
@@ -391,9 +408,21 @@ const mod = (path: string, added = 1): ActivityDraft => ({
 describe('ActivityStore', () => {
   it('the first snapshot is a baseline: no entries, live from then on', () => {
     const store = new ActivityStore({}, T0.getTime());
-    expect(store.read('wt', 0)).toEqual({ entries: [], seq: 0, dropped: false, live: false });
+    expect(store.read('wt', 0)).toEqual({
+      entries: [],
+      seq: 0,
+      dropped: false,
+      live: false,
+      run: store.run,
+    });
     expect(store.observe('wt', state([]), [mod('a')], T0)).toBe(0);
-    expect(store.read('wt', 0)).toEqual({ entries: [], seq: 0, dropped: false, live: true });
+    expect(store.read('wt', 0)).toEqual({
+      entries: [],
+      seq: 0,
+      dropped: false,
+      live: true,
+      run: store.run,
+    });
     store.observe('wt', state([]), [mod('a')], at(10));
     expect(store.read('wt', 0).entries).toHaveLength(1);
   });
@@ -463,6 +492,27 @@ describe('ActivityStore', () => {
       ['rebase', 2, OLD, C, ['x', 'y'], 2],
       ['checkout', 1, C, NEW, undefined, undefined],
     ]);
+  });
+
+  it('a cursor from an earlier run is dropped even when other worktrees advanced the counter past it (PR #77 review)', () => {
+    // After a restart: this worktree has recorded one entry, other worktrees many, so the daemon-wide
+    // counter is already beyond the old cursor (`after=100`) and the old check said "not stale".
+    const store = storeWith(state([]));
+    store.observe('wt', state([]), [mod('first')], at(0));
+    store.observe('other', state([]), [], at(0));
+    for (let i = 0; i < 150; i++) store.observe('other', state([]), [mod(`o${i}`)], at(i));
+    const stale = store.read('wt', 100);
+    expect(stale.dropped).toBe(true);
+    expect(stale.entries.map((e) => e.path)).toEqual(['first']);
+    // With the run identifier the restart is certain, whatever the counters say...
+    const first = store.read('wt', 0);
+    expect(first.run).toBe(store.run);
+    expect(store.read('wt', first.seq, first.run).dropped).toBe(false);
+    expect(store.read('wt', first.seq, 'an-earlier-run').dropped).toBe(true);
+    expect(store.read('wt', first.seq, 'an-earlier-run').entries).toHaveLength(1);
+    // ...and an unknown worktree is dropped for a foreign run as well.
+    expect(store.read('nowhere', 0, 'an-earlier-run').dropped).toBe(true);
+    expect(store.read('nowhere', 0).dropped).toBe(false);
   });
 
   it('keeps 200 entries per worktree and reports `dropped` for an `after` that fell off', () => {

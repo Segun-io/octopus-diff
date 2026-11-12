@@ -1211,6 +1211,17 @@ export class DaemonCore {
           this.#log.debug('activity: commits unavailable', { worktreeId: id, error });
         }
       }
+      // The read took a while: if the worktree was removed or its baseline reset meanwhile, this
+      // snapshot is not the one it was compared with. Writing it would bring back a ring that
+      // `forget` dropped, and a re-added worktree would compare new work against old state.
+      const project = this.#projects.get(entry.projectId);
+      if (
+        this.#closed ||
+        project?.worktrees.get(id) !== entry ||
+        this.#activity.previous(id) !== prev
+      ) {
+        return;
+      }
       head = classifyHead(prev.head, cur.head, commits);
     }
     // Only an unchanged review state's labels apply (they describe this summary's files).
@@ -1304,9 +1315,9 @@ export class DaemonCore {
   // --- live view (#38) ---------------------------------------------------------------------------
 
   /** The worktree's activity feed after `after` (memory only; see `activity.ts`). */
-  activity(worktreeId: string, after: number): ActivityResponse {
+  activity(worktreeId: string, after: number, run?: string): ActivityResponse {
     this.#requireWorktree(worktreeId);
-    const read = this.#activity.read(worktreeId, after);
+    const read = this.#activity.read(worktreeId, after, run);
     const watch: ActivityWatch = this.#watcher.liveness(worktreeId);
     return { worktreeId, ...read, watch };
   }

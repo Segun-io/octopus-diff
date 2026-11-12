@@ -19,6 +19,7 @@ import {
   http,
   onCleanup,
   recordEvents,
+  sleep,
   TEST_TOKEN,
   tempDir,
 } from './helpers.js';
@@ -54,6 +55,8 @@ async function start(
     };
     stripSnapshot?: boolean;
     stateDir?: string;
+    /** `listCommits` waits for this before it answers (a slow `git log`). */
+    holdCommits?: Promise<void>;
   } = {},
 ): Promise<Started> {
   const dir = await tempDir();
@@ -68,8 +71,9 @@ async function start(
     get(target, prop, receiver) {
       const value = Reflect.get(target, prop, receiver);
       if (typeof value !== 'function') return value;
-      return (...args: unknown[]) => {
+      return async (...args: unknown[]) => {
         calls.set(String(prop), (calls.get(String(prop)) ?? 0) + 1);
+        if (prop === 'listCommits' && options.holdCommits) await options.holdCommits;
         if (prop === 'getSummary' && options.stripSnapshot) {
           const { snapshot: _drop, ...rest } = (args[1] ?? {}) as Record<string, unknown>;
           return value.call(target, args[0], rest);
@@ -367,6 +371,53 @@ describe('live activity feed (real git, #38)', () => {
     // Still a deletion in the state: the chip is state-based.
     const summary = (await again.api.listProjects()).projects[0]?.worktrees[0]?.summary;
     expect(summary?.counts.deleted).toBe(1);
+  });
+
+  it('a worktree removed while its HEAD move is being classified does not come back with the old baseline (PR #77 review)', async () => {
+    const fx = await makeRealGitFixture();
+    const dir = await repo(fx);
+    const feature = path.join(fx.root, 'app-feature');
+    fx.git(dir, 'worktree', 'add', '-q', '-b', 'feature', feature);
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const s = await start(fx, { projects: [dir], holdCommits: gate });
+    const id = hashId(feature);
+    await live(s.api, id);
+
+    // A commit moves HEAD: the refresh asks for the commit list and waits for it (the gate).
+    await writeFile(path.join(feature, 'new.txt'), 'n\n');
+    fx.git(feature, 'add', '-A');
+    fx.git(feature, 'commit', '-q', '-m', 'agent');
+    void s.api.refreshWorktree(id).catch(() => {});
+    await eventually(() => (s.calls.get('listCommits') ?? 0) >= 1, 8000, 25);
+    // While it waits, the worktree is removed (a relist drops its ring)...
+    fx.git(dir, 'worktree', 'remove', '--force', feature);
+    await eventually(
+      async () => {
+        const { projects } = await s.api.listProjects();
+        return !projects.flatMap((p) => p.worktrees).some((w) => w.worktree.id === id);
+      },
+      10_000,
+      50,
+    );
+    release();
+    await sleep(300);
+    // ...and a worktree is added at the same path again, on a branch at the old HEAD.
+    fx.git(dir, 'worktree', 'add', '-q', '-b', 'feature2', feature);
+    await eventually(
+      async () => {
+        const { projects } = await s.api.listProjects();
+        return projects.flatMap((p) => p.worktrees).some((w) => w.worktree.id === id && w.summary);
+      },
+      10_000,
+      50,
+    );
+    await live(s.api, id);
+    await sleep(700);
+    // A fresh baseline records nothing; the old snapshot would show the move between the two HEADs.
+    expect((await s.api.getActivity(id)).entries).toEqual([]);
   });
 
   it('says how a polled worktree is refreshed', async () => {
