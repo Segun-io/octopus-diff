@@ -3,10 +3,12 @@
  * Produces contract-shaped data for every route plus a change simulator that emits SSE events.
  */
 import {
+  type ActivityResponse,
   type AddProjectResponse,
   type AddScanRootResponse,
   type AppSettings,
   type AppSettingsPatch,
+  type BlobResponse,
   BULK_UNDO_MAX_ENTRIES,
   BULK_UNDO_TTL_MS,
   type BulkReviewRequestParsed,
@@ -50,6 +52,7 @@ import {
   type Worktree,
   type WorktreeSummary,
 } from '@octopus-diff/contracts';
+import { MockActivity } from './activity.js';
 import { buildPatch, countLines, fileSides, type MockFile, type MockFileKind } from './content.js';
 import {
   mockConversation,
@@ -71,6 +74,9 @@ import {
   pick,
   prng,
 } from './util.js';
+
+/** The agent actions of `MockBackend.mutate`. */
+export type MutateAction = 'edit' | 'add' | 'revert' | 'delete' | 'delete-untracked' | 'commit';
 
 export type MockDataset = 'demo' | 'large' | 'empty';
 
@@ -203,6 +209,8 @@ export class MockBackend {
   settings: AppSettings = structuredClone(DEFAULT_APP_SETTINGS);
   readonly overrides = new Map<string, ReviewOverride>();
   settingsRevision = 0;
+  /** The live view (activity rings, blob allow-list, watch mode): `mock/activity.ts`. */
+  readonly activity = new MockActivity();
   private readonly undo = new Map<string, UndoEntry>();
   private undoSeq = 0;
   /** Clock for undo TTLs (tests override it). */
@@ -744,6 +752,8 @@ export class MockBackend {
       unstaged: mw.files.filter((f) => f.unstaged && f.status !== 'untracked').length,
       untracked: mw.files.filter((f) => f.status === 'untracked').length,
       conflicted: mw.files.filter((f) => f.status === 'conflicted').length,
+      // Like the daemon (#38): tracked files deleted and not committed; state-based.
+      deleted: mw.files.filter((f) => f.status === 'deleted').length,
     };
     const stateHash = hash16(
       `${mw.worktree.headSha}|${mw.revision}|${files.map((f) => `${f.path}:${f.patchHash}`).join(',')}`,
@@ -1480,12 +1490,16 @@ export class MockBackend {
   }
 
   /**
-   * Simulates an agent editing a worktree: edits an existing file (its patch changes), adds a
-   * new untracked file, or reverts one. Emits `worktree.changed`. Returns what changed.
+   * Simulates an agent working in a worktree. `edit` changes an existing file, `add` creates an
+   * untracked one, `revert` undoes an uncommitted file; `delete` removes a tracked file (its last
+   * committed content stays readable through the blob route), `delete-untracked` removes an
+   * untracked one (no content: git never had it) and `commit` commits every tracked change.
+   * Each one is recorded in the worktree's activity feed and emits `worktree.changed` (with
+   * `activitySeq`). Returns what changed (`action: 'none'` when there was nothing to act on).
    */
   mutate(
     worktreeId?: string,
-    action?: 'edit' | 'add' | 'revert',
+    action?: MutateAction,
     targetPath?: string,
   ): { worktreeId: string; path: string; action: string } {
     const ids = this.worktreeIds();
@@ -1503,31 +1517,149 @@ export class MockBackend {
         : roll < 0.22 && editable.length > 1
           ? 'revert'
           : 'edit');
+    const id = mw.worktree.id;
+    const nowMs = this.now();
     let path: string;
-    if (chosen === 'add' || editable.length === 0) {
+    if (chosen === 'delete' || chosen === 'delete-untracked' || chosen === 'commit') {
+      const done = this.mutateStructure(mw, chosen, targetPath, nowMs);
+      if (done === null) return { worktreeId: id, path: '', action: 'none' };
+      path = done;
+    } else if (chosen === 'add' || editable.length === 0) {
       path = `src/agent/generated-${mw.revision + 1}-${intBetween(this.rand, 100, 999)}.ts`;
-      mw.files.push(this.file(path, 'untracked', { lines: intBetween(this.rand, 5, 40) }));
+      const lines = intBetween(this.rand, 5, 40);
+      mw.files.push(this.file(path, 'untracked', { lines }));
+      this.activity.record(id, { kind: 'added', path, xy: '??', added: lines, deleted: 0 }, nowMs);
     } else if (chosen === 'revert') {
       const victim = pick(this.rand, editable);
       path = victim.path;
       mw.files.splice(mw.files.indexOf(victim), 1);
+      this.activity.record(id, { kind: 'restored', path }, nowMs);
     } else {
       const victim = pick(this.rand, editable);
       victim.version += 1;
       victim.unstaged = true;
       path = victim.path;
+      const counts = this.canonicalPatch(mw, { kind: 'working' }, victim);
+      this.activity.record(
+        id,
+        { kind: 'modified', path, xy: '.M', added: counts.additions, deleted: counts.deletions },
+        nowMs,
+      );
     }
     mw.revision += 1;
     mw.updatedAt = now();
     mw.activityAt = mw.updatedAt;
     const summary = this.summary(mp, mw);
+    const activitySeq = this.activity.seqOf(id);
     this.emit({
       type: 'worktree.changed',
       projectId: mp.project.id,
-      worktreeId: mw.worktree.id,
+      worktreeId: id,
       stateHash: summary.stateHash,
+      ...(activitySeq > 0 ? { activitySeq } : {}),
     });
-    return { worktreeId: mw.worktree.id, path, action: chosen };
+    return { worktreeId: id, path, action: chosen };
+  }
+
+  /** The agent actions that change the file set (see `mutate`); the path, or null for a no-op. */
+  private mutateStructure(
+    mw: MockWorktree,
+    action: 'delete' | 'delete-untracked' | 'commit',
+    targetPath: string | undefined,
+    nowMs: number,
+  ): string | null {
+    const id = mw.worktree.id;
+    if (action === 'commit') {
+      const tracked = mw.files.filter((f) => f.status !== 'untracked' && f.status !== 'conflicted');
+      if (tracked.length === 0) return null;
+      const from = mw.worktree.headSha;
+      const sha = hash40(`commit:${id}:${mw.commits.length}:${mw.revision}`);
+      const subject = 'Checkpoint: save the agent’s work';
+      const date = new Date(nowMs).toISOString();
+      mw.files = mw.files.filter((f) => !tracked.includes(f));
+      mw.commits.unshift({
+        info: {
+          sha,
+          shortSha: sha.slice(0, 7),
+          parents: from ? [from] : [],
+          subject,
+          authorName: 'Claude',
+          authorEmail: 'agent@example.com',
+          authorDate: date,
+          committerDate: date,
+        },
+        files: tracked.map((f) => ({ ...f, staged: false, unstaged: false })),
+      });
+      mw.worktree.headSha = sha;
+      if (mw.ahead !== null) mw.ahead += 1;
+      const paths = tracked.map((f) => f.path);
+      this.activity.record(
+        id,
+        {
+          kind: 'commit',
+          sha,
+          subject,
+          from,
+          to: sha,
+          paths: paths.slice(0, 20),
+          pathCount: paths.length,
+        },
+        nowMs,
+      );
+      return paths[0] ?? '';
+    }
+    if (action === 'delete-untracked') {
+      const victim =
+        mw.files.find((f) => f.status === 'untracked' && (!targetPath || f.path === targetPath)) ??
+        mw.files.find((f) => f.status === 'untracked');
+      if (!victim) return null;
+      mw.files.splice(mw.files.indexOf(victim), 1);
+      this.activity.record(
+        id,
+        { kind: 'deleted', path: victim.path, xy: '??', deleted: null, oid: null, untracked: true },
+        nowMs,
+      );
+      return victim.path;
+    }
+    const tracked = mw.files.filter((f) => f.kind === 'text' && f.status === 'modified');
+    const victim = tracked.find((f) => f.path === targetPath) ?? tracked[0];
+    if (!victim) return null;
+    // What git has: the last committed content (the mock's old side), readable by its blob id.
+    const content = fileSides(victim).oldContent ?? '';
+    const oid = hash40(`blob:${victim.path}:${content}`);
+    this.activity.keepBlob(id, oid, content);
+    victim.status = 'deleted';
+    victim.staged = false;
+    victim.unstaged = true;
+    victim.version += 1;
+    const lines =
+      content === '' ? 0 : content.split('\n').length - (content.endsWith('\n') ? 1 : 0);
+    this.activity.record(
+      id,
+      { kind: 'deleted', path: victim.path, xy: '.D', added: 0, deleted: lines, oid },
+      nowMs,
+    );
+    return victim.path;
+  }
+
+  // --- the live view (#38) ---------------------------------------------------------------
+
+  activityFeed(worktreeId: string, after: number, run?: string): ActivityResponse {
+    this.findWorktree(worktreeId);
+    return this.activity.read(worktreeId, after, run);
+  }
+
+  blob(worktreeId: string, oid: string, maxBytes: number): BlobResponse {
+    this.findWorktree(worktreeId);
+    const blob = this.activity.blob(worktreeId, oid, maxBytes);
+    if (!blob) {
+      throw new MockApiError(
+        404,
+        'not_found',
+        'that blob is not in this worktree’s recent activity',
+      );
+    }
+    return { worktreeId, blob };
   }
 
   /** Starts random mutations every `intervalMs`; returns a stop function. */

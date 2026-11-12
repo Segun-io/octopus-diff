@@ -15,6 +15,7 @@ export function RowChips({ row, request = true }: { row: WorktreeRow; request?: 
   const mainChip = worktree.isMain && worktree.branch !== project.defaultBranch;
   return (
     <>
+      <DeletedChip row={row} />
       {mainChip && (
         <span className="od-chip" title="Main checkout">
           main
@@ -32,6 +33,33 @@ export function RowChips({ row, request = true }: { row: WorktreeRow; request?: 
       )}
       {request && <ChangeRequestChip worktreeId={worktree.id} />}
     </>
+  );
+}
+
+/** The testid of the "N deleted" chip. */
+export const DELETED_CHIP_TEST_ID = 'deleted-chip';
+
+/** How many tracked files are deleted and not committed (0 when none or unknown: an older daemon). */
+export function deletedCount(row: Pick<WorktreeRow, 'summary'>): number {
+  return row.summary?.counts.deleted ?? 0;
+}
+
+/**
+ * "3 deleted": tracked files removed and not yet committed. State-based, not time-based: it is
+ * there while the deletions are, and gone when they are committed or undone (the daemon's
+ * `counts.deleted`, #38; absent from an older daemon, then no chip).
+ */
+export function DeletedChip({ row }: { row: WorktreeRow }) {
+  const n = deletedCount(row);
+  if (n <= 0) return null;
+  return (
+    <span
+      data-testid={DELETED_CHIP_TEST_ID}
+      className="od-chip font-sans text-del"
+      title={`${n} tracked ${n === 1 ? 'file is' : 'files are'} deleted and not committed`}
+    >
+      {n} deleted
+    </span>
   );
 }
 

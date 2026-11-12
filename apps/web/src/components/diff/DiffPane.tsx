@@ -44,6 +44,7 @@ import { ContextMenu, useContextMenu } from '../ContextMenu.tsx';
 import { CopyButton } from '../CopyButton.tsx';
 import { COPY_TEST_IDS, fileCopyItems, separated, worktreeCopyItems } from '../copyMenu.ts';
 import { SkeletonLines, WaitNote } from '../WaitNote.tsx';
+import { ActivityStrip } from './ActivityStrip.tsx';
 import { ImageDiff } from './ImageDiff.tsx';
 
 const DiffRenderer = lazy(() =>
@@ -496,6 +497,8 @@ export function DiffPane() {
           />
         )}
       </div>
+      {/* The open worktree's live feed (not the Inbox's: that mixes worktrees). */}
+      {model.view.kind === 'worktree' && <ActivityStrip worktreeId={model.view.worktreeId} />}
     </section>
   );
 }
