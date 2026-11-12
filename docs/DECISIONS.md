@@ -3087,3 +3087,58 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      `offsetHeight` for the virtual rows (the getters `@tanstack/virtual-core` reads). The default viewport (6000 px
      ≈ 100 rows) shows every row of the small fixtures, so older tests are unaffected; a test that is about the window
      calls `setSidebarLayout({ viewport })` before rendering and `scrollSidebarTo(el, top)` to scroll.
+
+## Sidebar: row layout, states and statuses (session, 2026-11-12; roadmap #14, step 16)
+
+249. **A row is two lines.** Line 1: the state indicator, the branch (truncates, `title` = full name), the `default`
+     chip, and the status slot at the right. Line 2: the repository (glyph under the indicator, name truncating at 72%
+     of the line, `title` = full name), then ahead / behind, files, the "N deleted" chip, the request chip, and the age
+     at the far end. Line 2 wraps (the repository, facts and chips wrap; the age never does), so a crowded row at
+     200 px grows to a third line instead of clipping a fact. Rows still carry no height of their own: the virtual
+     list measures them (#246). `row-branch` and `row-age` are new test ids; `worktree-item`, `row-repo`,
+     `deleted-chip`, `review-off-badge`, `change-request-chip` and every `data-*` attribute are unchanged. The old
+     third line (files, `+a −d`, source chip) is gone from the row: files appear only when no pill counts them, the
+     lines and the source live in the hover card and the context bar. The source chip and the in-progress chip are
+     left out of the row's chip list (`RowChips compact`; the status slot says the operation).
+250. **Statuses are `rowIndicator(row)`** (`lib/model.ts`), one kind per look: `missing`, `error`, `loading`,
+     `conflicts`, `operation`, `merged`, `closed`, `reviewOff`, `review` (own unreviewed files), `changed` (review
+     state not computed yet), `request` (open, nothing new), `reviewed`, `clean`, in that priority, each with a
+     sentence (`3 unreviewed files to review`, `request merged`, `rebase in progress`...). It sets `data-indicator`
+     on the row, the tooltip of the indicator and the screen-reader sentence. **"clean" is never a word.** A
+     reviewed worktree gets a faint tick and a clean one a faint dot: informative marks, no text on the row (the
+     hover card says "reviewed" / "no changes"). This revisits #244 only in that the indicator makes "reviewed"
+     visible again as a mark; the words stay off the row.
+251. **Counts stop at `99+`** (`countLabel`, `COUNT_CLAMP`): the pill and nothing else; the exact number is its
+     tooltip (`1000 unreviewed`; the e2e helper `unreviewedBadge` selects `[title$=" unreviewed"]`, so the format stays), `data-unreviewed` and the hover card. Merge noise is never counted: the pill
+     is `row.unreviewed` = `unreviewedOwnFiles ?? unreviewedFiles` as in #244, and a test feeds a summary with 17
+     base files to check it.
+252. **The indicator is a shape per kind, colour second** (12 px SVG, `aria-hidden`): filled accent dot = unreviewed
+     own files; accent ring = changes not yet computed; triangle (danger = conflicts, warn = rebase / merge / ...) =
+     blocked; cross in a circle = missing or error; the request glyphs (open / merged / closed) for requests; dashed
+     ring = review off; tick = reviewed; three dots = loading; a faint dot = clean. A request chip on line 2 repeats
+     the glyph with its number: the indicator says the state, the chip names the request.
+253. **Accessible name = the button's own content, no `aria-label`.** Branch, then (after the visual lines) an
+     `sr-only` sentence (`data-testid="row-status-text"`: the indicator sentence, `, review off` when the review is off
+     under another status, `, hidden`), the repository and the facts that are symbols have words (`2 ahead, 1
+     behind`). The visual status slot, the age and every glyph are `aria-hidden`, so nothing is read twice. An
+     `aria-label` would have hidden the repository and the chips from a screen reader.
+254. **Actions by state.** Idle: nothing extra. Hover or focus inside the row (the row button or its action): the
+     Hide / Show again button fades in over the end of line 2 (absolute, a gradient in the row's own background, so
+     the age and chips under it stay readable and nothing shifts; hover and focus use the same class pair). Selected:
+     a filled row (`aria-current`), action as above. Hidden section: the same row, dimmed, with `Show again`. Blocked
+     work has no action (it cannot be hidden). Right-click or the menu key still opens the full menu. The action
+     is a sibling of the row button, in the tab order right after it. No `⋯`.
+255. **Active with a recent change shows `now`.** `RowAge` (`shortAge`: `now`, `7m`, `3h`, `2d`, `5w`, `8mo`, `2y`)
+     reads `activityAt`; inside `RECENT_MS` (2 minutes) it is accent-coloured with a small static dot
+     (`data-recent="true"`). **Nothing animates**, keeping PLAN §4.2's "no activity pulse". The age is its own leaf
+     on a shared 30 s clock (`lib/ticker.ts`, one interval for the page, stopped with the last subscriber), so the
+     tick re-renders the ages, never the memoised rows.
+256. **Variants gallery.** The mock gets `MOCK_DATASET=gallery` (`mock/backend.ts buildGallery`, 22 worktrees: 0 / 1 /
+     9 / 99 / 1000 unreviewed files, long branch and repository names, conflicts, a rebase in progress, ahead /
+     behind, deleted files, reviewed, open / draft / changes-requested / merged / closed requests, review off,
+     missing, failed, detached, a change from a moment ago; ages relative to the real clock, no simulator tick) and
+     `scripts/shots.ts` the states `sidebar-gallery`, `-narrow` (200 px), `-states` (selected, focused, hovered)
+     and `-hidden`, each a screenshot of the sidebar alone in a tall viewport. `forges.ts` takes the look of a request
+     from the branch name (`pr-merged`, ...) for that dataset only. The row tests run against the same dataset, so
+     the pictures and the tests cannot drift apart. A row's render count is tested with a spy on `rowIndicator`
+     (a React Profiler fires whenever its own element is re-created, which is what a parent re-render does).

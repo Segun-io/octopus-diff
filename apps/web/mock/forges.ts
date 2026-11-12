@@ -20,6 +20,19 @@ const LOOKS: Array<Pick<ChangeRequest, 'state' | 'draft'> | null> = [
   null,
   { state: 'closed', draft: false },
 ];
+/**
+ * The gallery dataset (#14) names the look it wants in the branch (`feat/pr-merged`): everything
+ * else rotates as before. Only branches ending in these words are affected, so no other dataset is.
+ */
+const LOOK_HINTS: Array<
+  [RegExp, Pick<ChangeRequest, 'state' | 'draft'> & { review?: 'changes_requested' }]
+> = [
+  [/pr-merged$/, { state: 'merged', draft: false }],
+  [/pr-closed$/, { state: 'closed', draft: false }],
+  [/pr-draft$/, { state: 'open', draft: true }],
+  [/pr-changes-requested$/, { state: 'open', draft: false, review: 'changes_requested' }],
+  [/pr-open$/, { state: 'open', draft: false }],
+];
 const CHECKS: ChangeRequest['checks'][] = [
   { state: 'failure', passed: 21, failed: 1, pending: 0, total: 22 },
   { state: 'pending', passed: 12, failed: 0, pending: 3, total: 15 },
@@ -59,6 +72,8 @@ export function mockForges(
   settings: AppSettings,
   generatedAt: string,
   sim: ForgeSim = {},
+  /** The gallery dataset (#14): only the branches that name a look have a request. */
+  hintedOnly = false,
 ): ForgesResponse {
   const enabled = settings.forges?.enabled ?? true;
   const fetchedAt =
@@ -79,7 +94,8 @@ export function mockForges(
     for (const w of item.worktrees) {
       const branch = w.summary?.branch ?? w.worktree.branch;
       if (!branch || branch === item.project.defaultBranch || w.worktree.missing) continue;
-      const look = LOOKS[n % LOOKS.length] ?? null;
+      const hint = LOOK_HINTS.find(([re]) => re.test(branch))?.[1];
+      const look = hint ?? (hintedOnly ? null : (LOOKS[n % LOOKS.length] ?? null));
       const number = 100 + n * 7;
       const checks = CHECKS[n % CHECKS.length] ?? null;
       n += 1;
@@ -104,7 +120,7 @@ export function mockForges(
           kind === 'gitlab' && checks
             ? { state: checks.state, passed: null, failed: null, pending: null, total: null }
             : checks,
-        review: look.state === 'open' && !look.draft ? 'review_required' : null,
+        review: hint?.review ?? (look.state === 'open' && !look.draft ? 'review_required' : null),
         conflicts: n % 6 === 0 ? true : look.state === 'open' ? false : null,
         comments: n % 3,
         createdAt: CREATED,

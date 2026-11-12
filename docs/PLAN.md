@@ -111,18 +111,21 @@ References to read (do not fork):
 
 Three-pane layout, dark and light themes:
 
-1. **Sidebar** (DECISIONS #241-#248, which supersede "UX round 4"). One **flat, virtualised list** of the worktrees of
-   every folder the filter lets through: pinned first, then most recent activity first (`WorktreeSummary.activityAt`,
-   DECISIONS #124). No Inbox entry, no folder or project headers, no On review / Hidden split. Each row names its
-   repository (a small repo label above the branch) and says only what is informative: `N conflicts`, `N commits ·` and
-   the unreviewed pill (own files only, `unreviewedOwnFiles`; merge noise never counts), an open request
-   (`#42 · checks ✓`), `N deleted`, `review off`, `merged`, `closed`, `missing`, `error`. A worktree that needs no
-   review has no special state. Status comes from `WorktreeSummary.review` (status flow v2), never from the toolbar
-   scope. "Hide until it changes" / "Show again" on hover and in the row menu: what the user hid by hand sits in a
-   closed **Hidden** section at the end (it holds until the worktree's state hash changes). Only a window of rows is
-   mounted (`@tanstack/react-virtual`); `J`/`K` walk the whole list. The filter is a searchable multi-select picker
-   (status, **folders**, projects, worktrees), the way to narrow the list; a folder's or project's Overview opens from
-   a row's menu or the palette. No activity pulse.
+1. **Sidebar** (DECISIONS #241-#248, which supersede "UX round 4"; the row is #249-#256). One **flat, virtualised
+   list** of the worktrees of every folder the filter lets through: pinned first, then most recent activity first
+   (`WorktreeSummary.activityAt`, DECISIONS #124). No Inbox entry, no folder or project headers, no On review / Hidden
+   split. Each row is **two lines**: a state indicator (a shape per kind, never only a colour), the branch and the
+   status slot (`N conflicts`, the operation in progress, `N commits ·` and the unreviewed pill, `merged`, `closed`,
+   `review off`, `missing`, `error`), then the repository and what matters about the work (ahead / behind, files when
+   no pill counts them, `N deleted`, the request chip, and the age of the last change). The pill counts own files only
+   (`unreviewedOwnFiles`; merge noise never counts) and stops at `99+`. A reviewed worktree has a tick and a clean one
+   a faint dot, neither has a word. Status comes from `WorktreeSummary.review` (status flow v2), never from the
+   toolbar scope. "Hide until it changes" / "Show again" on hover or keyboard focus and in the row menu: what the user
+   hid by hand sits in a closed **Hidden** section at the end (it holds until the worktree's state hash changes). Only
+   a window of rows is mounted (`@tanstack/react-virtual`); `J`/`K` walk the whole list. The filter is a searchable
+   multi-select picker (status, **folders**, projects, worktrees), the way to narrow the list; a folder's or project's
+   Overview opens from a row's menu or the palette. No activity pulse: a change from the last two minutes shows a
+   static `now` in the accent colour, nothing animates.
 2. **File list** (`@pierre/trees`): changed files for the selected worktree (or, in Inbox mode, grouped by
    project → worktree). Status icons, +/− counts, reviewed checkmark.
 3. **Diff viewer** (`@pierre/diffs`): split / unified toggle, hide-whitespace toggle, collapsed unchanged
