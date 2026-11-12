@@ -268,6 +268,25 @@ describe('merge noise: the model', () => {
       ['w1', true, undefined],
       ['w2', true, undefined],
     ]);
+    // With the chip on only base files are listed and own files are hidden: bulk review does nothing
+    // (a bookmark-only request would mark the hidden own files of w1; PR #67 review).
+    const chip = planBulk({
+      scope: { kind: 'review' },
+      reviewed: true,
+      groups: [own, baseOnly],
+      entries,
+      visible: visibleIf(true, { fromMainOnly: true, expanded: new Set() }),
+      stateHashes: new Map([['w1', 'h1']]),
+      disabled: new Set(),
+      inboxUnfiltered: false,
+      view: 'inbox',
+    });
+    expect(chip.count).toBe(0);
+    // w1 hides own files, so it gets nothing; w2 has none hidden, and its bookmark-only request
+    // marks nothing (no own files, no paths): the same as without the chip.
+    expect(
+      chip.requests.map((r) => (r.target as { worktreeId?: string }).worktreeId),
+    ).not.toContain('w1');
     // Only "Review all" in To review moves bookmarks: other scopes and un-reviewing do not.
     expect(plan(true, { kind: 'working' }).requests).toHaveLength(1);
     expect(plan(false, { kind: 'review' }).requests.every((r) => !r.advanceBookmarks)).toBe(true);

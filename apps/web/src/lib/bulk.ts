@@ -50,11 +50,18 @@ export function planBulk(input: BulkPlanInput): BulkPlan {
   // base files (wrapped, so not in `byWorktree`): without it that group would stay behind.
   const advance = scope.kind === 'review' && reviewed;
   const advanceOnly = new Set<string>();
+  // Worktrees with an own file the view hides that the request would change (the "From main" chip
+  // lists base files only): a request without `paths` would mark it, so those get no bookmark-only
+  // request. Bulk review with the chip on stays a no-op.
+  const hidesOwn = new Set<string>();
   for (const e of entries) {
     if (advance && isBaseFile(e.file) && !(disabled.has(e.worktreeId) && !input.includeDisabled)) {
       advanceOnly.add(e.worktreeId);
     }
-    if (!visible(e)) continue;
+    if (!visible(e)) {
+      if (!isBaseFile(e.file) && e.file.reviewed !== reviewed) hidesOwn.add(e.worktreeId);
+      continue;
+    }
     // Files from a merge, rebase or update of the default branch are never marked in bulk (the
     // daemon skips them too, DECISIONS #204): the count says what the click changes.
     if (isBaseFile(e.file)) continue;
@@ -67,6 +74,7 @@ export function planBulk(input: BulkPlanInput): BulkPlan {
   let count = 0;
   for (const list of byWorktree.values()) count += list.length;
   for (const id of byWorktree.keys()) advanceOnly.delete(id);
+  for (const id of hidesOwn) advanceOnly.delete(id);
   const base = { scope: scopeField, reviewed, includeDisabled: input.includeDisabled ?? false };
   // "Review all" in To review (docs/STATUS-FLOW.md §2.3) also moves the bookmark to HEAD. Hidden
   // files there are reviewed ones only, so the whole worktree is what the user sees: no `paths`.
