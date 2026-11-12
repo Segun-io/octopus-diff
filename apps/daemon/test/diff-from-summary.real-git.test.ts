@@ -42,7 +42,9 @@ async function startCounting(fx: RealGitFixture, internal: DaemonInternals = {})
   const wrapper = path.join(path.dirname(log), 'git-wrapper.sh');
   writeFileSync(
     wrapper,
-    `#!/bin/sh\nfor a in "$@"; do printf '%s\\001' "$a"; done >> '${log}'\necho >> '${log}'\nexec git "$@"\n`,
+    // One record per process, built first and appended with ONE printf: processes that run side by
+    // side (the old route's raw diff and status) cannot interleave their arguments in the log.
+    `#!/bin/sh\nline=$(printf '%s\\001' "$@")\nprintf '%s\\n' "$line" >> '${log}'\nexec git "$@"\n`,
   );
   chmodSync(wrapper, 0o755);
   const incremental = internal.incremental !== false;
