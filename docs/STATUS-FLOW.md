@@ -109,6 +109,13 @@ merge or rebase brought into the range are not counted in `newCommits` and are n
 bookmark moves (so `main` does not inherit them); their files stay unreviewed but are not counted as own work.
 "Review all" never marks base files and still moves the bookmark past them.
 
+**In the web (#34, DECISIONS #205-#207).** The group is the last row of each worktree's list, collapsed, labelled
+`From origin/main - merge (N files)` (the via follows `originVia`; mixed vias drop it and each row says its own);
+expanded rows are dimmed and tagged. Collapsed, it is skipped by `j`/`k`/`n`. The chip `From main (N)` (`m`) lists
+only those files. Counts (row counts, scope counts, "Review N shown", title) are own + mixed; the sidebar prefers
+`unreviewedOwnFiles`. A mixed row has a `+main` tag and the header's "Only this branch's changes" switches to All on
+branch.
+
 ### 2.5 Forge
 
 Uses existing `WorktreeForge` data (`changeRequest.state`, `headSha`, `sync`, `review`, `checks`):

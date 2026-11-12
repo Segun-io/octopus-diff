@@ -2563,3 +2563,49 @@ Numbers: #201 and up (the next free ones after the file-origins branch).
      files (labelled; #34 wraps them in a collapsed group, "do not hide"), also under `onlyUnreviewed`: a worktree
      whose only unreviewed files are base still has an entry there; its review counts (`unreviewedOwnFiles`,
      `newCommits`) say 0.
+## Web: merge noise wrapped, not hidden (session, 2026-11-12; roadmap #34, step 13)
+
+Numbers: #205 and up (#201-#204 are the daemon branch's, `feat/daemon-file-origins`, PR #66).
+
+205. **Files that came from the default branch are wrapped in a collapsed group at the end of each worktree's list,
+     never hidden and never configured.** The web reads `ChangedFile.origin` / `originVia` (absent = own, so an older
+     daemon has no group, no chip and no toggle). `ownFirst` puts own and mixed files first and base files last (a
+     stable partition of the usual path order); `originVisibleIf` is the part of the `visible` predicate that wraps
+     base files unless their worktree's group is expanded, so **`j`/`k`, `n`, the list and the bulk plan all read one
+     predicate** and a collapsed group is skipped by every keyboard move. A selection inside a group that gets
+     collapsed stays selected (it still exists; `j`/`k` step from its position, so `k` lands on the last own file).
+     The group row is a disclosure `<button>` (`aria-expanded`, tab-reachable, `Enter`/`Space`) labelled `From
+     <integrationRef> - <via> (N files)`; the via is dropped when the group's files arrived in different ways (`From
+     origin/main (5 files)`) and each row carries its own tag (`merge`, `rebase`, `update`, `same as main`, `in
+     progress`; `main` when the daemon sent none). Expanded rows are dimmed (`opacity-60`, like reviewed rows). The
+     ref comes from `summary.review.integrationRef`, else the project's default branch. **The expansion is per
+     worktree and transient** (`originOpen` in the UI store, not a preference: every list opens collapsed, "nothing to
+     configure"). **Tree layout:** `@pierre/trees` cannot host a sub-group, so the tree shows own and mixed files and a
+     bar with the same disclosure button under it; expanded, the base files join the tree in tree order (so `j`/`k`
+     still follow the displayed order, F10) with the via as a row decoration; the tree cannot dim a row. Known gap.
+206. **The chip and the counts.** The chip `From main (N)` (the ref without `origin/`; `main` when refs differ) sits in
+     the file pane header next to the eye, appears when the list has base files (or while on), is off by default and
+     is a **per-device preference** (`fromMainOnly`, additive in the prefs shape, no version bump). On, the list shows
+     only the base files, plain and tagged rather than dimmed, with no group row; `m` toggles it, as `h` does the eye
+     (palette: "Show only files from the default branch"; "Expand / collapse the files from the default branch" is a
+     palette-only command that acts on the open worktree, or on every Inbox group). Counts: the group header, the
+     scope select (`To review (N)`, `All on branch (N)` and the current scope), "Review N shown" and the Inbox's
+     "Review all N" count **own + mixed only**; the sidebar row, its chip, the title and the favicon use
+     `unreviewedOwnFiles ?? unreviewedFiles`. The bulk plan never includes base files, expanded or not (the daemon
+     skips them anyway, #204), so the button's count is what the click changes; with the chip on it reads 0.
+207. **"Only this branch's changes" is the scope switch, with a way back.** A mixed row carries `+main`; where the list
+     has mixed files (To review or Uncommitted), the header offers a chip toggle that sets the scope to All on branch
+     (`ALL_ON_BRANCH`, the same query path: there the daemon sends the file as own, #201). While it is the reason for
+     the scope it reads pressed and a second click returns to the scope it came from (`branchToggleFrom`, transient,
+     cleared by any other scope change, so picking All on branch by hand shows no toggle: it has no mixed files).
+     No new data path and no per-file request. The toggle is not per file: the scope is, as in the rest of the app.
+208. **Mock, perf and shots.** `MockBackend` gets `mergeNoise` (off by default so counting tests keep their numbers; the
+     standalone mock turns it on, `MOCK_MERGE_NOISE=0` off): `feat/auth` has 4 merge + 1 same-as-main base file and a
+     mixed file, `fix/cache` 3 rebased base files, each non-default large-dataset worktree 12 base + 3 mixed files. To
+     review labels them and the summary carries `baseFiles` / `unreviewedOwnFiles` / `integrationRef` like the
+     daemon; All on branch lists the mixed ones as own and no base file; bulk review skips base files and moves the
+     bookmark. `scripts/perf.ts` takes `SCOPE` (default `working`) and waits for the chosen scope's own list: with
+     the large dataset's mixed files in All on branch (the app's default scope) the old wait returned on the first
+     scope's viewer and measured an empty list. `scripts/shots.ts` has `merge-noise`, `merge-noise-open` and
+     `merge-noise-chip` states. The README screenshots are fixture-driven by the e2e scripts, whose repositories have
+     no merge noise, and nothing they show changed, so they were not regenerated.

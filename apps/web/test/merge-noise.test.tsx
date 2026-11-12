@@ -430,6 +430,22 @@ describe('merge noise: the file list', () => {
     await waitFor(() => expect(paths()).not.toContain('src/lib/http.ts'));
   });
 
+  it('the group row works from the keyboard (Enter and Space on the focused button)', async () => {
+    const { user } = setup();
+    await open('feat/auth');
+    const g = await screen.findByTestId(ORIGIN_TEST_IDS.group);
+    expect(g.tagName).toBe('BUTTON');
+    g.focus();
+    await act(async () => {
+      await user.keyboard('{Enter}');
+    });
+    await waitFor(() => expect(paths()).toContain('src/lib/http.ts'));
+    await act(async () => {
+      await user.keyboard(' ');
+    });
+    await waitFor(() => expect(paths()).not.toContain('src/lib/http.ts'));
+  });
+
   it('j/k skip the collapsed group; expanding makes its rows reachable', async () => {
     const { user, store } = setup();
     await open('feat/auth');

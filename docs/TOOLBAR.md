@@ -81,6 +81,12 @@ branch, reviewed or not, and **To review** never lists reviewed files (what is l
 scopes with the eye, while it hides reviewed files the current scope's count says so: `Uncommitted (5 of 12)` (5
 listed, 12 changed); counts known only from the summary stay totals.
 
+**Merge noise (#34, DECISIONS #205-#207).** Two more chips appear only when the list has what they act on: `From
+main (N)` on the right, before the eye (pressed = only the files that came from the default branch; `m`), and `Only
+this branch's changes` after the scope select where the list has `+main` (mixed) files (it switches to All on branch
+and, pressed, back). The files themselves sit in a collapsed `From origin/main - merge (N files)` row at the end of
+the list; `Review N` and every count leave them out.
+
 The `17 files  17 unreviewed` line is gone: the select carries the total, the button carries the unreviewed count.
 
 ### 3.3 Diff header (`components/diff/DiffPane.tsx`)
