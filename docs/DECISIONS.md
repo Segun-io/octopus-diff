@@ -3843,8 +3843,11 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      finds the requested `summaryState` is no longer its latest, lists the worktree as it is now, and a move across
      the cap left an omission notice beside listed files, or none beside a capped list. Now `#gitFilesAt` asks
      `listChangedFilesWithState` (#340) and treats the list as the saved summary's only when git-core reports that
-     state (or nothing was asked: the kill switch, committed scopes, test doubles without the method). Only such lists
-     are cached under the summary's `stateHash`. `#listedAt` waits for a refresh in flight and lists again, up to three
+     state (or nothing was asked: the kill switch, test doubles without the method). git-core reports the held state
+     whenever it was its latest summary before and after listing, also for lists it builds in full (committed scopes,
+     conflicts, submodules: the first version reported null there, the daemon stopped caching them and ten daemon
+     tests caught it), and null only when a newer summary came in meanwhile. Only such lists are cached under the
+     summary's `stateHash`. `#listedAt` waits for a refresh in flight and lists again, up to three
      attempts. If every attempt is overtaken: `GET /files` returns the list with the omission git-core applied to it
      (exact ignore lines) and a `stateHash` of its own (`listed-…`, never a summary's), so the client sees a state it
      does not hold and fetches again; an inbox row is left out (the overtaking refresh announces the worktree, and the
