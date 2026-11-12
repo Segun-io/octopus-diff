@@ -745,7 +745,27 @@ async function finish(
     additions += info.lines ?? 0;
   }
 
-  const statusOutput = canonicalStatusOutput(c.header, entries);
+  // The untracked parts of the hashed text are rebuilt only when an untracked record changed (the
+  // same bytes either way: `canonicalStatusOutput(c.header, entries)`).
+  const untrackedSame =
+    c.untrackedTouched !== null &&
+    c.untrackedTouched.size === 0 &&
+    untracked.fresh !== null &&
+    untracked.fresh.length === 0 &&
+    previous?.untrackedText !== undefined;
+  const untrackedText =
+    untrackedSame && previous?.untrackedText
+      ? previous.untrackedText
+      : {
+          lines: canonicalStatusOutput([], untrackedEntries),
+          infos: untrackedInfos
+            .map((info) => {
+              const attribute = untracked.attributes.get(info.key) ?? '';
+              return `${info.key}\u0000${info.statSig}\u0000${attribute}`;
+            })
+            .join('\u0000'),
+        };
+  const statusOutput = canonicalStatusOutput(c.header, trackedEntries) + untrackedText.lines;
   const stateHash = hashParts(
     [
       'summary-v2',
@@ -757,12 +777,7 @@ async function finish(
       aheadBehind.behind,
       inProgress,
       dirtyKeys.map((key, i) => `${key}\u0000${signatures[i]}`).join('\u0000'),
-      untrackedInfos
-        .map((info) => {
-          const attribute = untracked.attributes.get(info.key) ?? '';
-          return `${info.key}\u0000${info.statSig}\u0000${attribute}`;
-        })
-        .join('\u0000'),
+      untrackedText.infos,
       c.statusOnly ? 'status-only' : null,
       [...c.unreadable].sort(compareBstr).join('\u0000'),
     ],
@@ -810,6 +825,7 @@ async function finish(
     tracked: c.tracked,
     untracked: c.untracked,
     untrackedOrder: c.untrackedOrder,
+    untrackedText,
     numstat: c.numstat,
     degraded: c.statusOnly || c.unreadable.size > 0,
     untrackedInfos: infosByKey,

@@ -89,6 +89,8 @@ export interface SummaryTrack {
   untracked: Map<string, StatusEntry>;
   /** The keys of `untracked`, sorted (`compareBstr`): region lookups by binary search. */
   untrackedOrder: string[];
+  /** The untracked parts of the state hash's text, reused while no untracked record changed. */
+  untrackedText?: { lines: string; infos: string };
   /** numstat records by destination path, in git's order within a path. */
   numstat: Map<string, NumstatRecord[]>;
   /** numstat was degraded (unreadable files, F7): the next refresh is full. */

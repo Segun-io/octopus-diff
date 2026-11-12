@@ -1031,7 +1031,20 @@ async function listFromSummary(
           return !trackedKeys.has(key);
         })
       : untrackedKeys(index, trackedKeys);
-  const infos = await inspectUntracked(repo.cwd, keys, deps.untrackedCache, inspect);
+  // The summary inspected every untracked file with these same options (count, verdicts): its
+  // inspections are the list's, without an lstat each (30k untracked files: about a second).
+  const reuse = track.readContent === inspect.readContent;
+  const missing: string[] = [];
+  const known = new Map<string, UntrackedInfo>();
+  for (const raw of keys) {
+    const key = raw.endsWith('/') ? raw.slice(0, -1) : raw;
+    const held = reuse ? track.untrackedInfos.get(key) : undefined;
+    if (held && held.attribute === (attributes.get(key) ?? '')) known.set(raw, held.info);
+    else missing.push(raw);
+  }
+  const inspected = await inspectUntracked(repo.cwd, missing, deps.untrackedCache, inspect);
+  for (const [i, raw] of missing.entries()) known.set(raw, inspected[i] as UntrackedInfo);
+  const infos = keys.map((raw) => known.get(raw) as UntrackedInfo);
   const rows = mergeRows(kept, sortRows([...fresh, ...untrackedRows(infos)]));
   if (update) listRefreshCounts.incremental++;
   else listRefreshCounts.seeded++;
