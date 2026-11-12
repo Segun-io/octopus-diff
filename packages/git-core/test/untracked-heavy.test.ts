@@ -687,10 +687,14 @@ describe('numstat alongside the status of a full summary (#43)', () => {
   it('a first summary runs it side by side above the index size, HEAD from the ref files', async () => {
     const repo = fx.repo('speculate-cold', { files: { 'a.txt': 'a\n' } });
     fx.write(path.join(repo, 'a.txt'), 'a\nb\n');
+    // Without a margin the proof is "its ctime is older than the summary's start": let the clock
+    // move past the write first, so a coarse or ahead-of-clock timestamp (macOS CI) cannot make
+    // the file look as young as the summary.
+    await new Promise((resolve) => setTimeout(resolve, 80));
     const wt = locator(repo);
     const saved = { ...summaryLimits };
     summaryLimits.speculateIndexBytes = 1;
-    // a.txt was written just now: with the default margin its numstat record could predate an
+    // a.txt was written a moment ago: with the default margin its numstat record could predate an
     // edit during the summary, so it is diffed again (asserted below); without a margin its ctime,
     // older than the summary's start, is the proof.
     summaryLimits.settleMs = 0;
