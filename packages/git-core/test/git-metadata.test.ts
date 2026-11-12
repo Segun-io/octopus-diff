@@ -9,6 +9,7 @@ import { spawnSync } from 'node:child_process';
 import {
   chmodSync,
   existsSync,
+  mkdirSync,
   readdirSync,
   readFileSync,
   rmSync,
@@ -28,27 +29,31 @@ let fx: Fixture;
 const RACY_WAIT_MS = 2100;
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-/** A git wrapper that logs each invocation's subcommand, so tests can count spawns. */
+/**
+ * A git wrapper that logs each invocation's argv, one file per process (concurrent processes would
+ * interleave writes to one shared log), so tests can count spawns by subcommand.
+ */
 function spawnLog(name: string, version?: string) {
-  const log = path.join(fx.root, `${name}.log`);
-  writeFileSync(log, '');
+  const dir = path.join(fx.root, `${name}.spawns`);
+  mkdirSync(dir, { recursive: true });
   const wrapper = path.join(fx.root, `${name}.sh`);
   const fake = version
     ? `if [ "$1" = "--version" ]; then echo "git version ${version}"; exit 0; fi\n`
     : '';
   writeFileSync(
     wrapper,
-    `#!/bin/sh\n${fake}for a in "$@"; do printf '%s\\001' "$a" >> '${log}'; done\necho >> '${log}'\nexec git "$@"\n`,
+    `#!/bin/sh\n${fake}f=$(mktemp '${dir}/XXXXXXXX')\nfor a in "$@"; do printf '%s\\001' "$a" >> "$f"; done\nexec git "$@"\n`,
   );
   chmodSync(wrapper, 0o755);
-  /** Subcommands since the last `take()`, with the first argument for `config`. */
-  let offset = 0;
+  const seen = new Set<string>();
+  /** Subcommands of the processes started since the last `take()`. */
   const take = (): string[] => {
-    const text = readFileSync(log, 'utf8');
-    const lines = text.slice(offset).split('\n').filter(Boolean);
-    offset = text.length;
-    return lines.map((line) => {
-      const args = line.split('\u0001').filter((a) => a.length > 0);
+    const fresh = readdirSync(dir).filter((file) => !seen.has(file));
+    return fresh.map((file) => {
+      seen.add(file);
+      const args = readFileSync(path.join(dir, file), 'utf8')
+        .split('\u0001')
+        .filter((a) => a.length > 0);
       let i = 0;
       while (i < args.length) {
         const a = args[i] as string;
