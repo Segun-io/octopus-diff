@@ -2108,3 +2108,7 @@ Numbers start at #180 so they do not collide with the parallel #29 session (#172
      landed (batched, one per burst); clients refetch projects only, not the inbox. `PUT /api/focus` takes an
      optional `projectId` (nullable): the project the user has open (its Overview); a focused worktree opens its
      own project without it. Older clients that send only `worktreeId` keep working.
+181. **Contracts (additive): `GET /api/inbox?projectIds=a,b`.** Optional filter (comma-separated ids, at most
+     `INBOX_PROJECTS_MAX` = 200, unknown ids ignored; absent = every project, as before). The web fills the inbox in
+     project batches after the first paint (#10) instead of waiting for one answer covering all of them.
+     `InboxParams.projectIds` in the client.

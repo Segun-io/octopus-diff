@@ -224,8 +224,24 @@ export type DirsResponse = z.infer<typeof DirsResponseSchema>;
 
 // --- inbox, files, diff, commits -------------------------------------------------------------
 
+/** Most projects one `GET /api/inbox?projectIds=` names (a client filling the inbox in batches). */
+export const INBOX_PROJECTS_MAX = 200;
+
 export const InboxQuerySchema = z
-  .object({ ...scopeQueryShape, onlyUnreviewed: QueryBool.default(false) })
+  .object({
+    ...scopeQueryShape,
+    onlyUnreviewed: QueryBool.default(false),
+    /**
+     * Only these projects (comma-separated ids; unknown ids are ignored). Absent = every project.
+     * Lets a client fill the inbox in batches, first rows first (#10).
+     */
+    projectIds: z
+      .string()
+      .max(INBOX_PROJECTS_MAX * 17)
+      .transform((v) => [...new Set(v.split(',').filter((s) => s.length > 0))])
+      .pipe(z.array(IdSchema).min(1).max(INBOX_PROJECTS_MAX))
+      .optional(),
+  })
   .superRefine(refineScopeQuery)
   .transform(({ scope, base, sha, working, ...rest }) => ({
     ...rest,
