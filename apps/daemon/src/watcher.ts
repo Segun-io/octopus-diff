@@ -1344,10 +1344,11 @@ export class WatcherService {
    * (degraded, too broad, over the per-project cap, a Windows mount), or `disabled` (watching off).
    */
   liveness(worktreeId: string): { mode: 'native' | 'polling' | 'disabled'; pollMs: number | null } {
-    if (!this.#opts.enabled) return { mode: 'disabled', pollMs: null };
     const st = this.#worktrees.get(worktreeId);
-    if (!st) return { mode: 'disabled', pollMs: null };
+    // Not registered (missing, prunable, not yet synced): nothing refreshes it but a request.
+    if (!st) return { mode: this.#opts.enabled ? 'polling' : 'disabled', pollMs: null };
     const pollMs = this.pollIntervalFor(worktreeId);
+    if (!this.#opts.enabled) return { mode: 'disabled', pollMs };
     return { mode: this.#isNative(st) ? 'native' : 'polling', pollMs };
   }
 
