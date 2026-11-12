@@ -246,6 +246,7 @@ const UNSTAMPED: Stamp = {
   sparse: true,
   submodules: true,
   gitlinks: true,
+  at: 0,
 };
 
 /** Everything a summary is computed from: a full status, or the last state with a hint merged in. */

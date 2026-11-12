@@ -28,6 +28,7 @@ import { hashParts, PATCH_HASH_LENGTH, PatchHasher, STATE_HASH_LENGTH } from './
 import { imageComparison } from './images.js';
 import {
   changedSince,
+  foldsCase,
   keysInRegion,
   Region,
   readStamp,
@@ -1356,6 +1357,227 @@ function present(
   return { patch: bstrToUtf8(chunk.text), tooLarge: false, truncated: false };
 }
 
+// ---------------------------------------------------------------------------------------------
+// getFileDiff from the summary state (#41)
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * How `getFileDiff` was answered, process-wide (tests, diagnostics): `summary` from the summary
+ * state (one `git diff` of the file, no whole-repository `status` or `diff --raw`), `full` by
+ * identifying the file in the whole scope, with the reason the summary route was not taken.
+ */
+export const fileDiffRoutes = { summary: 0, full: 0, reasons: new Map<string, number>() };
+
+/** Facts of one summary state that every file diff would otherwise recompute (memoized per track). */
+interface TrackFacts {
+  /**
+   * Some path is added relative to HEAD (a staged addition, intent-to-add, or the target of a
+   * rename or copy): a deleted file could pair with it as a rename in the whole scope.
+   */
+  adds: boolean;
+  /** Status entries `attributeState` looks at: the tracked ones and untracked `.gitattributes`. */
+  attributeEntries: StatusEntry[];
+}
+const trackFacts = new WeakMap<SummaryTrack, TrackFacts>();
+
+function factsOf(track: SummaryTrack): TrackFacts {
+  const known = trackFacts.get(track);
+  if (known) return known;
+  let adds = false;
+  const attributeEntries: StatusEntry[] = [];
+  for (const entry of track.tracked.values()) {
+    attributeEntries.push(entry);
+    if (entry.kind === 'renamed') adds = true;
+    else if (entry.kind === 'ordinary' && (entry.x === 'A' || entry.y === 'A')) adds = true;
+  }
+  for (const [key, entry] of track.untracked) {
+    if (path.posix.basename(key) === '.gitattributes') attributeEntries.push(entry);
+  }
+  const facts = { adds, attributeEntries };
+  trackFacts.set(track, facts);
+  return facts;
+}
+
+/** Ctime or mtime this close to the state's stamp (or after it) counts as written after it. */
+const CLOCK_MARGIN_MS = 100;
+
+/**
+ * Has a `.gitignore` in `key`'s directory or above it been written since `stampedAt`? The kernel's
+ * timestamps lag the wall clock by a few milliseconds and the stamp is taken just before git
+ * reads, hence the margin: a rule file written in the last moments before a summary counts as
+ * moved (the whole-scope route then answers), never the other way round.
+ */
+async function ignoreFileMoved(root: string, key: string, stampedAt: number): Promise<boolean> {
+  const dirs = [''];
+  for (let slash = key.indexOf('/'); slash >= 0; slash = key.indexOf('/', slash + 1)) {
+    dirs.push(`${key.slice(0, slash)}/`);
+  }
+  const moved = await Promise.all(
+    dirs.map(async (dir) => {
+      try {
+        const info = await lstat(absolutePathBuffer(root, `${dir}.gitignore`));
+        return Math.max(info.ctimeMs, info.mtimeMs) >= stampedAt - CLOCK_MARGIN_MS;
+      } catch {
+        return false;
+      }
+    }),
+  );
+  return moved.some(Boolean);
+}
+
+type FromSummary = { diff: GitFileDiff } | { reason: string };
+
+/**
+ * The diff of one file of a worktree-reading scope from the summary state git-core kept (#41),
+ * so that the whole-repository `git status` and `git diff --raw` that identify the file are
+ * skipped: a tracked file is one `git diff <base> -- <path>`, an untracked one no git process.
+ *
+ * The state only decides which route is safe; the answer is read from the file as it is now:
+ *
+ * - the state must be usable (`trackBlocker`: no conflicts, submodules, nested repositories,
+ *   sparse checkout, unreadable files), the filesystem must not fold case, and the stamp
+ *   (index, ignore rules, config, attributes) and HEAD must be what the state saw;
+ * - the file's own record must say that nothing but its content can differ in the whole scope:
+ *   a modification (`M` on either side, so never a rename or copy partner), or a deletion when
+ *   no path is added anywhere (no partner for a rename); against another base than HEAD only a
+ *   modification of a file the base and HEAD agree on (`diff-tree`, memoized with the lists');
+ *   an untracked file that is not also a tracked entry;
+ * - the file's lstat signature (the inspection's `statSig` for an untracked file) must still be
+ *   the state's, before and after the read: a file that moved since is read by the whole-scope
+ *   route, which describes it as it is, and so is one that moved while it was read;
+ * - git's own answer must confirm the record: one entry, for this path, with the status the
+ *   record predicted, not a stat-only change.
+ *
+ * Anything else (including a failed `git diff`, which the whole-scope route will fail again or
+ * explain) returns the reason it was not taken. Nothing is stored: a failed or abandoned read
+ * leaves no state behind (`untrackedCache` is the same content-addressed cache both routes use).
+ */
+async function diffFromSummary(
+  deps: DiffDeps,
+  repo: RepoInfo,
+  plan: ScopePlan,
+  key: string,
+  view: { context: number; ignoreWhitespace: boolean; full: boolean },
+  limit: number,
+): Promise<FromSummary> {
+  const { ctx } = deps;
+  const no = (reason: string): { reason: string } => ({ reason });
+  if (!deps.incremental) return no('disabled');
+  if (!plan.vsWorktree || !plan.statusBased || plan.revArgs.length !== 1) return no('scope');
+  // Where a watcher may name a file differently from the index (and literal pathspecs would miss
+  // it) no state is believed, as for incremental summaries (#288).
+  if (await foldsCase(repo.toplevel ?? repo.cwd)) return no('case-insensitive');
+  const track = deps.tracks.get(repo.cwd);
+  if (!track) return no('no-state');
+  const blocker = trackBlocker(track);
+  if (blocker) return no(blocker);
+  const headSha = track.branch.oid;
+  if (headSha === null) return no('unborn-branch');
+  if (!isValidUtf8(key)) return no('undecodable-path');
+
+  const tracked = track.tracked.get(key);
+  const untracked = track.untracked.has(key);
+  if (tracked !== undefined && untracked) return no('tracked-and-untracked');
+  if (tracked === undefined && !untracked) return no('not-in-state');
+
+  // What the state says is true of this file, and what that makes the whole scope's entry.
+  let expected: 'M' | 'D' | null = null;
+  if (tracked !== undefined) {
+    if (tracked.kind !== 'ordinary') return no('rename');
+    const sides = `${tracked.x}${tracked.y}`;
+    if (sides === 'M.' || sides === '.M' || sides === 'MM') expected = 'M';
+    else if (sides === '.D' || sides === 'MD' || sides === 'D.') expected = 'D';
+    else return no('status');
+    if (expected === 'D' && factsOf(track).adds) return no('rename-partner');
+  }
+
+  // Against another commit than HEAD: a file the commits in between left alone is the same in
+  // the base and in HEAD, so its record relative to HEAD is its record relative to the base.
+  const base = plan.revArgs[0] as string;
+  if (base !== 'HEAD' && base !== headSha) {
+    if (!FULL_OID.test(base) || expected === 'D') return no('base');
+    if ((await committedKeys(ctx, repo, base, headSha)).has(key)) return no('committed-since-base');
+  }
+
+  const env = (name: string): string | undefined => ctx.runner.envValue(name) || undefined;
+  /** The state's own facts about the file, as they are now (stat calls and ref files only). */
+  const unchanged = async (): Promise<string | null> => {
+    const changed = stampChange(track.stamp, await readStamp(repo, env));
+    if (changed) return changed;
+    if ((await resolveHead(ctx, repo)) !== headSha) return 'head-moved';
+    return null;
+  };
+
+  const moved = await unchanged();
+  if (moved) return no(moved);
+
+  if (tracked === undefined) {
+    const held = track.untrackedInfos.get(key);
+    if (!held) return no('no-inspection');
+    // Whether the file is ignored is decided by the `.gitignore` files above it, which no stamp
+    // covers: one written since the state was read may ignore it now.
+    if (await ignoreFileMoved(repo.cwd, key, track.stamp.at)) return no('ignore-rules');
+    const described = await describeUntracked(
+      deps,
+      repo,
+      plan,
+      limit,
+      view.full,
+      key,
+      track.untrackedOrder,
+      factsOf(track).attributeEntries,
+      // Above `maxUntrackedFiles` no content is read, the state asked for no verdicts and the hash
+      // is the stat signature's: only the signature counts then.
+      (info, attribute) =>
+        info.statSig === held.info.statSig && (!track.readContent || attribute === held.attribute),
+    );
+    if (!described) return no('stale-signature');
+    const after = await unchanged();
+    return after ? no(after) : { diff: described };
+  }
+
+  const recorded = track.signatures.get(key);
+  if (recorded === undefined) return no('no-signature');
+  if ((await lstatSignature(repo.cwd, key)) !== recorded) return no('stale-signature');
+
+  const only = new Set([key]);
+  const pathspecs = [bstrToUtf8(key)];
+  let run: DiffRun;
+  try {
+    run = await runScopeDiff(ctx, repo, plan, {
+      head: true,
+      patch: true,
+      only,
+      retain: view.ignoreWhitespace || view.context !== CANONICAL_CONTEXT ? new Set() : only,
+      retainLimit: limit,
+      pathspecs,
+    });
+  } catch (error) {
+    // An unreadable file, a vanished one, a lock: the whole-scope route explains it.
+    if (isGitCoreError(error, 'git_failed')) return no('git-failed');
+    throw error;
+  }
+  const entry = pickEntry(run.raw, key);
+  if (!entry || entry.combined || entry.srcPath !== key) return no('entry');
+  if (run.raw.some((other) => other.path !== key)) return no('other-paths');
+  if (entry.status !== expected) return no('status-moved');
+  const numstat = run.numstat.find((candidate) => candidate.path === key);
+  const canonical = run.chunks.get(key);
+  if (isStatOnly(entry, canonical, numstat)) return no('stat-only');
+  const diff = await describeTracked(ctx, repo, plan, view, limit, {
+    key,
+    entry,
+    numstat,
+    canonical,
+    conflicted: false,
+    pathspecs,
+  });
+  // The file, the index and HEAD are still what the state saw: the patch is of that state.
+  if ((await lstatSignature(repo.cwd, key)) !== recorded) return no('changed-while-reading');
+  const after = await unchanged();
+  return after ? no(after) : { diff };
+}
+
 export async function getFileDiff(
   deps: DiffDeps,
   worktree: WorktreeLocator,
@@ -1376,6 +1598,17 @@ export async function getFileDiff(
       path: selector.path,
     });
   if (plan.empty) throw notFound();
+  const limit = view.full ? ctx.settings.maxOutputBytes : ctx.settings.maxPatchBytes;
+  const needsView = view.ignoreWhitespace || view.context !== CANONICAL_CONTEXT;
+
+  // 0. The summary state vouches for the file: its patch alone is read (#41).
+  const fast = await diffFromSummary(deps, repo, plan, key, view, limit);
+  if ('diff' in fast) {
+    fileDiffRoutes.summary++;
+    return fast.diff;
+  }
+  fileDiffRoutes.full++;
+  fileDiffRoutes.reasons.set(fast.reason, (fileDiffRoutes.reasons.get(fast.reason) ?? 0) + 1);
 
   // 1. Identify the file in the whole scope (cheap: raw output only, no patch text).
   const [ident, status] = await Promise.all([
@@ -1384,8 +1617,6 @@ export async function getFileDiff(
   ]);
   const index = status ? indexStatus(status) : null;
   const identified = pickEntry(ident.raw, key);
-  const limit = view.full ? ctx.settings.maxOutputBytes : ctx.settings.maxPatchBytes;
-  const needsView = view.ignoreWhitespace || view.context !== CANONICAL_CONTEXT;
 
   if (identified) {
     const only = new Set([key]);
@@ -1434,33 +1665,14 @@ export async function getFileDiff(
     }
     if (isStatOnly(entry, canonical, numstat)) throw notFound();
     const conflicted = entry.combined || (index?.conflicted.has(key) ?? false);
-
-    const identity = trackedIdentity(
+    return describeTracked(ctx, repo, plan, view, limit, {
+      key,
       entry,
       numstat,
-      canonical?.hash ?? fallbackPatchHash(entry),
+      canonical,
       conflicted,
-    );
-    let shownChunk = canonical;
-    if (needsView && !identity.binary) {
-      const run = await runScopeDiff(ctx, repo, plan, {
-        head: false,
-        patch: true,
-        context: view.context,
-        ignoreWhitespace: view.ignoreWhitespace,
-        pathspecs,
-        only,
-        retain: only,
-        retainLimit: limit,
-      });
-      shownChunk = run.chunks.get(key);
-    }
-    return {
-      ...identity,
-      images: await imageComparison(ctx, repo, plan, entry, identity),
-      ...present(shownChunk, identity.binary, limit, view.full),
-      byteLength: canonical?.bytes ?? null,
-    };
+      pathspecs,
+    });
   }
 
   if (!plan.includeUntracked || !index) throw notFound();
@@ -1469,22 +1681,107 @@ export async function getFileDiff(
     (raw) => (raw.endsWith('/') ? raw.slice(0, -1) : raw) === key,
   );
   if (rawKey === undefined) throw notFound();
-  const attributes = await readDiffAttributes(deps, repo, index.untracked, status?.entries ?? [], [
+  const described = await describeUntracked(
+    deps,
+    repo,
+    plan,
+    limit,
+    view.full,
     rawKey,
-  ]);
+    index.untracked,
+    status?.entries ?? [],
+  );
+  if (!described) throw notFound();
+  return described;
+}
+
+/** What `getFileDiff` knows once it has the file's entry, numstat and canonical chunk. */
+interface TrackedParts {
+  key: string;
+  entry: RawEntry;
+  numstat: NumstatEntry | undefined;
+  canonical: ChunkResult | undefined;
+  conflicted: boolean;
+  /** The literal pathspecs the canonical run used (null: the whole scope). */
+  pathspecs: string[] | null;
+}
+
+/**
+ * The answer for a tracked file, from the pieces both routes (the whole-scope identification and
+ * the summary state) end with: identity, the view-option run when the view is not canonical, the
+ * image comparison. One function, so the two routes cannot describe a file differently.
+ */
+async function describeTracked(
+  ctx: GitContext,
+  repo: RepoInfo,
+  plan: ScopePlan,
+  view: { context: number; ignoreWhitespace: boolean; full: boolean },
+  limit: number,
+  parts: TrackedParts,
+): Promise<GitFileDiff> {
+  const { key, entry, numstat, canonical, conflicted, pathspecs } = parts;
+  const identity = trackedIdentity(
+    entry,
+    numstat,
+    canonical?.hash ?? fallbackPatchHash(entry),
+    conflicted,
+  );
+  let shownChunk = canonical;
+  if ((view.ignoreWhitespace || view.context !== CANONICAL_CONTEXT) && !identity.binary) {
+    const only = new Set([key]);
+    const run = await runScopeDiff(ctx, repo, plan, {
+      head: false,
+      patch: true,
+      context: view.context,
+      ignoreWhitespace: view.ignoreWhitespace,
+      pathspecs,
+      only,
+      retain: only,
+      retainLimit: limit,
+    });
+    shownChunk = run.chunks.get(key);
+  }
+  return {
+    ...identity,
+    images: await imageComparison(ctx, repo, plan, entry, identity),
+    ...present(shownChunk, identity.binary, limit, view.full),
+    byteLength: canonical?.bytes ?? null,
+  };
+}
+
+/**
+ * The answer for an untracked path (`rawKey`, as `git status` lists it) among `untracked` (every
+ * untracked path of the status snapshot it comes from) and `entries` (the snapshot's status
+ * entries, of which only `.gitattributes` ones matter). Null when `vouch` (given the inspection
+ * and the diff attribute it used) refuses it, or when the inspection gives nothing.
+ */
+async function describeUntracked(
+  deps: DiffDeps,
+  repo: RepoInfo,
+  plan: ScopePlan,
+  limit: number,
+  full: boolean,
+  rawKey: string,
+  untracked: readonly string[],
+  entries: readonly StatusEntry[],
+  vouch?: (info: UntrackedInfo, attribute: string) => boolean,
+): Promise<GitFileDiff | null> {
+  const { ctx } = deps;
+  const attributes = await readDiffAttributes(deps, repo, untracked, entries, [rawKey]);
   const [info] = await inspectUntracked(
     repo.cwd,
     [rawKey],
     deps.untrackedCache,
-    inspectOptions(ctx, repo, index.untracked.length, attributes),
+    inspectOptions(ctx, repo, untracked.length, attributes),
   );
-  if (!info) throw notFound();
+  if (!info) return null;
+  if (vouch && !vouch(info, attributes.get(info.key) ?? '')) return null;
   return {
     ...untrackedIdentity(info),
     ...(info.binary
       ? { images: await imageComparison(ctx, repo, plan, null, untrackedIdentity(info), info.key) }
       : {}),
-    ...(await untrackedPatch(ctx, repo, info, attributes.get(info.key), limit, view.full)),
+    ...(await untrackedPatch(ctx, repo, info, attributes.get(info.key), limit, full)),
   };
 }
 

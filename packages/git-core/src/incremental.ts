@@ -75,6 +75,12 @@ export interface Stamp {
    * writes only to its own `.git`, which no watcher event reports (PR #89 review, P2).
    */
   gitlinks: boolean;
+  /**
+   * Wall clock (ms) when the stamp was taken, before git ran. A file whose ctime or mtime is at or
+   * after it changed after the state was read (#41: `.gitignore` files, which no other record
+   * tells about). Not part of `stampChange`.
+   */
+  at: number;
 }
 
 /** A numstat line as git-core keeps it (bstr paths). */
@@ -369,6 +375,7 @@ export async function readStamp(
   envValue: (name: string) => string | undefined,
 ): Promise<Stamp> {
   stampReads.count++;
+  const stampedAt = Date.now();
   const root = repo.toplevel ?? repo.cwd;
   const outside = outsideFiles(envValue);
   const configFiles = [
@@ -402,7 +409,7 @@ export async function readStamp(
     at(0),
     repo.objectFormat,
   );
-  return { index: at(0), ignore, config, sparse, submodules, gitlinks };
+  return { index: at(0), ignore, config, sparse, submodules, gitlinks, at: stampedAt };
 }
 
 /** Index files above this size are not scanned: treated as holding a gitlink. */
