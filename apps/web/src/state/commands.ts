@@ -98,7 +98,9 @@ export function useCommands(model: AppModel, resolvedTheme: 'light' | 'dark'): C
       // `n` skips the files of a collapsed "from main" group, like `j`/`k`.
       const eligible = (e: NavEntry) =>
         !m.disabledWorktrees.has(e.worktreeId) && m.originVisible(e);
-      const target = nextUnreviewed(m.globalEntries, m.selectedKey, eligible);
+      // Only worktrees of the list the sidebar shows: the pane cannot show any other one.
+      const listed = m.globalEntries.filter((e) => m.listedIds.has(e.worktreeId));
+      const target = nextUnreviewed(listed, m.selectedKey, eligible);
       if (!target) return false;
       const ref = toFileRef(target.worktreeId, target.file);
       if (m.view.kind === 'worktree' && m.view.worktreeId !== target.worktreeId) {
@@ -171,7 +173,15 @@ export function useCommands(model: AppModel, resolvedTheme: 'light' | 'dark'): C
         }
       },
       nextUnreviewed() {
-        if (!goNextUnreviewed()) actions.notice(store, 'No unreviewed files left in this scope.');
+        if (!goNextUnreviewed()) {
+          const m = latest.current.model;
+          actions.notice(
+            store,
+            m.listedIds.size < m.sidebar.byId.size
+              ? 'No more unreviewed files in the listed worktrees.'
+              : 'No unreviewed files left in this scope.',
+          );
+        }
       },
       toggleReviewed() {
         const m = latest.current.model;

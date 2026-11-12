@@ -41,7 +41,7 @@ Run from the repo root on this machine (Node 26):
 - `pnpm lint`: pass (credits up to date; no dependency changed, `pnpm credits` not needed). One `info` from the daemon
   test file `apps/daemon/test/file-origins.real-git.test.ts` (another session's, not touched).
 - `pnpm typecheck`: pass (all packages incl. `e2e`).
-- `pnpm --filter @octopus-diff/web test`: **30 files, 428 tests pass (after the PR #86 follow-up; 423 before it)** (before this work: 30 files / 416 tests).
+- `pnpm --filter @octopus-diff/web test`: **30 files, 435 tests pass (after the PR #86 follow-ups; 423 before them)** (before this work: 30 files / 416 tests).
 - `pnpm build`: pass.
 - `pnpm test:e2e` (full, `workers: 1`): first run 101 passed, 1 failed (`15-ui-status-flow` "a commit keeps the work out
   of the shelf", a real race, below); after the fix, final run **102 passed, 0 failed** (3.2 min; re-run after the PR #86 follow-up: 102 passed).
@@ -140,3 +140,11 @@ Rebase onto main may touch `docs/DECISIONS.md` numbering (#272+) and `apps/web/s
    filtered per-worktree with paths: nothing marked).
 Mutation checks: pane ignoring `viewListed` (4 fail), no `hidden` reason (1), keys acting on the hidden worktree
 (`shown` plan, `r`, `j`: 1 each), hashes from the file query again (2), `viewListed` from `byId` (3).
+
+## Review follow-up 2 (PR #86, `n` into a filtered-out worktree)
+
+#281: `n` could select a file of a worktree the filters hide while the pane (#279) then showed the empty state. One
+predicate now (`listedIds`); `n`/auto-advance only target listed worktrees (wrap in the list, notice when nothing else),
+explicit picks of a hidden worktree (palette, Overview) clear the filters. Table-driven tests over every entry point;
+mutation checks: `n` unfiltered (3 fail: the reported bug), no reveal on explicit picks (2), notice (1), `J`/`K` from the
+full order (1), landing ignoring the list (1).

@@ -96,6 +96,11 @@ export interface AppModel {
    * worktree the filters leave out, or that is gone: its pane is not shown and keys do not act on it.
    */
   viewListed: boolean;
+  /**
+   * The worktrees of the list the sidebar shows (the filters apply): the one predicate of what a
+   * pane can show, used by the pane, `n`, `J`/`K`, the landing and the bulk plans (DECISIONS #281).
+   */
+  listedIds: ReadonlySet<string>;
   /** No sidebar filter and no hidden file: a bulk on every worktree is one `all` request. */
   allUnfiltered: boolean;
   /** Effective policy of the selected worktree view (null outside a worktree). */
@@ -248,10 +253,8 @@ function useBuildAppModel(): AppModel {
     return out;
   }, [inboxEntries]);
 
-  const viewListed = useMemo(
-    () => view.kind !== 'worktree' || sidebar.order.includes(view.worktreeId),
-    [view, sidebar.order],
-  );
+  const listedIds = useMemo<ReadonlySet<string>>(() => new Set(sidebar.order), [sidebar.order]);
+  const viewListed = view.kind !== 'worktree' || listedIds.has(view.worktreeId);
 
   // While its batches are still landing (#10) the data covers less than an "all" request does.
   const allUnfiltered =
@@ -351,6 +354,7 @@ function useBuildAppModel(): AppModel {
     stateHashes,
     inboxStateHashes,
     viewListed,
+    listedIds,
     allUnfiltered,
     viewPolicy,
     inboxEntries,

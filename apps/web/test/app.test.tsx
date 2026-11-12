@@ -9,7 +9,7 @@ import { App } from '../src/App.tsx';
 import type { EventSourceLike } from '../src/api/hooks.ts';
 import { createQueryClient } from '../src/api/queries.ts';
 import { scopeForPref } from '../src/state/prefs.ts';
-import { actions, createUiStore, type UiStore } from '../src/state/ui.tsx';
+import { actions, createUiStore, type UiState, type UiStore } from '../src/state/ui.tsx';
 
 // @pierre/diffs needs a real browser (web components, workers); stub the renderer.
 vi.mock('../src/components/diff/DiffRenderer.tsx', () => ({
@@ -51,7 +51,12 @@ interface Harness {
 
 function setup(
   dataset: MockDataset = 'demo',
-  opts: { token?: string; latencyMs?: number; lastWorktree?: string } = {},
+  opts: {
+    token?: string;
+    latencyMs?: number;
+    lastWorktree?: string;
+    ui?: Partial<UiState>;
+  } = {},
 ): Harness {
   const backend = new MockBackend({ dataset });
   const mockFetch = createMockFetch(backend, {
@@ -100,6 +105,7 @@ function setup(
       settledOpen: true,
       scope: scopeForPref('working'),
       ...(opts.lastWorktree ? { lastWorktree: opts.lastWorktree } : {}),
+      ...opts.ui,
     },
     false,
   );
@@ -750,6 +756,155 @@ describe('keyboard', () => {
     expect(screen.getByTestId(TEST_IDS.helpDialog)).toBeTruthy();
     await press(user, '{Escape}');
     expect(screen.queryByTestId(TEST_IDS.helpDialog)).toBeNull();
+  });
+});
+
+describe('every navigation targets a worktree the pane can show (#281)', () => {
+  const idOf = (branch: string | null, project?: string) => {
+    const probe = new MockBackend({ dataset: 'demo' });
+    const found = probe
+      .listProjects()
+      .projects.filter((p) => project === undefined || p.project.name === project)
+      .flatMap((p) => p.worktrees)
+      .find((w) => w.worktree.branch === branch);
+    if (!found) throw new Error(`no worktree ${project} ${branch}`);
+    return found.worktree.id;
+  };
+  const listed = () =>
+    screen.getAllByTestId(TEST_IDS.worktreeItem).map((el) => el.dataset.worktreeId as string);
+  const noticeText = () => screen.getByTestId('notice').textContent;
+
+  async function pick(user: Harness['user'], text: string) {
+    await press(user, '/');
+    await user.type(screen.getByTestId(TEST_IDS.sidebarFilterSearch), text);
+    const option = screen
+      .getAllByTestId(TEST_IDS.sidebarFilterOption)
+      .find((o) => o.dataset.kind === 'worktree' && o.textContent?.includes(text));
+    if (!option) throw new Error(`no filter option for ${text}`);
+    await user.click(option);
+    await press(user, '{Escape}');
+    await press(user, '{Escape}');
+  }
+  async function openAndFilter(h: Harness, ...branches: string[]) {
+    await ready();
+    fireEvent.click(rowOf(branches[0] ?? null));
+    await waitFor(() => expect(viewerPath()).toBe('src/lib/cache.ts'));
+    for (const b of branches) await pick(h.user, b);
+    await waitFor(() =>
+      expect(screen.getAllByTestId(TEST_IDS.worktreeItem)).toHaveLength(branches.length),
+    );
+  }
+
+  /** One row per way of moving between worktrees; each ends on something the pane shows. */
+  const cases: [string, (h: Harness) => Promise<void>][] = [
+    [
+      'n at the last unreviewed file of the only listed worktree stays there and says so',
+      async (h) => {
+        await openAndFilter(h, 'fix/cache');
+        const cache = currentWorktree();
+        await press(h.user, 'r'); // cache.ts reviewed; test/cache.test.ts is the last unreviewed
+        await press(h.user, 'j');
+        expect(viewerPath()).toBe('test/cache.test.ts');
+        await press(h.user, 'n');
+        expect(currentWorktree()).toBe(cache);
+        expect(viewerPath()).toBe('test/cache.test.ts');
+        expect(noticeText()).toContain('No more unreviewed files in the listed worktrees');
+      },
+    ],
+    [
+      'n wraps inside the listed worktrees, never to a filtered-out one',
+      async (h) => {
+        await openAndFilter(h, 'fix/cache', 'feat/auth');
+        const ids = listed();
+        for (let i = 0; i < 25; i++) {
+          await press(h.user, 'n');
+          expect(ids).toContain(currentWorktree());
+          expect(screen.queryByTestId('no-worktree')).toBeNull();
+        }
+      },
+    ],
+    [
+      'auto-advance after r does not leave the listed worktrees',
+      async (h) => {
+        h.store.setState({ autoAdvance: true });
+        await openAndFilter(h, 'fix/cache');
+        const cache = currentWorktree();
+        await press(h.user, 'r');
+        await press(h.user, 'j');
+        await press(h.user, 'r');
+        expect(currentWorktree()).toBe(cache);
+        expect(screen.queryByTestId('no-worktree')).toBeNull();
+      },
+    ],
+    [
+      'J and K walk the listed worktrees only',
+      async (h) => {
+        await openAndFilter(h, 'fix/cache', 'feat/auth');
+        const ids = listed();
+        for (const key of ['J', 'J', 'J', 'K', 'K', 'K', 'K']) {
+          await press(h.user, key);
+          expect(ids).toContain(currentWorktree());
+        }
+      },
+    ],
+    [
+      'the palette opens a worktree the filters hide by clearing them',
+      async (h) => {
+        await openAndFilter(h, 'fix/cache');
+        await press(h.user, '{Control>}k{/Control}');
+        const palette = await screen.findByTestId(TEST_IDS.commandPalette);
+        await h.user.type(within(palette).getByTestId(TEST_IDS.commandPaletteInput), 'feat/auth');
+        fireEvent.click(
+          within(palette)
+            .getAllByTestId(TEST_IDS.commandPaletteItem)
+            .find((i) => i.dataset.id === `go:worktree:${idOf('feat/auth')}`) as HTMLElement,
+        );
+        await waitFor(() => expect(currentWorktree()).toBe(idOf('feat/auth')));
+        expect(listed()).toContain(idOf('feat/auth'));
+        expect(listed().length).toBeGreaterThan(1);
+        expect(noticeText()).toContain('Filters cleared');
+      },
+    ],
+    [
+      'a row of an Overview opens a worktree the filters hide by clearing them',
+      async (h) => {
+        await openAndFilter(h, 'fix/cache');
+        act(() =>
+          actions.setView(h.store, {
+            kind: 'project',
+            projectId: rowOf('fix/cache').dataset.projectId as string,
+          }),
+        );
+        const target = idOf('feat/auth');
+        await h.user.click(
+          (await screen.findAllByTestId('overview-worktree-row')).find(
+            (r) => r.dataset.worktreeId === target,
+          ) as HTMLElement,
+        );
+        await waitFor(() => expect(currentWorktree()).toBe(target));
+        expect(listed().length).toBeGreaterThan(1);
+      },
+    ],
+  ];
+
+  it.each(cases)('%s', async (_name, run) => {
+    const h = setup();
+    await run(h);
+    // Whatever moved, the pane is a worktree the sidebar lists, with its files.
+    expect(screen.queryByTestId('no-worktree')).toBeNull();
+    expect(listed()).toContain(currentWorktree());
+    await waitFor(() => expect(screen.getAllByTestId(TEST_IDS.fileGroup)).toHaveLength(1));
+  });
+
+  it('the landing opens a listed worktree, not a remembered one the filters hide', async () => {
+    const cache = idOf('fix/cache');
+    setup('demo', {
+      lastWorktree: idOf('main', 'web-dashboard'),
+      ui: { filterWorktrees: [cache] },
+    });
+    await ready();
+    expect(currentWorktree()).toBe(cache);
+    expect(screen.queryByTestId('no-worktree')).toBeNull();
   });
 });
 

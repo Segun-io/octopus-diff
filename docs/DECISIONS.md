@@ -3370,3 +3370,18 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      worktree that moved on is reported "changed meanwhile". The open worktree's own plan (`markAll`, files from its file
      query) keeps `stateHashes` (that query's hash first): files and hash are one response. Overview bulks
      (`markAllFor`) send no paths and keep `stateHashes`.
+
+281. **Navigation and the pane agree: one list, `listedIds` (PR #86 review, 2026-11-12).** The pane shows only a worktree
+     of the list the sidebar shows (#279), so every way of moving between worktrees must land on one. The single
+     predicate is `AppModel.listedIds` (the set of `sidebar.order`; `viewListed` is `listedIds.has(open)`). Two kinds of
+     move: **automatic** ones only target listed worktrees: `n` (and the auto-advance after `r`, which calls it) searches
+     `globalEntries` filtered by `listedIds`, so it wraps inside the filtered list and, when nothing else is unreviewed
+     there, stays put with the notice "No more unreviewed files in the listed worktrees." (the old text when no filter is
+     on); `J`/`K` walk `sidebar.order`; the landing picks from `sidebar.order` (a remembered worktree the filters hide is
+     not a target). **Explicit** ones name a worktree (the palette, an Overview row, a link): if the filters hide it, the
+     filters are cleared and the notice "Filters cleared to show that worktree." says so (`App`: an effect that runs when
+     the open worktree *changes*, so a filter that later hides the open worktree is still the #279 "hidden by the filters"
+     pane, not a navigation). The opposite rule (the pane shows what was navigated to whatever the filters say) was not
+     taken: it would need a second source of truth for what the pane may show. Bulk plans never select. Filtering itself
+     never navigates. Table-driven test: `app.test.tsx` "every navigation targets a worktree the pane can show" (n at the
+     last unreviewed file, n wrapping, auto-advance, J/K, palette, Overview row, landing).

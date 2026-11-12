@@ -169,6 +169,27 @@ function useLanding() {
     }
   }, [loaded, view.kind, missing, pick, store]);
 
+  // Opening a worktree by name (the palette, an Overview, a link) that the filters leave out makes
+  // it visible: the filters are cleared, because the pane shows only listed worktrees (#281).
+  // A filter that hides the open worktree later is not a navigation: the pane says so (#279).
+  const announced = useRef<string | null>(null);
+  const listed = model.viewListed;
+  const hasRow = openId !== null && sidebar.byId.has(openId);
+  useEffect(() => {
+    if (!loaded || openId === announced.current) return;
+    announced.current = openId;
+    if (openId !== null && hasRow && !listed) {
+      store.setState({
+        filterFolders: [],
+        filterProjects: [],
+        filterWorktrees: [],
+        onlyDirty: false,
+        onlyUnreviewed: false,
+      });
+      actions.notice(store, 'Filters cleared to show that worktree.');
+    }
+  }, [loaded, openId, hasRow, listed, store]);
+
   useEffect(() => {
     if (openId !== null && !missing && lastWorktree !== openId) {
       store.setState({ lastWorktree: openId });
