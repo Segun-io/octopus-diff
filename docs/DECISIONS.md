@@ -3833,3 +3833,7 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      earlier summary. Survivors, by design: the bulk check of the listed state against `expectedStateHashes`
      (redundant unless a state hash comes back to an earlier value) and reading git-core's state hash after the
      awaits (no test can land a refresh inside `#gitFiles` before the list starts without a gate there).
+340. **Contract (additive): `GitCore.listChangedFilesWithState?` and `ListedChangedFiles`** (Greptile on PR #95):
+     the list plus `summaryState` (the summary state it was built from, or null when git-core listed the worktree as
+     it is now) and, for such a list, the `untrackedOmitted` it applied. Optional, so test doubles and older
+     implementations need nothing; `listChangedFiles` is unchanged. See #341.
