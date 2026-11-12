@@ -315,10 +315,11 @@ describe('live activity feed (real git, #38)', () => {
     await eventually(async () => (await b.api.listProjects()).projects[0]?.worktrees[0]?.summary);
     const without = await steps(b, dirB, fxB);
 
-    expect(a.spawns().length - withSnapshot[4]!).toBe(0);
+    const [lastA = 0, lastB = 0] = [withSnapshot[4], without[4]];
+    expect(a.spawns().length - lastA).toBe(0);
     // Startup and the file steps: identical totals; the commit adds exactly one `log`.
     expect(withSnapshot.slice(0, 4)).toEqual(without.slice(0, 4));
-    expect(withSnapshot[4]! - without[4]!).toBe(1);
+    expect(lastA - lastB).toBe(1);
     // The extra process is the HEAD classification's `git log`.
     const logs = (x: Started) => x.spawns().filter((l) => subcommand(l) === 'log').length;
     expect(logs(a) - logs(b)).toBe(1);

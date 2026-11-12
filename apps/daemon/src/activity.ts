@@ -573,7 +573,8 @@ export class ActivityStore {
       if (d.kind === 'head' && target.rest) {
         // A run of the same operation: from the first HEAD to the last, paths accumulated.
         const prev = target.rest;
-        const rest = (item.rest ??= {});
+        item.rest ??= {};
+        const rest = item.rest;
         rest.from = prev.from ?? null;
         rest.fromBranch = prev.fromBranch ?? null;
         const paths = [...new Set([...(prev.paths ?? []), ...(rest.paths ?? [])])];
