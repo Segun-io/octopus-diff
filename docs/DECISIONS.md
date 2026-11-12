@@ -2161,3 +2161,95 @@ Numbers start at #180 so they do not collide with the parallel #29 session (#172
      review states would undo #183. Precomputing the default scope's file lists would make the first Inbox load
      faster but competes with interactive requests for git-core's four slots, which has no priority queue; adding
      one is a git-core change (#29's area). Left for later if the measured fill time warrants it.
+## Per-project git metadata instead of per-worktree (session, 2026-11-11; roadmap #29)
+
+Numbers #172-#178 were taken by this session; the parallel #10 session uses #180+. Renumber at merge if
+needed.
+
+188. **Repository metadata is per project, not per worktree.** Measured with the #26 bench (30 × 3, no-UI run,
+     same machine, git 2.53): startup **1428 → 618 spawns** (15.9 → 6.9 per worktree; 7.4 s → 4.2 s of git time
+     summed). By subcommand: `rev-parse` 340 → 60, `for-each-ref` 210 → 30, `config` 187 → 47, `symbolic-ref`
+     90 → 0, `rev-list` 60 → 0, `merge-base` 60 → 0; `status` 180, `diff` 180, `check-attr` 90, `worktree` 30
+     unchanged. What is left is per worktree by nature (`status`, `diff --numstat`, `check-attr` for the
+     summary) plus the second `status` + `diff` the daemon's startup review-state pass runs for the review
+     file list (`#computeReview` → `#gitFiles(review)`), which #10 removes (its acceptance: 180 → 90 `status`).
+     With #10 the same count is about 618 − 180 = **~440 (< 450)**; this branch alone meets the bench budget
+     (≤ 8 per worktree), so `startupSpawns` is enforced now (removed from `TRACKED` in `e2e/bench/bench.ts`).
+     Per refresh of a project: at most one `for-each-ref` (ahead/behind, #190) and one config read (#191).
+     Everything still runs through the single runner and its allowlist; **no new subcommand** (the allowlist,
+     the read-only proof harness and `tools/fixtures` are unchanged).
+189. **One base lookup, from the ref files first.** `resolveRefName` (`packages/git-core/src/discovery.ts`) is
+     the only place a ref name becomes a commit: the branch scope, the summary's ahead/behind base, the review
+     range and `readBranchBase` (#27) all call it, so #30 can change the base in one place. It reads
+     `<commonDir>/refs/...` and `packed-refs` (`ref-files.ts`, moved from `branch-base.ts`) and falls back to
+     the old `for-each-ref` whenever the files cannot tell: a symbolic ref, a reftable repository, an odd or
+     unreadable file, and (new) the per-worktree namespaces `refs/bisect/`, `refs/worktree/`,
+     `refs/rewritten/`, which live in a worktree's own git dir (`readBranchBase` used to read those from the
+     common dir). HEAD (`resolveHead`, the review range's `symbolic-ref`) is read from `<gitDir>/HEAD` the
+     same way (a regular file; `ref: refs/heads/...` or an object id; anything else → git), and default-branch
+     detection reads `refs/remotes/origin/HEAD` as a symref file (a dangling one is skipped, as `for-each-ref`
+     skips broken refs). Known difference: a branch file pointing at a non-commit object (only possible with
+     plumbing such as `update-ref` to a tag object) is taken as is, where `rev-parse HEAD^{commit}` would peel
+     it; a broken ref (missing object) is taken as is where `for-each-ref` skips it. Both need a corrupted or
+     hand-edited repository, and the git commands that follow fail visibly. Reading files under the git dirs is
+     read-only, with names that passed `RefNameSchema` and a path check (no empty, `.`, `..` or control
+     components).
+190. **Ahead/behind: one `for-each-ref` per project and base.** On git >= 2.41 (`features.forEachRefAheadBehind`
+     in `version.ts`; `features` is a `Record<string, boolean>`, so no contract change)
+     `for-each-ref --format=%(objectname)%00%(ahead-behind:<base oid>) refs/heads/<b>...` over the branches
+     checked out in the project's worktrees (recorded by `listWorktrees`) answers every worktree at once,
+     single-flight per (common dir, base). Counts are stored by (common dir, head oid, base oid): immutable, so a
+     later refresh at the same commits spawns nothing, and a commit costs one new batch. Only those branches,
+     not all of `refs/heads/`: `ahead-behind` walks from every listed tip, and a repository with hundreds of
+     stale branches would pay for all of them. A head no listed branch points at (detached, or moved since the
+     listing) and git < 2.41 use `rev-list --left-right --count` (memoized the same way). A count git cannot
+     compute (missing objects) now leaves ahead/behind null instead of failing the whole summary.
+191. **The config scan (filter-driver neutralization, `core.attributesFile`) is reused across operations, under
+     conditions.** Repository config stays untrusted; `GitContext.configScan` reuses an earlier scan only when
+     (a) the stat signatures (size, mtime and ctime in ns, inode, mode, or "absent") of every file git reads are
+     unchanged: system (`GIT_CONFIG_SYSTEM`, else `/etc/gitconfig` and `<git prefix>/etc/gitconfig`; none with
+     `GIT_CONFIG_NOSYSTEM`), global (`GIT_CONFIG_GLOBAL`, else `$XDG_CONFIG_HOME/git/config` and
+     `~/.gitconfig`), `<commonDir>/config` and the worktree's `config.worktree`; signatures are taken *before*
+     git reads, so a write during the read changes them; (b) none of them changed in the last 2 s or is stamped
+     in the future (git's "racy" problem on coarse-timestamp file systems such as FAT's 2 s); (c) the scan saw
+     no `include.*` / `includeIf.*` key in any scope (the scan's regexp now also asks for them): included files
+     and `onbranch:` / `gitdir:` conditions are not covered by (a), so such a repository is read on every
+     operation as before, and a concurrent operation that joined such a read reads again itself; (d) it is
+     younger than 60 s, which only bounds how long a change to a trusted file in a place we do not stat (a
+     packager's system config) can be missed. Any other stat error means no reuse. Worktrees of one project
+     share a scan while they have no `config.worktree` (the key names that file by role, not path), and a
+     project's worktrees refreshing together share one read. The untrusted files (local and worktree scope)
+     are always in the signature, so a filter driver added there is neutralized by the very next operation;
+     a stale *trusted* value can at worst keep the user's own driver in place a little longer. The existing
+     hostile-config tests pass unchanged (including "re-reads config on every operation (includes ...)", which
+     fails if reuse ignores the signature or the include rule, checked by mutation); new tests cover a filter
+     added to local config, to one worktree's `config.worktree`, and to an included file.
+192. **Worktree repository info comes from `git worktree list`, not one `rev-parse` per worktree.** After
+     `listWorktrees` validates a worktree (two-way link, SEC-07), `seedWorktreeRepo` derives its `RepoInfo`
+     from files: `<path>/.git` refers to its git dir, whose `commondir` file (linked worktrees) must lead back
+     to the project's common dir; object format comes from the project. It is skipped, leaving git's own
+     discovery, when anything differs, when the worktree dir, its `.git` or the git dir is not owned by this
+     user (git's `safe.directory` check stays git's decision: with an explicit `--git-dir` git would not make
+     it), for bare or missing entries, and on Windows. `resolveProject` also seeds the path it resolved and the
+     project-level repository (`repo(commonDir)`), unless the common dir holds a `.git` entry of its own.
+     `repo()` is single-flight (the summary and the watch targets used to race and both spawn). Relists (every
+     ~60 s) refresh the seeds before the 5 min cache entry expires.
+193. **Commit facts are memoized by (common dir, object ids).** `commits.ts`: `merge-base` (trivial when both
+     sides are the same commit), `merge-base --is-ancestor`, `rev-parse --verify <oid>^{commit}` for a full
+     object id (the review scope's base), `rev-list --parents --max-count=1` (commit scope) and the review
+     range's `rev-list base..head` (up to 5000 commits) live in one LRU (20 000 entries) per `GitCore`, single-
+     flight. Only positive answers are stored: a commit missing today may arrive with a fetch. Caveat: git
+     honours `refs/replace/` (the runner does not set `GIT_NO_REPLACE_OBJECTS`), so adding a replace ref could
+     change a merge base for the same ids; such entries would stay until the daemon restarts. A missing object
+     in a branch scope's merge base is now reported as `not_found` ("no merge base") instead of `git_failed`.
+     **PR #58 review (two findings, both valid):** (a) what a shallow clone shows of the history is not
+     immutable, so the facts that depend on parents or reachability (parents, merge-base, ancestry,
+     counts, review ranges) now carry `GitContext.historyStamp` in their key: the `mtime:size` of
+     `<commonDir>/shallow` and `info/grafts`, two `stat` calls and no git process, so a `fetch --unshallow` or
+     `--deepen` is seen by the next call (`verifyCommit` stays unstamped: an object that exists keeps existing).
+     (b) Only full object ids are cached; an abbreviation (`CommitShaSchema` accepts four characters) goes to git
+     on every call, because a fetch can make it ambiguous and git must then refuse it. Regression tests in
+     `git-metadata.test.ts` (an unshallowed clone; a four-digit prefix that becomes ambiguous) fail without the change.
+
+194. **Bench: the startup-spawn budget is enforced.** `startupSpawns` is no longer in `TRACKED`
+     (`e2e/bench/bench.ts`); `docs/bench/README.md` says so. The warm-reload entry is left to #10.

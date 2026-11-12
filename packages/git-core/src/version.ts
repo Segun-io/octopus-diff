@@ -57,6 +57,8 @@ export function parseGitVersion(raw: string): GitVersion | null {
     worktreeListZ: atLeast(version, 2, 36),
     /** `GIT_NO_LAZY_FETCH` (no on-demand fetches from promisor remotes in partial clones). */
     noLazyFetch: atLeast(version, 2, 44),
+    /** `for-each-ref --format=%(ahead-behind:<committish>)` (#29; older git counts with rev-list). */
+    forEachRefAheadBehind: atLeast(version, 2, 41),
   };
   return version;
 }
