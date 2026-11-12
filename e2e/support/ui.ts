@@ -215,7 +215,7 @@ export class UiPage extends AppPage {
     await this.openOverviewVia(
       this.byTestId(TEST_IDS.commandPaletteItem)
         .and(this.page.locator('[data-id^="go:project:"]'))
-        .filter({ hasText: new RegExp(`^Project ${escaped}(?=\\d+ worktrees?$)`) }),
+        .filter({ hasText: new RegExp(`Project ${escaped}\\d+ worktrees?$`) }),
     );
   }
 

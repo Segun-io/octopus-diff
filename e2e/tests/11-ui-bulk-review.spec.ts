@@ -102,6 +102,8 @@ test.describe('UX-1 bulk review (UI)', () => {
     // The title counts To review (status flow v2), not the Uncommitted scope marked here.
     const titled = await expectTitle(page, daemon.client);
 
+    // The Inbox fills in per project: wait until it lists everything before marking it all.
+    await expect(ui.markAll).toHaveAttribute('data-count', String(total));
     await ui.focusApp();
     await ui.press('Shift+R');
     await expect(ui.confirmDialog).toBeVisible();
@@ -197,6 +199,8 @@ test.describe('UX-1 bulk review (UI)', () => {
     const liveCount = (await daemon.client.listFiles(live.id)).files.length;
     await ui.open(daemon.authUrl);
     await ui.selectInbox();
+    // The UI must hold everything it will mark before the refetches are frozen (the Inbox fills in per project).
+    await expect(ui.markAll).toHaveAttribute('data-count', String(total));
     const before = (await stateHashes(daemon.client))[live.id] ?? '';
 
     // Freeze what the UI knows: hold the refetches the live update would trigger.
