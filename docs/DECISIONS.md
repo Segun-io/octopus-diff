@@ -2323,3 +2323,91 @@ merge if they collide).
        "absorbed" in the ancestry sense; that is what the cherry-pick/patch-id work of #32 is for. Criss-cross
        merge bases: git picks one best base; the result can differ by which one.
 
+
+## Forge fetching audit and strategy (session, 2026-11-11; roadmap #8, step 07)
+
+(Next free number was #197; the integration-base branch uses #196. Report: `docs/reports/forge-fetching.md`
+has the call-path/cost table and the fleet estimates. "Arithmetic" below means computed from the query
+shape and GitHub's published rules; "simulated" means counted from the real `ForgeService` scheduler on a fake
+clock with a fake client (`apps/daemon/test/forge-fleet.test.ts`); nothing was measured against a real forge.)
+
+197. **Forge fetching: a budget, adaptive polling, a focus refresh and bounded bulk actions.**
+
+     *Findings, ranked.* (1) **Idle polling is the budget.** The 2-minute poll ran whether or not a browser
+     was open: 30 batches an hour per queried repository, 1 point each (2 from 14 head branches, see 4). Simulated:
+     5 / 30 / 100 repositories with 3 branches = 150 / 900 / 3 000 points an hour at idle (3 % / 18 % / 60 % of
+     GitHub's 5 000 an hour per user, a limit shared with every other tool that uses the same sign-in), and
+     100 repositories with 15 branches = 6 000, more than the limit. (2) **No budget, no backoff, no
+     recognition of a refusal:** a rate-limited account kept sending a query per project per poll. (3) "Check
+     again" forced every project with no per-call limit and no check that a project was fetched a second ago.
+     (4) **The batch costs 2 points from 14 head branches, not 1** (arithmetic: `round(11 n / 100)`, minimum 1:
+     each branch is a `pullRequests` connection, plus `commits(last: 1)` under each of its up to 5 requests and
+     `contexts(first: 1)` under each of those; 1 point up to 13 branches, 2 from 14 to 20, then per chunk of 20).
+     The "1 point per repository" in FORGES.md came from measurements with few branches. Detail, conversation and
+     repository queries are 1 point each (8, 53 and 24 requests / 100, rounded, minimum 1) and the recorded
+     fixtures' `rateLimit.cost` was 1 for each (`docs/reports/forge-details.md`). (5) A host that rejected the
+     full field set (GitHub Enterprise Server, self-managed GitLab) was asked twice on every refresh. (6) Every
+     new worktree on a new branch counted as "a push" and cost two forced follow-up lookups, and the second one
+     ran even when the first had found the request. (7) The #12 notes: a request created elsewhere waits for
+     the poll, a browser coming back served only the daemon's cache, an open request on a branch no worktree has
+     checked out reached the Overview after 10 minutes, the detail and conversation caches were never evicted.
+     (8) An edit event refetched a project whose data was older than the poll interval. Not problems: the web's
+     `['forges']` refetches (focus, 5 minutes, `forge.updated`) read the daemon's cache and cost 0 points; detail
+     and conversation are 1 point per TTL expiry of something someone has open.
+
+     *Decided against.* **Conditional requests / ETag:** GraphQL is POST-only and has no conditional
+     requests; the REST pull-request list has ETags (a 304 is free) but the read-only allowlist is GraphQL
+     only and has no `--include` / `--header`, and the REST list lacks review, merge state and checks. Not
+     built; a spike is proposed (report). **Server-side stale-while-revalidate for details:** the web already
+     shows the last response while it refetches (react-query `staleTime` and `placeholderData`), and the daemon
+     already serves the last good data when a refetch fails; a blocking refetch after the TTL only affects the
+     first open after 60 s. **Batching across projects** needs a new allowlisted query (below), so it is a
+     proposal.
+
+     *Decided and built.* (a) **`ForgeBudget`** (`apps/daemon/src/forge-budget.ts`), per host, a rolling-hour
+     ledger of estimated points (`estimateQueryPoints` in `packages/forge/src/cost.ts`) with three ceilings:
+     background polling stops at 1 500 points an hour, event-driven lookups (a push, a new branch, focus) at
+     2 500, lookups the user asked for (Refresh, Check again, opening a request) at 4 000, so at least 1 000
+     points stay for the user's other tools. The forge's own `remaining` (every GitHub response carries
+     `rateLimit { cost remaining resetAt }`; `resetAt` is new in the four query strings, the same read-only
+     queries otherwise, the allowlist rebuilds them from the builders) overrides the estimate: under 500 left only
+     user-asked lookups run, under 100 nothing does. A refusal (`isRateLimitMessage`: "rate limit", `RATE_LIMITED`,
+     "abuse detection", HTTP 429; the CLIs give no headers within the allowlist) starts a backoff for the host:
+     until the last reported `resetAt` when known, else 5 min doubling to 1 h, reset by a success. A held-back
+     lookup keeps the last good data (a project with none says why); the Request tab shows it as its "last loaded
+     data" note. The budget reaches the UI as `ForgesResponse.budgets` (additive, optional contract change,
+     separate `contracts:` commit) and Settings → Forges shows used points, what GitHub reports left, and when
+     lookups resume; `forge.updated` fires when a host's state changes. For GitLab a request counts as one unit;
+     only the backoff ever matters there.
+     (b) **Adaptive polling.** Attention comes from `PUT /api/focus` (new `DaemonCore` option `onFocus`), which the
+     web already sends (null when the tab is hidden), plus a 5-minute keep-alive while the tab is visible
+     (`useFocusReporting`): a browser counts as looking for 30 minutes after its last report, for 6 minutes after
+     the daemon starts. Fleet poll: 2 minutes while someone looks, 10 minutes when nobody does, stretched so that
+     a round does not exceed 1 000 points an hour (300 idle), at most 30 minutes. The project in view is also
+     looked up every 60 s while someone looks, and the project whose Overview is open reloads its repository
+     information when it is older than 2 minutes (so a request on a branch no worktree has checked out arrives
+     in about 2 minutes, announced by `forge.updated`). An edit event never refetches a project sooner than the
+     poll would. Simulated: idle hour 150 / 900 / 3 000 / 6 000 becomes 30 / 180 / 300 / 400 points for the
+     5x3 / 30x3 / 100x3 / 100x15 fleets; a busy hour for 100x3 becomes 1 140 instead of 3 080.
+     (c) **Focus refresh.** A project that comes into view is looked up when its data is older than 30 s, and the
+     fleet poll runs at once when it has been waiting longer than a normal interval (coming back after a break).
+     This is what a request created from another machine or the forge's web page needed: a person looking is the
+     only signal there is. Hidden tabs cause no lookup.
+     (d) **"Check again"** leaves a project fetched in the last 5 s alone and spends at most 150 points a call;
+     the poll catches up with the rest. The Request tab's Refresh stays unbounded (3 points).
+     (e) **Caches:** detail, conversation and repository entries are least-recently-used, 64 per kind, and dropped
+     after an hour unused (swept in the poll).
+     (f) **Push follow-ups** (30 s, 90 s) are only for branches whose upstream or push destination changed, and
+     the second is skipped when the first (or the poll) found the request.
+     (g) **The basic query variant is remembered** per host and query for an hour after a "unknown field" error.
+     (h) `pnpm`-level guard: `forge-fleet.test.ts` asserts the hourly points of simulated fleets stay under the
+     numbers above, so a change to polling shows up as a failing test.
+
+     *Contract change (additive).* `ForgesResponse.budgets?: ForgeBudgetState[]` (host, kind, state `ok | busy |
+     low | backoff`, spent in the last hour, background and hourly ceilings, remaining, resetAt, resumeAt,
+     message). `PUT /api/focus` is unchanged.
+
+     *Not built (proposed follow-ups in the report).* A multi-repository batch query, reading the real limit
+     for free from REST `rate_limit`, a conditional-request change detector, tunable ceilings, coalescing the
+     identical batches of clones of one repository, a budget notice outside Settings, a live run of the cost
+     check (the opt-in live test now asserts the 1/13/14/20-branch costs).
