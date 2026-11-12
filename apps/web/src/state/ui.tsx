@@ -71,6 +71,16 @@ export interface UiState extends Prefs {
   filterOpen: boolean;
   onlyDirty: boolean;
   onlyUnreviewed: boolean;
+  /**
+   * Worktrees whose "from main" group (the files a merge, rebase or update of the default branch
+   * brought) is expanded. Transient: every list opens with the group collapsed.
+   */
+  originOpen: string[];
+  /**
+   * The scope to go back to when the "only this branch's changes" toggle is on (it switched the
+   * list to All on branch); null while the toggle is off or the scope was changed another way.
+   */
+  branchToggleFrom: DiffScope | null;
   helpOpen: boolean;
   addProjectOpen: boolean;
   settingsOpen: boolean;
@@ -113,6 +123,8 @@ export const DEFAULT_UI_STATE: UiState = {
   filterOpen: false,
   onlyDirty: false,
   onlyUnreviewed: false,
+  originOpen: [],
+  branchToggleFrom: null,
   helpOpen: false,
   addProjectOpen: false,
   settingsOpen: false,
@@ -242,6 +254,18 @@ export const actions = {
         ? s.pinned.filter((x) => x !== worktreeId)
         : [...s.pinned, worktreeId],
     }));
+  },
+  /** Expands or collapses the "from main" group of a worktree (`open` forces a state). */
+  toggleOriginGroup(store: UiStore, worktreeId: string, open?: boolean) {
+    store.setState((s) => {
+      const isOpen = s.originOpen.includes(worktreeId);
+      if ((open ?? !isOpen) === isOpen) return s;
+      return {
+        originOpen: isOpen
+          ? s.originOpen.filter((x) => x !== worktreeId)
+          : [...s.originOpen, worktreeId],
+      };
+    });
   },
   toggleSettledOpen(store: UiStore) {
     store.setState((s) => ({ settledOpen: !s.settledOpen }));

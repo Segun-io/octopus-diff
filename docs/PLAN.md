@@ -157,8 +157,14 @@ button ("Continue" on the first run) watches the folder or adds the repository t
 until that is valid; a status panel (a toast once the form is gone) shows progress, what was found and the next
 step, and the app replaces the first-run screen as soon as a repository exists, events or not.
 
+Merge noise (DECISIONS #205-#208): files whose change came from a merge, rebase or update of the default branch
+(`ChangedFile.origin` `base`; `mixed` = both sides changed it) are wrapped, not hidden: own and mixed files first, a
+collapsed `From origin/main - merge (N files)` group last (dimmed, tagged rows once expanded), a `From main (N)` filter
+chip next to the eye and a `+main` tag with an "Only this branch's changes" toggle for mixed files. Counts and "Review
+N" leave the wrapped files out; `j`/`k`/`n` skip them while collapsed. An older daemon (no `origin`) shows none of it.
+
 Keyboard: `j`/`k` next/prev file · `J`/`K` next/prev worktree · `n` next **unreviewed** file anywhere ·
-`r` toggle reviewed · `s` split/unified · `/` filter · `g i` inbox · `?` help. All actions reachable
+`r` toggle reviewed · `m` only files from the default branch · `s` split/unified · `/` filter · `g i` inbox · `?` help. All actions reachable
 without a mouse.
 
 Live updates: selection and scroll position are preserved when the underlying diff refreshes. If the open

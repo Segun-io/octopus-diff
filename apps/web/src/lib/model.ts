@@ -6,6 +6,8 @@ import type {
   ChangedFile,
   ChangeRequest,
   EffectiveReviewPolicy,
+  FileOrigin,
+  FileOriginVia,
   InboxEntry,
   Project,
   ProjectListItem,
@@ -134,7 +136,8 @@ export interface WorktreeRow {
   error: WorktreeListItem['error'];
   /**
    * Unreviewed files of what the worktree has to review (docs/STATUS-FLOW.md §2.1), never the
-   * toolbar scope: `summary.review.unreviewedFiles`. 0 when out of the review loop, and while the
+   * toolbar scope: `summary.review.unreviewedOwnFiles`, else `unreviewedFiles` (an older daemon:
+   * every file is its own). 0 when out of the review loop, and while the
    * daemon has not computed the review state yet (stage `changed`, #10).
    */
   unreviewed: number;
@@ -503,7 +506,12 @@ export function buildSidebar(
       const review = effectivePolicy(wt.review);
       // `summary.review` is computed on demand (#10); without it the row shows its changes.
       const fromDaemon = wt.summary?.review;
-      const unreviewed = review.enabled && fromDaemon ? fromDaemon.unreviewedFiles : 0;
+      // Files that came from a merge, rebase or update of the default branch are wrapped, not
+      // counted (docs/STATUS-FLOW.md §2.4a): `unreviewedOwnFiles` when the daemon sends it.
+      const unreviewed =
+        review.enabled && fromDaemon
+          ? (fromDaemon.unreviewedOwnFiles ?? fromDaemon.unreviewedFiles)
+          : 0;
       const newCommits = review.enabled && fromDaemon ? fromDaemon.newCommits : 0;
       const input: StageInput = {
         summary: wt.summary,
@@ -614,8 +622,141 @@ export function listsReviewed(showReviewed: boolean, kind: ScopeKind): boolean {
   return showReviewed;
 }
 
-export function visibleIf(showReviewed: boolean): VisiblePredicate {
-  return showReviewed ? () => true : (e) => !e.file.reviewed;
+/**
+ * Files that came from a merge, rebase or update of the default branch are **wrapped, not
+ * hidden** (DECISIONS #205): own and mixed files first, the `base` ones in a collapsed group at
+ * the end of each worktree's list. This is how the list reads `origin` (absent = own, so an older
+ * daemon has no group and no chip).
+ */
+export function fileOrigin(file: Pick<ChangedFile, 'origin'>): FileOrigin {
+  return file.origin ?? 'own';
+}
+
+/** The file's change came from the default branch alone (a "from main" file, wrapped by default). */
+export function isBaseFile(file: Pick<ChangedFile, 'origin'>): boolean {
+  return file.origin === 'base';
+}
+
+/** The default branch changed this file too, but so did the branch: shown with a `+main` tag. */
+export function isMixedFile(file: Pick<ChangedFile, 'origin'>): boolean {
+  return file.origin === 'mixed';
+}
+
+/** Own and mixed files, in order, then the base files, in order (a stable partition). */
+export function ownFirst<T extends Pick<ChangedFile, 'origin'>>(files: readonly T[]): T[] {
+  const own: T[] = [];
+  const base: T[] = [];
+  for (const f of files) (isBaseFile(f) ? base : own).push(f);
+  return base.length === 0 ? own : [...own, ...base];
+}
+
+/** How the list treats the base files: only them (the chip), or wrapped unless the group is open. */
+export interface OriginView {
+  /** The "From main" chip is on: only the base files are listed. */
+  fromMainOnly: boolean;
+  /** Worktree ids whose "from main" group is expanded. */
+  expanded: ReadonlySet<string>;
+}
+
+export const NO_ORIGIN_VIEW: OriginView = { fromMainOnly: false, expanded: new Set() };
+
+/**
+ * Which entries the origin view lists: with the chip only base files, else every file but the
+ * base ones of a worktree whose group is collapsed. `j`/`k`/`n` skip what it hides.
+ */
+export function originVisibleIf(view: OriginView): VisiblePredicate {
+  if (view.fromMainOnly) return (e) => isBaseFile(e.file);
+  return (e) => !isBaseFile(e.file) || view.expanded.has(e.worktreeId);
+}
+
+export function visibleIf(showReviewed: boolean, origin?: OriginView): VisiblePredicate {
+  const reviewed: VisiblePredicate = showReviewed ? () => true : (e) => !e.file.reviewed;
+  if (!origin) return reviewed;
+  const byOrigin = originVisibleIf(origin);
+  return (e) => reviewed(e) && byOrigin(e);
+}
+
+/** Own + mixed files: what the counts, the scope counts and "Review N shown" are made of. */
+export function countOwn(files: readonly Pick<ChangedFile, 'origin'>[]): number {
+  let n = 0;
+  for (const f of files) if (!isBaseFile(f)) n++;
+  return n;
+}
+
+/** `origin/main` -> `main` (a remote prefix says nothing the chip needs); other refs unchanged. */
+export function shortRef(ref: string): string {
+  return ref.replace(/^origin\//, '');
+}
+
+const VIA_LABELS: Record<FileOriginVia, string> = {
+  merge: 'merge',
+  rebase: 'rebase',
+  'cherry-pick': 'cherry-pick',
+  update: 'update',
+  'same-as-base': 'same as main',
+  'in-progress': 'in progress',
+};
+
+/** How the default branch's part arrived, in words (`merge`, `same as main`, `in progress`...). */
+export function viaLabel(via: FileOriginVia | undefined): string | null {
+  return via ? VIA_LABELS[via] : null;
+}
+
+/** The tag a row carries: `+main` for a mixed file, the via for a base one, else none. */
+export function originTag(file: Pick<ChangedFile, 'origin' | 'originVia'>): string | null {
+  if (isMixedFile(file)) return '+main';
+  if (isBaseFile(file)) return viaLabel(file.originVia) ?? 'main';
+  return null;
+}
+
+/**
+ * The collapsed group's label: `From origin/main - merge (5 files)`. When the group's files
+ * arrived in different ways it says `From origin/main (5 files)` and each row carries its own via.
+ */
+export function noiseGroupLabel(
+  ref: string,
+  vias: ReadonlySet<FileOriginVia | undefined>,
+  count: number,
+): string {
+  const [only] = vias.size === 1 ? [...vias] : [];
+  const via = only ? viaLabel(only) : null;
+  const files = `${count} ${count === 1 ? 'file' : 'files'}`;
+  return via ? `From ${ref} - ${via} (${files})` : `From ${ref} (${files})`;
+}
+
+export interface OriginStats {
+  /** Own + mixed files passing `reviewedOk`. */
+  own: number;
+  /** Base files passing `reviewedOk`, expanded or not. */
+  base: number;
+  /** Mixed files passing `reviewedOk`. */
+  mixed: number;
+  /** How the base files arrived. */
+  vias: Set<FileOriginVia | undefined>;
+}
+
+/** Per worktree: how many files are own, mixed and base (`reviewedOk` = what the eye shows). */
+export function originStats(
+  entries: readonly NavEntry[],
+  reviewedOk: VisiblePredicate,
+): Map<string, OriginStats> {
+  const out = new Map<string, OriginStats>();
+  for (const e of entries) {
+    if (!reviewedOk(e)) continue;
+    let s = out.get(e.worktreeId);
+    if (!s) {
+      s = { own: 0, base: 0, mixed: 0, vias: new Set() };
+      out.set(e.worktreeId, s);
+    }
+    if (isBaseFile(e.file)) {
+      s.base++;
+      s.vias.add(e.file.originVia);
+    } else {
+      s.own++;
+      if (isMixedFile(e.file)) s.mixed++;
+    }
+  }
+  return out;
 }
 
 /**

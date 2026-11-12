@@ -6,7 +6,7 @@
 import type { GitStatusEntry } from '@pierre/trees';
 import { FileTree, useFileTree } from '@pierre/trees/react';
 import { useEffect, useMemo, useRef } from 'react';
-import type { NavEntry } from '../lib/model.ts';
+import { type NavEntry, originTag } from '../lib/model.ts';
 import { copyAndReport } from '../state/copy.ts';
 import { useUiStore } from '../state/ui.tsx';
 import { ContextMenu, type MenuItem } from './ContextMenu.tsx';
@@ -68,6 +68,9 @@ export function FileTreeView({
       if (additions) parts.push({ text: `+${additions} `, color: 'var(--od-add)' });
       if (deletions) parts.push({ text: `−${deletions} `, color: 'var(--od-del)' });
       if (reviewed) parts.push({ text: '✓', color: 'var(--od-add)' });
+      // `+main` on a mixed file, how a base file arrived (`merge`...): the tree cannot dim a row.
+      const tag = originTag(entry.file);
+      if (tag) parts.unshift({ text: `${tag} `, color: 'var(--od-faint)' });
       return parts.length ? { text: parts.map((p) => p.text).join(''), parts } : null;
     },
   });

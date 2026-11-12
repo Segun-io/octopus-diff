@@ -33,6 +33,25 @@ const STATES: Record<string, Step> = {
     await page.locator('[data-testid="worktree-item"][data-branch="feat/auth"]').click();
     await page.waitForTimeout(400);
   },
+  // Merge noise (#34): To review of feat/auth, the "From origin/main" group collapsed, then open.
+  'merge-noise': async (page) => {
+    await page.locator('[data-testid="worktree-item"][data-branch="feat/auth"]').click();
+    await page.locator('[data-testid="scope-select"]').selectOption('review');
+    await page.locator('[data-testid="from-main-group"]').waitFor();
+    await page.waitForTimeout(400);
+  },
+  'merge-noise-open': async (page) => {
+    await STATES['merge-noise']?.(page);
+    await page.locator('[data-testid="from-main-group"]').click();
+    await page.locator('[data-testid="file-item"][data-origin="base"]').first().waitFor();
+    await page.locator('[data-testid="from-main-group"]').scrollIntoViewIfNeeded();
+    await page.waitForTimeout(400);
+  },
+  'merge-noise-chip': async (page) => {
+    await STATES['merge-noise']?.(page);
+    await page.locator('[data-testid="from-main-chip"]').click();
+    await page.waitForTimeout(400);
+  },
   settings: async (page) => {
     await page.keyboard.press(',');
     await page.waitForTimeout(300);

@@ -1,7 +1,16 @@
 import './zod-config.ts';
 import { type ApiClient, TEST_IDS } from '@octopus-diff/contracts';
 import { type QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { useForgeIndex } from './api/forges.ts';
 import {
   type EventSourceFactory,
@@ -26,6 +35,7 @@ import { FileList } from './components/FileList.tsx';
 import { FilePaneHeader } from './components/FilePaneHeader.tsx';
 import { HelpDialog } from './components/HelpDialog.tsx';
 import { Mark } from './components/Mark.tsx';
+import { OriginGroupHeader } from './components/OriginGroupHeader.tsx';
 import { Sidebar } from './components/Sidebar.tsx';
 import { useFaviconDot } from './lib/favicon.ts';
 import { toFileRef } from './lib/fileRef.ts';
@@ -242,6 +252,29 @@ function LoadingSkeleton() {
   );
 }
 
+/**
+ * The tree layout's "from main" group: a bar under the tree (the tree itself cannot host a
+ * sub-group). Expanded, the files join the tree, tagged with how they arrived.
+ */
+function TreeOriginBar() {
+  const model = useAppModel();
+  const store = useUiStore();
+  if (model.view.kind !== 'worktree' || model.originView.fromMainOnly) return null;
+  const id = model.view.worktreeId;
+  const stats = model.originStats.get(id);
+  if (!stats || stats.base === 0) return null;
+  return (
+    <OriginGroupHeader
+      worktreeId={id}
+      stats={stats}
+      integrationRef={model.originRefs.get(id) ?? 'main'}
+      open={model.originView.expanded.has(id)}
+      onToggle={(worktreeId) => actions.toggleOriginGroup(store, worktreeId)}
+      className="h-(--od-row) shrink-0"
+    />
+  );
+}
+
 function AppShell({ eventSourceFactory }: { eventSourceFactory?: EventSourceFactory | null }) {
   const model = useAppModel();
   const store = useUiStore();
@@ -266,6 +299,19 @@ function AppShell({ eventSourceFactory }: { eventSourceFactory?: EventSourceFact
   // The project Overview opens its project too: the daemon computes review states on demand (#10).
   useFocusReporting(focusWorktree, model.view.kind === 'project' ? model.view.projectId : null);
   useSelectionRepair();
+  const toggleOrigin = useCallback(
+    (worktreeId: string) => actions.toggleOriginGroup(store, worktreeId),
+    [store],
+  );
+  const origin = useMemo(
+    () => ({
+      view: model.originView,
+      stats: model.originStats,
+      refs: model.originRefs,
+      onToggle: toggleOrigin,
+    }),
+    [model.originView, model.originStats, model.originRefs, toggleOrigin],
+  );
 
   const projectsData = model.projects.data;
   const hasProjects = (projectsData?.projects.length ?? 0) > 0;
@@ -364,15 +410,20 @@ function AppShell({ eventSourceFactory }: { eventSourceFactory?: EventSourceFact
                 Loading files…
               </p>
             ) : useTree ? (
-              <Suspense fallback={<p className="p-3 text-xs text-muted">Loading tree…</p>}>
-                <FileTreeView
-                  entries={model.entries.filter(model.visible)}
-                  selectedKey={model.selectedKey}
-                  onSelect={onSelectEntry}
-                  theme={theme}
-                  worktreePathOf={(id) => model.sidebar.byId.get(id)?.worktree.path}
-                />
-              </Suspense>
+              <div className="flex h-full min-h-0 flex-col">
+                <div className="min-h-0 flex-1">
+                  <Suspense fallback={<p className="p-3 text-xs text-muted">Loading tree…</p>}>
+                    <FileTreeView
+                      entries={model.entries.filter(model.visible)}
+                      selectedKey={model.selectedKey}
+                      onSelect={onSelectEntry}
+                      theme={theme}
+                      worktreePathOf={(id) => model.sidebar.byId.get(id)?.worktree.path}
+                    />
+                  </Suspense>
+                </div>
+                <TreeOriginBar />
+              </div>
             ) : (
               <FileList
                 groups={model.groups}
@@ -383,6 +434,7 @@ function AppShell({ eventSourceFactory }: { eventSourceFactory?: EventSourceFact
                 selectedKey={model.selectedKey}
                 grouped={inbox}
                 onSelect={onSelectEntry}
+                origin={origin}
                 emptyMessage={
                   inbox ? 'No dirty worktrees in this scope.' : 'No changes in this scope.'
                 }

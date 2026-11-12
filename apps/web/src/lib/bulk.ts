@@ -4,7 +4,7 @@
  * Pure, so it is unit-tested; `state/bulk.ts` executes the plan.
  */
 import type { BulkReviewRequest, DiffScope } from '@octopus-diff/contracts';
-import type { FileGroup, NavEntry, VisiblePredicate } from './model.ts';
+import { type FileGroup, isBaseFile, type NavEntry, type VisiblePredicate } from './model.ts';
 
 export interface BulkPlan {
   requests: BulkReviewRequest[];
@@ -46,8 +46,25 @@ export function planBulk(input: BulkPlanInput): BulkPlan {
   const { scope, reviewed, groups, entries, visible, stateHashes, disabled } = input;
   const scopeField = scope.kind === 'commit' ? { kind: 'working' as const } : scope;
   const byWorktree = new Map<string, NavEntry[]>();
+  // "Review all" in To review also moves the bookmark of a worktree whose only unreviewed files are
+  // base files (wrapped, so not in `byWorktree`): without it that group would stay behind.
+  const advance = scope.kind === 'review' && reviewed;
+  const advanceOnly = new Set<string>();
+  // Worktrees with an own file the view hides that the request would change (the "From main" chip
+  // lists base files only): a request without `paths` would mark it, so those get no bookmark-only
+  // request. Bulk review with the chip on stays a no-op.
+  const hidesOwn = new Set<string>();
   for (const e of entries) {
-    if (!visible(e)) continue;
+    if (advance && isBaseFile(e.file) && !(disabled.has(e.worktreeId) && !input.includeDisabled)) {
+      advanceOnly.add(e.worktreeId);
+    }
+    if (!visible(e)) {
+      if (!isBaseFile(e.file) && e.file.reviewed !== reviewed) hidesOwn.add(e.worktreeId);
+      continue;
+    }
+    // Files from a merge, rebase or update of the default branch are never marked in bulk (the
+    // daemon skips them too, DECISIONS #204): the count says what the click changes.
+    if (isBaseFile(e.file)) continue;
     if (e.file.reviewed === reviewed) continue;
     if (disabled.has(e.worktreeId) && !input.includeDisabled) continue;
     const list = byWorktree.get(e.worktreeId);
@@ -56,17 +73,18 @@ export function planBulk(input: BulkPlanInput): BulkPlan {
   }
   let count = 0;
   for (const list of byWorktree.values()) count += list.length;
+  for (const id of byWorktree.keys()) advanceOnly.delete(id);
+  for (const id of hidesOwn) advanceOnly.delete(id);
   const base = { scope: scopeField, reviewed, includeDisabled: input.includeDisabled ?? false };
   // "Review all" in To review (docs/STATUS-FLOW.md §2.3) also moves the bookmark to HEAD. Hidden
   // files there are reviewed ones only, so the whole worktree is what the user sees: no `paths`.
-  const advance = scope.kind === 'review' && reviewed;
 
   if (input.view === 'inbox' && input.inboxUnfiltered) {
     const ids = groups.map((g) => g.worktree.id);
     return {
       target: 'all',
       count,
-      worktrees: byWorktree.size,
+      worktrees: byWorktree.size + advanceOnly.size,
       requests: [
         {
           ...base,
@@ -94,7 +112,16 @@ export function planBulk(input: BulkPlanInput): BulkPlan {
       expectedStateHashes: hashesFor([worktreeId], stateHashes),
     });
   }
-  return { target: 'worktree', count, worktrees: byWorktree.size, requests };
+  // Worktrees with base files only: nothing to mark, but the bookmark moves like the others'.
+  for (const worktreeId of advanceOnly) {
+    requests.push({
+      ...base,
+      target: { kind: 'worktree', worktreeId },
+      advanceBookmarks: true,
+      expectedStateHashes: hashesFor([worktreeId], stateHashes),
+    });
+  }
+  return { target: 'worktree', count, worktrees: byWorktree.size + advanceOnly.size, requests };
 }
 
 /** A plan for a sidebar node (whole folder / project / worktree), ignoring UI filters. */

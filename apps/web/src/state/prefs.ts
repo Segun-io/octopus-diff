@@ -7,7 +7,7 @@
  * v2 (UX round 1): adds `version: 2`, `theme` becomes `{ mode, light, dark }`, plus density,
  *             defaultScope, autoAdvance, reviewOffDisplay, titleCount, confirmBulk, sidebar
  *             collapse state. Later additive fields (`pinned`, `folderStart`, `settle`,
- *             `settledOpen`) need no version bump: `normalizePrefs` fills their defaults.
+ *             `settledOpen`, `fromMainOnly`) need no version bump: `normalizePrefs` fills their defaults.
  */
 import { type DiffScope, type ScopeKind, scopeFromQueryFields } from '@octopus-diff/contracts';
 import type { SettleOverride } from '../lib/model.ts';
@@ -26,6 +26,11 @@ export interface Prefs {
   diffMode: DiffMode;
   ignoreWhitespace: boolean;
   showReviewed: boolean;
+  /**
+   * The "From main" chip: list only the files that came from a merge, rebase or update of the
+   * default branch. Off by default (those files are wrapped in a collapsed group, DECISIONS #205).
+   */
+  fromMainOnly: boolean;
   theme: ThemePrefs;
   fileListLayout: FileListLayout;
   density: Density;
@@ -53,6 +58,7 @@ export const DEFAULT_PREFS: Prefs = {
   diffMode: 'split',
   ignoreWhitespace: false,
   showReviewed: true,
+  fromMainOnly: false,
   theme: normalizeThemePrefs(undefined),
   fileListLayout: 'list',
   density: 'compact',
@@ -109,6 +115,7 @@ export function normalizePrefs(raw: unknown): Prefs {
     diffMode: oneOf(v.diffMode, ['split', 'unified']) ?? DEFAULT_PREFS.diffMode,
     ignoreWhitespace: bool(v.ignoreWhitespace) ?? DEFAULT_PREFS.ignoreWhitespace,
     showReviewed: bool(v.showReviewed) ?? DEFAULT_PREFS.showReviewed,
+    fromMainOnly: bool(v.fromMainOnly) ?? DEFAULT_PREFS.fromMainOnly,
     theme: normalizeThemePrefs(v.theme),
     fileListLayout: oneOf(v.fileListLayout, ['list', 'tree']) ?? DEFAULT_PREFS.fileListLayout,
     density: oneOf(v.density, ['compact', 'comfortable']) ?? DEFAULT_PREFS.density,

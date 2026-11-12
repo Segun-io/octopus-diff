@@ -266,6 +266,8 @@ export function DiffPane() {
       data-patch-hash={diff?.patchHash ?? ''}
       data-mode={diffMode}
       data-state={state}
+      // True while the patch shown is the previous scope's (placeholder data): `ready`, but not yet this view's.
+      data-placeholder={placeholder ? 'true' : 'false'}
       aria-label={selected ? `Diff of ${selected.path}` : 'Diff viewer'}
       aria-busy={state === 'loading'}
       className="flex h-full min-h-0 min-w-0 flex-col bg-canvas"

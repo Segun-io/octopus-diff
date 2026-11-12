@@ -94,6 +94,14 @@ export interface MockBackendOptions {
    * opened (`PUT /api/focus` with its worktree or `projectId`), which emits `review.ready`.
    */
   reviewOnDemand?: boolean;
+  /**
+   * Merge noise like the daemon's (DECISIONS #198-#204): some worktrees carry files that came from
+   * a merge, rebase or update of the default branch. To review labels them (`origin` / `originVia`,
+   * `baseFiles`, `unreviewedOwnFiles`, `integrationRef` on the summary); All on branch lists the
+   * mixed ones as plain own changes and none of the base ones; bulk review never marks base files.
+   * Off by default (the tests that count files keep their numbers); the standalone mock turns it on.
+   */
+  mergeNoise?: boolean;
 }
 
 /** Soft limit: above this the patch is omitted unless `full=true`. Hard cap: patch is cut. */
@@ -125,6 +133,8 @@ interface MockWorktree {
   worktree: Worktree;
   files: MockFile[];
   branchFiles: MockFile[];
+  /** Committed files carrying merge noise (`MockFile.noise`), with `mergeNoise` on. */
+  mergeFiles: MockFile[];
   commits: MockCommit[];
   upstream: string | null;
   aheadBehindRef: string | null;
@@ -293,6 +303,7 @@ export class MockBackend {
       worktree,
       files: [],
       branchFiles: [],
+      mergeFiles: [],
       commits: [],
       upstream,
       aheadBehindRef,
@@ -393,6 +404,19 @@ export class MockBackend {
     };
   }
 
+  /** A committed file carrying merge noise (see `MockFile.noise`). */
+  private noiseFile(
+    path: string,
+    status: MockFile['status'],
+    origin: 'base' | 'mixed',
+    via: NonNullable<MockFile['noise']>['via'],
+  ): MockFile {
+    return {
+      ...this.file(path, status, { staged: false, unstaged: false }),
+      noise: { origin, via },
+    };
+  }
+
   private buildDemo(): void {
     // `~/code` is a watched folder (scan root); infra and legacy-tool were added directly.
     const code: ScanRoot = {
@@ -460,6 +484,19 @@ export class MockBackend {
       this.file('src/server/router.ts', 'modified'),
     ];
 
+    if (this.options.mergeNoise) {
+      // Main merged in, then the branch changed one file main had changed too (mixed), and a
+      // cherry-picked fix main already has (same as main): different vias in one group.
+      auth.mergeFiles = [
+        this.noiseFile('src/lib/http.ts', 'modified', 'base', 'merge'),
+        this.noiseFile('src/lib/retry.ts', 'added', 'base', 'merge'),
+        this.noiseFile('src/server/health.ts', 'modified', 'base', 'merge'),
+        this.noiseFile('docs/CHANGELOG.md', 'modified', 'base', 'merge'),
+        this.noiseFile('src/lib/limits.ts', 'modified', 'base', 'same-as-base'),
+        this.noiseFile('src/server/config.ts', 'modified', 'mixed', 'merge'),
+      ];
+    }
+
     const cache = this.makeWorktree(api, {
       branch: 'fix/cache',
       path: '/home/dev/code/octopus-api/.claude/worktrees/fix-cache',
@@ -472,6 +509,14 @@ export class MockBackend {
       this.file('test/cache.test.ts', 'added', { lines: 50 }),
     ];
     cache.branchFiles = [this.file('src/lib/cache.ts', 'modified', { seed: 7 })];
+    if (this.options.mergeNoise) {
+      // Rebased onto origin/main: everything came the same way.
+      cache.mergeFiles = [
+        this.noiseFile('src/lib/pool.ts', 'added', 'base', 'rebase'),
+        this.noiseFile('test/pool.test.ts', 'added', 'base', 'rebase'),
+        this.noiseFile('src/lib/queue.ts', 'modified', 'base', 'rebase'),
+      ];
+    }
 
     const detached = this.makeWorktree(api, {
       branch: null,
@@ -560,6 +605,22 @@ export class MockBackend {
           );
         }
         mw.files = files;
+        if (this.options.mergeNoise && w > 0) {
+          // Merge noise per worktree: 12 base files, 3 mixed ones (no PRNG: the dataset above is
+          // the same with and without it).
+          const via = (k: number) => (k % 3 === 0 ? 'update' : k % 3 === 1 ? 'merge' : 'rebase');
+          for (let k = 0; k < 15; k++) {
+            const name = `${DIRS[k % DIRS.length] ?? 'src'}/upstream${String(k).padStart(2, '0')}-${NAMES[k % NAMES.length]}`;
+            mw.mergeFiles.push(
+              this.noiseFile(
+                name,
+                k % 4 === 0 ? 'added' : 'modified',
+                k < 12 ? 'base' : 'mixed',
+                via(w),
+              ),
+            );
+          }
+        }
       }
     }
   }
@@ -583,11 +644,19 @@ export class MockBackend {
       case 'unstaged':
         return mw.files.filter((f) => f.unstaged && f.status !== 'untracked');
       case 'branch':
-        return mw.worktree.isMain ? [] : mw.branchFiles;
+        // A file both sides changed is its own change here: All on branch starts at the merge
+        // base with the default branch, so the base files are not in it.
+        return mw.worktree.isMain
+          ? []
+          : [...mw.branchFiles, ...mw.mergeFiles.filter((f) => f.noise?.origin === 'mixed')];
       case 'review': {
-        if (!this.options.statusFlow || mw.worktree.isMain || mw.commitsReviewed) return mw.files;
+        if (mw.worktree.isMain || mw.commitsReviewed) return mw.files;
         const working = new Set(mw.files.map((f) => f.path));
-        return [...mw.files, ...mw.branchFiles.filter((f) => !working.has(f.path))];
+        const committed = this.options.statusFlow ? mw.branchFiles : [];
+        return [
+          ...mw.files,
+          ...[...committed, ...mw.mergeFiles].filter((f) => !working.has(f.path)),
+        ];
       }
       case 'commit': {
         const sha = scope.sha.toLowerCase();
@@ -649,6 +718,10 @@ export class MockBackend {
       staged: tracksStage ? file.staged : false,
       unstaged: tracksStage ? file.unstaged : false,
       reviewed: this.reviews.has(this.reviewKey(mp.project.id, scope.kind, file, patchHash)),
+      // Only To review labels files (the daemon's lists: DECISIONS #201).
+      ...(scope.kind === 'review' && file.noise
+        ? { origin: file.noise.origin, originVia: file.noise.via }
+        : {}),
     };
   }
 
@@ -696,15 +769,7 @@ export class MockBackend {
       ...(this.options.reviewOnDemand && !this.opened.has(mp.project.id)
         ? {}
         : {
-            review: this.options.statusFlow
-              ? this.reviewOf(mp, mw)
-              : {
-                  bookmark: mw.worktree.headSha,
-                  base: mw.worktree.headSha,
-                  newCommits: 0,
-                  unreviewedFiles: files.filter((f) => !f.reviewed).length,
-                  historyRewritten: false,
-                },
+            review: this.reviewOf(mp, mw, files),
           }),
     };
   }
@@ -715,14 +780,38 @@ export class MockBackend {
       : Math.max(1, Math.min(mw.commits.length, 3));
   }
 
-  private reviewOf(mp: MockProject, mw: MockWorktree): NonNullable<WorktreeSummary['review']> {
-    const files = this.changedFiles(mp, mw, { kind: 'review' });
+  private reviewOf(
+    mp: MockProject,
+    mw: MockWorktree,
+    working: readonly ChangedFile[],
+  ): NonNullable<WorktreeSummary['review']> {
+    const review = { kind: 'review' } as const;
+    // Without status flow the review list is the uncommitted files (reviewed per scope kind, as
+    // before) plus the merge noise, so only the noise needs building (the summary is computed
+    // for every worktree on every projects request); with it, what the review scope lists.
+    const files = this.options.statusFlow ? this.changedFiles(mp, mw, review) : [];
+    const noise = this.options.statusFlow
+      ? files.filter((f) => f.origin !== undefined)
+      : mw.worktree.isMain || mw.commitsReviewed
+        ? []
+        : mw.mergeFiles.map((f) => this.changedFile(mp, mw, review, f));
+    const unreviewed = this.options.statusFlow
+      ? files.filter((f) => !f.reviewed)
+      : [...working.filter((f) => !f.reviewed), ...noise.filter((f) => !f.reviewed)];
     return {
       bookmark: mw.worktree.headSha,
       base: mw.worktree.headSha,
-      newCommits: this.newCommits(mw),
-      unreviewedFiles: files.filter((f) => !f.reviewed).length,
+      newCommits: this.options.statusFlow ? this.newCommits(mw) : 0,
+      unreviewedFiles: unreviewed.length,
       historyRewritten: false,
+      // Like the daemon: only with something to label; mixed files count as own.
+      ...(noise.length > 0
+        ? {
+            baseFiles: noise.filter((f) => f.origin === 'base').length,
+            unreviewedOwnFiles: unreviewed.filter((f) => f.origin !== 'base').length,
+            integrationRef: 'origin/main',
+          }
+        : {}),
     };
   }
 
@@ -1028,10 +1117,11 @@ export class MockBackend {
         stale.push(mw.worktree.id);
         continue;
       }
-      let files = this.changedFiles(mp, mw, req.scope);
+      // Like the daemon (DECISIONS #204): bulk review never marks or unmarks base files.
+      let files = this.changedFiles(mp, mw, req.scope).filter((f) => f.origin !== 'base');
       if (wanted) files = files.filter((f) => wanted.has(f.rawPath ?? f.path));
       if (
-        this.options.statusFlow &&
+        (this.options.statusFlow || mw.mergeFiles.length > 0) &&
         req.advanceBookmarks &&
         req.reviewed &&
         req.scope.kind === 'review' &&
