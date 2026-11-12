@@ -1,7 +1,7 @@
 # cache-branch-inbox report
 
 Roadmap #27 "Perf: cache the branch-scope inbox and files, dedupe in-flight requests" (milestone M1, part of #24).
-Branch `perf/cache-branch-inbox`. DECISIONS #164–#168.
+Branch `perf/cache-branch-inbox`. DECISIONS #166–#170.
 
 ## Shipped
 
@@ -61,8 +61,8 @@ Commands and results (from the repo root):
 
 ## Decisions
 
-DECISIONS #164 (key and numbers), #165 (`readBranchBase`), #166 (`stateHash` covers the default branch), #167
-(inbox single-flight, no result cache), #168 (web). PLAN §5.3/§5.6 got one sentence each.
+DECISIONS #166 (key and numbers), #167 (`readBranchBase`), #168 (`stateHash` covers the default branch), #169
+(inbox single-flight, no result cache), #170 (web). PLAN §5.3/§5.6 got one sentence each.
 
 ## Contract changes
 
@@ -93,4 +93,3 @@ None added or removed (`pnpm credits` not needed; `pnpm lint` ran `credits:check
   `stateHash` now changes on a default-branch move, which an ETag on `/api/projects` will pick up for free.
 - **#26** owns the bench: `e2e/bench/inbox-cache.ts` is a standalone script and can be folded into it.
 - **#12**: forced refresh drops the per-worktree file lists (and re-reads the base); forge caches are untouched.
-- DECISIONS numbers #164–#168 may need renumbering at merge.
