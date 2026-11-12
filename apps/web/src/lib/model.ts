@@ -473,13 +473,19 @@ function matchesPicked(row: WorktreeRow, filters: SidebarFilters): boolean {
   return filters.projects.includes(row.project.id) || filters.worktrees.includes(row.worktree.id);
 }
 
+/**
+ * A row with changes whose review state the daemon has not computed yet (#10): it may well have
+ * something to review, so it stays listed, and the UI says it is being worked out (#11).
+ */
+export function reviewPending(
+  row: Pick<WorktreeRow, 'review' | 'summary'>,
+): boolean {
+  return row.review.enabled && !!row.summary && !row.summary.review && row.summary.changedFiles > 0;
+}
+
 export function rowVisible(row: WorktreeRow, filters: SidebarFilters): boolean {
   if (filters.onlyDirty && !isDirtySummary(row.summary)) return false;
-  // A row with changes whose review state is not computed yet (#10) may well have something to
-  // review: it stays listed (blocked ones included).
-  const pending =
-    row.review.enabled && !!row.summary && !row.summary.review && row.summary.changedFiles > 0;
-  if (filters.onlyUnreviewed && row.unreviewed === 0 && !pending) return false;
+  if (filters.onlyUnreviewed && row.unreviewed === 0 && !reviewPending(row)) return false;
   return matchesPicked(row, filters);
 }
 

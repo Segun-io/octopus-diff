@@ -8,6 +8,7 @@ import {
 import { useState } from 'react';
 import { describeError } from '../../api/queries.ts';
 import { useChangeRequestConversation } from '../../api/request.ts';
+import { useWorktreeForgeWait } from '../../api/wait.ts';
 import {
   CONVERSATION_PAGE,
   type ConversationFilter,
@@ -20,6 +21,7 @@ import {
   REVIEWER_WORD,
 } from '../../lib/request.ts';
 import { absoluteTime, relativeTime } from '../../lib/time.ts';
+import { SkeletonLines, WaitNote } from '../WaitNote.tsx';
 import { ActorName, Avatar, Banner, ExternalLink, MarkdownBlock } from './parts.tsx';
 
 /**
@@ -42,6 +44,7 @@ export function Conversation({
   requestUrl: string;
 }) {
   const query = useChangeRequestConversation(worktreeId, changeRequest, true);
+  const waitSource = useWorktreeForgeWait(worktreeId, kind);
   const [filter, setFilter] = useState<ConversationFilter>(DEFAULT_CONVERSATION_FILTER);
   const [newest, setNewest] = useState(false);
   const [shown, setShown] = useState(CONVERSATION_PAGE);
@@ -58,9 +61,10 @@ export function Conversation({
       );
     }
     return (
-      <p role="status" className="text-xs text-muted">
-        Loading the conversation…
-      </p>
+      <div aria-busy="true">
+        <SkeletonLines widths={[60, 80, 45]} />
+        <WaitNote active source={waitSource} />
+      </div>
     );
   }
   if (!data.conversation) {

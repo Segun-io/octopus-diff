@@ -1,9 +1,11 @@
 import { type ChangeRequest, type ChangeRequestDetail, TEST_IDS } from '@octopus-diff/contracts';
 import { type ReactNode, useState } from 'react';
 import { useChangeRequestConversation } from '../../api/request.ts';
+import { useWorktreeForgeWait } from '../../api/wait.ts';
 import { buildTimeline, REVIEWER_WORD, type TimelineEvent } from '../../lib/request.ts';
 import { absoluteTime, relativeTime } from '../../lib/time.ts';
 import { ChangeRequestGlyph } from '../ChangeRequest.tsx';
+import { WaitNote } from '../WaitNote.tsx';
 import { ActorName, Banner, ExternalLink, MarkdownBlock } from './parts.tsx';
 
 /**
@@ -92,6 +94,7 @@ export function Timeline({
 }) {
   const [newest, setNewest] = useState(true);
   const conversation = useChangeRequestConversation(worktreeId, batch, true);
+  const waitSource = useWorktreeForgeWait(worktreeId, batch.kind);
   const data = conversation.data;
   const events = buildTimeline(detail, data?.conversation ?? null, newest);
   const imageHosts = data?.imageHosts ?? [];
@@ -104,7 +107,11 @@ export function Timeline({
   return (
     <div className="px-4 py-3">
       <div className="mb-3 flex items-center gap-2 text-[11px] text-muted">
-        {!data && !conversation.isError && <span role="status">Loading the conversation…</span>}
+        <WaitNote
+          variant="inline"
+          active={!data && !conversation.isError}
+          source={waitSource}
+        />
         {data?.conversation?.truncated && (
           <span>
             Only partially loaded.{' '}

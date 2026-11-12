@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import type { HTMLAttributes, ReactNode } from 'react';
 import { useDelayedFlag, useNow } from '../lib/useWait.ts';
 import { staleText, WAIT_NOTE_DELAY_MS, type WaitSource, waitText } from '../lib/wait.ts';
 
@@ -50,16 +50,9 @@ export function WaitNote({
   };
   if (variant === 'float') {
     return (
-      <div
-        {...attrs}
-        className={`pointer-events-none absolute inset-x-2 bottom-2 z-10 flex ${className}`}
-      >
-        {shown && (
-          <span className="od-overlay od-fade-in max-w-full truncate rounded-md px-2 py-1 text-[11px] text-muted">
-            <span className={tone}>{text}</span>
-          </span>
-        )}
-      </div>
+      <FloatSlot {...attrs} className={className}>
+        {shown && <FloatPill className={tone}>{text}</FloatPill>}
+      </FloatSlot>
     );
   }
   if (variant === 'inline') {
@@ -73,6 +66,39 @@ export function WaitNote({
     <p {...attrs} className={`mt-1 min-h-4 text-[11px] ${tone} ${className}`}>
       {text}
     </p>
+  );
+}
+
+/** The always-mounted live region of a floating note: over the nearest positioned ancestor. */
+export function FloatSlot({
+  children,
+  className = '',
+  ...rest
+}: { children?: ReactNode; className?: string } & Omit<HTMLAttributes<HTMLDivElement>, 'className'> &
+  Record<`data-${string}`, string | undefined>) {
+  return (
+    <div
+      {...rest}
+      className={`pointer-events-none absolute inset-x-2 bottom-2 z-10 flex ${className}`}
+    >
+      {children}
+    </div>
+  );
+}
+
+export function FloatPill({
+  children,
+  className = '',
+}: {
+  children: ReactNode;
+  className?: string;
+}) {
+  return (
+    <span
+      className={`od-overlay od-fade-in pointer-events-auto max-w-full min-w-0 rounded-md px-2 py-1 text-[11px] text-muted ${className}`}
+    >
+      {children}
+    </span>
   );
 }
 
@@ -122,5 +148,21 @@ export function StaleNote({
         {refreshing ? 'Refreshing…' : 'Refresh'}
       </button>
     </span>
+  );
+}
+
+/** Placeholder bars while content loads (the shape, not a message: no text, hidden from AT). */
+export function SkeletonLines({ widths }: { widths: readonly number[] }) {
+  return (
+    <div aria-hidden="true">
+      {widths.map((w, i) => (
+        <div
+          // biome-ignore lint/suspicious/noArrayIndexKey: static placeholder rows
+          key={i}
+          className="mb-2 h-3 rounded-sm bg-raised"
+          style={{ width: `${w}%` }}
+        />
+      ))}
+    </div>
   );
 }
