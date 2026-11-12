@@ -184,3 +184,6 @@ untracked file 2 ms (20 ms in the untracked-heavy worktree) / 0 spawns; a file t
   inside a nested repository, so nothing was wrong; the route refuses anyway.
 - **Tests:** 5 golden cases against the reference core (4 failed first), 4 mutations killed; fuzz extended (nested repository per seed) but, honestly, it does
   not isolate the case by itself.
+- **Verification (round 4):** lint, typecheck, build exit 0; `pnpm test` exit 0 (git-core 434 + 1 skipped, daemon 398 + 4 skipped; both run twice more, same counts); folding mode git-core 419 + 16 skipped,
+  daemon 396 + 6 skipped; `pnpm test:e2e` 102 passed (3.4 min), read-only proof 12 repos, 4916 lock polls, 0 violations; `perf:smoke` exit 0; 100k diff-open: tracked 15-16 ms / 1 spawn,
+  untracked 2 ms (21 ms in the untracked-heavy worktree) / 0 spawns, 300k-line rewrite 280 ms (first call).
