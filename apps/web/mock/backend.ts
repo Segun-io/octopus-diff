@@ -43,15 +43,22 @@ import {
   reviewTargetKey,
   type ScanRoot,
   type ServerEvent,
+  type ServerEventOf,
   type SetReviewPolicyRequest,
   type SettingsResponse,
   scopeKey,
   type UndoReviewResponse,
   type UpdateProjectRequest,
   type UpdateProjectResponse,
+  WORKTREE_CHANGED_PATHS_MAX,
+  WORKTREE_CHANGED_PATHS_MAX_CHARS,
   type Worktree,
+  type WorktreeListItem,
   type WorktreeSummary,
 } from '@octopus-diff/contracts';
+
+const WORKING: DiffScope = { kind: 'working' };
+
 import { MockActivity } from './activity.js';
 import { buildPatch, countLines, fileSides, type MockFile, type MockFileKind } from './content.js';
 import {
@@ -108,6 +115,11 @@ export interface MockBackendOptions {
    * Off by default (the tests that count files keep their numbers); the standalone mock turns it on.
    */
   mergeNoise?: boolean;
+  /**
+   * Behave like a daemon before #51: `worktree.changed` carries only ids and hashes (no row, no
+   * changed paths). Off by default: the mock sends the deltas a current daemon sends.
+   */
+  legacyEvents?: boolean;
 }
 
 /** Soft limit: above this the patch is omitted unless `full=true`. Hard cap: patch is cut. */
@@ -153,6 +165,8 @@ interface MockWorktree {
   /** `WorktreeSummary.activityAt`: a stable stagger per worktree id, then the last simulated edit. */
   activityAt: string;
   revision: number;
+  /** `WorktreeListItem.rev` (#51 review): bumped whenever the mock changes the row's state. */
+  rowRev?: number;
   /** Status flow mock: the bookmark reached HEAD (the branch's commits are reviewed). */
   commitsReviewed?: boolean;
 }
@@ -968,14 +982,81 @@ export class MockBackend {
 
   private projectItem(mp: MockProject): ProjectListItem {
     const map = reviewOverrideMap([...this.overrides.values()]);
+    return { project: mp.project, worktrees: mp.worktrees.map((mw) => this.row(mp, mw, map)) };
+  }
+
+  /** A worktree's row of `/api/projects` (and of `worktree.changed`, #51). */
+  private row(
+    mp: MockProject,
+    mw: MockWorktree,
+    map = reviewOverrideMap([...this.overrides.values()]),
+  ): WorktreeListItem {
     return {
-      project: mp.project,
-      worktrees: mp.worktrees.map((mw) => ({
-        worktree: mw.worktree,
-        summary: mw.error || mw.worktree.missing ? null : this.summary(mp, mw),
-        error: mw.error ? { code: 'timeout', message: mw.error } : null,
-        review: this.policyOf(mp, mw, map),
-      })),
+      worktree: mw.worktree,
+      summary: mw.error || mw.worktree.missing ? null : this.summary(mp, mw),
+      error: mw.error ? { code: 'timeout', message: mw.error } : null,
+      review: this.policyOf(mp, mw, map),
+      // An older daemon (`legacyEvents`) has no `rev` either.
+      ...(this.options.legacyEvents ? {} : { rev: mw.rowRev ?? 0 }),
+    };
+  }
+
+  /** Last `rev` handed out, seeded like the daemon's (start time in ms). */
+  private revSeq = Date.now();
+
+  private bumpRow(mw: MockWorktree): void {
+    mw.rowRev = ++this.revSeq;
+  }
+
+  /**
+   * Makes a worktree's summary fail (`error`), or recover, and announces it the way the daemon does
+   * (#51 review): `stateHash` `error:timeout`, a row with a null summary and the error.
+   */
+  setWorktreeError(worktreeId: string, message: string | null): void {
+    const { mp, mw } = this.findWorktree(worktreeId);
+    mw.error = message;
+    mw.revision += 1;
+    mw.updatedAt = now();
+    this.bumpRow(mw);
+    this.emit(this.changedEvent(mp, mw));
+  }
+
+  /**
+   * `worktree.changed` as a current daemon sends it (#51): the row, and the `working` list's
+   * paths with their patch hashes (the daemon sends the list it already holds; the mock always
+   * has the working one), none past the contract's caps.
+   */
+  private changedEvent(mp: MockProject, mw: MockWorktree): ServerEventOf<'worktree.changed'> {
+    const summary = this.summary(mp, mw);
+    const activitySeq = this.activity.seqOf(mw.worktree.id);
+    const slim: ServerEventOf<'worktree.changed'> = {
+      type: 'worktree.changed',
+      projectId: mp.project.id,
+      worktreeId: mw.worktree.id,
+      stateHash: mw.error ? 'error:timeout' : summary.stateHash,
+      ...(activitySeq > 0 ? { activitySeq } : {}),
+    };
+    if (this.options.legacyEvents) return slim;
+    const files = mw.error || mw.worktree.missing ? [] : this.changedFiles(mp, mw, WORKING);
+    let chars = 0;
+    for (const f of files) chars += f.path.length + (f.rawPath?.length ?? 0);
+    const fits =
+      files.length <= WORKTREE_CHANGED_PATHS_MAX && chars <= WORKTREE_CHANGED_PATHS_MAX_CHARS;
+    return {
+      ...slim,
+      ...this.row(mp, mw),
+      paths: {
+        scope: WORKING,
+        files: fits
+          ? files.map((f) =>
+              f.rawPath
+                ? { path: f.path, rawPath: f.rawPath, patchHash: f.patchHash }
+                : { path: f.path, patchHash: f.patchHash },
+            )
+          : [],
+        total: files.length,
+        truncated: !fits,
+      },
     };
   }
 
@@ -1365,16 +1446,23 @@ export class MockBackend {
     return { ok: true, restored };
   }
 
-  inbox(scope: DiffScope, onlyUnreviewed: boolean, projectIds?: readonly string[]): InboxResponse {
+  inbox(
+    scope: DiffScope,
+    onlyUnreviewed: boolean,
+    projectIds?: readonly string[],
+    worktreeIds?: readonly string[],
+  ): InboxResponse {
     if (scope.kind === 'commit') {
       throw new MockApiError(400, 'bad_request', 'commit scope is not supported by the inbox');
     }
     const entries: InboxResponse['entries'] = [];
     const map = reviewOverrideMap([...this.overrides.values()]);
     const only = projectIds ? new Set(projectIds) : null;
+    const onlyWorktrees = worktreeIds ? new Set(worktreeIds) : null;
     for (const mp of this.projects) {
       if (only && !only.has(mp.project.id)) continue;
       for (const mw of mp.worktrees) {
+        if (onlyWorktrees && !onlyWorktrees.has(mw.worktree.id)) continue;
         if (mw.error || mw.worktree.missing) continue;
         const review = this.policyOf(mp, mw, map);
         if (onlyUnreviewed && !review.enabled) continue;
@@ -1677,15 +1765,8 @@ export class MockBackend {
     mw.revision += 1;
     mw.updatedAt = now();
     mw.activityAt = mw.updatedAt;
-    const summary = this.summary(mp, mw);
-    const activitySeq = this.activity.seqOf(id);
-    this.emit({
-      type: 'worktree.changed',
-      projectId: mp.project.id,
-      worktreeId: id,
-      stateHash: summary.stateHash,
-      ...(activitySeq > 0 ? { activitySeq } : {}),
-    });
+    this.bumpRow(mw);
+    this.emit(this.changedEvent(mp, mw));
     return { worktreeId: id, path, action: chosen };
   }
 

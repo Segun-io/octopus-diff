@@ -7,6 +7,7 @@ import {
   type ServerEvent,
   ServerEventSchema,
   SseParser,
+  WORKTREE_CHANGED_PATHS_MAX,
 } from '../src/index.js';
 
 const id = '0123456789abcdef';
@@ -88,6 +89,89 @@ describe('server events', () => {
     expect(messages.map((m) => m.event)).toEqual(samples.map((s) => s.type));
     expect(messages.map((m) => parseServerEvent(m))).toEqual(samples);
     for (const event of samples) expect(ServerEventSchema.parse(event)).toEqual(event);
+  });
+
+  it('carries the worktree row and changed paths on worktree.changed (#51); old events still parse', () => {
+    const sha = 'a'.repeat(40);
+    const delta: ServerEvent = {
+      type: 'worktree.changed',
+      projectId: id,
+      worktreeId: id,
+      stateHash: 'abc',
+      worktree: {
+        id,
+        projectId: id,
+        path: '/repo',
+        branch: 'main',
+        headSha: sha,
+        detached: false,
+        isMain: true,
+        bare: false,
+        locked: false,
+        prunable: false,
+        missing: false,
+      },
+      summary: {
+        worktreeId: id,
+        projectId: id,
+        branch: 'main',
+        headSha: sha,
+        detached: false,
+        upstream: null,
+        aheadBehindRef: null,
+        ahead: null,
+        behind: null,
+        counts: { staged: 0, unstaged: 1, untracked: 0, conflicted: 0 },
+        changedFiles: 1,
+        additions: 1,
+        deletions: 0,
+        inProgress: null,
+        stateHash: 'abc',
+        updatedAt: new Date(0).toISOString(),
+      },
+      error: null,
+      review: { enabled: true, source: 'default' },
+      rev: 1_768_000_000_123,
+      paths: {
+        scope: { kind: 'review', base: sha },
+        files: [{ path: 'a.txt', patchHash: 'p' }],
+        total: 1,
+        truncated: false,
+      },
+    };
+    expect(parseServerEvent({ data: JSON.stringify(delta) })).toEqual(delta);
+    // An older client's schema drops what it does not know; an older daemon's event has none of it.
+    const old = parseServerEvent({
+      data: JSON.stringify({
+        type: 'worktree.changed',
+        projectId: id,
+        worktreeId: id,
+        stateHash: 'x',
+      }),
+    });
+    expect(old).toEqual({
+      type: 'worktree.changed',
+      projectId: id,
+      worktreeId: id,
+      stateHash: 'x',
+    });
+    // `rev` is an optional non-negative integer (#51 review).
+    expect(parseServerEvent({ data: JSON.stringify({ ...delta, rev: -1 }) })).toBeNull();
+    expect(parseServerEvent({ data: JSON.stringify({ ...delta, rev: 1.5 }) })).toBeNull();
+    // The list is bounded.
+    const tooMany = {
+      ...delta,
+      paths: {
+        scope: { kind: 'working' },
+        files: Array.from({ length: WORKTREE_CHANGED_PATHS_MAX + 1 }, (_, i) => ({
+          path: `f${i}`,
+          patchHash: 'p',
+        })),
+        total: WORKTREE_CHANGED_PATHS_MAX + 1,
+        truncated: false,
+      },
+    };
+    expect(parseServerEvent({ data: JSON.stringify(tooMany) })).toBeNull();
   });
 
   it('returns null for unknown or malformed events', () => {

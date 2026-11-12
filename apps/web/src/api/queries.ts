@@ -18,6 +18,7 @@ import {
 } from '@tanstack/react-query';
 import { createContext, useContext } from 'react';
 import type { FileRef } from '../lib/fileRef.ts';
+import { keepNewerRows } from './deltas.ts';
 import { readToken } from './token.ts';
 
 /**
@@ -48,6 +49,12 @@ export const queryKeys = {
   dirs: (path: string) => ['dirs', path] as const,
   inboxAll: () => ['inbox'] as const,
   inbox: (scope: DiffScope) => ['inbox', scopeKey(scope)] as const,
+  /**
+   * One `worktree.changed` delta fetch of inbox rows (#51): not under `['inbox']`, so inbox
+   * invalidations and lookups never see it; one key per batch, removed when it settles.
+   */
+  inboxDelta: (scope: DiffScope, worktreeIds: readonly string[], batch: number) =>
+    ['inbox-delta', scopeKey(scope), worktreeIds.join(','), batch] as const,
   filesAll: (worktreeId: string) => ['files', worktreeId] as const,
   files: (worktreeId: string, scope: DiffScope) => ['files', worktreeId, scopeKey(scope)] as const,
   diffAll: (worktreeId: string) => ['diff', worktreeId] as const,
@@ -119,9 +126,21 @@ export function inboxScopeFor(scope: DiffScope): DiffScope {
   return scope.kind === 'commit' ? { kind: 'working' } : scope;
 }
 
+/**
+ * The projects list. A row a `worktree.changed` delta applied while this request was in flight is
+ * newer than what the request returns for it: it is kept (`keepNewerRows`, #51).
+ */
+export function projectsQueryOptions(api: ApiClient, queryClient: QueryClient) {
+  return {
+    queryKey: queryKeys.projects(),
+    queryFn: async () => keepNewerRows(queryClient, await api.listProjects()),
+  };
+}
+
 export function useProjectsQuery() {
   const api = useApi();
-  return useQuery({ queryKey: queryKeys.projects(), queryFn: () => api.listProjects() });
+  const queryClient = useQueryClient();
+  return useQuery(projectsQueryOptions(api, queryClient));
 }
 
 /**
@@ -202,7 +221,7 @@ async function currentProjects(
     return state.data;
   }
   return queryClient
-    .fetchQuery({ queryKey: key, queryFn: () => api.listProjects(), staleTime: 0 })
+    .fetchQuery({ ...projectsQueryOptions(api, queryClient), staleTime: 0 })
     .catch(() => undefined);
 }
 

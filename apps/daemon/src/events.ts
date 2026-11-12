@@ -68,13 +68,22 @@ export class EventHub {
     return () => this.#listeners.delete(listener);
   }
 
-  emit(event: ServerEvent): void {
+  /**
+   * Sends `event` to every client and listener. `replay` is what the `Last-Event-ID` buffer keeps
+   * instead (default: the event itself): `worktree.changed` keeps its slim form there (#51), since a
+   * reconnecting client resyncs anyway and the buffer should not hold 1000 rows and path lists.
+   */
+  emit(event: ServerEvent, replay: ServerEvent = event): void {
     if (this.#closed) return;
     const seq = ++this.#seq;
     const id = `${this.bootId}.${seq}`;
     const frame = formatSseEvent(event, id);
     if (this.#bufferSize > 0) {
-      this.#buffer.push({ seq, event, frame });
+      this.#buffer.push({
+        seq,
+        event: replay,
+        frame: replay === event ? frame : formatSseEvent(replay, id),
+      });
       if (this.#buffer.length > this.#bufferSize) this.#buffer.shift();
     }
     const bytes = encoder.encode(frame);

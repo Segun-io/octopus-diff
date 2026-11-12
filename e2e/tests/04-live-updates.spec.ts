@@ -6,6 +6,7 @@
 import { join } from 'node:path';
 import { TEST_IDS } from '@octopus-diff/contracts';
 import { findWorktree, LIVE_FILES, startAgentSimulator } from '@octopus-diff/fixtures';
+import type { Request } from '@playwright/test';
 import { liveBudgetMs } from '../support/env.js';
 import { expect, sleep, test } from '../support/test.js';
 
@@ -132,6 +133,64 @@ test.describe('§8.5 live updates', () => {
     await edits.restore();
     await expect(app.fileItem(added)).toHaveCount(0, { timeout: liveBudgetMs() });
     await expect(app.fileItem('src/stable.ts')).toHaveCount(0, { timeout: liveBudgetMs() });
+  });
+
+  test('an edit costs no /api/projects refetch, no refetch of the open diff and under 100 KB (#51)', async ({
+    manifest,
+    daemon,
+    app,
+    edits,
+  }) => {
+    const live = findWorktree(manifest, 'live').worktree;
+    await app.open(daemon.authUrl);
+    await app.selectWorktree(live.id);
+    await app.openFile(LIVE_FILES.edit);
+    const hash = await app.diffViewer.getAttribute('data-patch-hash');
+    const additions = () => app.fileItem(LIVE_FILES.other).getAttribute('data-additions');
+    const before = (await app.fileItem(LIVE_FILES.other).count()) > 0 ? await additions() : null;
+    await sleep(1000);
+
+    const seen: Array<{ url: string; bytes: number }> = [];
+    const pending: Promise<void>[] = [];
+    const onFinished = (request: Request) => {
+      if (!request.url().includes('/api/')) return;
+      pending.push(
+        request.sizes().then((s) => {
+          seen.push({ url: request.url(), bytes: s.responseBodySize + s.responseHeadersSize });
+        }),
+      );
+    };
+    app.page.on('requestfinished', onFinished);
+    try {
+      await edits.append(join(live.path, LIVE_FILES.other), '// octopus-marker-delta\n');
+      await expect
+        .poll(
+          async () => ((await app.fileItem(LIVE_FILES.other).count()) > 0 ? additions() : null),
+          {
+            timeout: liveBudgetMs() + 3000,
+          },
+        )
+        .not.toBe(before);
+      await sleep(1000); // whatever else the edit caused
+    } finally {
+      app.page.off('requestfinished', onFinished);
+    }
+    await Promise.all(pending);
+    const urls = seen.map((s) => new URL(s.url).pathname);
+    expect(
+      urls.filter((u) => u === '/api/projects'),
+      urls.join(', '),
+    ).toEqual([]);
+    expect(
+      urls.filter((u) => u.endsWith('/diff')),
+      urls.join(', '),
+    ).toEqual([]);
+    expect(urls.filter((u) => u === `/api/worktrees/${live.id}/files`).length).toBeGreaterThan(0);
+    const bytes = seen.reduce((sum, s) => sum + s.bytes, 0);
+    test.info().annotations.push({ type: 'edit-traffic-bytes', description: String(bytes) });
+    expect(bytes, urls.join(', ')).toBeLessThan(100 * 1024);
+    await expect(app.diffViewer).toHaveAttribute('data-patch-hash', hash ?? '');
+    await expect(app.diffViewer).toHaveAttribute('data-path', LIVE_FILES.edit);
   });
 
   test('sidebar counts follow external edits in the inbox view', async ({

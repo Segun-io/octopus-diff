@@ -147,6 +147,13 @@ describe('query schemas', () => {
     expect(InboxQuerySchema.parse({ projectIds: `${a},${b},${a},` }).projectIds).toEqual([a, b]);
     expect(InboxQuerySchema.safeParse({ projectIds: 'not-an-id' }).success).toBe(false);
     expect(InboxQuerySchema.safeParse({ projectIds: '' }).success).toBe(false);
+    // #51: only these worktrees (deduplicated, validated, bounded).
+    expect(InboxQuerySchema.parse({ worktreeIds: `${a},${b},${a}` }).worktreeIds).toEqual([a, b]);
+    expect(InboxQuerySchema.parse({}).worktreeIds).toBeUndefined();
+    expect(InboxQuerySchema.safeParse({ worktreeIds: 'not-an-id' }).success).toBe(false);
+    expect(InboxQuerySchema.safeParse({ worktreeIds: ',' }).success).toBe(false);
+    const many = Array.from({ length: 201 }, (_, i) => i.toString(16).padStart(16, '0'));
+    expect(InboxQuerySchema.safeParse({ worktreeIds: many.join(',') }).success).toBe(false);
     expect(
       DiffQuerySchema.parse({
         scope: 'staged',

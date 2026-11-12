@@ -229,6 +229,8 @@ export type DirsResponse = z.infer<typeof DirsResponseSchema>;
 
 /** Most projects one `GET /api/inbox?projectIds=` names (a client filling the inbox in batches). */
 export const INBOX_PROJECTS_MAX = 200;
+/** Most worktrees one `GET /api/inbox?worktreeIds=` names (a client applying event deltas, #51). */
+export const INBOX_WORKTREES_MAX = 200;
 
 export const InboxQuerySchema = z
   .object({
@@ -243,6 +245,18 @@ export const InboxQuerySchema = z
       .max(INBOX_PROJECTS_MAX * 17)
       .transform((v) => [...new Set(v.split(',').filter((s) => s.length > 0))])
       .pipe(z.array(IdSchema).min(1).max(INBOX_PROJECTS_MAX))
+      .optional(),
+    /**
+     * Only these worktrees (comma-separated ids; unknown ids are ignored), within `projectIds` when
+     * both are given (#51). A client that saw `worktree.changed` asks for just those rows: the
+     * answer holds an entry for each named worktree that has files in `scope`, built by the same
+     * rules as the full inbox; a named worktree without an entry has none.
+     */
+    worktreeIds: z
+      .string()
+      .max(INBOX_WORKTREES_MAX * 17)
+      .transform((v) => [...new Set(v.split(',').filter((s) => s.length > 0))])
+      .pipe(z.array(IdSchema).min(1).max(INBOX_WORKTREES_MAX))
       .optional(),
   })
   .superRefine(refineScopeQuery)

@@ -376,6 +376,15 @@ export const WorktreeListItemSchema = z.object({
    * (older daemons), so clients must treat `undefined` as `{ enabled: true, source: 'default' }`.
    */
   review: EffectiveReviewPolicySchema.optional(),
+  /**
+   * The order in which the daemon observed this row's state (#51 review): of two rows of the same
+   * worktree, the one with the higher `rev` describes the later state, whatever changed (summary,
+   * error, review state, the worktree's branch), so a client can tell an old answer from a new event
+   * even when `summary` is null. Equal `rev` = the same state. It moves only when the row's state
+   * changes; strictly increasing within one daemon process, starting at the process's start time in
+   * ms. Compare rows of one daemon run only (`hello.startedAt`). Absent from older daemons.
+   */
+  rev: z.number().int().nonnegative().optional(),
 });
 export type WorktreeListItem = z.infer<typeof WorktreeListItemSchema>;
 

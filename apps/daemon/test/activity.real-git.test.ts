@@ -117,7 +117,9 @@ function waitEntry(
   api: ApiClient,
   worktreeId: string,
   match: (e: ActivityEntry) => boolean,
-  timeoutMs = 8000,
+  // A loaded CI runner can take several seconds from a file event to the feed (debounce, the
+  // review state, the summary); a miss still fails, only later.
+  timeoutMs = 20_000,
 ): Promise<ActivityEntry> {
   return eventually(
     async () => (await api.getActivity(worktreeId)).entries.find(match),
@@ -127,7 +129,7 @@ function waitEntry(
 }
 
 const live = (api: ApiClient, id: string) =>
-  eventually(async () => (await api.getActivity(id)).live, 8000, 50);
+  eventually(async () => (await api.getActivity(id)).live, 20_000, 50);
 
 /** The git subcommand of a logged argv (after the global options and `-c` pairs). */
 function subcommand(line: string): string | undefined {
@@ -149,7 +151,7 @@ async function filesUnder(dir: string): Promise<string[]> {
 }
 
 // Each test starts a real daemon on real git (two in one case); a loaded CI runner needs more than 5 s.
-describe('live activity feed (real git, #38)', { timeout: 30_000 }, () => {
+describe('live activity feed (real git, #38)', { timeout: 90_000 }, () => {
   it('shows what an agent does: edit, delete (content served), untracked delete, commit, checkout, reset', async () => {
     const fx = await makeRealGitFixture();
     const dir = await repo(fx);
@@ -300,10 +302,21 @@ describe('live activity feed (real git, #38)', { timeout: 30_000 }, () => {
     const steps = async (s: Started, dir: string, fx: RealGitFixture) => {
       const id = hashId(dir);
       const counts: number[] = [];
+      // `config` reads are left out: how many there are depends on the 2 s racy window of the
+      // config scan, not on the snapshot. The count is taken once nothing spawns any more (a
+      // slow runner finishes the review state's work after the refresh answered).
+      const count = () => s.spawns().filter((l) => subcommand(l) !== 'config').length;
       const step = async (act: () => Promise<void> | void) => {
         await act();
         await s.api.refreshWorktree(id);
-        counts.push(s.spawns().length);
+        let last = count();
+        for (let quietFor = 0; quietFor < 200; ) {
+          await sleep(50);
+          const now = count();
+          quietFor = now === last ? quietFor + 50 : 0;
+          last = now;
+        }
+        counts.push(last);
       };
       await step(() => {});
       await step(() => appendFile(path.join(dir, 'a.txt'), 'x\n'));
@@ -329,12 +342,16 @@ describe('live activity feed (real git, #38)', { timeout: 30_000 }, () => {
     const without = await steps(b, dirB, fxB);
 
     const [lastA = 0, lastB = 0] = [withSnapshot[4], without[4]];
-    expect(a.spawns().length - lastA).toBe(0);
+    const settledCount = (x: Started) =>
+      x.spawns().filter((l) => subcommand(l) !== 'config').length;
+    expect(settledCount(a) - lastA).toBe(0);
     // Startup and the file steps: identical totals; the commit adds exactly one `log`.
     expect(withSnapshot.slice(0, 4)).toEqual(without.slice(0, 4));
     expect(lastA - lastB).toBe(1);
     // The extra process is the HEAD classification's `git log`.
-    const logs = (x: Started) => x.spawns().filter((l) => subcommand(l) === 'log').length;
+    // (The review state runs its own `log`s; only the classification's carries `--max-count`.)
+    const logs = (x: Started) =>
+      x.spawns().filter((l) => subcommand(l) === 'log' && l.includes('--max-count=')).length;
     expect(logs(a) - logs(b)).toBe(1);
     // The feed of A saw it all; B (no snapshot) has no feed.
     const feed = await a.api.getActivity(hashId(dirA));

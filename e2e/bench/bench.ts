@@ -59,7 +59,7 @@ import {
   sampleProcessCpu,
   summarize,
 } from '@octopus-diff/fixtures';
-import { type Browser, chromium, type Page } from '@playwright/test';
+import { type Browser, chromium, type Page, type Request } from '@playwright/test';
 import {
   applyChromiumLibraryPath,
   assertBuilt,
@@ -116,6 +116,13 @@ const TARGETS = {
    * 2026-11-12, 30 × 3: 26-28 ms with the lane, 214-221 ms with every request in one lane.
    */
   burstDiffMs: 100,
+  /**
+   * What the browser downloads per edit in another worktree, worst edit (#51: the event carries the
+   * row, the inbox asks for that row only). Before #51: 3 requests and up to 2.1 MB per edit.
+   */
+  editTrafficBytes: 100 * 1024,
+  /** `/api/projects` requests per edit, worst edit: none since #51 (limit 1 = "below one"). */
+  editProjectsRequests: 1,
 };
 
 /**
@@ -688,6 +695,34 @@ async function main() {
       uiMs: number | null;
       window: [number, number];
     }> = [];
+    // What the browser fetched (#51): every finished API request with its size on the wire.
+    const traffic: Array<{ at: number; path: string; bytes: number }> = [];
+    const sizing: Promise<void>[] = [];
+    const onFinished = (request: Request) => {
+      const url = new URL(request.url());
+      if (!url.pathname.startsWith('/api/') || url.pathname === '/api/events') return;
+      const at = Date.now();
+      sizing.push(
+        request
+          .sizes()
+          .then((sz) => {
+            traffic.push({
+              at,
+              path: url.pathname,
+              bytes: sz.responseBodySize + sz.responseHeadersSize,
+            });
+          })
+          .catch(() => {}),
+      );
+    };
+    page?.on('requestfinished', onFinished);
+    // The sidebar is virtualised (#13): only rows near the viewport are mounted, and the loop reads
+    // every target's row. A tall viewport mounts them all (about 58 px a row); the paint phases above
+    // keep their 1440 × 900.
+    if (page) {
+      await page.setViewportSize({ width: 1440, height: Math.max(900, 80 * targets.length + 400) });
+      await sleep(300);
+    }
     for (let i = 0; i < iterations; i++) {
       const target = targets[i % targets.length];
       if (!target) break;
@@ -741,6 +776,27 @@ async function main() {
       sample.window[1] = Date.now();
     }
     sub.close();
+    page?.off('requestfinished', onFinished);
+    await Promise.all(sizing);
+    const trafficPerEdit = page
+      ? samples.map((sample) => {
+          const inWindow = traffic.filter(
+            (t) => t.at >= sample.window[0] && t.at <= sample.window[1],
+          );
+          const byPath: Record<string, number> = {};
+          for (const t of inWindow) {
+            const key = t.path.replace(/\/worktrees\/[0-9a-f]{16}\//, '/worktrees/:id/');
+            byPath[key] = (byPath[key] ?? 0) + 1;
+          }
+          return {
+            role: sample.role,
+            requests: inWindow.length,
+            bytes: inWindow.reduce((sum, t) => sum + t.bytes, 0),
+            projects: inWindow.filter((t) => t.path === '/api/projects').length,
+            byPath,
+          };
+        })
+      : null;
 
     // Issue #44: opening a diff while a 60-edit burst keeps the daemon busy with summaries.
     let burst: BurstResult | null = null;
@@ -940,6 +996,22 @@ async function main() {
           applies: standard,
         },
         {
+          id: 'editTraffic',
+          label: 'Browser traffic per edit (worst edit, #51)',
+          actual: trafficPerEdit ? Math.max(0, ...trafficPerEdit.map((t) => t.bytes)) : null,
+          limit: TARGETS.editTrafficBytes,
+          unit: 'bytes',
+          applies: standard,
+        },
+        {
+          id: 'editProjects',
+          label: '`/api/projects` requests per edit (worst edit, #51)',
+          actual: trafficPerEdit ? Math.max(0, ...trafficPerEdit.map((t) => t.projects)) : null,
+          limit: TARGETS.editProjectsRequests,
+          unit: 'requests',
+          applies: standard,
+        },
+        {
           id: 'refreshUi',
           label: 'Refresh: write → UI sidebar update p95',
           actual: page ? (ui.length === iterations ? uiStats.p95 : Number.POSITIVE_INFINITY) : null,
@@ -1002,6 +1074,7 @@ async function main() {
         sseByRole: byRole,
         ui: page ? uiStats : { skipped: uiProblem },
         spawnsPerEdit: editSpawns,
+        trafficPerEdit,
         samples: samples.map(({ window: _window, ...rest }) => rest),
       },
       burst: burst
@@ -1234,6 +1307,7 @@ Tracked budgets are known to fail until the issue they name lands: they are list
 | Idle CPU, daemon + git children (avg over ${Math.round(r.idleCpu.durationMs / 1000)} s / worst 1 s) | ${r.idleCpu.supported ? `${r.idleCpu.averagePercent.toFixed(2)} % / ${r.idleCpu.maxIntervalPercent.toFixed(2)} %` : 'n/a'} |
 | Refresh: write → SSE \`worktree.changed\` (p50 / p95 / max) | ${fmt(r.refresh.sse.p50)} / ${fmt(r.refresh.sse.p95)} / ${fmt(r.refresh.sse.max)} (${r.refresh.sse.count}/${r.refresh.iterations}) |
 | Refresh: write → UI sidebar update (p50 / p95 / max) | ${ui ? `${fmt(ui.p50)} / ${fmt(ui.p95)} / ${fmt(ui.max)} (${ui.count}/${r.refresh.iterations})` : 'skipped'} |
+| Browser traffic per edit, Inbox view (median / worst; requests median / worst; \`/api/projects\` in all edits) | ${trafficCell(r.refresh.trafficPerEdit)} |
 | Daemon startup: listening / all summaries | ${fmt(r.startup.listeningMs)} / ${fmt(r.startup.allSummariesMs)} |
 | Daemon RSS: end of run / peak | ${bytes(r.memory.rssBytes)} / ${bytes(r.memory.peakRssBytes)} |
 
@@ -1279,6 +1353,16 @@ ${baselineRows}
 
 Raw numbers: \`${stem}.json\` next to this file. Re-run: \`pnpm --filter @octopus-diff/e2e bench${af ? ' --after-fetch' : r.layout.toReview ? ' --to-review' : r.layout.name === 'small' ? '' : ` --layout ${r.layout.name}`}\`.
 `;
+}
+
+/** The per-edit browser traffic cell (#51). */
+function trafficCell(
+  t: Array<{ bytes: number; requests: number; projects: number }> | null | undefined,
+): string {
+  if (!t?.length) return 'skipped';
+  const b = t.map((x) => x.bytes);
+  const n = t.map((x) => x.requests);
+  return `${bytes(median(b))} / ${bytes(Math.max(...b))}; ${median(n)} / ${Math.max(...n)}; ${t.reduce((s, x) => s + x.projects, 0)}`;
 }
 
 // biome-ignore lint/suspicious/noExplicitAny: the result object is plain JSON

@@ -1,21 +1,33 @@
 /**
  * Cache maintenance: review-mark patches (optimistic updates and `review.changed` events) and
- * SSE-driven invalidation.
+ * SSE-driven updates: event deltas applied in place (#51), invalidation otherwise.
  */
-import type {
-  ApiClient,
-  ChangedFile,
-  DiffResponse,
-  DiffScope,
-  FilesResponse,
-  InboxEntry,
-  InboxResponse,
-  ProjectsResponse,
-  ScopeKind,
-  ServerEvent,
+import {
+  type ApiClient,
+  type ChangedFile,
+  type DiffResponse,
+  type FilesResponse,
+  INBOX_WORKTREES_MAX,
+  type InboxEntry,
+  type InboxResponse,
+  type ProjectsResponse,
+  type ScopeKind,
+  type ServerEvent,
+  scopeKey,
+  type WorktreeChangedPaths,
+  type WorktreeListItem,
 } from '@octopus-diff/contracts';
-import type { QueryClient } from '@tanstack/react-query';
-import { filesQueryOptions, queryKeys } from './queries.ts';
+import type { Query, QueryClient } from '@tanstack/react-query';
+import {
+  applyRow,
+  bringsNews,
+  cachedRow,
+  cachedStateHash,
+  forgetRows,
+  isDeltaEvent,
+  type WorktreeDeltaEvent,
+} from './deltas.ts';
+import { type DiffQueryData, queryKeys } from './queries.ts';
 
 export interface ReviewPatch {
   projectId: string;
@@ -105,25 +117,15 @@ export function applyReviewToCaches(queryClient: QueryClient, patch: ReviewPatch
   };
 }
 
-/** Current stateHash of a worktree according to the cached projects list. */
-function cachedStateHash(queryClient: QueryClient, worktreeId: string): string | undefined {
-  const projects = queryClient.getQueryData<ProjectsResponse>(queryKeys.projects());
-  for (const item of projects?.projects ?? []) {
-    for (const w of item.worktrees) {
-      if (w.worktree.id === worktreeId) return w.summary?.stateHash;
-    }
-  }
-  return undefined;
-}
-
 export interface EventEffects {
-  /** Worktrees whose files/diffs/commits must be refetched. */
+  /** Worktrees whose files/diffs/commits must be refetched (no delta, or a delta that missed). */
   worktrees: Set<string>;
   projects: boolean;
+  /** The whole inbox is refetched (older daemons, structural events). */
   inbox: boolean;
   /**
-   * The inbox needs a full refetch (worktrees or projects were added/removed/updated). When
-   * only `worktree.changed` events arrived, the changed worktrees' entries are patched instead.
+   * The inbox needs a full refetch (worktrees or projects were added/removed/updated). Kept for
+   * callers and tests; a full refetch is what `inbox` means now (#51: no client-side patching).
    */
   inboxFull: boolean;
   scanRoots: boolean;
@@ -136,6 +138,17 @@ export interface EventEffects {
    * invalidated, and fetched (incrementally) only when it is on screen.
    */
   activity: Set<string>;
+  /**
+   * `worktree.changed` events that carry the worktree's row (#51), the latest per worktree: the
+   * row goes into the projects list, the inbox asks for just these rows, and the worktree's file
+   * lists and diffs are refetched only where they moved.
+   */
+  deltas: Map<string, WorktreeDeltaEvent>;
+  /**
+   * Of `deltas`, the worktrees whose latest event has the cached `stateHash` but a later row (#51
+   * review: e.g. its review state): only the row is applied, no list moved.
+   */
+  rowOnly: Set<string>;
   everything: boolean;
 }
 
@@ -149,6 +162,8 @@ export function emptyEffects(): EventEffects {
     settings: false,
     forges: false,
     activity: new Set(),
+    deltas: new Map(),
+    rowOnly: new Set(),
     everything: false,
   };
 }
@@ -172,7 +187,23 @@ export function collectEventEffects(
       // The feed moves with the state, but the projects list may already hold the new hash (any
       // refetch refreshes it), so this is decided before the hash check below.
       if (event.activitySeq !== undefined) effects.activity.add(event.worktreeId);
-      if (cachedStateHash(queryClient, event.worktreeId) === event.stateHash) break;
+      if (cachedStateHash(queryClient, event.worktreeId) === event.stateHash) {
+        // Same git state, but the row may be later (its review state landed after a projects
+        // answer already showed the summary, #51 review): apply the row, refetch nothing.
+        const row = cachedRow(queryClient, event.worktreeId);
+        if (isDeltaEvent(event) && row && bringsNews(event, row)) {
+          if (!effects.deltas.has(event.worktreeId)) effects.rowOnly.add(event.worktreeId);
+          effects.deltas.set(event.worktreeId, event);
+        }
+        break;
+      }
+      if (isDeltaEvent(event)) {
+        // Events arrive in order: the latest one per worktree is the one to apply.
+        effects.deltas.set(event.worktreeId, event);
+        effects.rowOnly.delete(event.worktreeId);
+        break;
+      }
+      // An older daemon: refetch what may have moved.
       effects.worktrees.add(event.worktreeId);
       effects.projects = true;
       effects.inbox = true;
@@ -239,119 +270,188 @@ export function collectEventEffects(
   return effects;
 }
 
-/** Above this many changed worktrees in one batch, one inbox refetch is cheaper than patching. */
-export const INBOX_PATCH_MAX_WORKTREES = 8;
+/** Above this many changed worktrees in one batch, the whole inbox is refetched instead. */
+export const INBOX_DELTA_MAX_WORKTREES = INBOX_WORKTREES_MAX;
 
-const patchSeq = new WeakMap<QueryClient, { next: number; applied: Map<string, number> }>();
-
-/**
- * The worktree's file list in `scope` for an inbox patch, through the `files` query itself so it
- * is one request per edit (#27): the same query is usually active in the file pane and the scope
- * select and is refetched by the invalidation of `['files', worktreeId]` in the same flush. A
- * fetch already in flight is joined (`fetchQuery` shares it); a result that is current for
- * `stateHash` and not invalidated is reused; only otherwise is the list fetched.
- */
-async function filesForPatch(
-  queryClient: QueryClient,
-  api: ApiClient,
-  worktreeId: string,
-  scope: DiffScope,
-  stateHash: string,
-): Promise<FilesResponse> {
-  const queryKey = queryKeys.files(worktreeId, scope);
-  const state = queryClient.getQueryState<FilesResponse>(queryKey);
-  if (
-    state?.data &&
-    state.fetchStatus === 'idle' &&
-    !state.isInvalidated &&
-    state.data.stateHash === stateHash
-  ) {
-    return state.data;
-  }
-  return queryClient.fetchQuery({ ...filesQueryOptions(api, worktreeId, scope), staleTime: 0 });
-}
+/** Per inbox query key and worktree: the newest delta batch whose rows were written. */
+const inboxSeq = new WeakMap<QueryClient, { next: number; applied: Map<string, number> }>();
 
 /**
- * Replaces the inbox entries of `worktreeIds` in every active inbox query, using
- * `GET /worktrees/:id/files` and the (already refetched) projects list, instead of refetching
- * the whole inbox (1.5 MB for 30 worktrees x 200 files). Builds exactly what `/api/inbox`
- * would return for those worktrees: `{project, worktree, summary, files}` when the list is
- * non-empty. Throws (caller falls back to a full refetch) if a worktree is unknown, a request
- * fails, or the file list is from another state than the projects list.
+ * Replaces the rows of `worktreeIds` in every inbox query on screen with the daemon's own rows for
+ * them (`GET /api/inbox?worktreeIds=`, #51): one request per scope on screen, built by the daemon's
+ * inbox rules (no reconstruction here). An inbox not on screen is only marked stale. A full inbox
+ * fetch in flight would write older rows over these when it lands, so the rows are asked for after
+ * it. Of two batches that overlap, the later one's rows are kept.
  */
-async function patchInbox(
+async function applyInboxDelta(
   queryClient: QueryClient,
   api: ApiClient,
   worktreeIds: string[],
 ): Promise<void> {
-  const seqs = patchSeq.get(queryClient) ?? { next: 0, applied: new Map<string, number>() };
-  patchSeq.set(queryClient, seqs);
+  const seqs = inboxSeq.get(queryClient) ?? { next: 0, applied: new Map<string, number>() };
+  inboxSeq.set(queryClient, seqs);
   const seq = ++seqs.next;
-  const projects = queryClient.getQueryData<ProjectsResponse>(queryKeys.projects());
-  const locate = (id: string) => {
-    for (const item of projects?.projects ?? []) {
-      const w = item.worktrees.find((x) => x.worktree.id === id);
-      if (w) return { project: item.project, ...w };
-    }
-    return null;
-  };
   const queries = queryClient.getQueryCache().findAll({ queryKey: queryKeys.inboxAll() });
-  for (const query of queries) {
-    const data = query.state.data as InboxResponse | undefined;
-    if (!data) continue;
-    if (query.getObserversCount() === 0) {
-      // Not on screen: mark stale, refetch when used again.
-      await queryClient.invalidateQueries({ queryKey: query.queryKey, refetchType: 'none' });
-      continue;
-    }
-    const scope = data.scope;
-    const results = await Promise.all(
-      worktreeIds.map(async (id) => {
-        const loc = locate(id);
-        if (!loc) throw new Error(`unknown worktree ${id}`);
-        if (!loc.summary || loc.worktree.bare || loc.worktree.missing)
-          return { id, loc, files: null };
-        const response = await filesForPatch(queryClient, api, id, scope, loc.summary.stateHash);
-        if (response.stateHash !== loc.summary.stateHash) throw new Error('state moved on');
-        return { id, loc, files: response.files };
-      }),
-    );
-    // A later batch already patched these worktrees: keep its (newer) result.
-    const fresh = results.filter((r) => (seqs.applied.get(r.id) ?? 0) < seq);
-    for (const r of fresh) seqs.applied.set(r.id, seq);
-    const current = queryClient.getQueryData<InboxResponse>(query.queryKey) ?? data;
-    const replaced = new Map<string, InboxEntry | null>();
-    for (const r of fresh) {
-      replaced.set(
-        r.id,
-        r.files && r.files.length > 0 && r.loc.summary
-          ? {
-              project: r.loc.project,
-              worktree: r.loc.worktree,
-              summary: r.loc.summary,
-              files: r.files,
-              // Effective review policy comes from the (already refetched) projects list, as
-              // the daemon attaches the same value to inbox entries. Dropping it would turn
-              // review back on for a review-disabled worktree after any live update.
-              ...(r.loc.review ? { review: r.loc.review } : {}),
-            }
-          : null,
-      );
-    }
-    const entries: InboxEntry[] = [];
-    for (const entry of current.entries) {
-      const next = replaced.get(entry.worktree.id);
-      if (next === undefined) entries.push(entry);
-      else if (next) entries.push(next);
-      replaced.delete(entry.worktree.id);
-    }
-    for (const next of replaced.values()) if (next) entries.push(next);
-    queryClient.setQueryData<InboxResponse>(query.queryKey, {
-      ...current,
-      entries,
-      generatedAt: new Date().toISOString(),
-    });
+  await Promise.all(
+    queries.map(async (query) => {
+      if (query.state.data === undefined) return;
+      if (query.getObserversCount() === 0) {
+        await queryClient.invalidateQueries({
+          queryKey: query.queryKey,
+          exact: true,
+          refetchType: 'none',
+        });
+        return;
+      }
+      if (query.state.fetchStatus === 'fetching') await query.promise?.catch(() => undefined);
+      const before = query.state.data as InboxResponse | undefined;
+      if (!before) return;
+      // Through React Query (its own key, dropped once done) so the refresh indicator
+      // (`useIsFetching`) shows this fetch like any live refresh: since #51 it is often the only
+      // request an edit causes, and a user watching the Inbox should see it.
+      const response = await queryClient.fetchQuery({
+        queryKey: queryKeys.inboxDelta(before.scope, worktreeIds, seq),
+        queryFn: () => api.inbox({ scope: before.scope, worktreeIds }),
+        staleTime: 0,
+        gcTime: 0,
+        retry: false,
+      });
+      const key = JSON.stringify(query.queryKey);
+      const fresh = worktreeIds.filter((id) => (seqs.applied.get(`${key}\u0000${id}`) ?? 0) < seq);
+      if (fresh.length === 0) return;
+      for (const id of fresh) seqs.applied.set(`${key}\u0000${id}`, seq);
+      const current = queryClient.getQueryData<InboxResponse>(query.queryKey) ?? before;
+      const replaced = new Map<string, InboxEntry | null>(fresh.map((id) => [id, null]));
+      for (const entry of response.entries) {
+        if (replaced.has(entry.worktree.id)) replaced.set(entry.worktree.id, entry);
+      }
+      const entries: InboxEntry[] = [];
+      for (const entry of current.entries) {
+        const next = replaced.get(entry.worktree.id);
+        if (next === undefined) entries.push(entry);
+        else if (next) entries.push(next);
+        replaced.delete(entry.worktree.id);
+      }
+      for (const next of replaced.values()) if (next) entries.push(next);
+      queryClient.setQueryData<InboxResponse>(query.queryKey, {
+        ...current,
+        entries,
+        generatedAt: response.generatedAt,
+      });
+    }),
+  );
+}
+
+/** The file of a diff query, by `rawPath ?? path` (the diff key's own identity). */
+function fileKeyOf(file: { path: string; rawPath?: string | undefined }): string {
+  return file.rawPath ?? file.path;
+}
+
+/**
+ * What the event's own path list says about a cached diff: `same` patch, `changed` (another patch,
+ * or no longer changed), or `unknown` (no list, a truncated one, or one for another scope).
+ */
+function diffVerdict(
+  data: DiffQueryData | undefined,
+  paths: WorktreeChangedPaths | undefined,
+): 'same' | 'changed' | 'unknown' {
+  if (!data || !paths || paths.truncated) return 'unknown';
+  if (scopeKey(paths.scope) !== scopeKey(data.scope)) return 'unknown';
+  const key = fileKeyOf(data.diff);
+  const listed = paths.files.find((f) => fileKeyOf(f) === key);
+  return listed?.patchHash === data.diff.patchHash ? 'same' : 'changed';
+}
+
+/**
+ * The file `fileKey` in a list that is current for the worktree's latest state (`stateHash`): the
+ * file list query of the same view scope (`scopeKeyOf` = the query keys' scope part), else the
+ * worktree's inbox row in that scope. Null: the current list does not have the file. Undefined: no
+ * current list.
+ */
+function currentFile(
+  queryClient: QueryClient,
+  worktreeId: string,
+  viewScopeKey: unknown,
+  fileKey: unknown,
+  stateHash: string | undefined,
+): ChangedFile | null | undefined {
+  if (stateHash === undefined) return undefined;
+  const files = queryClient
+    .getQueryCache()
+    .find<FilesResponse>({ queryKey: ['files', worktreeId, viewScopeKey], exact: true });
+  const state = files?.state;
+  if (
+    state?.data &&
+    state.status === 'success' &&
+    state.fetchStatus === 'idle' &&
+    !state.isInvalidated &&
+    state.data.stateHash === stateHash
+  ) {
+    return state.data.files.find((f) => fileKeyOf(f) === fileKey) ?? null;
   }
+  const inbox = queryClient
+    .getQueryCache()
+    .find<InboxResponse>({ queryKey: ['inbox', viewScopeKey], exact: true });
+  const entry = inbox?.state.data?.entries.find((e) => e.worktree.id === worktreeId);
+  if (entry && !inbox?.state.isInvalidated && entry.summary.stateHash === stateHash) {
+    return entry.files.find((f) => fileKeyOf(f) === fileKey) ?? null;
+  }
+  return undefined;
+}
+
+/**
+ * A delta worktree's file lists, diffs and commits (#51). Its file lists are refetched (the ones on
+ * screen; the others are marked stale). A diff is refetched only when its own file moved: at once
+ * when the event's path list (same scope) says its patch changed, else once the current list (the
+ * refetched file list, or the inbox row) is in, by `patchHash`; a diff that kept its patch keeps
+ * its data (and takes the list's `reviewed`). Nothing current to compare with: invalidated, as
+ * before. Commits only when HEAD or the branch moved.
+ */
+async function refreshDeltaLists(
+  queryClient: QueryClient,
+  event: WorktreeDeltaEvent,
+  previous: WorktreeListItem | undefined,
+  inboxDone: Promise<unknown>,
+): Promise<void> {
+  const id = event.worktreeId;
+  const tasks: Promise<unknown>[] = [];
+  const before = previous?.summary;
+  const now = event.summary;
+  if (!before || !now || before.headSha !== now.headSha || before.branch !== now.branch) {
+    tasks.push(queryClient.invalidateQueries({ queryKey: queryKeys.commits(id) }));
+  }
+  const later: Query[] = [];
+  for (const query of queryClient.getQueryCache().findAll({ queryKey: queryKeys.diffAll(id) })) {
+    const verdict = diffVerdict(query.state.data as DiffQueryData | undefined, event.paths);
+    if (verdict === 'changed') {
+      tasks.push(queryClient.invalidateQueries({ queryKey: query.queryKey, exact: true }));
+    } else {
+      later.push(query);
+    }
+  }
+  await Promise.all([
+    queryClient.invalidateQueries({ queryKey: queryKeys.filesAll(id) }),
+    inboxDone.catch(() => undefined),
+  ]);
+  const stateHash = cachedStateHash(queryClient, id);
+  for (const query of later) {
+    const data = query.state.data as DiffQueryData | undefined;
+    if (!data) continue;
+    const file = currentFile(queryClient, id, query.queryKey[2], query.queryKey[3], stateHash);
+    const kept =
+      file === undefined
+        ? diffVerdict(data, event.paths) === 'same'
+        : file !== null && file.patchHash === data.diff.patchHash;
+    if (!kept) {
+      tasks.push(queryClient.invalidateQueries({ queryKey: query.queryKey, exact: true }));
+    } else if (file && file.reviewed !== data.diff.reviewed) {
+      queryClient.setQueryData<DiffQueryData>(query.queryKey, {
+        ...data,
+        diff: { ...data.diff, reviewed: file.reviewed },
+      });
+    }
+  }
+  await Promise.all(tasks);
 }
 
 /** Worktree ids of the given projects according to the cached projects list. */
@@ -371,32 +471,46 @@ export async function flushEffects(
   api?: ApiClient,
 ): Promise<void> {
   if (effects.everything) {
+    // A reconnect: the daemon may have restarted (its `rev` counts again); everything refetches.
+    forgetRows(queryClient);
     await queryClient.invalidateQueries();
     return;
   }
-  const tasks: Promise<void>[] = [];
+  // Deltas first (#51): rows into the projects list. A worktree the cached list does not know (no
+  // list yet, or added / removed meanwhile) falls back to a refetch, as does one that also had an
+  // event without a delta in this batch.
+  const deltas: Array<{ event: WorktreeDeltaEvent; previous: WorktreeListItem | undefined }> = [];
+  for (const [id, event] of effects.deltas) {
+    if (effects.worktrees.has(id)) continue;
+    const applied = applyRow(queryClient, event);
+    if (applied.kind === 'unknown') {
+      effects.worktrees.add(id);
+      effects.projects = true;
+      effects.inbox = true;
+      continue;
+    }
+    if (effects.rowOnly.has(id)) continue;
+    deltas.push({ event, previous: applied.previous });
+  }
+  const tasks: Promise<unknown>[] = [];
   if (effects.settings) tasks.push(queryClient.invalidateQueries({ queryKey: ['settings'] }));
   if (effects.forges) tasks.push(queryClient.invalidateQueries({ queryKey: ['forges'] }));
-  const projectsRefetch = effects.projects
-    ? queryClient.invalidateQueries({ queryKey: queryKeys.projects() })
-    : Promise.resolve();
-  tasks.push(projectsRefetch);
-  const canPatch =
-    api !== undefined &&
-    !effects.inboxFull &&
-    effects.worktrees.size > 0 &&
-    effects.worktrees.size <= INBOX_PATCH_MAX_WORKTREES &&
-    queryClient.getQueryState(queryKeys.projects())?.status === 'success';
-  if (effects.inbox && canPatch) {
-    const ids = [...effects.worktrees];
-    tasks.push(
-      projectsRefetch
-        .then(() => patchInbox(queryClient, api, ids))
-        .catch(() => queryClient.invalidateQueries({ queryKey: queryKeys.inboxAll() })),
-    );
-  } else if (effects.inbox) {
-    tasks.push(queryClient.invalidateQueries({ queryKey: queryKeys.inboxAll() }));
+  if (effects.projects) {
+    tasks.push(queryClient.invalidateQueries({ queryKey: queryKeys.projects() }));
   }
+  let inboxDone: Promise<unknown> = Promise.resolve();
+  if (effects.inbox) {
+    inboxDone = queryClient.invalidateQueries({ queryKey: queryKeys.inboxAll() });
+  } else if (deltas.length > 0) {
+    const ids = deltas.map((d) => d.event.worktreeId);
+    inboxDone =
+      api && ids.length <= INBOX_DELTA_MAX_WORKTREES
+        ? applyInboxDelta(queryClient, api, ids).catch(() =>
+            queryClient.invalidateQueries({ queryKey: queryKeys.inboxAll() }),
+          )
+        : queryClient.invalidateQueries({ queryKey: queryKeys.inboxAll() });
+  }
+  tasks.push(inboxDone);
   if (effects.scanRoots)
     tasks.push(queryClient.invalidateQueries({ queryKey: queryKeys.scanRoots() }));
   for (const id of effects.activity) {
@@ -406,6 +520,9 @@ export async function flushEffects(
     tasks.push(queryClient.invalidateQueries({ queryKey: queryKeys.filesAll(id) }));
     tasks.push(queryClient.invalidateQueries({ queryKey: queryKeys.diffAll(id) }));
     tasks.push(queryClient.invalidateQueries({ queryKey: queryKeys.commits(id) }));
+  }
+  for (const { event, previous } of deltas) {
+    tasks.push(refreshDeltaLists(queryClient, event, previous, inboxDone));
   }
   await Promise.all(tasks);
 }

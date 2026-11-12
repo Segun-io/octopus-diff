@@ -30,12 +30,23 @@ arguments as they are (no `--` needed; a literal `--` is tolerated). Build first
 | Warm reload (median of 3) | < 300 ms | small at 30 × 3 | enforced (#27 fixed it) |
 | Startup git spawns per worktree | ≤ 8 | every layout | enforced (since #29) |
 | Diff opened during a 60-edit burst, p95 | < 100 ms | small | enforced (#44) |
+| Browser traffic per edit (Inbox view, worst edit) | < 100 KB | small | enforced (#51) |
+| `/api/projects` requests per edit (worst edit) | 0 | small | enforced (#51) |
 
 A *tracked* budget is known to fail today. It prints `FAIL (tracked: #n)` and does not turn the run red. When the
 issue lands, delete the entry from `TRACKED` in `e2e/bench/bench.ts` (the bench prints `PASS (tracked …; remove it)`
 once it passes), so the budget is enforced from then on. `--strict` counts tracked budgets as failures.
 
 `--after-fetch` is judged by the same budgets as the plain 30 × 3 run (cold paint, warm reload, idle CPU, refresh, startup spawns per worktree); the fetch figures are report-only (no new budget). Its fixtures come from `addBenchOrigins` in `tools/fixtures/src/merge-noise.ts`, an opt-in: `generateFixtures({ bench })` and every other bench stay without remotes. The labels cost shows up as the live-fetch table: `merge-base` + `diff-tree` are the label work (about 3.3 per linked worktree, at most 2 at once); `status` and `diff` are the summary refreshes the moved ref triggers in every worktree.
+
+## Traffic per edit (issue #51)
+
+During the refresh loop the page sits on the Inbox view; each sample appends to `README.md` in a different worktree.
+Every finished `/api/*` request of the page inside the sample's window counts (body + headers as sent, gzip included;
+the SSE stream itself is not a finished request). Since #51 an edit costs one `GET /api/inbox?worktreeIds=` (and the
+Activity feed when it is open) and no `/api/projects`; before it, the projects list and the whole inbox or the changed
+worktree's file list. The request-count tests (`apps/web/test/event-deltas.test.ts`, e2e `04-live-updates`) are the
+primary proof; this is the end-to-end number.
 
 ## Spawns per reload (issue #74)
 

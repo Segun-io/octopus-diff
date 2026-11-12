@@ -220,16 +220,23 @@ function useBuildAppModel(): AppModel {
     return out;
   }, [sidebar, inboxEntries]);
 
+  // The state a bulk request expects (the daemon skips a worktree that moved on) is the state of
+  // the files it acts on: the open file list's, then the inbox row's, then the sidebar's. Since
+  // #51 the sidebar row is applied from the event at once while those lists refetch, so the
+  // sidebar's hash can be newer than the files on screen; sending it would defeat the stale check.
   const stateHashes = useMemo(() => {
     const out = new Map<string, string>();
-    for (const row of sidebar.byId.values()) {
-      if (row.summary) out.set(row.worktree.id, row.summary.stateHash);
-    }
+    if (filesData) out.set(filesData.worktreeId, filesData.stateHash);
     for (const entry of inboxEntries) {
       if (!out.has(entry.worktree.id)) out.set(entry.worktree.id, entry.summary.stateHash);
     }
+    for (const row of sidebar.byId.values()) {
+      if (row.summary && !out.has(row.worktree.id)) {
+        out.set(row.worktree.id, row.summary.stateHash);
+      }
+    }
     return out;
-  }, [sidebar, inboxEntries]);
+  }, [sidebar, inboxEntries, filesData]);
 
   // While its batches are still landing (#10) the Inbox shows less than an "all" request covers.
   const inboxUnfiltered =

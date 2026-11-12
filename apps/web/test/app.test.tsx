@@ -45,9 +45,15 @@ interface Harness {
   requests: string[];
 }
 
-function setup(dataset: MockDataset = 'demo', opts: { token?: string } = {}): Harness {
+function setup(
+  dataset: MockDataset = 'demo',
+  opts: { token?: string; latencyMs?: number } = {},
+): Harness {
   const backend = new MockBackend({ dataset });
-  const mockFetch = createMockFetch(backend, opts.token ? { token: opts.token } : {});
+  const mockFetch = createMockFetch(backend, {
+    ...(opts.token ? { token: opts.token } : {}),
+    ...(opts.latencyMs ? { latencyMs: opts.latencyMs } : {}),
+  });
   const requests: string[] = [];
   const api = createApiClient({
     baseUrl: 'http://mock.local',
@@ -613,6 +619,77 @@ describe('live updates', () => {
     expect(refetched.filter((r) => r.includes('/files') && !r.includes(worktreeId))).toHaveLength(
       0,
     );
+  });
+
+  it('applies the event delta (#51): no /api/projects refetch, the open diff stays when another file moves', async () => {
+    const { backend, requests } = setup();
+    await ready();
+    fireEvent.click(
+      screen
+        .getAllByTestId(TEST_IDS.worktreeItem)
+        .find((el) => el.dataset.branch === 'feat/auth') as HTMLElement,
+    );
+    await waitFor(() => expect(viewer().getAttribute('data-state')).toBe('ready'));
+    fireEvent.click(
+      within(await screen.findByTestId(TEST_IDS.fileList))
+        .getAllByTestId(TEST_IDS.fileItem)
+        .find((el) => el.dataset.path === 'src/auth/session.ts') as HTMLElement,
+    );
+    await waitFor(() => expect(viewerPath()).toBe('src/auth/session.ts'));
+    await waitFor(() => expect(viewer().getAttribute('data-state')).toBe('ready'));
+    const worktreeId = viewer().getAttribute('data-worktree-id') ?? '';
+    const hash = viewer().getAttribute('data-patch-hash');
+    const row = () =>
+      screen
+        .getAllByTestId(TEST_IDS.worktreeItem)
+        .find((el) => el.dataset.worktreeId === worktreeId) as HTMLElement;
+    const additions = row().getAttribute('data-additions');
+    const before = requests.length;
+
+    act(() => {
+      backend.mutate(worktreeId, 'edit', 'src/format.ts');
+    });
+    // The sidebar follows the event's row; the file list follows its refetch.
+    await waitFor(() => expect(row().getAttribute('data-additions')).not.toBe(additions));
+    await waitFor(() =>
+      expect(
+        requests
+          .slice(before)
+          .filter((r) => r.includes(`/api/worktrees/${worktreeId}/files?scope=working`)),
+      ).toHaveLength(1),
+    );
+    await new Promise((r) => setTimeout(r, 50));
+    const after = requests.slice(before);
+    expect(after.filter((r) => r.includes('/api/projects'))).toEqual([]);
+    expect(after.filter((r) => r.includes('/diff'))).toEqual([]);
+    expect(viewerPath()).toBe('src/auth/session.ts');
+    expect(viewer().getAttribute('data-patch-hash')).toBe(hash);
+  });
+
+  it('a live edit in the Inbox shows the refresh indicator, though it refetches no list (#51)', async () => {
+    // A network round trip takes time; an instant mock answer would settle within one render.
+    const { backend, requests } = setup('demo', { latencyMs: 40 });
+    await ready();
+    const indicator = screen.getByTestId(TEST_IDS.refreshIndicator);
+    await waitFor(() => expect(indicator.getAttribute('data-state')).toBe('idle'));
+    const states: string[] = [];
+    const observer = new MutationObserver(() => {
+      states.push(indicator.getAttribute('data-state') ?? '');
+    });
+    observer.observe(indicator, { attributes: true, attributeFilter: ['data-state'] });
+    const worktreeId = screen
+      .getAllByTestId(TEST_IDS.worktreeItem)
+      .find((el) => el.dataset.branch === 'fix/cache')?.dataset.worktreeId;
+    const before = requests.length;
+    act(() => {
+      backend.mutate(worktreeId, 'edit', 'src/lib/cache.ts');
+    });
+    await waitFor(() => expect(states).toContain('refreshing'));
+    await waitFor(() => expect(indicator.getAttribute('data-state')).toBe('idle'));
+    observer.disconnect();
+    const after = requests.slice(before);
+    expect(after.filter((r) => r.includes('worktreeIds='))).toHaveLength(1);
+    expect(after.filter((r) => r.includes('/api/projects'))).toEqual([]);
   });
 
   it('a reverted open file hands the selection to its neighbor', async () => {

@@ -162,7 +162,7 @@ export function createMockRouter(backend: MockBackend, options: MockRouterOption
       }
       if (path === '/api/inbox' && method === 'GET') {
         const q = parse(InboxQuerySchema, queryObject(url));
-        return json(200, backend.inbox(q.scope, q.onlyUnreviewed, q.projectIds));
+        return json(200, backend.inbox(q.scope, q.onlyUnreviewed, q.projectIds, q.worktreeIds));
       }
       const wtMatch = path.match(/^\/api\/worktrees\/([^/]+)\/(files|diff|commits|refresh)$/);
       if (wtMatch) {

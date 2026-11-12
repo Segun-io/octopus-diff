@@ -6,12 +6,14 @@ import {
   RepoPathSchema,
   TimestampSchema,
 } from './common.js';
-import { ScopeKindSchema } from './scope.js';
+import { WorktreeListItemSchema } from './domain.js';
+import { DiffScopeSchema, ScopeKindSchema } from './scope.js';
 
 /**
  * Server-Sent Events on `GET /api/events`. Each event is sent as a *named* SSE event whose
  * `event:` field equals `type`, and whose `data:` is the JSON object (including `type`).
- * Events are deliberately small (ids + hashes); clients refetch what they need.
+ * Events are deliberately small (ids + hashes; `worktree.changed` also carries the worktree's row and
+ * a bounded list of changed paths, #51); clients refetch what they need.
  * The server sends a `: ping` comment at least every 15 s to keep proxies from timing out.
  */
 export const HelloEventSchema = z.object({
@@ -19,6 +21,36 @@ export const HelloEventSchema = z.object({
   version: z.string(),
   startedAt: TimestampSchema,
 });
+
+/** Most paths `WorktreeChangedEvent.paths` lists; a worktree with more sends none (#51). */
+export const WORKTREE_CHANGED_PATHS_MAX = 200;
+/** Most characters of path text (`path` + `rawPath`) the list may hold; above it, none (#51). */
+export const WORKTREE_CHANGED_PATHS_MAX_CHARS = 24_000;
+
+/** One changed file of a worktree, by identity and patch (`ChangedFile`'s fields of the same name). */
+export const ChangedPathSchema = z.object({
+  path: RepoPathSchema,
+  rawPath: RawPathSchema.optional(),
+  patchHash: z.string().min(1),
+});
+export type ChangedPath = z.infer<typeof ChangedPathSchema>;
+
+/**
+ * The worktree's changed files in `scope` with their `patchHash`, as the daemon had already listed
+ * them for the event's `stateHash` (no git process of its own, #51). A client compares them with the
+ * file list and diffs it holds for the same scope (`scopeKey` of the resolved scope it got back in
+ * `FilesResponse.scope` / `DiffResponse.scope`) to tell whether they are still current.
+ * `truncated`: the worktree has more than `WORKTREE_CHANGED_PATHS_MAX` changed files (or more path
+ * text than `WORKTREE_CHANGED_PATHS_MAX_CHARS`); `files` is then empty and `total` says how many
+ * there are: refetch instead of trusting the list.
+ */
+export const WorktreeChangedPathsSchema = z.object({
+  scope: DiffScopeSchema,
+  files: z.array(ChangedPathSchema).max(WORKTREE_CHANGED_PATHS_MAX),
+  total: z.number().int().min(0),
+  truncated: z.boolean(),
+});
+export type WorktreeChangedPaths = z.infer<typeof WorktreeChangedPathsSchema>;
 
 export const WorktreeChangedEventSchema = z.object({
   type: z.literal('worktree.changed'),
@@ -31,6 +63,30 @@ export const WorktreeChangedEventSchema = z.object({
    * when this moved. Absent when the feed is empty, and from older daemons.
    */
   activitySeq: z.number().int().positive().optional(),
+  /**
+   * Event deltas (#51): the worktree's row exactly as `GET /api/projects` now holds it
+   * (`WorktreeListItem`: `worktree`, `summary` with its `review`, `error`, the effective `review`
+   * policy), so a client replaces that row in its projects list instead of refetching the list.
+   * Present together (`worktree` and `summary` are the feature test); absent from older daemons and
+   * from events replayed after a reconnect (`Last-Event-ID`: the client resyncs anyway). Order rows
+   * by `rev` (below); without one, drop a row whose `summary.updatedAt` is older than the one held.
+   */
+  worktree: WorktreeListItemSchema.shape.worktree.optional(),
+  summary: WorktreeListItemSchema.shape.summary.optional(),
+  error: WorktreeListItemSchema.shape.error.optional(),
+  review: WorktreeListItemSchema.shape.review,
+  /**
+   * The row's `rev` (see `WorktreeListItem.rev`): apply the row when it is higher than the cached
+   * row's, even when `stateHash` is the same (the review state can land after a projects answer
+   * already showed the summary), and never let a projects answer with a lower `rev` undo it.
+   */
+  rev: WorktreeListItemSchema.shape.rev,
+  /**
+   * The changed files the daemon already listed for this state, with their patch hashes (see
+   * `WorktreeChangedPathsSchema`). Absent when it had no list for this `stateHash` (nothing asked
+   * for one: no git process is spent on the event), and from older daemons.
+   */
+  paths: WorktreeChangedPathsSchema.optional(),
 });
 
 export const WorktreeAddedEventSchema = z.object({
