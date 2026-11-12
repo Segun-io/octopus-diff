@@ -928,7 +928,15 @@ async function main() {
       await writeFile(join(args['keep-trace'], 'spawns.jsonl'), await readFile(daemon.spawnFile));
       await writeFile(
         join(args['keep-trace'], 'phases.json'),
-        `${JSON.stringify({ root: setup.root, ...phases }, null, 2)}\n`,
+        `${JSON.stringify(
+          {
+            root: setup.root,
+            ...phases,
+            edits: samples.map((x) => ({ role: x.role, at: x.window[0], sseAt: x.sseAt })),
+          },
+          null,
+          2,
+        )}\n`,
       );
     }
     const editSpawns = samples.map((sample) => {

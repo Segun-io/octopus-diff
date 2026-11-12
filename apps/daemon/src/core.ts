@@ -1830,6 +1830,11 @@ export class DaemonCore {
     const refs = await this.#branchBase(project, DEFAULT_BASE_SCOPE);
     const defaultBranch = this.#defaultBranch(project);
     const key = [scopeKey(scope), base ?? '', defaultBranch ?? '', refs ?? ''].join('\u0000');
+    // Only uncommitted files and no operation in progress: every file is own (rules 1-5 of
+    // `readFileOrigins` need a committed file or a staged one during a merge). git-core is still
+    // asked, without the files, for the integration base and ref (#40: tens of thousands of
+    // untracked files made validating them the slowest part of an edit's review state).
+    const ownOnly = summary.inProgress === null && files.every(isUncommitted);
     const cached = this.#origins.get(files);
     if (cached && cached.key === key && !cached.run.cancelled) return cached.run.join(want.signal);
     // The fallback is part of the cached run: every caller that shares it gets the same answer,
@@ -1842,13 +1847,13 @@ export class DaemonCore {
             read.call(this.#git, this.#locator(entry), {
               base,
               defaultBranch,
-              files,
+              files: ownOnly ? [] : files,
               ...callOptions(want, signal),
             }),
           )
           .then(
             (result): Labels => ({
-              files: applyOrigins(files, result.origins),
+              files: ownOnly ? files : applyOrigins(files, result.origins),
               known: true,
               integrationRef: result.integrationRef,
               n: result.n,
