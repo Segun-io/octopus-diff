@@ -4,16 +4,19 @@
  * server and directly (as a custom `fetch`) by tests.
  */
 import {
+  ActivityQuerySchema,
   AddProjectRequestSchema,
   AddScanRootRequestSchema,
   type ApiErrorBody,
   AppSettingsPatchSchema,
+  BlobQuerySchema,
   BulkReviewRequestSchema,
   CommitsQuerySchema,
   DiffQuerySchema,
   DirsQuerySchema,
   FilesQuerySchema,
   FocusRequestSchema,
+  GitObjectIdSchema,
   IdSchema,
   InboxQuerySchema,
   RefreshForgesRequestSchema,
@@ -23,7 +26,7 @@ import {
   UndoReviewRequestSchema,
   UpdateProjectRequestSchema,
 } from '@octopus-diff/contracts';
-import { MockApiError, type MockBackend } from './backend.js';
+import { MockApiError, type MockBackend, type MutateAction } from './backend.js';
 import { listMockDirs } from './fs.js';
 
 export interface MockRouterOptions {
@@ -180,6 +183,27 @@ export function createMockRouter(backend: MockBackend, options: MockRouterOption
         if (action === 'refresh' && method === 'POST')
           return json(200, backend.refresh(worktreeId));
       }
+      // --- live view (#38) ---
+      const activityMatch = path.match(/^\/api\/worktrees\/([^/]+)\/activity$/);
+      if (activityMatch && method === 'GET') {
+        const q = parse(ActivityQuerySchema, queryObject(url));
+        return json(
+          200,
+          backend.activityFeed(decodeURIComponent(activityMatch[1] ?? ''), q.after, q.run),
+        );
+      }
+      const blobMatch = path.match(/^\/api\/worktrees\/([^/]+)\/blob\/([^/]+)$/);
+      if (blobMatch && method === 'GET') {
+        const oid = decodeURIComponent(blobMatch[2] ?? '');
+        if (!GitObjectIdSchema.safeParse(oid).success) {
+          throw new MockApiError(400, 'bad_request', 'invalid object id');
+        }
+        const q = parse(BlobQuerySchema, queryObject(url));
+        return json(
+          200,
+          backend.blob(decodeURIComponent(blobMatch[1] ?? ''), oid, q.maxBytes ?? 1024 * 1024),
+        );
+      }
       if (path === '/api/review' && method === 'PUT') {
         const req = parse(ReviewRequestSchema, await body());
         return json(200, backend.setReview(req));
@@ -252,14 +276,26 @@ export function createMockRouter(backend: MockBackend, options: MockRouterOption
           }),
         );
       }
+      // Mock-only control endpoint: how a worktree is watched (`mode=polling&pollMs=5000`), or a
+      // daemon restart (`restart=1`: a new run, every feed gone).
+      if (path === '/api/__mock/activity' && method === 'POST') {
+        const q = url.searchParams;
+        if (q.get('restart') === '1') backend.activity.restart();
+        const id = q.get('worktreeId');
+        const mode = q.get('mode');
+        if (id && (mode === 'native' || mode === 'polling' || mode === 'disabled')) {
+          const ms = Number(q.get('pollMs'));
+          backend.activity.setWatch(id, {
+            mode,
+            pollMs: mode !== 'native' && Number.isInteger(ms) && ms > 0 ? ms : null,
+          });
+        }
+        return json(200, { ok: true });
+      }
       // Mock-only control endpoint: simulate an agent edit right now.
       if (path === '/api/__mock/mutate' && method === 'POST') {
         const worktreeId = url.searchParams.get('worktreeId') ?? undefined;
-        const action = (url.searchParams.get('action') ?? undefined) as
-          | 'edit'
-          | 'add'
-          | 'revert'
-          | undefined;
+        const action = (url.searchParams.get('action') ?? undefined) as MutateAction | undefined;
         const target = url.searchParams.get('path') ?? undefined;
         return json(200, backend.mutate(worktreeId, action, target));
       }

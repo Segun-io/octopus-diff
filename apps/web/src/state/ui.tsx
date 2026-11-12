@@ -72,6 +72,11 @@ export interface UiState extends Prefs {
   onlyDirty: boolean;
   onlyUnreviewed: boolean;
   /**
+   * Activity strip, "follow latest change": select the newest changed file as the feed moves. Off
+   * by default and not remembered (a reload starts without it).
+   */
+  followLatest: boolean;
+  /**
    * Worktrees whose "from main" group (the files a merge, rebase or update of the default branch
    * brought) is expanded. Transient: every list opens with the group collapsed.
    */
@@ -123,6 +128,7 @@ export const DEFAULT_UI_STATE: UiState = {
   filterOpen: false,
   onlyDirty: false,
   onlyUnreviewed: false,
+  followLatest: false,
   originOpen: [],
   branchToggleFrom: null,
   helpOpen: false,

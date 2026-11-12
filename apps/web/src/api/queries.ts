@@ -62,6 +62,10 @@ export const queryKeys = {
       opts.full ?? false,
     ] as const,
   commits: (worktreeId: string) => ['commits', worktreeId] as const,
+  /** The Activity feed of a worktree (api/activity.ts); only the open worktree is observed. */
+  activity: (worktreeId: string) => ['activity', worktreeId] as const,
+  /** A deleted file's last content (a blob of the feed), by object id. */
+  blob: (worktreeId: string, oid: string) => ['blob', worktreeId, oid] as const,
 };
 
 export interface DiffViewParams {

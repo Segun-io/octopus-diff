@@ -26,6 +26,10 @@ const ready = async (page: Page) => {
   await page.waitForTimeout(400);
 };
 
+/** The `activity` state seeds the agent's changes once (see the state). */
+let activitySeeded = false;
+let activityWorktree: string | null = null;
+
 /** Named states; each starts from a fresh load with the theme preset in localStorage. */
 const STATES: Record<string, Step> = {
   inbox: async () => {},
@@ -50,6 +54,37 @@ const STATES: Record<string, Step> = {
   'merge-noise-chip': async (page) => {
     await STATES['merge-noise']?.(page);
     await page.locator('[data-testid="from-main-chip"]').click();
+    await page.waitForTimeout(400);
+  },
+  // Live view (#39): a simulated agent edits, deletes (tracked and untracked) and commits in
+  // feat/auth; the strip is opened and the deleted file's content shown. The agent changes the
+  // mock's shared worktree, so the state is in `MUTATING_STATES`: it runs after every other shot
+  // (so none inherits its changes) and seeds the changes once, not once per theme and size.
+  activity: async (page) => {
+    const id = await page
+      .locator('[data-testid="worktree-item"][data-branch="feat/auth"]')
+      .getAttribute('data-worktree-id');
+    await page.locator('[data-testid="worktree-item"][data-branch="feat/auth"]').click();
+    await page.locator('[data-testid="activity-strip"]').waitFor();
+    const act = async (action: string, path = '') => {
+      const q = `worktreeId=${id}&action=${action}${path ? `&path=${encodeURIComponent(path)}` : ''}`;
+      await page.request.post(`${base}/api/__mock/mutate?${q}`);
+      await page.waitForTimeout(250);
+    };
+    if (!activitySeeded) {
+      activitySeeded = true;
+      activityWorktree = id;
+      await act('edit', 'src/auth/token.ts');
+      await act('delete-untracked', 'notes/todo.md');
+      await act('delete', 'src/auth/session.ts');
+      await page.request.post(
+        `${base}/api/__mock/activity?worktreeId=${id}&mode=polling&pollMs=5000`,
+      );
+      await act('edit', 'src/auth/token.ts');
+    }
+    await page.locator('[data-testid="activity-toggle"]').click();
+    await page.locator('[data-testid="activity-view-content"]').first().click();
+    await page.locator('[data-testid="activity-content"]').waitFor();
     await page.waitForTimeout(400);
   },
   settings: async (page) => {
@@ -184,6 +219,12 @@ const STATES: Record<string, Step> = {
   },
 };
 
+/**
+ * States that change the mock's shared worktree data (no reset exists for it): run after all
+ * the others, so no other shot starts from their changes.
+ */
+const MUTATING_STATES = new Set(['activity']);
+
 /** States that change the mock's shared forge state (each resets it when its shot is done). */
 const SIMULATED_STATES = new Set(['rate-limit', 'rate-limit-stale', 'stale-request']);
 
@@ -196,58 +237,72 @@ async function simulate(page: Page, query: string): Promise<void> {
 async function main() {
   await mkdir(out, { recursive: true });
   const browser = await chromium.launch();
-  const states = process.env.STATES?.split(',').filter(Boolean) ?? ['inbox', 'worktree'];
+  const requested = process.env.STATES?.split(',').filter(Boolean) ?? ['inbox', 'worktree'];
+  // Passes: the states that leave the mock as it was, then the ones that change it.
+  const passes = [
+    requested.filter((state) => !MUTATING_STATES.has(state)),
+    requested.filter((state) => MUTATING_STATES.has(state)),
+  ];
   const sizes = [
     { w: 1440, h: 900 },
     { w: 960, h: 700 },
   ];
-  for (const theme of THEMES) {
-    if (only && !only.includes(theme.id)) continue;
-    for (const size of sizes) {
-      for (const state of states) {
-        const step = STATES[state];
-        if (!step) throw new Error(`unknown state ${state}`);
-        const context = await browser.newContext({
-          viewport: { width: size.w, height: size.h },
-          colorScheme: theme.kind,
-          reducedMotion: 'reduce',
-        });
-        await context.addInitScript(
-          (prefs: string) => {
-            localStorage.setItem('octopus-diff:prefs', prefs);
-          },
-          JSON.stringify({ version: 2, theme: { mode: theme.kind, [theme.kind]: theme.id } }),
-        );
-        const page = await context.newPage();
-        const errors: string[] = [];
-        page.on('pageerror', (e) => errors.push(e.message));
-        page.on('console', (m) => {
-          if (m.type() === 'error') errors.push(m.text());
-        });
-        await page.goto(base);
-        await ready(page);
-        try {
+  for (const states of passes) {
+    for (const theme of THEMES) {
+      if (only && !only.includes(theme.id)) continue;
+      for (const size of sizes) {
+        for (const state of states) {
+          const step = STATES[state];
+          if (!step) throw new Error(`unknown state ${state}`);
+          const context = await browser.newContext({
+            viewport: { width: size.w, height: size.h },
+            colorScheme: theme.kind,
+            reducedMotion: 'reduce',
+          });
+          await context.addInitScript(
+            (prefs: string) => {
+              localStorage.setItem('octopus-diff:prefs', prefs);
+            },
+            JSON.stringify({ version: 2, theme: { mode: theme.kind, [theme.kind]: theme.id } }),
+          );
+          const page = await context.newPage();
+          const errors: string[] = [];
+          page.on('pageerror', (e) => errors.push(e.message));
+          page.on('console', (m) => {
+            if (m.type() === 'error') errors.push(m.text());
+          });
+          await page.goto(base);
+          await ready(page);
           try {
-            await step(page);
-          } catch (err) {
-            console.warn(`state ${state} failed on ${theme.id}: ${String(err).split('\n')[0]}`);
+            try {
+              await step(page);
+            } catch (err) {
+              console.warn(`state ${state} failed on ${theme.id}: ${String(err).split('\n')[0]}`);
+            }
+            const file = path.join(out, `${theme.id}-${size.w}-${state}.png`);
+            await page.screenshot({ path: file });
+            console.log(file, errors.length ? `errors: ${errors.join(' | ')}` : '');
+          } finally {
+            // The mock server is shared by every shot and a fresh browser context does not reset it:
+            // put the forge knobs back (also when the shot failed) so the next image shows the
+            // plain fixture, not this one's rate limit or error.
+            if (SIMULATED_STATES.has(state)) {
+              await simulate(page, '').catch((err) =>
+                console.warn(`could not reset the forge simulation: ${String(err).split('\n')[0]}`),
+              );
+            }
+            await context.close();
           }
-          const file = path.join(out, `${theme.id}-${size.w}-${state}.png`);
-          await page.screenshot({ path: file });
-          console.log(file, errors.length ? `errors: ${errors.join(' | ')}` : '');
-        } finally {
-          // The mock server is shared by every shot and a fresh browser context does not reset it:
-          // put the forge knobs back (also when the shot failed) so the next image shows the
-          // plain fixture, not this one's rate limit or error.
-          if (SIMULATED_STATES.has(state)) {
-            await simulate(page, '').catch((err) =>
-              console.warn(`could not reset the forge simulation: ${String(err).split('\n')[0]}`),
-            );
-          }
-          await context.close();
         }
       }
     }
+  }
+  if (activityWorktree) {
+    // The watch note is the only thing the seeding set that a later run of the script could see
+    // (the feed itself goes with the server).
+    await fetch(`${base}/api/__mock/activity?worktreeId=${activityWorktree}&mode=native`, {
+      method: 'POST',
+    }).catch(() => {});
   }
   await browser.close();
 }

@@ -131,6 +131,11 @@ export interface EventEffects {
   settings: boolean;
   /** `forge.updated`: refetch pull/merge requests (api/forges.ts). */
   forges: boolean;
+  /**
+   * Worktrees whose activity feed moved (`worktree.changed.activitySeq`, #38): their feed is
+   * invalidated, and fetched (incrementally) only when it is on screen.
+   */
+  activity: Set<string>;
   everything: boolean;
 }
 
@@ -143,6 +148,7 @@ export function emptyEffects(): EventEffects {
     scanRoots: false,
     settings: false,
     forges: false,
+    activity: new Set(),
     everything: false,
   };
 }
@@ -163,6 +169,9 @@ export function collectEventEffects(
       if (opts.reconnect) effects.everything = true;
       break;
     case 'worktree.changed':
+      // The feed moves with the state, but the projects list may already hold the new hash (any
+      // refetch refreshes it), so this is decided before the hash check below.
+      if (event.activitySeq !== undefined) effects.activity.add(event.worktreeId);
       if (cachedStateHash(queryClient, event.worktreeId) === event.stateHash) break;
       effects.worktrees.add(event.worktreeId);
       effects.projects = true;
@@ -394,6 +403,9 @@ export async function flushEffects(
   }
   if (effects.scanRoots)
     tasks.push(queryClient.invalidateQueries({ queryKey: queryKeys.scanRoots() }));
+  for (const id of effects.activity) {
+    tasks.push(queryClient.invalidateQueries({ queryKey: queryKeys.activity(id) }));
+  }
   for (const id of effects.worktrees) {
     tasks.push(queryClient.invalidateQueries({ queryKey: queryKeys.filesAll(id) }));
     tasks.push(queryClient.invalidateQueries({ queryKey: queryKeys.diffAll(id) }));

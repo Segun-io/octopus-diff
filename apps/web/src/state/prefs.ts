@@ -7,7 +7,7 @@
  * v2 (UX round 1): adds `version: 2`, `theme` becomes `{ mode, light, dark }`, plus density,
  *             defaultScope, autoAdvance, reviewOffDisplay, titleCount, confirmBulk, sidebar
  *             collapse state. Later additive fields (`pinned`, `folderStart`, `settle`,
- *             `settledOpen`, `fromMainOnly`) need no version bump: `normalizePrefs` fills their defaults.
+ *             `settledOpen`, `fromMainOnly`, `activityOpen`) need no version bump: `normalizePrefs` fills their defaults.
  */
 import { type DiffScope, type ScopeKind, scopeFromQueryFields } from '@octopus-diff/contracts';
 import type { SettleOverride } from '../lib/model.ts';
@@ -52,6 +52,8 @@ export interface Prefs {
   settle: SettleOverride[];
   /** The Hidden shelf (`settled` rows) is open (closed by default: density is earned by hiding). */
   settledOpen: boolean;
+  /** The Activity strip under the diff is open (collapsed by default: the diff comes first). */
+  activityOpen: boolean;
 }
 
 export const DEFAULT_PREFS: Prefs = {
@@ -72,6 +74,7 @@ export const DEFAULT_PREFS: Prefs = {
   folderStart: '',
   settle: [],
   settledOpen: false,
+  activityOpen: false,
 };
 
 function stringList(value: unknown): string[] {
@@ -135,6 +138,7 @@ export function normalizePrefs(raw: unknown): Prefs {
         : DEFAULT_PREFS.folderStart,
     settle: settleList(v.settle),
     settledOpen: bool(v.settledOpen) ?? DEFAULT_PREFS.settledOpen,
+    activityOpen: bool(v.activityOpen) ?? DEFAULT_PREFS.activityOpen,
   };
 }
 
