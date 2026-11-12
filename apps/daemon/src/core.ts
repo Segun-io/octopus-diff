@@ -101,6 +101,15 @@ export const CORE_DEFAULTS = {
   /** Max cached file lists (per worktree x scope). */
   filesCacheSize: 2000,
   /**
+   * Incremental refreshes (#40): a worktree whose summary was updated from the watcher's paths
+   * gets a full refresh this long after the first such update, so an event the watcher missed
+   * costs at most this much staleness (the fallback poll is 30 s focused, 5 min otherwise, and
+   * every refresh re-arms it, so it alone would never fire while a worktree keeps changing).
+   */
+  reconcileMs: 30_000,
+  /** Watcher paths kept per worktree between two refreshes; more means a full refresh. */
+  maxHintPaths: 256,
+  /**
    * `readFileOrigins` calls in flight at once (#33). A fetch that moves `origin/main` relabels
    * every worktree of the project; git-core has 4 process slots (per-repository round-robin), so
    * this leaves half of them to interactive requests.
@@ -222,6 +231,12 @@ export interface CoreOptions {
   onFocus?: (visible: boolean, projectId: string | null, overview: boolean) => void;
   /** The activity rings (#38; tests pass one with small caps). */
   activity?: ActivityStore;
+  /**
+   * Incremental refreshes from the watcher's paths (#40; default on). `false`: every summary
+   * and file list is computed in full (kill switch, bench A/B). `reconcileMs`: see
+   * `CORE_DEFAULTS.reconcileMs`.
+   */
+  incremental?: boolean | { reconcileMs?: number };
 }
 
 interface WorktreeEntry {
@@ -269,6 +284,15 @@ interface WorktreeEntry {
     review: ReviewComputed | null;
     worktree: Worktree;
   } | null;
+  /**
+   * What the watcher reported since the summary refresh last started (#40): the paths, or `full`
+   * once anything without paths asked. Null: no watcher event, so a refresh is a full one.
+   */
+  hint: { paths: Set<string>; full: boolean } | null;
+  /** git-core's own `stateHash` of `summary` (before `withBase`): `ScopeOptions.summaryState`. */
+  gitStateHash: string | null;
+  /** Full refresh after an incremental one (`CORE_DEFAULTS.reconcileMs`). */
+  reconcile: NodeJS.Timeout | null;
 }
 
 /** First review states that land within this window share one `review.ready` per project. */
@@ -467,6 +491,9 @@ export class DaemonCore {
   #gitVersion: string | null = null;
   #timers: NodeJS.Timeout[] = [];
   #closed = false;
+  /** Incremental refreshes (#40): on unless `CoreOptions.incremental` is false. */
+  readonly #incremental: boolean;
+  readonly #reconcileMs: number;
 
   constructor(options: CoreOptions) {
     this.#git = options.gitCore;
@@ -483,6 +510,13 @@ export class DaemonCore {
     this.#gcIntervalMs = options.gcIntervalMs ?? CORE_DEFAULTS.gcIntervalMs;
     this.#reviewPolicy = options.reviewPolicy ?? null;
     this.#activity = options.activity ?? new ActivityStore();
+    const incremental = options.incremental ?? true;
+    this.#incremental = incremental !== false;
+    this.#reconcileMs = Math.max(
+      50,
+      (typeof incremental === 'object' ? incremental.reconcileMs : undefined) ??
+        CORE_DEFAULTS.reconcileMs,
+    );
     const watch = options.watch ?? {};
     this.#relistMs = options.relistMs ?? 60_000;
     const watcherOptions: ConstructorParameters<typeof WatcherService>[0] = {
@@ -492,7 +526,7 @@ export class DaemonCore {
       relistMs: this.#relistMs,
       leadingEdge: options.leadingEdge ?? true,
       logger: this.#log,
-      onWorktreeDirty: (id, reason) => this.#onWorktreeDirty(id, reason),
+      onWorktreeDirty: (id, reason, paths) => this.#onWorktreeDirty(id, reason, paths),
       onWorktreeListDirty: (projectId) => {
         const entry = this.#projects.get(projectId);
         if (entry) void this.#relist(entry);
@@ -566,6 +600,9 @@ export class DaemonCore {
     this.#timers = [];
     if (this.#reviewReadyTimer) clearTimeout(this.#reviewReadyTimer);
     this.#reviewReadyTimer = null;
+    for (const project of this.#projects.values()) {
+      for (const e of project.worktrees.values()) this.#clearReconcile(e);
+    }
     const scans: Promise<void>[] = [];
     for (const st of this.#scanRoots.values()) {
       st.controller?.abort();
@@ -1072,6 +1109,9 @@ export class DaemonCore {
       servedEarly: false,
       rowRev: 0,
       rowSeen: null,
+      hint: null,
+      gitStateHash: null,
+      reconcile: null,
     };
     return entry;
   }
@@ -1159,11 +1199,16 @@ export class DaemonCore {
 
   // --- summaries -------------------------------------------------------------------------------
 
-  #onWorktreeDirty(worktreeId: string, reason: DirtyReason): void {
+  #onWorktreeDirty(
+    worktreeId: string,
+    reason: DirtyReason,
+    paths: readonly string[] | null = null,
+  ): void {
     for (const project of this.#projects.values()) {
       const entry = project.worktrees.get(worktreeId);
       if (entry) {
-        this.#log.debug('worktree dirty', { worktreeId, reason });
+        this.#log.debug('worktree dirty', { worktreeId, reason, paths: paths?.length ?? null });
+        this.#noteHint(entry, reason === 'fs' ? paths : null);
         void this.#refresh(entry);
         if (reason === 'git') this.#onGitChange?.(entry.projectId);
         return;
@@ -1173,6 +1218,55 @@ export class DaemonCore {
 
   #refresh(entry: WorktreeEntry): Promise<void> {
     return entry.refresher.run();
+  }
+
+  /** Adds watcher paths to the next refresh's hint; null makes it a full refresh (#40). */
+  #noteHint(entry: WorktreeEntry, paths: readonly string[] | null): void {
+    entry.hint ??= { paths: new Set(), full: false };
+    if (paths === null) entry.hint.full = true;
+    if (entry.hint.full) {
+      entry.hint.paths.clear();
+      return;
+    }
+    for (const p of paths ?? []) entry.hint.paths.add(p);
+    if (entry.hint.paths.size > CORE_DEFAULTS.maxHintPaths) {
+      entry.hint.full = true;
+      entry.hint.paths.clear();
+    }
+  }
+
+  /** Takes the hint for a refresh that starts now: the paths, or undefined for a full refresh. */
+  #takeHint(entry: WorktreeEntry): string[] | undefined {
+    const hint = entry.hint;
+    entry.hint = null;
+    if (!this.#incremental || !hint || hint.full || hint.paths.size === 0) return undefined;
+    return [...hint.paths];
+  }
+
+  #clearReconcile(entry: WorktreeEntry): void {
+    if (entry.reconcile) clearTimeout(entry.reconcile);
+    entry.reconcile = null;
+  }
+
+  /**
+   * After an incremental refresh, a full one follows within `reconcileMs` (once per stretch of
+   * incremental ones): it repairs whatever an event the watcher missed left behind.
+   */
+  #armReconcile(entry: WorktreeEntry, mode: 'full' | 'incremental' | undefined): void {
+    if (mode !== 'incremental') {
+      this.#clearReconcile(entry);
+      return;
+    }
+    if (entry.reconcile || this.#closed) return;
+    entry.reconcile = setTimeout(() => {
+      entry.reconcile = null;
+      if (this.#closed) return;
+      const project = this.#projects.get(entry.projectId);
+      if (project?.worktrees.get(entry.worktree.id) !== entry) return;
+      this.#noteHint(entry, null);
+      void this.#refresh(entry);
+    }, this.#reconcileMs);
+    entry.reconcile.unref();
   }
 
   #kickSummaries(project: ProjectEntry): void {
@@ -1202,11 +1296,26 @@ export class DaemonCore {
     }
     try {
       // The snapshot (#37) is a reshaping of what the summary reads anyway: no extra git process.
-      // It feeds the activity ring only and never reaches an API payload.
-      const { snapshot, ...gitSummary } = await this.#git.getSummary(this.#locator(entry), {
-        defaultBranch: this.#defaultBranch(project),
-        snapshot: true,
-      });
+      // It feeds the activity ring only and never reaches an API payload. With the watcher's
+      // paths since the last refresh, git-core may limit its git calls to them (#40); a refresh
+      // that fails gives them back as "refresh in full".
+      const changedPaths = this.#takeHint(entry);
+      let result: Awaited<ReturnType<GitCore['getSummary']>>;
+      try {
+        result = await this.#git.getSummary(this.#locator(entry), {
+          defaultBranch: this.#defaultBranch(project),
+          snapshot: true,
+          ...(changedPaths ? { changedPaths } : {}),
+        });
+      } catch (error) {
+        this.#noteHint(entry, null);
+        throw error;
+      }
+      const { snapshot, refresh, ...gitSummary } = result;
+      if (project.worktrees.get(entry.worktree.id) === entry) {
+        this.#armReconcile(entry, refresh?.mode);
+        entry.gitStateHash = gitSummary.stateHash;
+      }
       // The state hash also covers the default branch's commit (#27): a branch scope's diff
       // follows it (the merge base moves) while the worktree itself stays as it was.
       const summary = withBase(gitSummary, await this.#branchBase(project, DEFAULT_BASE_SCOPE));
@@ -1657,6 +1766,11 @@ export class DaemonCore {
       this.#git
         .listChangedFiles(this.#locator(entry), scope, {
           defaultBranch: this.#defaultBranch(project),
+          // The list of the summary state this cache entry is for: git-core may update its last
+          // list from the paths that changed since (#40).
+          ...(this.#incremental && entry.gitStateHash !== null && stateHash !== null
+            ? { summaryState: entry.gitStateHash }
+            : {}),
           ...callOptions(want, signal),
         })
         .then((files) => {
