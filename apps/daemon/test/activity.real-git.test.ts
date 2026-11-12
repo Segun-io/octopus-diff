@@ -148,7 +148,8 @@ async function filesUnder(dir: string): Promise<string[]> {
   return out;
 }
 
-describe('live activity feed (real git, #38)', () => {
+// Each test starts a real daemon on real git (two in one case); a loaded CI runner needs more than 5 s.
+describe('live activity feed (real git, #38)', { timeout: 30_000 }, () => {
   it('shows what an agent does: edit, delete (content served), untracked delete, commit, checkout, reset', async () => {
     const fx = await makeRealGitFixture();
     const dir = await repo(fx);
