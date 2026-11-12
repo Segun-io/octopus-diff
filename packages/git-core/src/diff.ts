@@ -1269,11 +1269,14 @@ export async function listChangedFilesWithState(
   // read `.gitattributes` from the worktree (binary, diff drivers), which can differ per
   // worktree and change over time. Scopes that read the worktree keep their last list per
   // worktree, updated from the summary's changed paths (#40).
-  if (plan.empty) return { files: [], summaryState: null };
+  if (plan.empty) return { files: [], summaryState: options?.summaryState ?? null };
   const incremental = deps.incremental && plan.vsWorktree && plan.statusBased;
   const key = listKeyOf(repo, plan);
   const held = options?.summaryState;
-  if (incremental && held !== undefined && deps.tracks.get(repo.cwd)?.stateHash === held) {
+  /** The held state is git-core's latest summary of the worktree now. */
+  const latest = (): boolean => held !== undefined && deps.tracks.get(repo.cwd)?.stateHash === held;
+  const heldAtStart = latest();
+  if (incremental && held !== undefined && heldAtStart) {
     const listed = await listFromSummary(deps, repo, plan, key);
     if (listed) return { files: listed, summaryState: held };
   }
@@ -1385,6 +1388,10 @@ export async function listChangedFilesWithState(
     }
   }
   const files = rows.map((row) => row.file);
+  // Listed in full: of the held state as far as anyone can tell when no newer summary came in
+  // between (the files are read as they are, as a list without a state always was). After a newer
+  // one, of no state the caller holds (Greptile on PR #95): say so, and what this list omitted.
+  if (held !== undefined && heldAtStart && latest()) return { files, summaryState: held };
   return omission
     ? { files, summaryState: null, untrackedOmitted: omission }
     : { files, summaryState: null };

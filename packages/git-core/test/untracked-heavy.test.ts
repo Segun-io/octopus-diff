@@ -966,6 +966,16 @@ describe('listChangedFilesWithState (#43 follow-up)', () => {
     expect(stale.untrackedOmitted?.directories.map((d) => [d.path, d.count])).toEqual(
       now.untrackedOmitted?.directories.map((d) => [d.path, d.count]),
     );
+    // A held state that is still the latest: reported, even where the list is built in full
+    // (a committed scope), so a caller keeps caching it as that state's.
+    const latestNow = await core.getSummary(wt);
+    const branch = await listWith.call(
+      core,
+      wt,
+      { kind: 'branch', base: 'main' },
+      { summaryState: latestNow.stateHash },
+    );
+    expect(branch.summaryState).toBe(latestNow.stateHash);
     // Without any state asked for, and for a scope without untracked files: no omission.
     expect((await listWith.call(core, wt, { kind: 'working' })).summaryState).toBeNull();
     const staged = await listWith.call(core, wt, { kind: 'staged' });
