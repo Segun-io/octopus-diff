@@ -2853,7 +2853,6 @@ Numbers: #218 and up (renumbered after #212-#217 and the watcher entry #213 reac
      "polling every N s" from it.
      PR #77 review (contracts, additive): `ActivityResponse.run` and `ActivityQuery.run` identify the daemon run. A cursor (`after`) from before a restart can look valid when this run's counters overlap it (other worktrees advanced the daemon-wide counter past the old value), so a client sends back the `run` it saw and a different one is `dropped`; without it, a cursor beyond the worktree's own newest `seq` is treated as stale as well. Also: a truncated snapshot (more than 2000 paths) now compares a whole-worktree hash (round 2 below: `contentHash`), because an edit to a path beyond the cap changes neither `total` nor a retained entry; and a refresh that waited for the commit list does not write its snapshot if the worktree was removed or its baseline reset meanwhile.
      PR #77 review round 2 (contracts, additive): `SummarySnapshot.contentHash` (optional) is a hash of every changed path's status codes, object ids, content signatures and counts, including paths beyond the cap, and nothing about refs. It replaces the summary's `stateHash` as the truncated-snapshot signal: that hash is extended with the default branch's commit (and the status header carries the upstream), so a commit in another worktree or a fetch looked like activity once a worktree had more than 2000 changed paths. A worktree whose files did not change now records nothing. Computed in `git-core/src/snapshot.ts` from inputs the summary already has (no new git process). It holds only what the feed's per-file comparison looks at (path, content signature, line counts, deletion flag), so staging (`git add`: status letters, index object id) is not activity either.
-||||||| 2661c42
 
 ## Remote spawns: warm reload and startup config reads with a remote (session, 2026-11-12; GitHub #74)
 
@@ -2910,7 +2909,6 @@ Numbers: #225-#228 (after #218-#224 of `feat/daemon-activity`, which merges firs
      host was up (it starts with the first subscription), so every "wait until quiet" could only end at its
      timeout (10 s per edit in the edit loop, 30 s after the live fetch). It now counts git processes only. Also: `argv` (every argument, cut) in each trace line,
      and `--keep-trace <dir>` keeps the raw trace and the phase windows after the run for diagnosis.
-||||||| ed407f8
 
 ## Live view: Activity strip and "N deleted" chip (session, 2026-11-12; roadmap #39, step 20)
 
