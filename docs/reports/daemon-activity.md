@@ -1,12 +1,12 @@
 # daemon-activity report
 
 Roadmap #38 "daemon: activity ring and /activity route (live view)" (step 19 of #24). Branch `feat/daemon-activity`
-(from `main` at `4c9e780`). DECISIONS **#212-#218** (#212 is the contracts entry; other open branches may also use
-these numbers, renumber at merge). The web side (Activity strip, "N deleted" chip) is #39.
+(from `main` at `4c9e780`). DECISIONS **#218-#224** (#218 is the contracts entry; other open branches may also use
+these numbers; renumbered from #212-#218 when other branches took #212-#217). The web side (Activity strip, "N deleted" chip) is #39.
 
 ## Shipped
 
-- **Contracts (separate `contracts:` commit `27e5767`, DECISIONS #212).** New `packages/contracts/src/activity.ts`:
+- **Contracts (separate `contracts:` commit `27e5767`, DECISIONS #218).** New `packages/contracts/src/activity.ts`:
   `ActivityEntrySchema` (flat: `id`, `seq`, `kind`, `at`, `updatedAt`, `count` + per-kind optional fields: `path`,
   `rawPath`, `oldPath`, `xy`, `added`, `deleted`, `oid`, `untracked`, `origin`, `originVia`, `sha`, `subject`, `op`,
   `from`, `to`, `branch`, `fromBranch`, `inProgress`, `paths`, `pathCount`, `kinds`, `truncated`), kinds `added |
@@ -87,14 +87,14 @@ Machine: 12-core WSL2 (Ryzen 7 7800X3D), Node 26.13, git 2.53.0. All results are
 
 ## Decisions
 
-#212 contracts; #213 snapshot in every refresh, stripped, `counts.deleted`, baseline, `activitySeq`, origin labels from
-the review state; #214 memory-only compact ring and its caps (measured 3.7 MB for 90 x 200); #215 diff rules,
-attribution, bulk, coalescing; #216 HEAD classification with one `git log` per same-branch move; #217 blob route and
-its allow-list; #218 watch liveness in the response.
+#218 contracts; #219 snapshot in every refresh, stripped, `counts.deleted`, baseline, `activitySeq`, origin labels from
+the review state; #220 memory-only compact ring and its caps (measured 3.7 MB for 90 x 200); #221 diff rules,
+attribution, bulk, coalescing; #222 HEAD classification with one `git log` per same-branch move; #223 blob route and
+its allow-list; #224 watch liveness in the response.
 
 ## Contract changes
 
-All additive, in commit `27e5767` (DECISIONS #212): a new module, two new routes, two client methods, two optional
+All additive, in commit `27e5767` (DECISIONS #218): a new module, two new routes, two client methods, two optional
 fields on existing schemas (`WorktreeChangedEvent.activitySeq`, `ChangeCounts.deleted`). Nothing renamed or removed;
 older payloads parse (tested in `packages/contracts/test/activity.test.ts`).
 

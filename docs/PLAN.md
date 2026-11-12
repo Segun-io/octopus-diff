@@ -334,7 +334,7 @@ All git access goes through **one runner** in `packages/git-core`:
   the gap (DECISIONS #131).
 - Detect new / removed worktrees by re-running `worktree list` when git-dir `worktrees/` changes and on a
   timer.
-- Live view (DECISIONS #212-#218): every summary refresh also takes the per-file snapshot (no extra git process);
+- Live view (DECISIONS #218-#224): every summary refresh also takes the per-file snapshot (no extra git process);
   the daemon diffs consecutive snapshots into an in-memory activity ring (200 entries per worktree, 20000 and about
   4 MB overall, never persisted; the first snapshot is a baseline) served by `GET /api/worktrees/:id/activity?after=`,
   and a deleted tracked file's last staged or committed content by `GET /api/worktrees/:id/blob/:oid` (only oids of

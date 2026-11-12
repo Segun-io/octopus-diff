@@ -368,7 +368,7 @@ function own(s: string | null | undefined): string | null | undefined {
 
 /**
  * One stored entry. A fixed-shape class with times as milliseconds since the store started (small
- * integers) instead of an `ActivityEntry` with ISO strings: about 40% smaller (DECISIONS #214).
+ * integers) instead of an `ActivityEntry` with ISO strings: about 40% smaller (DECISIONS #220).
  * `toEntry` builds the API form on read.
  */
 class Item {
