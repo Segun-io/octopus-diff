@@ -217,14 +217,17 @@ describe.skipIf(FOLDS)('a file or the state moves while getFileDiff reads', () =
     },
   );
 
-  it('the index changes while git reads (a git add elsewhere)', async () => {
+  it('the index changes after git read the file (a git add elsewhere): the answer is still the file as read', async () => {
     const core = wrapped();
     const { repo, wt } = await repoWithState(core, 'race-index');
     hook('race-index', 'after', `git -C "${repo}" add b.txt`);
-    const before = mark();
     const got = await core.getFileDiff(wt, WORKING, { path: 'a.txt' });
-    expect(routeSince(before)).toBe('index');
+    // Staging another file changes nothing about this one's patch against HEAD.
     expect(got).toEqual(await reference.getFileDiff(wt, WORKING, { path: 'a.txt' }));
+    // The next call meets the moved index and reads the whole way.
+    const next = mark();
+    expect(await core.getFileDiff(wt, WORKING, { path: 'a.txt' })).toEqual(got);
+    expect(routeSince(next)).toBe('index');
   });
 
   it('a summary replaces the state while the patch run is held: the read is checked against the state it started from', async () => {

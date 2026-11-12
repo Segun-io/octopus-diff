@@ -3656,16 +3656,28 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      with a golden test.
 307. **Races: the file is read as it is, and the state only decides which route is safe.** Everything the answer
      contains (status letter, modes, counts, patch, `patchHash`) comes from git's output about the file at the moment it
-     read, never from the track. The track's record is a precondition, and the file's lstat signature (the inspection's
-     `statSig` for an untracked file) must equal the state's **before** the read (a file that moved since is the whole
-     route's, which reads it as it is) and **after** it (a file, the index or HEAD that moved while git ran: the answer is
-     discarded and the whole route reads again; no loop, one retry by construction). git's answer must confirm the record
-     (one entry, this path, the predicted status, not stat-only), else the whole route answers. So the `patchHash` the
-     client compares with the list's, and the key of the review marks, is the hash of the bytes returned. A failed
-     `git diff` (an unreadable file, a lock) is not an answer: the whole route runs and fails or explains the same way.
-     Nothing is stored by the route: there is no result cache to poison, and an aborted call (#44) rejects with `aborted`
-     from the same `ctx.git` signal and starts no fallback process. `ScopeOptions.summaryState` is now also read by
+     read, never from the track. The track's record is a precondition. The checks run **beside** the read, not before
+     it: the stamp, HEAD and the file's lstat signature (the inspection's `statSig` for an untracked file) are read
+     together (`check`, one round of file system calls) while the one `git diff` runs; what they compare only moves
+     forward (ctime, inode, mtime, the index and its stamp), so "equal to the state's now" means unchanged since the
+     state, and the read, a snapshot of one instant after the checks began, is of the state the record describes. A
+     file that moved is the whole route's, which reads it as it is. The one thing that can still move between the checks
+     and git's read is the file, so a tracked file's signature is taken once more after the read (`changed-while-reading`;
+     the answer is discarded and the whole route reads, one retry by construction). The index and HEAD are not read again:
+     staging something else or moving HEAD after git started does not change this file's patch against HEAD. A stale
+     state costs the spawn the checks overlapped, nothing else. git's answer must confirm the record (one entry, this
+     path, the predicted status, not stat-only), else the whole route answers. So the `patchHash` the client compares
+     with the list's, and the key of the review marks, is the hash of the bytes returned. A failed `git diff` (an
+     unreadable file, a lock) is not an answer: the whole route runs and fails or explains the same way. Nothing is
+     stored by the route: there is no result cache to poison, and an aborted call (#44) rejects with `aborted` from the
+     same `ctx.git` signal and starts no fallback process. `ScopeOptions.summaryState` is now also read by
      `getFileDiff`; the contract change is a comment only (`contracts:` commit 579a1f1), and the daemon passes it.
+     **Why beside, not before and after** (measured with the default bench's burst phase: a diff opened while 60 edits
+     refresh 60 other worktrees): checks run one after the other (stamp, HEAD, signature before the read and again after
+     it) gave a p95 of 74-79 ms, because under a burst each round of file system calls waits its turn in the 4-thread
+     pool behind the summaries' stats (about 8 rounds); checks beside the read with only the file's signature after it:
+     see the report. The earlier shape's p95 on the old route was 34-42 ms, so the budget (< 100 ms) held either way,
+     but the burst is what the interactive lane (#44) is for.
 308. **Known windows and one internal addition.** (a) An untracked file is ignored or not by the `.gitignore` files above
      it, which no stamp covers: `Stamp.at` (wall clock before git ran, an internal field of the kept track; not part of
      `stampChange`) lets the route refuse an untracked file whose ancestor `.gitignore` has a ctime or mtime within 100 ms

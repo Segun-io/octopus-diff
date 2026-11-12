@@ -1453,8 +1453,9 @@ type FromSummary = { diff: GitFileDiff } | { reason: string };
  *   an untracked file that HEAD and the base do not have (not also a tracked entry, not a
  *   rename's source);
  * - the file's lstat signature (the inspection's `statSig` for an untracked file) must still be
- *   the state's, before and after the read: a file that moved since is read by the whole-scope
- *   route, which describes it as it is, and so is one that moved while it was read;
+ *   the state's, beside the read and, for a tracked file, once more after it: a file that moved
+ *   since is read by the whole-scope route, which describes it as it is, and so is one that moved
+ *   while it was read;
  * - git's own answer must confirm the record: one entry, for this path, with the status the
  *   record predicted, not a stat-only change.
  *
@@ -1533,9 +1534,10 @@ async function diffFromSummary(
     return { moved: changed ?? (head !== headSha ? 'head-moved' : null), signature };
   };
 
-  // The checks run while the file is read, and again once it was: unchanged from the state's time
-  // to the end of the read means unchanged during it (what they compare only moves forward), so
-  // the answer is of the state the record describes. A stale state costs the read it overlapped.
+  // The checks run beside the read. The read is a snapshot of one instant, which the checks (the
+  // stamp, HEAD and the file's signature only ever move forward, so equal now means equal since the
+  // state) place inside the state the record describes; the only thing left to move between the checks and
+  // git's read of the file is the file, so its signature is taken once more after the read.
   if (tracked === undefined) {
     const held = track.untrackedInfos.get(key);
     if (!held) return no('no-inspection');
@@ -1563,8 +1565,7 @@ async function diffFromSummary(
     if (before.moved) return no(before.moved);
     if (ignored) return no('ignore-rules');
     if (!described) return no('stale-signature');
-    const after = await check(false);
-    return after.moved ? no(after.moved) : { diff: described };
+    return { diff: described };
   }
 
   const recorded = track.signatures.get(key);
@@ -1607,9 +1608,7 @@ async function diffFromSummary(
     pathspecs,
   });
   // The file, the index and HEAD are still what the state saw: the patch is of that state.
-  const after = await check(true);
-  if (after.moved) return no(after.moved);
-  if (after.signature !== recorded) return no('changed-while-reading');
+  if ((await lstatSignature(repo.cwd, key)) !== recorded) return no('changed-while-reading');
   return { diff };
 }
 
