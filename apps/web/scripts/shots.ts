@@ -28,7 +28,8 @@ const ready = async (page: Page) => {
 
 /**
  * The sidebar gallery (#14): every look a row has, from the mock's `gallery` dataset. Start the
- * server with it, e.g. `MOCK_DATASET=gallery WEB_PORT=5391 pnpm --filter @octopus-diff/web dev:mock`,
+ * server with it, e.g. `MOCK_DATASET=gallery MOCK_INTERVAL_MS=0 WEB_PORT=5391 pnpm --filter @octopus-diff/web dev:mock`
+ * (`MOCK_INTERVAL_MS=0` stops the mock's random edits, which would change counts and ages mid-shot),
  * then `BASE_URL=http://127.0.0.1:5391 STATES=sidebar-gallery,sidebar-gallery-narrow,... pnpm shots`.
  * These states screenshot the sidebar alone (see `CLIPS`) in a tall viewport so the whole list shows.
  */

@@ -228,6 +228,10 @@ describe('row indicator', () => {
     const ago = (ms: number) => new Date(now - ms).toISOString();
     const MIN = 60_000;
     expect(shortAge(ago(10_000), now)).toBe('now');
+    // The text and the recent dot share one cutoff (RECENT_MS = 2 min), both sides of it.
+    expect(shortAge(ago(RECENT_MS - 1), now)).toBe('now');
+    expect(shortAge(ago(90_000), now)).toBe('now');
+    expect(shortAge(ago(RECENT_MS), now)).toBe('2m');
     expect(shortAge(ago(7 * MIN), now)).toBe('7m');
     expect(shortAge(ago(3 * 60 * MIN), now)).toBe('3h');
     expect(shortAge(ago(2 * 24 * 60 * MIN), now)).toBe('2d');
@@ -380,7 +384,10 @@ describe('row actions', () => {
     const wrapper = row.parentElement as HTMLElement;
     const hide = within(wrapper).getByRole('button', { name: 'Hide until it changes' });
     // Visible on hover and whenever focus is inside the row, never `display: none`.
-    expect(hide.parentElement?.className).toContain('focus-within:opacity-100');
+    // `group-focus-within`: focus on the row button reveals the action too (it is a sibling of the
+    // button, so a plain `focus-within` on the wrapper would only fire once the action had focus).
+    expect(hide.parentElement?.className).toContain('group-focus-within/wt:opacity-100');
+    expect(hide.parentElement?.className).not.toMatch(/(^|\s)focus-within:opacity-100/);
     expect(hide.parentElement?.className).toContain('group-hover/wt:opacity-100');
     expect(hide.parentElement?.className).not.toMatch(/\bhidden\b/);
     // Tab order: the row, then its action.

@@ -517,7 +517,7 @@ export const WorktreeItem = memo(function WorktreeItem({
       </button>
       {canHide && (
         <span
-          className="absolute right-1.5 bottom-1 flex h-5 items-center rounded-sm pl-5 opacity-0 focus-within:opacity-100 group-hover/wt:opacity-100"
+          className="absolute right-1.5 bottom-1 flex h-5 items-center rounded-sm pl-5 opacity-0 group-focus-within/wt:opacity-100 group-hover/wt:opacity-100"
           style={{ background: `linear-gradient(to left, ${fade} 72%, transparent)` }}
         >
           <button
