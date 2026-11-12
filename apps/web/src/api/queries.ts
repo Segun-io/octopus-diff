@@ -120,8 +120,12 @@ export function useProjectsQuery() {
   return useQuery({ queryKey: queryKeys.projects(), queryFn: () => api.listProjects() });
 }
 
-/** Requests at most this many inbox batches at once (the SSE stream holds one connection). */
-const INBOX_BATCH_PARALLEL = 4;
+/**
+ * Inbox batches in flight at once. One: git-core runs four git processes in total, so batches in
+ * parallel only interleave and the first one lands late (30 × 3: first file at 973 ms with four
+ * in flight, 257 ms one at a time; the whole inbox 1.41 s vs 1.32 s).
+ */
+const INBOX_BATCH_PARALLEL = 1;
 /** About this many batches per inbox: big enough to stream, few enough to stay cheap. */
 const INBOX_BATCHES = 12;
 

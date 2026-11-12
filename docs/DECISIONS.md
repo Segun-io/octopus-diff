@@ -2145,8 +2145,9 @@ Numbers start at #180 so they do not collide with the parallel #29 session (#172
      derived (unreviewed uncommitted files, no commits), and its tests use the scope they were effectively on
      (Uncommitted); `reviewOnDemand` mimics #183.
 185. **The inbox fills in project batches.** On the first load of a scope the web asks `/api/inbox?projectIds=` in
-     about 12 batches (at most 4 in flight: the SSE stream holds one of the browser's 6 connections; projects with
-     changes first, then by name) through TanStack Query's `experimental_streamedQuery`, and shows each batch as it
+     about 12 batches (one at a time: git-core runs four git processes in total, so batches in parallel only
+     interleave; at 30 × 3 the first file lands at 257 ms one at a time vs 973 ms with four in flight, the whole
+     inbox at 1.32 s vs 1.41 s; projects with changes first, then by name) through TanStack Query's `experimental_streamedQuery`, and shows each batch as it
      lands. Per project rather than per worktree: no new streaming transport, the ETag/gzip and single-flight paths
      stay as they are, and the git work is bounded by git-core's global limit either way. A refetch is one request and
      replaces the data when it is in (`refetchMode: 'replace'`), so batching buys nothing there. The batch list comes
