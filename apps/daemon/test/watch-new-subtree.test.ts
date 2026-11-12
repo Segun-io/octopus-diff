@@ -72,6 +72,8 @@ async function makeLayout() {
 function setup() {
   const dirty: Array<{ id: string; reason: DirtyReason; at: number }> = [];
   const checks: Check[] = [];
+  /** Worktree-list refreshes asked for, by project and reason. */
+  const listDirty: Array<{ id: string; reason: string }> = [];
   /** Every event handed to the watcher, per directory. */
   const raw: Array<RawEvent & { dir: string }> = [];
   /** Completed subscriptions per directory. */
@@ -103,7 +105,7 @@ function setup() {
     watchNewSubtrees: true,
     newSubtreeGapMs: 50,
     onWorktreeDirty: (id, reason) => dirty.push({ id, reason, at: Date.now() }),
-    onWorktreeListDirty: () => {},
+    onWorktreeListDirty: (id, reason) => listDirty.push({ id, reason }),
     onSubtreeCheck: (info) =>
       checks.push({ target: info.target, inspected: info.inspected, reason: info.reason }),
   });
@@ -133,6 +135,7 @@ function setup() {
   return {
     watcher,
     dirty,
+    listDirty,
     checks,
     raw,
     subscribed,
@@ -276,6 +279,29 @@ describe('new directories with subdirectories (issue #36)', { timeout: 30_000 },
       () => t.dirty.some((d) => d.id === 'main' && d.reason === 'git' && d.at >= event.at),
       10_000,
     );
+  });
+
+  it('after the git dir is subscribed again, the worktree list is read again (PR #75 review)', async () => {
+    const layout = await makeLayout();
+    const t = setup();
+    await t.watcher.setProject('p1', layout.common, [layout.worktree]);
+    expect(t.count(layout.common)).toBe(1);
+    expect(t.listDirty).toEqual([]);
+    // A burst of creations in the git dir subscribes it again (synthetic events, so the test does
+    // not depend on what the OS reports for a nested `mkdir`). A `git worktree add` that completed
+    // while the old subscription was released left no event behind, and a refs directory is not
+    // under `worktrees/`, so nothing else asks for a relist.
+    const deliver = t.callbacks.get(layout.common);
+    if (!deliver) throw new Error('no subscription');
+    deliver(
+      null,
+      Array.from({ length: burstThreshold() }, (_, i) => ({
+        type: 'create' as const,
+        path: path.join(layout.common, 'refs', 'heads', `gone-${i}`),
+      })),
+    );
+    await eventually(() => t.count(layout.common) >= 2, 10_000);
+    await eventually(() => t.listDirty.some((d) => d.id === 'p1' && d.reason === 'git'), 10_000);
   });
 
   it('after the git dir is subscribed again, an exclude edit made in the gap is read (PR #75 review)', async () => {
