@@ -252,56 +252,61 @@ describe('gzip and ETag on the JSON API (fake git-core)', () => {
 });
 
 describe('cost of the middleware', () => {
-  it('adds about 50 ms CPU per 10 MB at most (gzip level 1 plus the ETag hash)', async () => {
-    // ~10 MB of JSON shaped like a file list, with random ids so it does not compress unrealistically well
-    // (the measured inbox gzips about 9x; gzip's cost grows with the entropy of its input).
-    const files = Array.from({ length: 80_000 }, (_, i) => ({
-      path: `packages/pkg-${i % 97}/src/dir-${i % 31}/module-${i}.ts`,
-      status: 'modified',
-      additions: i % 50,
-      deletions: i % 7,
-      patchHash: randomBytes(8).toString('hex'),
-    }));
-    const json = JSON.stringify({ files });
-    expect(json.length).toBeGreaterThan(9_500_000);
-    const route = (c: Context) => c.body(json, 200, { 'Content-Type': 'application/json' });
-    const plain = new Hono().get('/api/list', route);
-    const cached = new Hono()
-      .use('/api/*', httpCache({ revalidate: [/^\/api\/list$/] }))
-      .get('/api/list', route);
+  // A wall-clock budget depends on the machine, so it does not run in the normal suite (it would
+  // fail on a busy runner without a regression). Run it on purpose: `OCTOPUS_PERF_TESTS=1 pnpm test`.
+  it.skipIf(!process.env.OCTOPUS_PERF_TESTS)(
+    'adds about 50 ms per 10 MB at most (gzip level 1 plus the ETag hash)',
+    async () => {
+      // ~10 MB of JSON shaped like a file list, with random ids so it does not compress unrealistically well
+      // (the measured inbox gzips about 9x; gzip's cost grows with the entropy of its input).
+      const files = Array.from({ length: 80_000 }, (_, i) => ({
+        path: `packages/pkg-${i % 97}/src/dir-${i % 31}/module-${i}.ts`,
+        status: 'modified',
+        additions: i % 50,
+        deletions: i % 7,
+        patchHash: randomBytes(8).toString('hex'),
+      }));
+      const json = JSON.stringify({ files });
+      expect(json.length).toBeGreaterThan(9_500_000);
+      const route = (c: Context) => c.body(json, 200, { 'Content-Type': 'application/json' });
+      const plain = new Hono().get('/api/list', route);
+      const cached = new Hono()
+        .use('/api/*', httpCache({ revalidate: [/^\/api\/list$/] }))
+        .get('/api/list', route);
 
-    const timeOf = async (app: Hono, headers: Record<string, string>): Promise<number> => {
-      const started = performance.now();
-      const res = await app.request('/api/list', { headers });
-      await res.arrayBuffer();
-      return performance.now() - started;
-    };
-    const best = async (app: Hono, headers: Record<string, string>): Promise<number> => {
-      await timeOf(app, headers); // warm-up
-      const runs: number[] = [];
-      for (let i = 0; i < 7; i++) runs.push(await timeOf(app, headers));
-      return Math.min(...runs);
-    };
-    // Best of several runs on each side: the budget is about the work, not CI noise. The
-    // measured side also hashes the body for the ETag (the route is revalidated).
-    const base = await best(plain, {});
-    const withMiddleware = await best(cached, { 'accept-encoding': 'gzip' });
-    const extra = withMiddleware - base;
-    // The budget follows the machine (DECISIONS #163 did the same for the bulk bench): 50 ms on a
-    // normal machine, more on a slow shared CI runner. The reference is the same work done directly
-    // (gzip level 1 plus the SHA-1 of the body), so only overhead beyond that work can fail the test.
-    const reference = Math.min(
-      ...Array.from({ length: 3 }, () => {
+      const timeOf = async (app: Hono, headers: Record<string, string>): Promise<number> => {
         const started = performance.now();
-        gzipSync(json, { level: 1 });
-        createHash('sha1').update(json).digest('hex');
+        const res = await app.request('/api/list', { headers });
+        await res.arrayBuffer();
         return performance.now() - started;
-      }),
-    );
-    const budget = Math.max(50, reference * 1.5 + 15);
-    expect(
-      extra,
-      `+${extra.toFixed(1)} ms per ${(json.length / 1e6).toFixed(1)} MB (budget ${budget.toFixed(0)} ms, reference ${reference.toFixed(0)} ms)`,
-    ).toBeLessThan(budget);
-  });
+      };
+      const best = async (app: Hono, headers: Record<string, string>): Promise<number> => {
+        await timeOf(app, headers); // warm-up
+        const runs: number[] = [];
+        for (let i = 0; i < 7; i++) runs.push(await timeOf(app, headers));
+        return Math.min(...runs);
+      };
+      // Best of several runs on each side: the budget is about the work, not CI noise. The
+      // measured side also hashes the body for the ETag (the route is revalidated).
+      const base = await best(plain, {});
+      const withMiddleware = await best(cached, { 'accept-encoding': 'gzip' });
+      const extra = withMiddleware - base;
+      // The budget follows the machine (DECISIONS #163 did the same for the bulk bench): 50 ms on a
+      // normal machine, more on a slow shared CI runner. The reference is the same work done directly
+      // (gzip level 1 plus the SHA-1 of the body), so only overhead beyond that work can fail the test.
+      const reference = Math.min(
+        ...Array.from({ length: 3 }, () => {
+          const started = performance.now();
+          gzipSync(json, { level: 1 });
+          createHash('sha1').update(json).digest('hex');
+          return performance.now() - started;
+        }),
+      );
+      const budget = Math.max(50, reference * 1.5 + 15);
+      expect(
+        extra,
+        `+${extra.toFixed(1)} ms per ${(json.length / 1e6).toFixed(1)} MB (budget ${budget.toFixed(0)} ms, reference ${reference.toFixed(0)} ms)`,
+      ).toBeLessThan(budget);
+    },
+  );
 });

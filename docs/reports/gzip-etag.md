@@ -48,3 +48,7 @@ None added (`pnpm credits:check` is clean).
   security-header middleware) and the new `http-cache.ts` changed in src. DECISIONS #171.
 - Conflict watch with #27 (`core.ts`, web hooks): none expected. If #27 adds a state-derived cache key, an ETag
   from it could replace the body hash for the inbox.
+
+## PR review round 1 (Greptile on #56)
+
+- **The CPU-cost test measured wall-clock time, so it depended on the machine** (valid; it had already failed once on a CI runner at 54 ms against 50 ms). Its budget first became machine-relative, and the test is now opt-in: it only runs with `OCTOPUS_PERF_TESTS=1` (`OCTOPUS_PERF_TESTS=1 pnpm --filter @octopus-diff/daemon test`). The normal suite keeps the deterministic checks (gzip applied and smaller, `Vary`, 304 on a matching `If-None-Match`, no compression on SSE, `generatedAt` ignored by the ETag). Measured on the dev machine with the opt-in run: gzip 1 + hash is about 20-35 ms per 10 MB.
