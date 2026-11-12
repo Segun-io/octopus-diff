@@ -271,7 +271,7 @@ describe('auth v2 and request safety', () => {
     expect(res.headers.get('cache-control')).toBe('no-store');
     expect(res.headers.get('content-security-policy')).toContain("default-src 'none'");
     expect(res.headers.get('access-control-allow-origin')).toBeNull();
-    // The project listing is the exception to `no-store`: `no-cache` + ETag (DECISIONS #164).
+    // The project listing is the exception to `no-store`: `no-cache` + ETag (DECISIONS #171).
     const projects = await http(daemon, '/api/projects', { headers: { origin: daemon.url } });
     expect(projects.headers.get('cache-control')).toBe('no-cache');
     expect(projects.headers.get('content-security-policy')).toContain("default-src 'none'");

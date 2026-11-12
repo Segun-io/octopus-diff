@@ -10,7 +10,7 @@
     (so a browser keeps and revalidates them); everything else stays `no-store`.
   - SSE, POSTs, error bodies, small bodies: untouched.
 - Tests: `apps/daemon/test/http-cache.test.ts` (11 tests); `auth.test.ts` adjusted for the `no-cache` exception.
-- Docs: DECISIONS #164, one paragraph in PLAN §5.4.
+- Docs: DECISIONS #171, one paragraph in PLAN §5.4.
 
 ## Verification
 - `pnpm check` (lint + credits check, typecheck, build, test): exit 0. daemon 210 passed (22 files; 11 new),
@@ -25,7 +25,7 @@
   (9.3 MB): gzip1 20 ms, gzip4 33 ms, brotli q4 40 ms, sha1 3.8 ms.
 
 ## Decisions
-DECISIONS #164: gzip 1 over brotli; body hash over `stateHash` (review marks and forge data are not in it, inbox spans
+DECISIONS #171: gzip 1 over brotli; body hash over `stateHash` (review marks and forge data are not in it, inbox spans
 worktrees); `generatedAt` excluded from the hash (without it the inbox ETag never matched: found by the first test
 run); `no-cache` instead of `no-store` on the three listings so browsers can send `If-None-Match` at all.
 
@@ -45,6 +45,6 @@ None added (`pnpm credits:check` is clean).
 
 ## Notes for integration
 - Only `apps/daemon/src/app.ts` (import, one `onApi(httpCache(...))` line, the Cache-Control rule in the
-  security-header middleware) and the new `http-cache.ts` changed in src. DECISIONS #164 may need renumbering.
+  security-header middleware) and the new `http-cache.ts` changed in src. DECISIONS #171.
 - Conflict watch with #27 (`core.ts`, web hooks): none expected. If #27 adds a state-derived cache key, an ETag
   from it could replace the body hash for the inbox.

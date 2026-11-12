@@ -4,7 +4,7 @@ import { gzip } from 'node:zlib';
 import type { MiddlewareHandler } from 'hono';
 
 /**
- * Compression and conditional requests for JSON API responses (DECISIONS #164, GitHub #28).
+ * Compression and conditional requests for JSON API responses (DECISIONS #171, GitHub #28).
  *
  * - gzip level 1 for every successful JSON `GET` response of at least `MIN_COMPRESS_BYTES`, when the
  *   client accepts it. Level 1 measured 20 ms CPU per 9.3 MB (7x smaller); level 4 costs 33 ms for
