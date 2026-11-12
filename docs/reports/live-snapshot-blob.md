@@ -104,3 +104,8 @@ None added or removed (`pnpm credits:check` passes inside `pnpm lint`).
   "content gone (pruned)" and `invalid_argument` to 400.
 - `truncated: true` means the feed is coarse for that worktree: emit a `bulk` entry instead of per-file ones.
 - `GitObjectIdSchema` is the schema for the `/blob/:oid` route parameter (lowercase it first if the client may not).
+
+## PR review round 1 (Greptile on #70)
+
+- **A path could appear twice** (valid). After `git rm --cached f` with the file still on disk, status lists `f` as a staged deletion and as untracked, and `buildSnapshot` appended both with conflicting `xy`, counting both in `total`: a caller keying entries by path lost the deletion when the untracked entry overwrote it. The tracked entry now wins (it carries the blob oids, so the removed content stays readable) and the untracked copy is neither listed nor counted. The cap counts the path once. Test: one entry `D.` with `hH` set and `hI` null, `total: 1`, unique paths (it listed two entries before).
+- **Malformed `snapshot` options slipped through** (valid; AGENTS.md requires a contract schema for every boundary input). `snapshotCap` read `maxEntries` without checking the shape: `snapshot: null` crashed into `git_failed`, `snapshot: 5` silently enabled a snapshot. A new additive `SummarySnapshotOptionSchema` (`boolean | { maxEntries?: int 1..20000 }`, strict) in `contracts` (its own `contracts:` commit, `51e3d1e`) now parses the option first; anything else is `invalid_argument`. Tests: schema accept/reject cases in contracts; `null`, `5`, `'yes'`, `[]`, an unknown key and a string cap are rejected in git-core (they were not, before).

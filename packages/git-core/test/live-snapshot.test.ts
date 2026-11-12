@@ -262,6 +262,20 @@ describe('getSummary snapshot', () => {
     expect(exact?.entries).toHaveLength(9);
   });
 
+  it('rejects a malformed snapshot option before reading any field (PR #70 review)', async () => {
+    for (const snapshot of [null, 5, 'yes', [], { max: 10 }, { maxEntries: '10' }]) {
+      const error = await core
+        .getSummary(wt, { snapshot: snapshot as never })
+        .catch((e: unknown) => e);
+      expect(isGitCoreError(error, 'invalid_argument'), JSON.stringify(snapshot)).toBe(true);
+    }
+    // Still fine: the documented shapes, and `false` (no snapshot).
+    expect((await core.getSummary(wt, { snapshot: false })).snapshot).toBeUndefined();
+    expect((await core.getSummary(wt, { snapshot: {} })).snapshot?.entries.length).toBeGreaterThan(
+      0,
+    );
+  });
+
   it('rejects a cap outside 1..20000', async () => {
     for (const maxEntries of [0, -1, 1.5, 20_001, Number.NaN]) {
       const error = await core.getSummary(wt, { snapshot: { maxEntries } }).catch((e) => e);
@@ -312,6 +326,32 @@ describe('getSummary snapshot', () => {
     expect(summary.snapshot?.entries[0]).toMatchObject({ path: 'a.txt', xy: '.M' });
     rmSync(dir, { recursive: true, force: true });
   }, 30_000);
+});
+
+describe('getSummary snapshot: one entry per path (PR #70 review)', () => {
+  it('a file removed from the index but still on disk appears once, as the staged deletion', async () => {
+    const repo = fx.repo('snap-uncached', { files: { 'f.txt': 'content\n', 'keep.txt': 'k\n' } });
+    const blob = git(repo, ['rev-parse', 'HEAD:f.txt']);
+    git(repo, ['rm', '-q', '--cached', 'f.txt']);
+    const core = createGitCore(fx.coreOptions());
+    try {
+      const wt = locator(repo, path.join(repo, '.git'));
+      const snapshot = (await core.getSummary(wt, { snapshot: true })).snapshot;
+      const entries = snapshot?.entries.filter((entry) => entry.path === 'f.txt') ?? [];
+      // Keyed by path, nothing is lost or overwritten: one entry, the deletion with its blob.
+      expect(entries).toHaveLength(1);
+      expect(entries[0]).toMatchObject({ xy: 'D.', hH: blob, hI: null });
+      expect(snapshot?.total).toBe(1);
+      expect(new Set(snapshot?.entries.map((entry) => entry.path)).size).toBe(
+        snapshot?.entries.length,
+      );
+      // The cap counts it once too.
+      const capped = (await core.getSummary(wt, { snapshot: { maxEntries: 1 } })).snapshot;
+      expect(capped).toMatchObject({ total: 1, truncated: false });
+    } finally {
+      await core.dispose();
+    }
+  });
 });
 
 describe('readBlob', () => {

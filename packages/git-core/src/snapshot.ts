@@ -5,6 +5,7 @@ import {
   type SummaryOptions,
   type SummarySnapshot,
   type SummarySnapshotEntry,
+  SummarySnapshotOptionSchema,
 } from '@octopus-diff/contracts';
 import { decodeRepoPath } from './bstr.js';
 import type { StatusEntry } from './parse/status.js';
@@ -18,17 +19,21 @@ import type { UntrackedInfo } from './untracked.js';
 
 /** Resolves `SummaryOptions.snapshot` to an entry cap, or null when no snapshot was asked for. */
 export function snapshotCap(options: SummaryOptions | undefined): number | null {
-  const wanted = options?.snapshot;
-  if (wanted === undefined || wanted === false) return null;
-  const max = wanted === true ? undefined : wanted.maxEntries;
-  if (max === undefined) return SNAPSHOT_MAX_ENTRIES_DEFAULT;
-  if (!Number.isInteger(max) || max < 1 || max > SNAPSHOT_MAX_ENTRIES_LIMIT) {
+  const raw: unknown = options?.snapshot;
+  if (raw === undefined) return null;
+  // Every boundary input is parsed with its contract schema before any field is read: `null`, a
+  // number, an unknown key or a cap outside 1..LIMIT is an `invalid_argument`.
+  const parsed = SummarySnapshotOptionSchema.safeParse(raw);
+  if (!parsed.success) {
     throw new GitCoreError(
       'invalid_argument',
-      `snapshot.maxEntries must be an integer 1..${SNAPSHOT_MAX_ENTRIES_LIMIT}`,
+      `snapshot must be a boolean or { maxEntries: an integer 1..${SNAPSHOT_MAX_ENTRIES_LIMIT} }`,
     );
   }
-  return max;
+  const wanted = parsed.data;
+  if (wanted === false) return null;
+  const max = wanted === true ? undefined : wanted.maxEntries;
+  return max ?? SNAPSHOT_MAX_ENTRIES_DEFAULT;
 }
 
 /** An empty snapshot (bare repositories have no worktree). */
@@ -63,7 +68,13 @@ export function buildSnapshot(input: SnapshotInput): SummarySnapshot {
   const tracked = input.entries.filter(
     (entry) => entry.kind !== 'untracked' && entry.kind !== 'ignored',
   );
-  const total = tracked.length + input.untracked.length;
+  // One entry per path: after `git rm --cached f` (the file stays on disk) status lists f twice,
+  // as a staged deletion and as untracked. The tracked entry wins (it carries the blob oids, so the
+  // removed content stays readable), and the untracked copy is not listed or counted again.
+  const trackedKeys = new Set<string>();
+  for (const entry of tracked) trackedKeys.add(entry.path);
+  const untracked = input.untracked.filter((info) => !trackedKeys.has(info.key));
+  const total = tracked.length + untracked.length;
   const entries: SummarySnapshotEntry[] = [];
 
   for (const entry of tracked) {
@@ -98,7 +109,7 @@ export function buildSnapshot(input: SnapshotInput): SummarySnapshot {
     });
   }
 
-  for (const info of input.untracked) {
+  for (const info of untracked) {
     if (entries.length >= input.cap) break;
     entries.push({
       ...paths(info.key),
