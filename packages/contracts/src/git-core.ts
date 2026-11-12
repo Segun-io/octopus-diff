@@ -444,6 +444,8 @@ export interface ScopeOptions extends CallOptions {
    * the worktree, a scope that reads the worktree may be answered by updating git-core's last
    * list for it from the paths whose records changed in the summaries since (one pathspec-limited
    * `git diff`, the summary's status), instead of a full status and diff. Absent: a full list.
+   * `getFileDiff` (#41) also takes it: when it names a state other than git-core's latest summary of
+   * the worktree, the diff is read the whole-scope way (a hint only, the answer is the same bytes).
    */
   summaryState?: string;
 }
