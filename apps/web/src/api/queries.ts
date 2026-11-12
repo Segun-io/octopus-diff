@@ -225,6 +225,49 @@ async function currentProjects(
     .catch(() => undefined);
 }
 
+/**
+ * Follow-up delays for inbox rows the daemon marks `listing: 'overtaken'` (#43, Greptile P1 on PR
+ * #95: refreshes kept overtaking the listing of that worktree's files). Mutable for tests.
+ */
+export const inboxOvertakenRetry = { delaysMs: [250, 1000, 3000] };
+
+/**
+ * `response` with its overtaken rows asked for again (`?worktreeIds=`), after each delay of
+ * `inboxOvertakenRetry`, until none is left or the delays run out. A row that comes back with
+ * files replaces the marked one; one that does not come back has no changes in `scope` any more;
+ * one still overtaken stays, marked, so the worktree is never dropped for it. Never silent: the
+ * row stays visible either way, and the next event asks again.
+ */
+export async function settleOvertaken(
+  api: ApiClient,
+  response: InboxResponse,
+): Promise<InboxResponse> {
+  let current = response;
+  for (const delay of inboxOvertakenRetry.delaysMs) {
+    const ids = current.entries.filter((e) => e.listing === 'overtaken').map((e) => e.worktree.id);
+    if (ids.length === 0) break;
+    await new Promise((resolve) => setTimeout(resolve, delay));
+    let again: InboxResponse;
+    try {
+      again = await api.inbox({ scope: current.scope, worktreeIds: ids });
+    } catch {
+      break; // the marked rows stay; the next fetch or event asks again
+    }
+    const asked = new Set(ids);
+    const fresh = new Map(again.entries.map((e) => [e.worktree.id, e]));
+    current = {
+      ...current,
+      entries: current.entries.flatMap((e) => {
+        if (!asked.has(e.worktree.id)) return [e];
+        const next = fresh.get(e.worktree.id);
+        return next ? [next] : [];
+      }),
+      generatedAt: again.generatedAt,
+    };
+  }
+  return current;
+}
+
 /** Inbox batches, a few in flight, yielded as each lands; `last` marks the final one. */
 async function* streamInbox(
   api: ApiClient,
@@ -232,7 +275,7 @@ async function* streamInbox(
   batches: string[][] | null,
 ): AsyncGenerator<{ response: InboxResponse; last: boolean }> {
   if (batches === null) {
-    yield { response: await api.inbox({ scope }), last: true };
+    yield { response: await settleOvertaken(api, await api.inbox({ scope })), last: true };
     return;
   }
   const pending = new Map<number, Promise<[number, InboxResponse]>>();
@@ -241,6 +284,7 @@ async function* streamInbox(
     const i = next++;
     const request = api
       .inbox({ scope, projectIds: batches[i] ?? [] })
+      .then((r) => settleOvertaken(api, r))
       .then((r): [number, InboxResponse] => [i, r]);
     // Rejections surface through `Promise.race`; a batch still in flight after one failed must
     // not turn into an unhandled rejection.

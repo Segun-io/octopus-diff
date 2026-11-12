@@ -1446,6 +1446,17 @@ export class MockBackend {
     return { ok: true, restored };
   }
 
+  /** Worktree id → how many more inbox answers send its row as `listing: 'overtaken'` (#43). */
+  readonly #overtaken = new Map<string, number>();
+
+  /**
+   * The next `times` inbox answers send this worktree's row as the daemon does when refreshes kept
+   * overtaking its listing (`listing: 'overtaken'`, no files, the latest summary).
+   */
+  overtakeInbox(worktreeId: string, times: number): void {
+    this.#overtaken.set(worktreeId, times);
+  }
+
   inbox(
     scope: DiffScope,
     onlyUnreviewed: boolean,
@@ -1466,6 +1477,19 @@ export class MockBackend {
         if (mw.error || mw.worktree.missing) continue;
         const review = this.policyOf(mp, mw, map);
         if (onlyUnreviewed && !review.enabled) continue;
+        const overtaken = this.#overtaken.get(mw.worktree.id) ?? 0;
+        if (overtaken > 0) {
+          this.#overtaken.set(mw.worktree.id, overtaken - 1);
+          entries.push({
+            project: mp.project,
+            worktree: mw.worktree,
+            summary: this.summary(mp, mw),
+            files: [],
+            review,
+            listing: 'overtaken',
+          });
+          continue;
+        }
         let files = this.changedFiles(mp, mw, scope);
         if (onlyUnreviewed) files = files.filter((f) => !f.reviewed);
         if (files.length === 0) continue;
