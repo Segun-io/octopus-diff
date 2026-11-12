@@ -97,8 +97,7 @@ const TARGETS = {
  * Budgets that fail today and are tracked by an issue: reported as `FAIL (tracked #n)`, they do not
  * turn the run red until the issue lands (then delete the entry). `--strict` ignores this list.
  */
-export const TRACKED: Readonly<Record<string, string>> = {
-};
+export const TRACKED: Readonly<Record<string, string>> = {};
 
 /** The 2026-11-11 profiling pass (issue #24), 12-core WSL2, Node 26, git 2.53. Static reference. */
 const BASELINE_2026_11_11 = [
