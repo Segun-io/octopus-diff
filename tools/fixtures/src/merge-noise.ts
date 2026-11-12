@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { BuildContext, RepoBuilder } from './builder.js';
 import { removeFixtureRoot } from './generator.js';
 import { createIsolatedGitEnv, type IsolatedGitEnv, runGit } from './git.js';
+import type { FixtureManifest } from './manifest.js';
 import { fixtureId } from './oracle.js';
 import { createRng } from './random.js';
 
@@ -357,4 +358,120 @@ async function build(
     },
     cleanup: () => removeFixtureRoot(root, parent),
   };
+}
+
+// --- bench: a fetch that moves origin/main in every repository ----------------------------------
+
+export interface BenchOrigins {
+  /** Repositories that got an `origin`, and the linked worktrees that merged it. */
+  readonly repos: number;
+  readonly linkedWorktrees: number;
+  /**
+   * A `git fetch` that moves `origin/main` in every repository: the upstream clone pushes one
+   * commit (round N: `docs/upstream-round-N.md`, plus every linked worktree's own file with the
+   * same content, so each of them has one file that turns from own to "same as main"), then `fetch`
+   * runs in each repository. Local `main` never moves. Run it before the daemon starts (a cold
+   * start after a fetch) or while it runs (every worktree's labels are invalidated at once).
+   */
+  fetchMovesOrigin(round: number): Promise<{ ms: number }>;
+}
+
+export interface BenchOriginsOptions {
+  /** How many repositories are prepared at once. */
+  concurrency?: number;
+}
+
+/** The own file the linked worktree `name` commits (and that round 2 of the fetch lands upstream). */
+export function benchOwnFile(worktreeName: string): string {
+  return `src/own-${worktreeName}.ts`;
+}
+
+/**
+ * Opt-in for the perf bench (`generateFixtures({ bench })` is unchanged): gives every bench
+ * repository a bare `origin` (clone / push / fetch under `root`, no network), commits one own file in
+ * every linked worktree, pushes a first upstream commit and merges `origin/main` into the linked
+ * worktrees (local `main` stays stale), so each of them has merge noise from `origin/main`. The
+ * worktrees keep their dirty files; the merges touch only new files.
+ */
+export async function addBenchOrigins(
+  manifest: Pick<FixtureManifest, 'projects'>,
+  env: IsolatedGitEnv,
+  root: string,
+  options: BenchOriginsOptions = {},
+): Promise<BenchOrigins> {
+  const ctx = new BuildContext(env, createRng(36));
+  const projects = manifest.projects.filter((p) => p.role === 'bench' && p.mainWorktreePath);
+  const originsDir = join(root, 'bench-origins');
+  await mkdir(originsDir, { recursive: true });
+  interface Repo {
+    main: RepoBuilder;
+    upstream: RepoBuilder;
+    linked: Array<{ name: string; builder: RepoBuilder }>;
+  }
+  const repos: Repo[] = [];
+  await mapLimit(projects, options.concurrency ?? 6, async (project) => {
+    const dir = project.mainWorktreePath as string;
+    const originDir = join(originsDir, `${project.name}.git`);
+    const upstreamDir = join(originsDir, `${project.name}-upstream`);
+    const main = new RepoBuilder(ctx, dir);
+    await runGit(['clone', '-q', '--bare', dir, originDir], { cwd: originsDir, env });
+    await main.git(['remote', 'add', 'origin', originDir]);
+    await main.git(['fetch', '-q', 'origin']);
+    await runGit(['clone', '-q', originDir, upstreamDir], { cwd: originsDir, env });
+    const upstream = new RepoBuilder(ctx, upstreamDir);
+    const linked: Repo['linked'] = [];
+    for (const worktree of project.worktrees) {
+      if (worktree.isMain || worktree.bare) continue;
+      const builder = new RepoBuilder(ctx, worktree.path);
+      // Staged explicitly: the worktree's dirty files stay dirty.
+      await builder.writeLines(benchOwnFile(worktree.name), ['own work', worktree.name]);
+      await builder.add(benchOwnFile(worktree.name));
+      await builder.commit(`${worktree.name}: own work`);
+      linked.push({ name: worktree.name, builder });
+    }
+    await upstream.writeLines('docs/upstream.md', ['# upstream', project.name]);
+    await upstream.commitAll(`${project.name}: upstream docs`);
+    await upstream.git(['push', '-q', 'origin', 'main']);
+    await main.git(['fetch', '-q', 'origin']);
+    for (const { builder } of linked)
+      await builder.git(['merge', '-q', '--no-edit', 'origin/main']);
+    repos.push({ main, upstream, linked });
+  });
+  return {
+    repos: repos.length,
+    linkedWorktrees: repos.reduce((n, r) => n + r.linked.length, 0),
+    async fetchMovesOrigin(round) {
+      const started = performance.now();
+      await mapLimit(repos, options.concurrency ?? 6, async (repo) => {
+        await repo.upstream.git(['pull', '-q', '--ff-only', 'origin', 'main']);
+        await repo.upstream.writeLines(`docs/upstream-round-${round}.md`, ['round', String(round)]);
+        if (round >= 2) {
+          for (const { name } of repo.linked) {
+            await repo.upstream.writeLines(benchOwnFile(name), ['own work', name]);
+          }
+        }
+        await repo.upstream.commitAll(`upstream: round ${round}`);
+        await repo.upstream.git(['push', '-q', 'origin', 'main']);
+        await repo.main.git(['fetch', '-q', 'origin']);
+      });
+      return { ms: Math.round(performance.now() - started) };
+    },
+  };
+}
+
+/** Runs `task` over `items` with bounded concurrency; the first failure rejects. */
+async function mapLimit<T>(
+  items: readonly T[],
+  limit: number,
+  task: (item: T) => Promise<void>,
+): Promise<void> {
+  let next = 0;
+  const worker = async () => {
+    for (;;) {
+      const index = next++;
+      if (index >= items.length) return;
+      await task(items[index] as T);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
 }
