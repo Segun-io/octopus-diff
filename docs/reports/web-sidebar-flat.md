@@ -57,7 +57,7 @@ Run from the repo root on this machine (Node 26):
 - `pnpm build`: **pass**.
 - `PERF_SMOKE=1 pnpm --filter @octopus-diff/web perf` (preview of the build, 30 worktrees x 200 files): all checks
   ok, 0 page errors (`virtualised list ... 46 / 46` is the file list; the sidebar's own check is `data-total`).
-- `pnpm test:e2e`: 82 passed, 16 failed (expected, see "e2e" below).
+- `pnpm test:e2e` (full, one run, `workers: 1`): **99 passed, 0 failed** (see "e2e" below).
 
 ### How the virtual list is tested in jsdom
 
@@ -87,42 +87,36 @@ test and the model test). `test/model.test.ts` (`hideToggle`), `app.test.tsx`, `
 `merge-noise.test.tsx`, `repository-info.test.tsx` (no Inbox entry; they use `store`, `g i` or `data-dirty` rows
 instead; the J/K test walks the DOM order).
 
-## e2e (`pnpm test:e2e`)
+## e2e (`pnpm test:e2e`): 99 passed, 0 failed
 
-Run in two parts (the suite has `workers: 1` and each broken spec waits out its 90 s timeout, so the full run exceeds
-the 900 s I allowed it; `tests/12`-`19` were run separately with `playwright test tests/12 ... tests/19`):
-**82 passed, 16 failed** of 98. Every failure is a spec that looks for an element that no longer exists or for the
-old placement, none is a runtime error of the app:
+The first version of this branch broke 16 specs (they looked for the removed Inbox entry and project / folder
+headers). The lead allowed edits to `e2e/`; they are kept small and no assertion was weakened. The only app change
+for it: the context bar now carries `data-view` (`inbox` | `worktree`) and, in the Inbox, `data-count` (dirty
+worktrees), because the sidebar's `inbox-item` (`aria-current`, `data-count`) is gone.
 
-- `01-projects` (add by path / scan root; sidebar shows every worktree...), `18-onboarding` (2): `app.projectItem(name)`.
-- `02-inbox-diff` (UI inbox lists every dirty worktree; selecting a file shows its patch), `04-live-updates` (sidebar
-  counts follow external edits in the inbox view), `06-keyboard` (`/`, `g i`, `?`), `07-readonly` (`app.selectInbox()`,
-  3 min timeout), `11-ui-bulk-review` (3: inbox with filter / inbox-wide / project via context menu), `19-merge-noise`
-  (`:252`): `app.inbox` / `selectInbox()` click `inbox-item`.
-- `14-ui-forge-details` (2): `projectNameButton(name)` = `project-item ... button[title]`.
-- `15-ui-status-flow` (`:70`, "Hide until it changes"): expects `data-section="settled"`, now `hidden`.
-
-All other specs pass.
-
-What needs updating in `e2e/` (not edited here, it is another stream's; no test id was renamed, the elements are gone):
-
-- `e2e/support/app.ts`: `get inbox()` (`TEST_IDS.inboxItem`, no element now), `projectItem(name)`
-  (`TEST_IDS.projectItem`, no element now). `e2e/support/ui.ts`: `projectNameButton`, `folderNameButton`
-  (`li[data-folder-id]`, gone: open Overviews from a row's context menu `Overview of ...` or the palette instead).
-- `tests/01-projects.spec.ts` (lines 24, 59, 153: `app.projectItem(...)`), `tests/18-onboarding.spec.ts` (57, 72, 135:
-  `projectItem`, `app.inbox`): assert on a worktree row with `data-project-name` instead (new attribute) or on the
-  filter picker's project option.
-- `tests/02-inbox-diff.spec.ts:43` (`app.inbox` `data-count`): count `[data-testid=worktree-item][data-dirty=true]`
-  rows (the sidebar list is virtual, so a big fixture mounts only a window: use `sidebar-list[data-total]` for totals).
-- `tests/06-keyboard.spec.ts:91` (`app.inbox` `aria-current` after `K`): the Inbox view has no sidebar element; check
-  the context bar or `[data-testid=file-group]`.
-- `tests/15-ui-status-flow.spec.ts` (20, 89, 93): `li[data-section]` is now `flat | hidden | hidden-header` (was
-  `folder | settled | pinned`) and reviewed worktrees are not in a shelf: "Hide until it changes" moves the row to
-  `data-section="hidden"` once the Hidden section is expanded (`Expand hidden`), and the un-hide happens in `flat`.
-- `e2e/bench/bench.ts:600` and `e2e/bench/profile.ts:489` click `inboxItem`; use `page.keyboard.press('g'); press('i')`.
-- Any e2e that finds a worktree row far down a long list must scroll or use the filter: only a window is mounted.
-  (`worktreeItem(id)` of `app.ts` can use `scrollIntoViewIfNeeded` only for a mounted row; select by id through the
-  store/palette or filter first.)
+- `support/app.ts`: `get inbox()` replaced by `contextBar`; `selectInbox()` now presses `g` `i` and expects
+  `context-bar[data-view=inbox]`; `projectItem(name)` replaced by `projectRows(name)` (worktree rows with that
+  `data-project-name`) and `expectProjectListed(name, id?)`; new `reveal(locator)`, which scrolls the virtual list from
+  the top until a row is mounted; `selectWorktree` and `expectWorktreeItem` call it, so no helper assumes every row is
+  mounted.
+- `support/ui.ts`: `projectNameButton` / `folderNameButton` replaced by `openProjectOverview(name)` /
+  `openFolderOverview(scanRootId)`, which use the command palette (`Project <name>`, `go:folder:<id>`).
+- `tests/01-projects`, `tests/18-onboarding`: `projectItem(...)` -> `expectProjectListed(...)`; onboarding's "Show
+  folder leaves the Inbox" asserts the context bar is gone (the Overview has none) instead of the inbox entry's
+  `aria-current`.
+- `tests/02-inbox-diff`, `tests/06-keyboard`: `app.inbox` `data-count` / `aria-current` -> `app.contextBar`
+  `data-count` / `data-view`.
+- `tests/14-ui-forge-details`: `projectNameButton(...).click()` -> `openProjectOverview(...)`.
+- `tests/11-ui-bulk-review`: the "project via context menu" test is rewritten, because the sidebar has no project
+  header menu any more: the same bulk actions (Mark all reviewed / unreviewed) are taken from the project's and the
+  folder's Overview (renamed "project and folder via their Overviews, ..."). Two Inbox tests now wait for
+  `mark-all[data-count] == total` before acting; this is a real condition, not a looser assertion: the Inbox fills in
+  per project, and `g i` is instant where the old click was not, so the stale-worktree test froze the refetches too
+  early and the Shift+R dialog counted 15 of 44 files.
+- `tests/15-ui-status-flow`: "Hide until it changes" expects `data-section="hidden"` then `flat` (was `settled` /
+  `folder`); the row-place helper's comment follows.
+- `tests/04-live-updates`, `tests/07-readonly`, `tests/19-merge-noise`: unchanged (they only use `selectInbox()`).
+- `bench/bench.ts`, `bench/profile.ts`: `g` `i` instead of clicking `inboxItem`.
 
 ## Decisions (also in docs/DECISIONS.md #233-#240)
 
@@ -149,7 +143,6 @@ Added `@tanstack/react-virtual` 3.14.26 (MIT) to `apps/web` (pulls `@tanstack/vi
   they live in the Overviews and Settings -> Folders. Worktree-level policy and bulk stay in the row menu.
 - "Reviewed", "clean" and the layout of the row (branch + repo second line, status variants) are #14.
 - A real-browser run at 330 worktrees was not done (see above); jsdom bound plus `pnpm perf` at 30.
-- `e2e/` needs the updates listed above; they were not made here.
 
 ## Notes for integration
 
