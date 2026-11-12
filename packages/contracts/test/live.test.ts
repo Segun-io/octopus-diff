@@ -9,8 +9,10 @@ import {
   BlobReadSchema,
   type GitCore,
   GitObjectIdSchema,
+  SNAPSHOT_MAX_ENTRIES_LIMIT,
   type SummaryOptions,
   type SummaryResult,
+  SummarySnapshotOptionSchema,
   SummarySnapshotSchema,
   type WorktreeSummary,
   WorktreeSummarySchema,
@@ -89,5 +91,32 @@ describe('GitCore additions', () => {
     expectTypeOf<GitCore['readBlob']>().toBeNullable();
     // The summary schema does not know the snapshot: it never reaches an API payload by accident.
     expect('snapshot' in WorktreeSummarySchema.shape).toBe(false);
+  });
+});
+
+describe('SummarySnapshotOptionSchema (PR #70 review)', () => {
+  it('accepts a boolean or { maxEntries } and nothing else', () => {
+    for (const ok of [
+      true,
+      false,
+      {},
+      { maxEntries: 1 },
+      { maxEntries: SNAPSHOT_MAX_ENTRIES_LIMIT },
+    ]) {
+      expect(SummarySnapshotOptionSchema.safeParse(ok).success, JSON.stringify(ok)).toBe(true);
+    }
+    for (const bad of [
+      null,
+      5,
+      'yes',
+      [],
+      { maxEntries: 0 },
+      { maxEntries: 1.5 },
+      { maxEntries: SNAPSHOT_MAX_ENTRIES_LIMIT + 1 },
+      { maxEntries: '10' },
+      { max: 10 },
+    ]) {
+      expect(SummarySnapshotOptionSchema.safeParse(bad).success, JSON.stringify(bad)).toBe(false);
+    }
   });
 });

@@ -2661,3 +2661,4 @@ Numbers: #209 and up (other sessions may also have used #209; renumber at merge)
      content cannot be read from here. A deleted tracked file's id stays readable after a commit or `reset --hard`
      until `git gc` prunes it (tested before and after a commit and a hard reset, and for a file that was staged and
      then unstaged: an unreferenced loose object).
+     PR #70 review (contracts, additive): `SummarySnapshotOptionSchema` (`boolean | { maxEntries?: int 1..LIMIT }`, strict) parses `SummaryOptions.snapshot` at the git-core boundary, as AGENTS.md requires for every input; and a path that is both staged-deleted and still on disk (`git rm --cached`) appears once in a snapshot, as its tracked entry (it carries the blob oids), not twice.

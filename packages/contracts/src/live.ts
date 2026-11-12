@@ -26,6 +26,18 @@ export const SNAPSHOT_MAX_ENTRIES_DEFAULT = 2000;
 export const SNAPSHOT_MAX_ENTRIES_LIMIT = 20_000;
 
 /**
+ * `SummaryOptions.snapshot`: `true` (default cap), `false`, or `{ maxEntries }`. git-core parses what
+ * a caller passes with this schema before reading any field, so `null`, a number or an unknown key
+ * is an `invalid_argument`, not a silently enabled snapshot or a crash.
+ */
+export const SummarySnapshotOptionSchema = z.union([
+  z.boolean(),
+  z
+    .object({ maxEntries: z.number().int().min(1).max(SNAPSHOT_MAX_ENTRIES_LIMIT).optional() })
+    .strict(),
+]);
+
+/**
  * One changed path of a worktree, as the summary's own `git status --porcelain=v2` and numstat
  * saw it. Untracked files appear with `xy` `??` and no oids (their content is never available
  * through git: a deleted untracked file is gone).
