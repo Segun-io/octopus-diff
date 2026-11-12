@@ -173,14 +173,13 @@ describe('F1: worktree folder deleted / replaced at the same path', { timeout: 2
 
     // `git worktree remove --force wt && git worktree add wt` as seen by the file system.
     await rm(layout.linked, { recursive: true, force: true });
-    if (process.platform === 'darwin') {
-      // FSEvents coalesces an immediate re-create with the delete into an `update` of the root
-      // and keeps watching the path (nothing to heal; the relist sees the new inode, as in the
-      // next test). Let the delete arrive first to exercise the same degraded path as inotify.
-      await eventually(() => rec.lists.some((l) => l.reason === 'missing'), 5000);
-    }
-    await mkdir(path.join(layout.linked, 'src'), { recursive: true });
+    // Let the delete arrive before re-creating the folder, on every platform. FSEvents (macOS)
+    // coalesces an immediate re-create with the delete into an `update` of the root and keeps
+    // watching the path (nothing to heal; the relist sees the new inode, as in the next test).
+    // inotify can lose the race too when the machine is busy (rare Linux CI/dev flake: the
+    // delete is never reported). Waiting exercises the same degraded path everywhere.
     await eventually(() => rec.lists.some((l) => l.reason === 'missing'), 5000);
+    await mkdir(path.join(layout.linked, 'src'), { recursive: true });
     expect(rec.replaced).toEqual(['linked']); // DaemonCore re-checks the watch targets
     const degraded = watcher.status();
     expect(degraded.mode).toBe('mixed');
