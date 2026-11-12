@@ -3,6 +3,7 @@ import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from 'n
 import { mkdir, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import {
+  type CallOptions,
   type CommitInfo,
   type DiffOptions,
   type DiffScope,
@@ -121,6 +122,8 @@ export class FakeGitCore implements GitCore {
   readonly failures = new Map<Method, GitCoreError>();
   lastDiffOptions: DiffOptions | undefined;
   lastScopeOptions: ScopeOptions | undefined;
+  lastFilesOptions: ScopeOptions | undefined;
+  lastCommitsOptions: ({ limit?: number } & CallOptions) | undefined;
   disposed = false;
 
   #count(method: Method): void {
@@ -402,8 +405,9 @@ export class FakeGitCore implements GitCore {
     scope: DiffScope,
     options?: ScopeOptions,
   ): Promise<GitChangedFile[]> {
-    await this.#enter('listChangedFiles');
     this.lastScopeOptions = options;
+    this.lastFilesOptions = options;
+    await this.#enter('listChangedFiles', options?.signal);
     return this.#filesFor(this.worktree(loc.worktreeId), scope.kind);
   }
 
@@ -413,8 +417,8 @@ export class FakeGitCore implements GitCore {
     file: FileSelector,
     options?: DiffOptions,
   ): Promise<GitFileDiff> {
-    await this.#enter('getFileDiff');
     this.lastDiffOptions = options;
+    await this.#enter('getFileDiff', options?.signal);
     const files = this.#filesFor(this.worktree(loc.worktreeId), scope.kind);
     const match = files.find((f) =>
       file.rawPath !== undefined ? f.rawPath === file.rawPath : f.path === file.path,
@@ -425,8 +429,12 @@ export class FakeGitCore implements GitCore {
     return { ...identity, patch, tooLarge: false, truncated: false, byteLength: patch.length };
   }
 
-  async listCommits(loc: WorktreeLocator, options?: { limit?: number }): Promise<CommitInfo[]> {
-    await this.#enter('listCommits');
+  async listCommits(
+    loc: WorktreeLocator,
+    options?: { limit?: number } & CallOptions,
+  ): Promise<CommitInfo[]> {
+    this.lastCommitsOptions = options;
+    await this.#enter('listCommits', options?.signal);
     const wt = this.worktree(loc.worktreeId);
     const n = Math.min(options?.limit ?? 50, 3);
     return Array.from({ length: n }, (_, i) => {

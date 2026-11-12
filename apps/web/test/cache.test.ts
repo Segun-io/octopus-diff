@@ -6,7 +6,7 @@ import {
   type ServerEvent,
 } from '@octopus-diff/contracts';
 import { QueryClient, QueryObserver } from '@tanstack/react-query';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { MockBackend } from '../mock/backend.ts';
 import { createMockFetch } from '../mock/router.ts';
 import {
@@ -15,7 +15,7 @@ import {
   emptyEffects,
   flushEffects,
 } from '../src/api/cache.ts';
-import { queryKeys } from '../src/api/queries.ts';
+import { filesQueryOptions, queryKeys } from '../src/api/queries.ts';
 
 function seeded() {
   const backend = new MockBackend({ dataset: 'demo' });
@@ -364,5 +364,52 @@ describe('SSE → cache invalidation', () => {
     expect(collectEventEffects(qc, hello, emptyEffects(), { reconnect: true }).everything).toBe(
       true,
     );
+  });
+});
+
+describe('superseded requests are aborted (#44)', () => {
+  it('an invalidation while the file list is in flight aborts the old request', async () => {
+    const { backend, qc, a } = seeded();
+    const mockFetch = createMockFetch(backend);
+    const signals: Array<AbortSignal | null | undefined> = [];
+    let hold = true;
+    const api = createApiClient({
+      baseUrl: 'http://mock.local',
+      fetch: async (input, init) => {
+        if (String(input).includes('/files')) {
+          signals.push(init?.signal);
+          // The first request stays in flight until it is aborted (or released).
+          if (hold) {
+            hold = false;
+            await new Promise<void>((resolve) => {
+              init?.signal?.addEventListener('abort', () => resolve(), { once: true });
+              setTimeout(resolve, 2_000);
+            });
+            if (init?.signal?.aborted) throw new DOMException('aborted', 'AbortError');
+          }
+        }
+        return mockFetch(input, init);
+      },
+    });
+    const wid = a.worktree.id;
+    const scope = { kind: 'working' } as const;
+    qc.removeQueries({ queryKey: queryKeys.files(wid, scope) });
+    const observer = new QueryObserver(qc, filesQueryOptions(api, wid, scope));
+    const unsubscribe = observer.subscribe(() => {});
+    await vi.waitFor(() => expect(signals).toHaveLength(1));
+    // A first answer must be there for `cancelRefetch` to apply (React Query cancels a refetch of
+    // a query that has data); seed it, as an earlier load would have.
+    qc.setQueryData(queryKeys.files(wid, scope), backend.listFiles(wid, scope));
+    const first = signals[0];
+    // Two `worktree.changed` in a row: the second flush supersedes the first refetch.
+    backend.mutate(wid, 'edit');
+    await qc.invalidateQueries({ queryKey: queryKeys.filesAll(wid) });
+    expect(first?.aborted).toBe(true);
+    expect(signals).toHaveLength(2);
+    expect(signals[1]?.aborted).toBe(false);
+    expect(qc.getQueryData<FilesResponse>(queryKeys.files(wid, scope))?.stateHash).toBe(
+      backend.listFiles(wid, scope).stateHash,
+    );
+    unsubscribe();
   });
 });

@@ -111,7 +111,7 @@ References to read (do not fork):
 
 Three-pane layout, dark and light themes:
 
-1. **Sidebar** (DECISIONS #233-#240, which supersede "UX round 4"). One **flat, virtualised list** of the worktrees of
+1. **Sidebar** (DECISIONS #241-#248, which supersede "UX round 4"). One **flat, virtualised list** of the worktrees of
    every folder the filter lets through: pinned first, then most recent activity first (`WorktreeSummary.activityAt`,
    DECISIONS #124). No Inbox entry, no folder or project headers, no On review / Hidden split. Each row names its
    repository (a small repo label above the branch) and says only what is informative: `N conflicts`, `N commits ·` and

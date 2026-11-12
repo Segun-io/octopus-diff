@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 /**
- * The flat, virtualised sidebar (#13, DECISIONS #233): the model (order by last activity, pinned
+ * The flat, virtualised sidebar (#13, DECISIONS #241): the model (order by last activity, pinned
  * first, Hidden, own-only counts, the folder filter) and the list (only a window of rows mounted,
  * the selected row always there, scrolling and J/K move the window). jsdom has no layout, so
  * `test/layout.ts` stubs the scroller's height and the rows' heights (see its header).

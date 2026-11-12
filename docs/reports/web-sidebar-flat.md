@@ -1,7 +1,7 @@
 # web-sidebar-flat report
 
 Roadmap #13 "Sidebar: remove Inbox and show a flat list of active work ordered by last activity" (step 15 of #24,
-milestone M3). `apps/web` only (plus `docs/` and the credits files). DECISIONS **#233-#240** (other open branches may
+milestone M3). `apps/web` only (plus `docs/` and the credits files). DECISIONS **#241-#248** (other open branches may
 use these numbers; the lead renumbers).
 
 ## Shipped
@@ -32,7 +32,7 @@ use these numbers; the lead renumbers).
   `sidebar-hidden` and `sidebar-filter` states), `scripts/perf.ts` (waits on the list's `data-total`, since a virtual
   list never mounts all 30 rows; prints `listed` in its page-state message), `scripts/browser-check.ts` (no
   `inbox-item`). The mock needed no change (its `large` dataset already staggers `activityAt`).
-- **Docs:** DECISIONS #233-#240, PLAN §4.2 sidebar paragraph rewritten, banner in `docs/STATUS-FLOW.md` (placement
+- **Docs:** DECISIONS #241-#248, PLAN §4.2 sidebar paragraph rewritten, banner in `docs/STATUS-FLOW.md` (placement
   superseded; stages unchanged).
 
 ### What I saw (shots, Chromium, `octopus-dark`, 1440 and 960 wide, demo dataset)
@@ -118,11 +118,11 @@ worktrees), because the sidebar's `inbox-item` (`aria-current`, `data-count`) is
 - `tests/04-live-updates`, `tests/07-readonly`, `tests/19-merge-noise`: unchanged (they only use `selectInbox()`).
 - `bench/bench.ts`, `bench/profile.ts`: `g` `i` instead of clicking `inboxItem`.
 
-## Decisions (also in docs/DECISIONS.md #233-#240)
+## Decisions (also in docs/DECISIONS.md #241-#248)
 
-Flat list order and Hidden semantics (#233, #235); the Inbox *view* stays, only the sidebar entry goes (#234, with the
-follow-up to remove the view); no word for rows that need no review (#236); repo label on every row (#237); virtual
-list design (#238); Folders group in the picker (#239); jsdom layout shim (#240).
+Flat list order and Hidden semantics (#241, #243); the Inbox *view* stays, only the sidebar entry goes (#242, with the
+follow-up to remove the view); no word for rows that need no review (#244); repo label on every row (#245); virtual
+list design (#246); Folders group in the picker (#247); jsdom layout shim (#248).
 
 ## Contract changes
 
@@ -136,7 +136,7 @@ Added `@tanstack/react-virtual` 3.14.26 (MIT) to `apps/web` (pulls `@tanstack/vi
 
 ## Known gaps
 
-- The Inbox view and `g i` remain (see #234). With no sidebar entry the way back is `g i`, the palette, or `K` from
+- The Inbox view and `g i` remain (see #242). With no sidebar entry the way back is `g i`, the palette, or `K` from
   the first worktree.
 - Tab walks only the mounted rows (a long list is a window); `J`/`K`, the palette and the filter reach everything.
 - Folder- and project-level actions (bulk review, review policy, rescan, remove) no longer have sidebar header menus;

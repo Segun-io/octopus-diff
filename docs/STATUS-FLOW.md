@@ -5,7 +5,7 @@
 > §4.3 (review state) and §5.7. The implementing session logs each step in `docs/DECISIONS.md` and
 > updates `docs/PLAN.md` to match.
 >
-> **Placement superseded (DECISIONS #233-#236, 2026-11-12):** the stages below still define each row's `stage` and
+> **Placement superseded (DECISIONS #241-#244, 2026-11-12):** the stages below still define each row's `stage` and
 > `state`, but the sidebar no longer places rows "under their project" or in a "shelf": it is one flat list by last
 > activity, and only a row hidden by hand sits in the closed Hidden section. Reviewed, merged/closed and review-off
 > rows stay in the list; a row that needs no review gets no special state.

@@ -24,7 +24,7 @@ import { hideLabel, type RowEvent } from './SidebarRow.tsx';
 import { FloatPill, FloatSlot, StaleNote } from './WaitNote.tsx';
 
 /**
- * The sidebar (#13, DECISIONS #233): one flat list of the worktrees of every folder (filtered by
+ * The sidebar (#13, DECISIONS #241): one flat list of the worktrees of every folder (filtered by
  * the picker above it), pinned first, then the most recent activity first. No Inbox entry, no
  * folder or project headers, no On review / Hidden split: a worktree that needs nothing simply has
  * no special state. Only what the user hid by hand ("Hide until it changes") sits in a "Hidden"

@@ -15,7 +15,7 @@ import type {
   ServerEvent,
 } from '@octopus-diff/contracts';
 import type { QueryClient } from '@tanstack/react-query';
-import { queryKeys } from './queries.ts';
+import { filesQueryOptions, queryKeys } from './queries.ts';
 
 export interface ReviewPatch {
   projectId: string;
@@ -268,11 +268,7 @@ async function filesForPatch(
   ) {
     return state.data;
   }
-  return queryClient.fetchQuery({
-    queryKey,
-    queryFn: () => api.listFiles(worktreeId, { scope }),
-    staleTime: 0,
-  });
+  return queryClient.fetchQuery({ ...filesQueryOptions(api, worktreeId, scope), staleTime: 0 });
 }
 
 /**

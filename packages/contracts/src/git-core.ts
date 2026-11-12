@@ -73,7 +73,10 @@ export interface GitCore {
   ): Promise<GitFileDiff>;
 
   /** Recent commits reachable from HEAD, newest first (for the commit-scope picker). */
-  listCommits(worktree: WorktreeLocator, options?: { limit?: number }): Promise<CommitInfo[]>;
+  listCommits(
+    worktree: WorktreeLocator,
+    options?: { limit?: number } & CallOptions,
+  ): Promise<CommitInfo[]>;
 
   /** Locations the daemon's watcher should observe for this worktree. */
   getWatchTargets(worktree: WorktreeLocator): Promise<WatchTargets>;
@@ -150,7 +153,7 @@ export interface GitCore {
    * without content. Untracked files have no object id and are never read from here. Optional
    * (test doubles, older implementations).
    */
-  readBlob?(worktree: WorktreeLocator, options: BlobReadOptions): Promise<BlobRead>;
+  readBlob?(worktree: WorktreeLocator, options: BlobReadOptions & CallOptions): Promise<BlobRead>;
 
   /** Kills in-flight git processes and rejects queued work. */
   dispose(): Promise<void>;
@@ -368,7 +371,31 @@ export interface ResolvedProject {
   matchedWorktreeId: string | null;
 }
 
-export interface ScopeOptions {
+/**
+ * Scheduling lane of a call's git processes (#44). `interactive`: a request the user is waiting
+ * on (the open diff, the selected worktree's file list, a blob read); it starts ahead of queued
+ * `background` work (summaries, relists, forge and review work), which still gets a turn after a
+ * bounded number of interactive starts. Default `background`.
+ */
+export type GitPriority = 'interactive' | 'background';
+
+/**
+ * Per-call controls (#44), accepted by the calls whose options extend this (every `ScopeOptions`
+ * call, `listCommits`, `readBlob`). Optional: without them a call behaves as before.
+ */
+export interface CallOptions {
+  /**
+   * Cancels the call. The call rejects at once with `GitCoreError` code `aborted`; its git
+   * processes that are still queued never start, and running ones are stopped (SIGTERM, then
+   * SIGKILL after a short grace). Work the call shares with other callers inside git-core (version
+   * probe, repository discovery, config reads, memoized commit facts) is not cancelled by it.
+   */
+  signal?: AbortSignal;
+  /** Lane for the call's git processes (default `background`). */
+  priority?: GitPriority;
+}
+
+export interface ScopeOptions extends CallOptions {
   /**
    * Default branch used for `branch` scope when `scope.base` is absent, and as the fallback
    * ahead/behind reference when there is no upstream. If null/undefined, git-core detects it.

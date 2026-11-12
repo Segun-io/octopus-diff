@@ -29,6 +29,7 @@ arguments as they are (no `--` needed; a literal `--` is tolerated). Build first
 | Edit → SSE and → UI, p95 | < 1000 ms | small | enforced |
 | Warm reload (median of 3) | < 300 ms | small at 30 × 3 | enforced (#27 fixed it) |
 | Startup git spawns per worktree | ≤ 8 | every layout | enforced (since #29) |
+| Diff opened during a 60-edit burst, p95 | < 100 ms | small | enforced (#44) |
 
 A *tracked* budget is known to fail today. It prints `FAIL (tracked: #n)` and does not turn the run red. When the
 issue lands, delete the entry from `TRACKED` in `e2e/bench/bench.ts` (the bench prints `PASS (tracked …; remove it)`
@@ -46,6 +47,16 @@ for 1 s and last until the daemon is quiet again: that is what one reload costs 
 worktree, worst of three), not judged: a reload refetches the open file's diff (3 processes; diffs are not cached,
 roadmap #41), focusing a worktree re-checks it with one `status`, and timers (the worktree relist every 60 s, the
 forge poll) can fall into the window. Read it with `--keep-trace` when it is not 3-4.
+
+## A diff during an edit burst (issue #44)
+
+`e2e/bench/burst.ts` runs after the refresh loop (small layout): 7 `GET /diff` probes of one changed file on the quiet
+daemon, then 60 appends to `README.md` in 60 other worktrees **back to back**, with one probe at a time every 100 ms
+until 2 s after the last edit. The probes spawn git themselves, so the phase waits for a quiet daemon only once they
+stop; a phase that never gets quiet fails the budget. Keep the edits back to back: 20 ms apart, the summary queue never
+builds on a fast machine and the number cannot tell the interactive lane from a single queue (both measured 24-69 ms;
+back to back: 26-28 ms with the lane, 214-221 ms without, 2026-11-12). The proof of the lane is the gated-runner test
+`packages/git-core/test/lanes.test.ts`; this number is the end-to-end check.
 
 ## How the large layout is built
 

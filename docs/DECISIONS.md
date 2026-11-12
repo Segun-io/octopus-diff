@@ -2949,9 +2949,88 @@ Numbers: #229-#232 (after #225-#228; other open branches may use these numbers).
      `delete` (blob kept), `delete-untracked`, `commit` next to `edit | add | revert`; `POST
      /api/__mock/mutate?action=` and `/api/__mock/activity?mode=polling&pollMs=5000` / `?restart=1` drive them.
 
+## Priority lanes and request cancellation (session, 2026-11-12; roadmap #44, step 21)
+
+Numbers: #233-#239 (after #229-#232; other open branches may use these numbers). Report: `docs/reports/priority-lanes.md`.
+
+233. **contracts: `CallOptions` (`signal?`, `priority?`) on the per-request `GitCore` calls (additive).** New
+     `GitPriority = 'interactive' | 'background'` and `CallOptions { signal?: AbortSignal; priority?: GitPriority }`.
+     `ScopeOptions` now extends `CallOptions` (so `getSummary`, `listChangedFiles`, `getFileDiff`, `readFileOrigins`,
+     `readReviewRange`, `readBranchBase` accept both), and `listCommits` / `readBlob` take `… & CallOptions`. Both
+     fields are optional and new; nothing is renamed, removed or changes meaning, and a call without them behaves
+     exactly as before (lane `background`, never cancelled). An aborted call rejects with the existing
+     `GitCoreError` code `aborted` (already in `GIT_CORE_ERROR_CODES`, already mapped by the daemon), so no new
+     error code was needed. `BlobReadOptionsSchema` (zod) is untouched: the signal is not data and never crosses
+     the wire; `readBlob`'s parameter type is the schema's type intersected with `CallOptions`.
+234. **contracts: `RequestParams { signal? }` on the API client's GET calls (additive).** The web cannot abort a
+     superseded request without it: the client builds each `fetch` itself. `ScopeParams` (so `inbox`, `listFiles`,
+     `getDiff`) now extends `RequestParams`, and `listCommits`, `getActivity`, `getBlob` take `… & RequestParams`.
+     The signal goes to `fetch` (only when given: a call without one passes exactly the `RequestInit` it passed
+     before) and never into the query string. An aborted request rejects with the existing `ApiClientError` code
+     `aborted` (it was already in `ApiClientErrorCode`, used by `subscribe`), not `network`; an already-aborted
+     signal rejects without fetching. Nothing renamed or removed.
+235. **Two lanes in the runner, starvation bounded by a count, no reserved slot.** `FairScheduler` became
+     `LaneScheduler`: an `interactive` and a `background` `FairQueue` (each the old per-key round-robin), one global
+     limit. A free slot goes to queued interactive work first; after `INTERACTIVE_BURST` (4) interactive starts in a
+     row while background work waits, the next start is a background one, so under any interactive load the
+     background lane still gets at least one start in five (deterministic, testable; an age rule would need clocks in
+     the scheduler for no gain at human request rates). No slot is reserved for either lane: `concurrency` keeps
+     meaning "git processes overall" (a reserved slot would cut background throughput by a quarter at the default 4,
+     and the 2026-11-11 measurements showed more processes do not help). Interactive work therefore waits for the
+     next process to finish, never behind a queue; between two of its own processes (it schedules the next one only
+     after parsing the previous output) a background job may take the free slot. Daemon requests in the interactive
+     lane: `/files` (of the worktree asked for), `/diff`, `/commits`, `/blob`. Everything else stays background:
+     summaries and refreshes, relists, the inbox, review states, origins started by the inbox, forge-related git reads.
+236. **Cancellation in the runner.** `GitRunOptions.signal` (default: the running `GitCore` call's, below). A queued
+     job whose signal fires leaves its queue and rejects with `aborted` at once; it never spawns (the scheduler
+     refuses an already-aborted job too). A running process gets SIGTERM (its process group), and SIGKILL after
+     `ABORT_GRACE_MS` (500 ms) if the group is still there; the run settles, and its slot frees, only when the
+     process has exited, so the limit stays true. Timeouts and dispose keep their immediate SIGKILL (a timeout or
+     dispose during an abort's grace period escalates). The subcommand allowlist and every safety flag are untouched.
+     **The signal reaches the runner through `AsyncLocalStorage`** (`runner/call-context.ts`): `createGitCore`'s
+     guard runs each call inside `withCall({ lane, signal })`, so the dozens of internal functions between a
+     `GitCore` method and `runner.run` need no new parameter. The guard also races the call against its signal, so
+     the caller is answered at once even while it waits on work it shares (below), and refuses an already-aborted
+     call before starting anything.
+237. **Shared work is cancelled only when its last waiter leaves.** git-core's single-flight reads (repository
+     discovery `repo()`, `cachedConfigRead`, `memo`, the `for-each-ref` ahead/behind batch) are `Flight`s, the
+     daemon's `#gitFiles` in-flight lists (`FlightMap`) and file origins (`SharedFlight`) the same idea with explicit
+     signals. Each caller joins with its own signal: one leaving rejects only that caller; when every waiter has left,
+     the run's own signal fires (its processes stop, queued ones never start) and the entry is dropped first, so a
+     later caller starts afresh instead of joining a cancelled run, and a cancelled run fills no cache. A waiter
+     without a signal (background work) pins the run. The version probe stays pinned (`shared()`: never cancelled).
+     A shared run keeps the lane of the call that started it: a `/files` request that joins a list the inbox started
+     waits in the background lane (no priority inheritance; rare, the inbox and the open file list differ in scope or
+     come at different times; logged as a gap). There is no diff cache in the daemon yet (#41), so `/diff` has no
+     single-flight to protect; #41 should build its cache on `FlightMap`.
+238. **An aborted request gets no body.** When the HTTP request's signal has fired and the error is `aborted`, the
+     daemon's `onError` answers 499 with an empty body and logs at debug level (it was an error log with a 503
+     body). `toApiError` keeps mapping `aborted` to `internal`/503 for other cancellations (shutdown).
+     `@hono/node-server` aborts `c.req.raw.signal` when the client's connection closes before the answer is written.
+239. **Web: React Query's signal on the file, diff, commit, activity and blob requests.** React Query already cancels a
+     fetch that is superseded (an invalidation while it is in flight cancels it with `cancelRefetch`, the default)
+     or unobserved, but without the signal reaching `fetch` the cancelled request kept running on the wire and in
+     git. Now it is aborted, the daemon sees the client go away and stops the git work. **The duplicate `files`
+     fetch per edit:** within one event flush there is one request since #170 (its unit test still holds). The
+     duplicate that can remain comes from React Query's own behaviour: a second `worktree.changed` for the same
+     worktree while the first refetch is in flight cancels that refetch and starts another, and the cancelled request
+     used to run to the end. Now it is aborted (unit test in `apps/web/test/cache.test.ts`). Inferred from the code;
+     not reproduced in a browser. The inbox (`streamedQuery` batches) and the projects list do not pass
+     the signal: the daemon does not cancel inbox work, and a cancelled batch would leave a partial inbox.
+240. **Bench: a diff opened during a 60-edit burst.** `e2e/bench/burst.ts`, run by `bench` on the small layout after
+     the refresh loop: 7 diff probes on the quiet daemon, then 60 appends over 60 other worktrees **back to back**,
+     with a diff probe (one at a time) every 100 ms until 2 s after the last edit (the probes spawn git themselves,
+     so the phase waits for a quiet daemon only after they stop). Budget `burstDiff`: p95 under the burst below
+     100 ms (enforced on the small layout; a phase that never gets quiet counts as a failure). Control runs on this
+     machine (30 × 3, `--no-ui`, 3 runs each): with the lane p95 26 / 27 / 28 ms, with every request forced into one
+     lane 214 / 218 / 221 ms (quiet p50 8 ms both). With the edits 20 ms apart the queue never builds here and both
+     variants measured 24-69 ms, so that spacing could not tell them apart; hence back to back. The primary proof
+     of the lane is the gated-runner tests (`packages/git-core/test/lanes.test.ts`); the bench number is secondary
+     (machine-dependent).
+
 ## Sidebar: a flat, virtualised list of worktrees by last activity (session, 2026-11-12; roadmap #13, step 15)
 
-233. **The sidebar is one flat list.** No Inbox entry, no folder headers, no project headers, no Pinned / To review /
+241. **The sidebar is one flat list.** No Inbox entry, no folder headers, no project headers, no Pinned / To review /
      Hidden split as the primary structure. Every worktree that passes the filters is a row of one list, **pinned rows
      first, then most recent activity first** (`WorktreeSummary.activityAt`; rows without one last; ties by project
      name, then main checkout first, then branch): `compareRows` in `lib/model.ts`, global across projects.
@@ -2959,7 +3038,7 @@ Numbers: #229-#232 (after #225-#228; other open branches may use these numbers).
      `folders` stay (filters applied) because the Overviews and the palette read them, they are just not rendered.
      `order` (what `J`/`K` walk) is `flat` then `hidden`. **Superseded:** the "folders and projects keep a static
      order" part of PLAN §4.2 and "Pinned / shelf" of DECISIONS "UX round 4" (the shelf is now "Hidden", below).
-234. **What stays of the Inbox.** The sidebar entry (and its `data-count`) is removed. The Inbox *view* (the
+242. **What stays of the Inbox.** The sidebar entry (and its `data-count`) is removed. The Inbox *view* (the
      cross-worktree list of changed files, the landing view, `g i`, the palette's "Go to Inbox", `J`/`K` stepping to it
      from the first worktree) is **kept**: removing the view touches `App`, `DiffPane`, bulk review, the commands and
      e2e specs that are other streams', and the issue's wording ("the Inbox section of the sidebar") is about the
@@ -2968,7 +3047,7 @@ Numbers: #229-#232 (after #225-#228; other open branches may use these numbers).
      click on its header, is now: the worktree's context menu (`Overview of <project>`, `Overview of folder <label>`)
      and the palette. Project- and folder-level bulk review and review policy live in those Overviews (they already
      did), no longer in sidebar header menus.
-235. **"Hidden" is only what the user hid by hand.** `WorktreeRow.hidden` = a "Hide until it changes" override that
+243. **"Hidden" is only what the user hid by hand.** `WorktreeRow.hidden` = a "Hide until it changes" override that
      still holds (same `stateHash`) and the row is not blocked. Everything else stays in the list: a reviewed, clean,
      merged, closed, review-off, missing or failed worktree is a normal row. Hidden rows sit under a `Hidden N`
      header at the end of the list, **closed by default** (`settledOpen` pref, unchanged: the key keeps its name), open
@@ -2977,17 +3056,17 @@ Numbers: #229-#232 (after #225-#228; other open branches may use these numbers).
      (`hideToggle` replaces `settleToggle`: it sets `settled` or removes the override, never writes `active`; old
      persisted `active` overrides are harmless and expire with their hash). `row.state` and `data-state` keep their
      values (`blocked | attention | active | settled`) for the Overviews and the e2e suite; only `data-hidden` is new.
-236. **No special state for rows that need no review.** The status slot says what is informative: `N conflicts`,
+244. **No special state for rows that need no review.** The status slot says what is informative: `N conflicts`,
      `N commits ·` and the unreviewed pill, an open request (`#42 · checks ✓`), `review off`, `merged`, `closed`,
      `missing`, `error`, and `…` while loading. The words `reviewed` and `clean` are gone from the row (they stay in
      the hover card). Counts are `row.unreviewed` = `unreviewedOwnFiles ?? unreviewedFiles`, so merge noise never
      counts (DECISIONS #205-#208); the pill and the document title use it. Rethinking the statuses and the layout is
      #14.
-237. **Every row names its repository** (a small repo glyph and name above the branch; `data-testid="row-repo"`,
+245. **Every row names its repository** (a small repo glyph and name above the branch; `data-testid="row-repo"`,
      `data-project-name` on the row) because rows are no longer under a project. This is the layout the Pinned and
      Hidden rows already had; #14 redesigns it (a second line for branch and repo). Rows are measured, not fixed-height
      (below), so that redesign needs no change to the list.
-238. **Virtualisation with `@tanstack/react-virtual` 3.14 (MIT, apps/web only).** `components/SidebarList.tsx`: one
+246. **Virtualisation with `@tanstack/react-virtual` 3.14 (MIT, apps/web only).** `components/SidebarList.tsx`: one
      `useVirtualizer` over `SidebarItem[]` (worktree rows and the Hidden header), `estimateSize` 58 px (header 30),
      real heights from `measureElement` (a row may be taller: a wrapped chip line, the "N deleted" chip, #14),
      `overscan` 6, stable keys (the worktree id). Rows are `position: absolute; top: <start>`; **not** a `transform`,
@@ -2998,13 +3077,14 @@ Numbers: #229-#232 (after #225-#228; other open branches may use these numbers).
      Tab walks only the mounted rows; the keyboard way across the whole list is `J`/`K` (as before) and the filter.
      The scroller is `data-testid="sidebar-scroll"`, the list `data-testid="sidebar-list"` with `data-total` (items in
      the list) and `data-mounted`; `scripts/perf.ts` waits on `data-total` instead of counting mounted rows.
-239. **The filter picker has a Folders group** (`filterFolders`, ids of scan roots or `direct`, new in `ui.tsx`;
+247. **The filter picker has a Folders group** (`filterFolders`, ids of scan roots or `direct`, new in `ui.tsx`;
      `SidebarFilters.folders` optional) between Status and Projects: "the selected folders" of #13 are the picked
      ones. The dropdown stays a searchable multi-select listbox (placeholder "Search by name"); picked folders,
      projects and worktrees are one union as before. `SidebarModel.folderOptions` lists every folder regardless of the
      filters.
-240. **Test shim for the virtual list (jsdom has no layout).** `test/layout.ts`, installed by `test/setup.ts`, overrides
+248. **Test shim for the virtual list (jsdom has no layout).** `test/layout.ts`, installed by `test/setup.ts`, overrides
      `clientHeight` / `clientWidth` / `scrollHeight` / `scrollTop` / `scrollTo` for the sidebar's scroller and
      `offsetHeight` for the virtual rows (the getters `@tanstack/virtual-core` reads). The default viewport (6000 px
      ≈ 100 rows) shows every row of the small fixtures, so older tests are unaffected; a test that is about the window
      calls `setSidebarLayout({ viewport })` before rendering and `scrollSidebarTo(el, top)` to scroll.
+||||||| 3f5d004

@@ -41,7 +41,13 @@ export {
 } from './runner/allowlist.js';
 export { CONFIG_PINS } from './runner/config-pins.js';
 export { buildGitEnv, SAFETY_ENV } from './runner/env.js';
-export { buildGitArgv, GitRunner, resolveExecutable } from './runner/runner.js';
+export {
+  ABORT_GRACE_MS,
+  buildGitArgv,
+  GitRunner,
+  INTERACTIVE_BURST,
+  resolveExecutable,
+} from './runner/runner.js';
 export { CANONICAL_CONTEXT, DIFF_PINS } from './scope.js';
 export { quotePathName, synthesizeNewFilePatch } from './untracked.js';
 export { MIN_GIT_VERSION, parseGitVersion } from './version.js';
