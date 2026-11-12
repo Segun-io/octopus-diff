@@ -3622,3 +3622,61 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      unsigned path is committed-clean (dirty ones are not signed); above the cap the list is served, counted
      `uncached`, and the next request seeds again. Mutations killed.
 
+
+## File diffs from the summary state (session, 2026-11-12; roadmap #41, step 24)
+
+305. **`getFileDiff` reads the file's patch alone when the kept summary state vouches for it.** Opening one file's diff
+     ran a whole-repository `git status` and `git diff --raw` to identify the file, then its patch (3-4 git processes,
+     346-398 ms on the 100k layout's main worktree, 804-832 ms on the stale-index one; not cached). The summary track git-core
+     already keeps per worktree (#285) now answers the identification (`diffFromSummary` in `diff.ts`): a tracked file
+     is **one** `git diff <base> --raw --numstat -z -p -U3 -- <path>` (the argv the whole route's narrowed patch run
+     already used: same pins, `--no-ext-diff --no-textconv`, literal pathspec after `--`), an untracked file **no** git
+     process (its inspection, `check-attr` once per file when an attributes source exists). Both routes end in the same
+     two functions (`describeTracked`, `describeUntracked`), so they cannot describe a file differently; patch text and
+     `patchHash` are unchanged by construction and by test. The subcommand allowlist and every flag are unchanged.
+     The route answers `working` and the scopes that read the worktree against HEAD's own commit (`review` with that
+     base, `branch` + working); against another base only a modification or an untracked file that the commits since
+     the base left alone (`diff-tree`, memoized with the lists': #290). `staged`, `unstaged`, `branch` and `commit`
+     scopes and every other base are the whole route's.
+306. **When the state vouches (every other case is the whole route's, with a reason: `fileDiffRoutes.reasons`).**
+     Checked in this order, all with stat calls and ref files, no git process: `incremental` on (#293: the kill switch
+     gives the old calls exactly, no stamp is read); the filesystem does not fold case (#288); a track exists and is the
+     state the caller holds (`DiffOptions.summaryState`, a hint the daemon passes from `entry.gitStateHash`; a mismatch is
+     `state-mismatch`); `trackBlocker` is empty (no conflicts, submodules, gitlinks, nested repositories, sparse
+     checkout, unreadable files); the path is valid UTF-8; the stamp (index, ignore, config, attributes, `.gitmodules`)
+     and HEAD are what the state saw. Then what the file's own record says: a status entry `M` on either side (`M.`,
+     `.M`, `MM`) can never be a rename or copy partner, so nothing else in the repository can change its patch; a
+     deletion (`.D`, `MD`, `D.`) only while no path is added anywhere (`TrackFacts.adds`: a staged addition,
+     intent-to-add, a rename or copy target), since a deletion pairs with any addition; an added, renamed, copied,
+     type-changed, intent-to-add or unmerged file is the whole route's (a deleted file elsewhere may pair with it); an
+     untracked file that is not also a tracked entry (`git rm --cached` leaves both) and not the source of a rename
+     entry. **The last one the fuzz found** (seed 0xd1ff01, step 39, review base `main`): a rename source recreated as an
+     untracked file is, in the whole scope, still a deleted path (`diff` reports it against HEAD or the base; the list
+     hides the untracked file for it), so the summary route answering "untracked" differed. It is now `rename-source`,
+     with a golden test.
+307. **Races: the file is read as it is, and the state only decides which route is safe.** Everything the answer
+     contains (status letter, modes, counts, patch, `patchHash`) comes from git's output about the file at the moment it
+     read, never from the track. The track's record is a precondition, and the file's lstat signature (the inspection's
+     `statSig` for an untracked file) must equal the state's **before** the read (a file that moved since is the whole
+     route's, which reads it as it is) and **after** it (a file, the index or HEAD that moved while git ran: the answer is
+     discarded and the whole route reads again; no loop, one retry by construction). git's answer must confirm the record
+     (one entry, this path, the predicted status, not stat-only), else the whole route answers. So the `patchHash` the
+     client compares with the list's, and the key of the review marks, is the hash of the bytes returned. A failed
+     `git diff` (an unreadable file, a lock) is not an answer: the whole route runs and fails or explains the same way.
+     Nothing is stored by the route: there is no result cache to poison, and an aborted call (#44) rejects with `aborted`
+     from the same `ctx.git` signal and starts no fallback process. `ScopeOptions.summaryState` is now also read by
+     `getFileDiff`; the contract change is a comment only (`contracts:` commit 579a1f1), and the daemon passes it.
+308. **Known windows and one internal addition.** (a) An untracked file is ignored or not by the `.gitignore` files above
+     it, which no stamp covers: `Stamp.at` (wall clock before git ran, an internal field of the kept track; not part of
+     `stampChange`) lets the route refuse an untracked file whose ancestor `.gitignore` has a ctime or mtime within 100 ms
+     of it or later (`ignore-rules`; the clock margin covers the kernel's coarse timestamps). (b) Whether an untracked
+     file's content is read (at most `maxUntrackedFiles` of them) is decided by the state's count of untracked files, as
+     the lists' hashes are, so the diff and the list at the same state agree; the whole route counts afresh, so they can
+     differ for a worktree that crosses the threshold between the summary and the open. (c) `core.excludesFile` and
+     `core.attributesFile` outside the stamp (#285's gap) are the same here. (d) Three checks are defense in depth that
+     no test can reach without forging a file's ctime: the predicted status letter, one raw entry, the stat-only test
+     (a mutation removing any of them survives; the signature checks come first). Mutations killed: the track blocker,
+     the stamp, HEAD, both signature checks, rename partner, rename source, ignore files, committed-since-base, the
+     base-deletion rule, tracked-and-untracked, the kill switch, `summaryState`, the untracked `statSig`, the
+     content-read clause, the git-failure fallback, added or renamed files vouched; the case probe is killed under
+     `OCTOPUS_DIFF_TEST_FOLDS_CASE=1`.

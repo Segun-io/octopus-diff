@@ -11,6 +11,7 @@ dir, except `profile:real`, which reads your repositories and never writes to th
 | `pnpm --filter @octopus-diff/e2e bench --layout large-ci` | One monorepo, ~20k tracked files, three worktrees (a 30k-line rewrite; a stale index; 5k untracked). Fixture in 2 s | `results-large-ci.{json,md}` |
 | `pnpm --filter @octopus-diff/e2e bench --layout large` | Same shape at 100k files, 30k untracked, 300k-line rewrite. Fixture in 10 s | `results-large.{json,md}` |
 | `pnpm --filter @octopus-diff/fixtures fixtures large --layout large-ci` | Only builds the large layout and prints its paths | |
+| `pnpm exec tsx --conditions=@octopus-diff/source packages/git-core/test/bench/diff-open.bench.ts [large\|large-ci] [rounds]` | Opening one file's diff (#41): wall time and git processes of `getFileDiff` per worktree role and file kind (modified, untracked, the 300k-line rewrite), the summary state held as the daemon holds it. `OCTOPUS_DIFF_BENCH_OLD=1` reads the diffs with a core that has no summary route: the "before" column. Fixture built like `bench --layout`; not in `pnpm test` | stdout |
 | `pnpm --filter @octopus-diff/e2e profile:real <repo>... \| --scan-root <dir> [--redact] [--json f]` | Read-only profile of real repos: `status`, `ls-files`, `diff HEAD`, untracked count, speed-related git config, probable stale index; checks `.git/index` is untouched | stdout, optional JSON |
 | `pnpm --filter @octopus-diff/web build` then `pnpm --filter @octopus-diff/web perf` | Render bench in Chromium on the large mock dataset (30 worktrees × 200 files; no daemon). Starts its own mock + `vite preview` (fresh every run, about 15 s). `SCOPE=review`, `MOCK_MERGE_NOISE=0`, `PERF_OUT=<file>`, `BASE_URL` for a server you started (must serve `MOCK_DATASET=large`) | `web-perf.json` |
 | `pnpm --filter @octopus-diff/web perf:smoke` | Same script, fewer iterations (about 8 s); structural checks only. Runs in the CI `e2e` job | exit code |
@@ -70,8 +71,8 @@ are what the warm-reload *time* budget judges, but their spawn counts include wh
 not finished (with To review that is every review state and, with origins, every label: about 12 processes per linked
 worktree, 1.9-5 s in all), so they say little about a reload itself. `settledReload1-3` start once no git process ran
 for 1 s and last until the daemon is quiet again: that is what one reload costs on its own. It is reported (per
-worktree, worst of three), not judged: a reload refetches the open file's diff (3 processes; diffs are not cached,
-roadmap #41), focusing a worktree re-checks it with one `status`, and timers (the worktree relist every 60 s, the
+worktree, worst of three), not judged: a reload refetches the open file's diff (1 process for a tracked file and none for an untracked
+one since #41; 3 and 2 where the summary state cannot vouch for the file), focusing a worktree re-checks it with one `status`, and timers (the worktree relist every 60 s, the
 forge poll) can fall into the window. Read it with `--keep-trace` when it is not 3-4.
 
 ## A diff during an edit burst (issue #44)

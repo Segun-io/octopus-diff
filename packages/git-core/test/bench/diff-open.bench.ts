@@ -6,8 +6,7 @@
  *
  *   pnpm exec tsx --conditions=@octopus-diff/source packages/git-core/test/bench/diff-open.bench.ts [large|large-ci] [rounds]
  *
- * `OCTOPUS_DIFF_BENCH_OLD=1` skips nothing but names the run "before" in the output; to compare, run it on the
- * commit before the change. Spawns are counted from the runner's debug log (every git process).
+ * `OCTOPUS_DIFF_BENCH_OLD=1` reads the diffs with a core that has no summary route (`incremental: false`): the "before" column. Spawns are counted from the runner's debug log (every git process).
  */
 import type { GitChangedFile, GitCore, WorktreeLocator } from '@octopus-diff/contracts';
 import {
@@ -19,6 +18,8 @@ import { createGitCore, hashId } from '../../src/index.js';
 
 const LAYOUT = (process.argv[2] ?? 'large') as LargeLayoutName;
 const ROUNDS = Number(process.argv[3] ?? 15);
+/** The whole-scope route only (`incremental: false`): the "before" numbers of #41. */
+const OLD = process.env.OCTOPUS_DIFF_BENCH_OLD === '1';
 
 function median(values: number[]): number {
   const sorted = [...values].sort((a, b) => a - b);
@@ -44,6 +45,11 @@ async function main(): Promise<void> {
     error() {},
   };
   const core: GitCore = createGitCore({ env: { ...set.env.vars }, logger });
+  // The whole-scope route: a core with no summary route reads the diffs (the summaries and lists
+  // still come from `core`, since a full list of the stale-index worktree takes minutes).
+  const reader: GitCore = OLD
+    ? createGitCore({ env: { ...set.env.vars }, logger, incremental: false })
+    : core;
   try {
     for (const worktree of set.worktrees) {
       const locator: WorktreeLocator = {
@@ -79,7 +85,7 @@ async function main(): Promise<void> {
         for (let round = 0; round < ROUNDS; round++) {
           spawns.length = 0;
           const t = performance.now();
-          const diff = await core.getFileDiff(locator, { kind: 'working' }, { path: file.path });
+          const diff = await reader.getFileDiff(locator, { kind: 'working' }, { path: file.path });
           times.push(performance.now() - t);
           if (diff.patchHash !== file.patchHash)
             throw new Error(`patchHash differs for ${file.path}`);
@@ -99,6 +105,7 @@ async function main(): Promise<void> {
     }
   } finally {
     await core.dispose();
+    if (reader !== core) await reader.dispose();
     await set.cleanup();
   }
 }
