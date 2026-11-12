@@ -1,8 +1,9 @@
 import { type ChildProcess, spawn } from 'node:child_process';
 import { accessSync, constants, existsSync, statSync } from 'node:fs';
 import path from 'node:path';
-import { GitCoreError, type Logger, noopLogger } from '@octopus-diff/contracts';
+import { GitCoreError, type GitPriority, type Logger, noopLogger } from '@octopus-diff/contracts';
 import { assertAllowedGitArgs, assertStdinAllowed, DIFF_FAMILY } from './allowlist.js';
+import { abortedError, currentCall } from './call-context.js';
 import { CONFIG_PIN_ARGS } from './config-pins.js';
 import { buildGitEnv, withConfigEnv } from './env.js';
 
@@ -50,6 +51,15 @@ export interface GitRunOptions {
    * can tell whether the process that will read the repository has started yet.
    */
   onSpawn?: () => void;
+  /**
+   * Cancels this process (#44): while queued it never starts; while running it gets SIGTERM
+   * (its process group), then SIGKILL after `ABORT_GRACE_MS`; the run rejects with `aborted`
+   * once the process has exited. Default: the signal of the `GitCore` call running
+   * (`currentCall`).
+   */
+  signal?: AbortSignal;
+  /** Scheduling lane (default: the running call's, else `background`). */
+  priority?: GitPriority;
 }
 
 export interface GitLocation {
@@ -69,38 +79,38 @@ const STDERR_DETAIL = 4 * 1024;
 const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_MAX_OUTPUT = 64 * 1024 * 1024;
 
+/** Background jobs start after at most this many interactive starts in a row (#44). */
+export const INTERACTIVE_BURST = 4;
+/** After an abort, SIGTERM; SIGKILL if the process group is still there after this long. */
+export const ABORT_GRACE_MS = 500;
+
 interface Job {
   start: () => Promise<GitRunResult>;
   resolve: (value: GitRunResult) => void;
   reject: (error: unknown) => void;
+  /** Removes the job's abort listener (when it starts or settles). */
+  detach?: () => void;
 }
 
-/**
- * Global concurrency limit with per-key FIFO queues served round-robin, so one busy
- * repository cannot starve the others.
- */
-class FairScheduler {
-  private active = 0;
+/** Per-key FIFO queues served round-robin, so one busy repository cannot starve the others. */
+class FairQueue {
   private readonly queues = new Map<string, Job[]>();
   private readonly ring: string[] = [];
+  size = 0;
 
-  constructor(private readonly limit: number) {}
-
-  schedule(key: string, start: () => Promise<GitRunResult>): Promise<GitRunResult> {
-    return new Promise<GitRunResult>((resolve, reject) => {
-      let queue = this.queues.get(key);
-      if (!queue) {
-        queue = [];
-        this.queues.set(key, queue);
-        this.ring.push(key);
-      }
-      queue.push({ start, resolve, reject });
-      this.pump();
-    });
+  push(key: string, job: Job): void {
+    let queue = this.queues.get(key);
+    if (!queue) {
+      queue = [];
+      this.queues.set(key, queue);
+      this.ring.push(key);
+    }
+    queue.push(job);
+    this.size += 1;
   }
 
-  private pump(): void {
-    while (this.active < this.limit && this.ring.length > 0) {
+  shift(): Job | undefined {
+    while (this.ring.length > 0) {
       const key = this.ring.shift() as string;
       const queue = this.queues.get(key);
       const job = queue?.shift();
@@ -110,6 +120,94 @@ class FairScheduler {
       }
       if (queue.length > 0) this.ring.push(key);
       else this.queues.delete(key);
+      this.size -= 1;
+      return job;
+    }
+    return undefined;
+  }
+
+  /** Removes a queued job; false when it is not queued (already started). */
+  remove(key: string, job: Job): boolean {
+    const queue = this.queues.get(key);
+    const index = queue ? queue.indexOf(job) : -1;
+    if (!queue || index < 0) return false;
+    queue.splice(index, 1);
+    this.size -= 1;
+    if (queue.length === 0) {
+      this.queues.delete(key);
+      const at = this.ring.indexOf(key);
+      if (at >= 0) this.ring.splice(at, 1);
+    }
+    return true;
+  }
+
+  drain(): Job[] {
+    const jobs = [...this.queues.values()].flat();
+    this.queues.clear();
+    this.ring.length = 0;
+    this.size = 0;
+    return jobs;
+  }
+}
+
+/**
+ * Global concurrency limit over two lanes (#44), each a `FairQueue`. A free slot goes to the
+ * `interactive` lane (requests the user waits on) first; `background` work (summaries, relists,
+ * forge and review work) gets the next slot after `INTERACTIVE_BURST` interactive starts in a row
+ * while it waits, so it is never starved: under any interactive load it keeps at least one start
+ * in `INTERACTIVE_BURST + 1`. Both lanes share the one limit (no reserved slot): the limit stays
+ * the maximum number of git processes overall. A queued job whose signal aborts leaves its queue
+ * and rejects without ever starting.
+ */
+class LaneScheduler {
+  private active = 0;
+  private interactiveRun = 0;
+  private readonly lanes: Record<GitPriority, FairQueue> = {
+    interactive: new FairQueue(),
+    background: new FairQueue(),
+  };
+
+  constructor(private readonly limit: number) {}
+
+  schedule(
+    key: string,
+    lane: GitPriority,
+    signal: AbortSignal | undefined,
+    start: () => Promise<GitRunResult>,
+  ): Promise<GitRunResult> {
+    if (signal?.aborted) return Promise.reject(abortedError({ queued: true }));
+    return new Promise<GitRunResult>((resolve, reject) => {
+      const job: Job = { start, resolve, reject };
+      if (signal) {
+        const onAbort = (): void => {
+          if (this.lanes[lane].remove(key, job)) reject(abortedError({ queued: true }));
+        };
+        signal.addEventListener('abort', onAbort, { once: true });
+        job.detach = () => signal.removeEventListener('abort', onAbort);
+      }
+      this.lanes[lane].push(key, job);
+      this.pump();
+    });
+  }
+
+  private next(): Job | undefined {
+    const { interactive, background } = this.lanes;
+    if (
+      interactive.size > 0 &&
+      (background.size === 0 || this.interactiveRun < INTERACTIVE_BURST)
+    ) {
+      this.interactiveRun += 1;
+      return interactive.shift();
+    }
+    this.interactiveRun = 0;
+    return background.shift() ?? interactive.shift();
+  }
+
+  private pump(): void {
+    while (this.active < this.limit) {
+      const job = this.next();
+      if (!job) return;
+      job.detach?.();
       this.active += 1;
       job
         .start()
@@ -122,11 +220,12 @@ class FairScheduler {
   }
 
   rejectAll(error: unknown): void {
-    for (const queue of this.queues.values()) {
-      for (const job of queue) job.reject(error);
+    for (const lane of Object.values(this.lanes)) {
+      for (const job of lane.drain()) {
+        job.detach?.();
+        job.reject(error);
+      }
     }
-    this.queues.clear();
-    this.ring.length = 0;
   }
 }
 
@@ -217,7 +316,7 @@ export class GitRunner {
   private readonly maxOutputBytes: number;
   private readonly env: Record<string, string>;
   private readonly logger: Logger;
-  private readonly scheduler: FairScheduler;
+  private readonly scheduler: LaneScheduler;
   private readonly children = new Map<ChildProcess, (error: GitCoreError) => void>();
   private disposed = false;
   private resolvedBinary: string | null = null;
@@ -228,7 +327,7 @@ export class GitRunner {
     this.maxOutputBytes = options.maxOutputBytes ?? DEFAULT_MAX_OUTPUT;
     this.env = buildGitEnv(process.env, options.env);
     this.logger = options.logger ?? noopLogger;
-    this.scheduler = new FairScheduler(Math.max(1, Math.floor(options.concurrency ?? 4)));
+    this.scheduler = new LaneScheduler(Math.max(1, Math.floor(options.concurrency ?? 4)));
     // Diff files above the threshold as binary, so no single file's patch can exceed about
     // twice this size while it is streamed and hashed (`core.bigFileThreshold`).
     const threshold = options.bigFileThreshold ?? defaultBigFileThreshold(this.maxOutputBytes);
@@ -268,16 +367,28 @@ export class GitRunner {
       return Promise.reject(error);
     }
     const okExitCodes = options.okExitCodes ?? (hasNoIndex(args) ? [0, 1] : [0]);
-    return this.scheduler.schedule(options.queueKey ?? options.cwd, () =>
-      this.execute(argv, [...args], { ...options, okExitCodes }),
+    const call = currentCall();
+    const signal = options.signal ?? call?.signal;
+    const lane = options.priority ?? call?.lane ?? 'background';
+    return this.scheduler.schedule(options.queueKey ?? options.cwd, lane, signal, () =>
+      this.execute(argv, [...args], { ...options, okExitCodes, signal }),
     );
   }
 
   /** `git --version` (the one invocation outside the subcommand allowlist). */
   async version(): Promise<string> {
     if (this.disposed) throw disposedError();
-    const result = await this.scheduler.schedule('\u0000version', () =>
-      this.execute(['--version'], ['--version'], { cwd: process.cwd(), okExitCodes: [0] }),
+    const call = currentCall();
+    const result = await this.scheduler.schedule(
+      '\u0000version',
+      call?.lane ?? 'background',
+      call?.signal,
+      () =>
+        this.execute(['--version'], ['--version'], {
+          cwd: process.cwd(),
+          okExitCodes: [0],
+          signal: call?.signal,
+        }),
     );
     return result.stdout.toString('utf8').trim();
   }
@@ -312,6 +423,12 @@ export class GitRunner {
 
       let child: ChildProcess;
       let binary: string;
+      const { signal } = options;
+      // The scheduler already refuses aborted jobs; this keeps `execute` safe on its own.
+      if (signal?.aborted) {
+        reject(abortedError({ args, cwd }));
+        return;
+      }
       try {
         binary = this.binary();
       } catch (error) {
@@ -333,8 +450,22 @@ export class GitRunner {
         return;
       }
 
+      let exited = false;
+      let aborting = false;
+      let graceTimer: NodeJS.Timeout | undefined;
+      child.once('exit', () => {
+        exited = true;
+        clearTimeout(graceTimer);
+        // An aborted run settles once its process is gone (its slot stays taken until then).
+        if (aborting && failure) finish(failure);
+      });
+
       const fail = (error: GitCoreError): void => {
-        if (failure) return;
+        if (failure) {
+          // Already stopping (an abort's grace period): a timeout or dispose escalates.
+          if (!exited) killTree(child);
+          return;
+        }
         failure = error;
         killTree(child);
         // Settle now: a grandchild may keep the pipes (and so 'close') open.
@@ -343,6 +474,22 @@ export class GitRunner {
         finish(error);
       };
       this.children.set(child, fail);
+      const onAbort = (): void => {
+        if (failure) return;
+        failure = abortedError({ args, cwd });
+        aborting = true;
+        child.stdout?.destroy();
+        child.stderr?.destroy();
+        if (exited) {
+          finish(failure);
+          return;
+        }
+        killTree(child, 'SIGTERM');
+        graceTimer = setTimeout(() => {
+          if (!exited) killTree(child);
+        }, ABORT_GRACE_MS);
+      };
+      signal?.addEventListener('abort', onAbort, { once: true });
       if (options.input && child.stdin) {
         // git may exit before reading everything (e.g. on an error): ignore EPIPE.
         child.stdin.on('error', () => {});
@@ -362,6 +509,8 @@ export class GitRunner {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
+        clearTimeout(graceTimer);
+        signal?.removeEventListener('abort', onAbort);
         this.children.delete(child);
         const elapsed = Math.round(performance.now() - startedAt);
         if (error) {
@@ -466,16 +615,16 @@ export function resolveExecutable(command: string, searchPath: string): string {
   throw new GitCoreError('git_not_found', `git executable not found in PATH (${command})`);
 }
 
-function killTree(child: ChildProcess): void {
+function killTree(child: ChildProcess, signal: NodeJS.Signals = 'SIGKILL'): void {
   if (USE_PROCESS_GROUP && child.pid !== undefined) {
     try {
-      process.kill(-child.pid, 'SIGKILL');
+      process.kill(-child.pid, signal);
       return;
     } catch {
       // Group already gone, or not a group leader: fall back to the process itself.
     }
   }
-  child.kill('SIGKILL');
+  child.kill(signal);
 }
 
 function disposedError(): GitCoreError {

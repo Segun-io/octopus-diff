@@ -1,5 +1,6 @@
 import path from 'node:path';
 import {
+  type CallOptions,
   COMMITS_LIMIT_DEFAULT,
   COMMITS_LIMIT_MAX,
   type CommitInfo,
@@ -28,6 +29,7 @@ import {
   rangePatchId,
   readReviewRange,
 } from './review.js';
+import { abortedError, callContext, raceAbort, withCall } from './runner/call-context.js';
 import { defaultBigFileThreshold, GitRunner } from './runner/runner.js';
 import { getSummary } from './summary.js';
 import { createUntrackedCache } from './untracked.js';
@@ -151,12 +153,25 @@ export const createGitCore: CreateGitCore = (options: GitCoreOptions = {}): GitC
   const reviewDeps: ReviewDeps = { ctx, commitCache: createCommitDetailsCache() };
   let disposed = false;
 
-  /** Rejects after dispose, and maps unexpected errors to `GitCoreError`. */
-  const guard = <A extends unknown[], R>(fn: (...args: A) => Promise<R>) => {
+  /**
+   * Rejects after dispose, and maps unexpected errors to `GitCoreError`. `callOf` picks the
+   * call's `CallOptions` (#44) from its arguments: the call then runs in that lane, and rejects
+   * with `aborted` as soon as its signal fires (its git processes are stopped by the runner).
+   */
+  const guard = <A extends unknown[], R>(
+    fn: (...args: A) => Promise<R>,
+    callOf?: (...args: A) => CallOptions | undefined,
+  ) => {
     return async (...args: A): Promise<R> => {
       if (disposed) throw new GitCoreError('disposed', 'git-core has been disposed');
+      const call = callContext(callOf?.(...args));
+      // Cancelled before it began: start nothing at all (not even shared reads).
+      if (call.signal?.aborted) throw abortedError();
       try {
-        return await fn(...args);
+        return await raceAbort(
+          withCall(call, () => fn(...args)),
+          call.signal,
+        );
       } catch (error) {
         if (error instanceof GitCoreError) throw error;
         throw new GitCoreError(
@@ -186,14 +201,22 @@ export const createGitCore: CreateGitCore = (options: GitCoreOptions = {}): GitC
       return detectDefaultBranch(ctx, project);
     }),
     scan: guard((root, scanOptions) => scan(root, scanOptions)),
-    getSummary: guard((worktree, scopeOptions) => getSummary(deps, worktree, scopeOptions)),
-    listChangedFiles: guard((worktree, scope, scopeOptions) =>
-      listChangedFiles(deps, worktree, scope, scopeOptions),
+    getSummary: guard(
+      (worktree, scopeOptions) => getSummary(deps, worktree, scopeOptions),
+      (_worktree, scopeOptions) => scopeOptions,
     ),
-    getFileDiff: guard((worktree, scope, file, diffOptions) =>
-      getFileDiff(deps, worktree, scope, file, diffOptions),
+    listChangedFiles: guard(
+      (worktree, scope, scopeOptions) => listChangedFiles(deps, worktree, scope, scopeOptions),
+      (_worktree, _scope, scopeOptions) => scopeOptions,
     ),
-    listCommits: guard((worktree, commitOptions) => listCommits(ctx, worktree, commitOptions)),
+    getFileDiff: guard(
+      (worktree, scope, file, diffOptions) => getFileDiff(deps, worktree, scope, file, diffOptions),
+      (_worktree, _scope, _file, diffOptions) => diffOptions,
+    ),
+    listCommits: guard(
+      (worktree, commitOptions) => listCommits(ctx, worktree, commitOptions),
+      (_worktree, commitOptions) => commitOptions,
+    ),
     getWatchTargets: guard((worktree) => getWatchTargets(ctx, worktree)),
     readRemoteConfig: guard(async (project) => {
       await ctx.ensureSupported();
@@ -203,16 +226,24 @@ export const createGitCore: CreateGitCore = (options: GitCoreOptions = {}): GitC
       await ctx.ensureSupported();
       return readRepositoryInfo(ctx, project, infoOptions);
     }),
-    readBranchBase: guard((project, baseOptions) => readBranchBase(ctx, project, baseOptions)),
-    readReviewRange: guard((worktree, rangeOptions) =>
-      readReviewRange(reviewDeps, worktree, rangeOptions),
+    readBranchBase: guard(
+      (project, baseOptions) => readBranchBase(ctx, project, baseOptions),
+      (_project, baseOptions) => baseOptions,
+    ),
+    readReviewRange: guard(
+      (worktree, rangeOptions) => readReviewRange(reviewDeps, worktree, rangeOptions),
+      (_worktree, rangeOptions) => rangeOptions,
     ),
     describeCommits: guard((worktree, shas) => describeCommits(reviewDeps, worktree, shas)),
     rangePatchId: guard((worktree, from, to) => rangePatchId(reviewDeps, worktree, from, to)),
-    readFileOrigins: guard((worktree, originOptions) =>
-      readFileOrigins(ctx, worktree, originOptions),
+    readFileOrigins: guard(
+      (worktree, originOptions) => readFileOrigins(ctx, worktree, originOptions),
+      (_worktree, originOptions) => originOptions,
     ),
-    readBlob: guard((worktree, blobOptions) => readBlob(ctx, worktree, blobOptions)),
+    readBlob: guard(
+      (worktree, blobOptions) => readBlob(ctx, worktree, blobOptions),
+      (_worktree, blobOptions) => blobOptions,
+    ),
     dispose: async () => {
       disposed = true;
       reviewDeps.commitCache.clear();
