@@ -11,9 +11,12 @@
   hash. Spawn-free guards first (`Stamp`: index, ignore, config, attribute, sparse-checkout and `.gitmodules`
   files), and the limited status's own `--branch` header must equal the last one (HEAD, branch, upstream,
   ahead/behind). Refused hints refresh in full and say why (`SummaryResult.refresh.reason`), see DECISIONS #276-#278.
-- **State hash unchanged in meaning and bytes.** Both modes hash a canonical rebuild of the status text in git's
-  own order (changed by path, unmerged by path, untracked by path) and numstat lines by path; the fuzz asserts the
-  rebuild equals git's raw output (DECISIONS #275).
+- **State hash: same meaning, one narrow change.** Both modes hash a canonical rebuild of the status text in git's
+  own order (changed by path, unmerged by path, untracked by path; the fuzz asserts it equals git's raw output)
+  and the numstat lines of paths git status reports. Main hashed the raw numstat output, which also has a
+  `-\t-\t<file>` line for a stat-dirty but unchanged binary file: **a worktree with a real tracked change and a
+  touched, unchanged binary gets a new state hash once on upgrade**; every other worktree keeps its hash
+  (DECISIONS #275).
 - **File lists follow the summary** (`packages/git-core/src/diff.ts` `listFromSummary`). With
   `ScopeOptions.summaryState` (the held summary state), a list of a worktree-reading scope (working, review,
   branch + working) is either updated from the journal of changed keys (one `diff -p` limited to them plus the
@@ -25,7 +28,8 @@
   full refresh, passes `summaryState` to lists, and reconciles with a full refresh 30 s after the first incremental
   one (DECISIONS #280, #281). Merge-noise labels of an uncommitted-only list skip the per-file work (#283).
 - **Kill switch / A/B:** `OCTOPUS_DIFF_INCREMENTAL=0`, `git.incremental: false` or `internal.incremental: false`
-  (#282); bench `--no-incremental`.
+  (#282); bench `--no-incremental`. It restores the full git calls only: the state hash keeps the canonical
+  rebuild, and the merge-noise shortcut for uncommitted-only lists (#283) still applies.
 - **Bench** (`e2e/bench/bench.ts`): `--no-incremental`, a "Git spawns to SSE" column (write → `worktree.changed`),
   the edit windows in `--keep-trace`, and two budgets on later edits of a worktree: spawns to SSE ≤ 3 (enforced) and
   edit → SSE p95 < 120 ms (report only, the 100k-file target). `docs/bench/README.md` documents them.
@@ -139,3 +143,37 @@ None added or removed (`pnpm credits:check`: up to date).
   already make.
 - This branch regenerated `docs/bench/results.*`, `results-large-ci.*`, `results-large.*` and added
   `results-large-edits*.{md,json}`; re-run them after rebasing if other perf work lands first.
+
+## PR #89 review follow-up
+
+- **P1, phantom rows in cached lists** (DECISIONS #286). A list read from the files while an event was pending
+  could keep a row for a file that is clean in the summary state for ever. Now: an incremental summary journals its
+  whole region (the watcher's paths), a full summary is "blind" and lists then re-diff the paths they read whose file
+  moved since (lstat signatures taken before reading; full lists are seeded again), rows the state does not explain
+  are re-checked on every use, and a full summary drops lists it does not explain. Tests (failing first):
+  `packages/git-core/test/incremental-review.test.ts` (both repros, lost revert/delete events, a short-lived untracked
+  file, the same state asked again, the drop, a committed file read mid-edit by a seeded or a full list then changed
+  back before an incremental or a full summary). The fuzz asks for lists between a step's operations and restores files
+  to HEAD's content; its sweep found the chmod-undone-by-stash case the first version of this fix missed. Mutations
+  killed: hint region not journaled, full summaries not blind, moved files ignored, full lists kept after a blind
+  summary, re-check keys not re-diffed, the early return ignoring them, nothing counted unexplained, untracked rows
+  always explained, the drop removed.
+- **P2, embedded repositories** (#287). Gitlinks in the index (parsed, memoized by the index's stat) and hinted
+  paths below a `.git` refresh in full. Tests: a commit inside an embedded repository then an edit elsewhere
+  (`changedFiles` 2, as a full refresh), a hinted path inside it, a hinted path inside an ignored nested
+  repository. Mutations killed: gitlink scan removed, ancestor check removed.
+- **P3a, Refresh** (#285, #288): full, and `forgetState` drops git-core's state and lists. Tests:
+  `apps/daemon/test/incremental-core.test.ts` (a refresh queued behind a slow one with watcher paths pending:
+  `changedPaths` absent, `forgetState` true; failing first), `incremental.real-git.test.ts` (Refresh repairs a
+  lost event, reconciliation off), `incremental-review.test.ts` (`forgetState` in git-core). Mutations killed:
+  the hint kept, `forgetState` not passed, `forgetState` ignored by git-core.
+- **P3b/P3c**: the state-hash and kill-switch wording above and in DECISIONS #275, #282.
+- Verification of the follow-up (head after the merge of main): `pnpm lint`, `pnpm typecheck`, `pnpm build`: exit 0.
+  `pnpm test`: exit 0 (contracts 107, forge 101 + 5 skipped, fixtures 58, web 416, git-core 338, daemon 388 +
+  3 skipped, e2e unit 7, cli 139, scripts 34); git-core and daemon suites passed three times in all (the known
+  watcher-review-fixes F1 flake did not show). Fuzz: 16 extra seeds × 250 steps pass (three of them failed on the
+  first version of the P1 fix: the chmod/stash case). `pnpm test:e2e` (1 worker): 100 passed (3.1 min), read-only
+  proof 12 control repos, 4515 lock polls, 0 violations. Bench 30 × 3 (UI): every budget passes (cold paint 137 ms,
+  warm 78 ms, edit → SSE p95 20 ms, burst diff p95 40 ms, idle CPU 0.35 %). 100k files, `--no-ui`, 15 edits: later
+  edits main 53-59 ms, stale-index 55-62 ms, untracked-heavy 96-115 ms (p95 115 ms), 3 git processes to SSE; first
+  edits 550 / 253 / 313 ms (the first review state, as before).

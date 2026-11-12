@@ -3314,11 +3314,14 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      full refresh does: it is the same `finish` step.
 275. **The state hash is rebuilt canonically, in git's order.** Both modes hash the status text rebuilt from its
      header and entries (changed entries by path, then unmerged ones by path, then untracked by path: git's own
-     order, so the bytes and the hash are what they were; `incremental-fuzz.test.ts` asserts it against raw output)
-     and the numstat lines by destination path, **only those of paths git status reports**. The last part changes the
-     hash once for a worktree with stat-dirty binary files git status does not report (their `-\t-` lines were noise
-     that moved the hash on a `touch`); nothing else changes. No new scheme was needed: a full and an incremental
-     refresh of the same state produce the same bytes. Considered and not done: section digests (`summary-v3`),
+     order, so that part's bytes are what they were; `incremental-fuzz.test.ts` asserts it against raw output)
+     and the numstat lines by destination path, **only those of paths git status reports**. That last part is a
+     change: main hashed git's raw numstat output, which includes a `-\t-\t<file>` line for every stat-dirty but
+     unchanged binary file (numstat only runs when a tracked file really changed). So a worktree with a real tracked
+     change **and** a touched, unchanged binary gets a **new state hash once on upgrade** (and its hash no longer
+     moves on such a `touch`); every other worktree keeps its hash (corrected after the PR #89 review: an earlier
+     wording said existing hashes do not change). A full and an incremental refresh of the same state produce the
+     same bytes. Considered and not done: section digests (`summary-v3`),
      which would cut the ~15 ms of SHA-256 per refresh of a 30k-untracked worktree but change every state hash once
      (rows hidden "until it changes" would come back); a proposal for the lead.
 276. **When a hint is refused (a full refresh, `SummaryRefresh.reason`).** No last state; `incremental: false`; a
@@ -3371,9 +3374,12 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      timer (`CORE_DEFAULTS.reconcileMs`, 30 s; `internal.incremental.reconcileMs`) at the first incremental refresh
      after a full one; it refreshes in full and is cleared by any full refresh. A lost event costs at most 30 s of
      staleness (test: a watcher that drops one file's events; the repair arrives with no new event).
-282. **Kill switch.** `DaemonInternals.incremental: false`, `StartDaemonOptions.git.incremental: false`, or
+282. **Kill switch (git calls only).** `DaemonInternals.incremental: false`, `StartDaemonOptions.git.incremental: false`, or
      `OCTOPUS_DIFF_INCREMENTAL=0` in the daemon's environment: no hints, no `summaryState`, git-core created with
-     `incremental: false`. The bench's `--no-incremental` uses the first two (A/B).
+     `incremental: false`. The bench's `--no-incremental` uses the first two (A/B). It restores
+     the full `status` / `diff` of every summary and list and nothing else: the state hash is still computed from the
+     canonical rebuild (#275), and #283 (no per-file origins for uncommitted-only lists) still applies (PR #89
+     review).
 283. **Daemon: no per-file origins for a list of uncommitted files only.** Every such file is own when no operation is
      in progress (`readFileOrigins`' rules need a committed file, or a staged one during a merge), so `#labelFiles`
      asks git-core without the files (for the integration base and ref, which the review state still carries) and
@@ -3390,3 +3396,33 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
 285. **Contract (additive): `SummaryOptions.forgetState?: boolean`.** git-core drops the worktree's kept summary state
      and its cached file lists, then refreshes in full (`SummaryRefresh.reason` `forget`). The daemon's explicit
      Refresh passes it. Nothing is renamed or removed.
+286. **A cached list never outlives what it read (PR #89 review P1).** A list's rows come from the files at the
+     moment it runs, which can be after its summary state (an edit whose event is pending); the journal named only
+     the paths whose records differ between two states, so a file changed and changed back between them (a revert,
+     a chmod undone by `git stash`, a short-lived untracked file) kept a row read mid-edit for ever, and the
+     reconciliation did not help. Three layers now:
+     - **The journal names what the watcher named.** An incremental summary's entry holds its whole region (hint,
+       rename candidates, missed signatures) besides the changed records, so a path the watcher saw is re-diffed by
+       every cached list even when its record came back. A full summary's entry is **blind** (it cannot know).
+     - **Lists remember what they read.** Every cached list keeps its diff region with each path's lstat signature
+       taken just before the diff (`late`; a full list reads everything: `lateAll`). After a blind entry, the paths
+       whose file moved since are re-diffed (a directory always is), and a full list is seeded again.
+     - **Rows the state does not explain are re-checked on every use** (`recheck`): a tracked row whose path is no
+       status path and, against another base than HEAD, no base..HEAD path; an untracked row the state does not list.
+       This repairs a lost event before the reconciliation. A full summary also drops the worktree's lists it does not
+       explain, so the next one is seeded.
+     Tests (failing first): `incremental-review.test.ts` (both repros of the review; a short-lived untracked file; lost
+     revert and delete events; the same held state asked again after a revert; the drop; a committed file read mid-edit
+     by a seeded or a full list and changed back before an incremental or a full summary). The fuzz asks for lists
+     between a step's operations (with the stale held state or none) and restores files to HEAD's content by plain
+     writes; its 16-seed sweep found the chmod/stash case. Every layer is mutation-checked.
+287. **Embedded repositories refresh in full (PR #89 review P2).** A repository added with plain `git add sub` is a
+     gitlink without `.gitmodules`; clean, it is in no status line, and a commit inside it writes only to `sub/.git`
+     (no watcher event), so an incremental refresh for another path missed it until the reconciliation. The stamp
+     now says whether the index holds a gitlink (`indexHasGitlinks`: parses index versions 2-4, memoized by the
+     index's stat signature; a split index, an unparsable or a >256 MB index counts as "has one"), and
+     `trackBlocker` refuses then (`submodules`). Also, a hinted path with a `.git` in any ancestor directory
+     refreshes in full (`nested-repository`: an ignored nested repository shows in no status line either).
+288. **An explicit Refresh is a full refresh that forgets (PR #89 review P3a).** `refreshWorktree` makes the next
+     summary full whatever the watcher holds (`#noteHint(entry, null)`) and passes `forgetState` (#285), so
+     git-core's kept state and lists of the worktree are rebuilt from scratch.

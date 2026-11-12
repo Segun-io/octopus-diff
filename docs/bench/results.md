@@ -1,24 +1,24 @@
 # octopus-diff perf bench
 
-Generated 2026-11-12T15:14:10.153Z · linux 6.18.58.1-microsoft-standard-WSL2 · AMD Ryzen 7 7800X3D 8-Core Processor (12 cores) · Node v26.13.0 · git version 2.53.0
+Generated 2026-11-12T16:30:07.897Z · linux 6.18.58.1-microsoft-standard-WSL2 · AMD Ryzen 7 7800X3D 8-Core Processor (12 cores) · Node v26.13.0 · git version 2.53.0
 
-Layout `small`: 30 repos × 3 worktrees (all dirty) = 90 worktrees, generated in 5204 ms.
+Layout `small`: 30 repos × 3 worktrees (all dirty) = 90 worktrees, generated in 4872 ms.
 
 ## Budgets
 
 | Metric | Result | Budget | Verdict |
 |---|---|---|---|
-| Time to first paint (cold, `data-ready`) | 139 ms | < 3000 ms | PASS |
-| Time to first paint (warm reload, median of 3) | 72 ms | < 300 ms | PASS |
+| Time to first paint (cold, `data-ready`) | 137 ms | < 3000 ms | PASS |
+| Time to first paint (warm reload, median of 3) | 78 ms | < 300 ms | PASS |
 | Git spawns from the write to SSE, worst later edit of a worktree (#40) | n/a | ≤ 3 spawns | skipped |
 | Edit → SSE p95, later edits of a worktree (#40, 100k-file target) | n/a | < 120 ms | report only |
 | Startup git spawns per worktree | 4.5 | ≤ 8 spawns | PASS |
-| Idle CPU, daemon + git children (average) | 0.40 % | < 10 % | PASS |
-| Refresh: write → SSE `worktree.changed` p95 | 19 ms | < 1000 ms | PASS |
-| Diff opened during a 60-edit burst, p95 (#44) | 34 ms | < 100 ms | PASS |
-| Browser traffic per edit (worst edit, #51) | 1420 bytes | < 102400 bytes | PASS |
+| Idle CPU, daemon + git children (average) | 0.35 % | < 10 % | PASS |
+| Refresh: write → SSE `worktree.changed` p95 | 20 ms | < 1000 ms | PASS |
+| Diff opened during a 60-edit burst, p95 (#44) | 40 ms | < 100 ms | PASS |
+| Browser traffic per edit (worst edit, #51) | 1421 bytes | < 102400 bytes | PASS |
 | `/api/projects` requests per edit (worst edit, #51) | 0 requests | < 1 requests | PASS |
-| Refresh: write → UI sidebar update p95 | 34 ms | < 1000 ms | PASS |
+| Refresh: write → UI sidebar update p95 | 38 ms | < 1000 ms | PASS |
 
 Tracked budgets are known to fail until the issue they name lands: they are listed as `FAIL (tracked)` and do not turn the run red (). Large layouts report everything but judge only the startup spawns. Run `--strict` to count tracked budgets too.
 
@@ -26,41 +26,41 @@ Tracked budgets are known to fail until the issue they name lands: they are list
 
 | Metric | Result |
 |---|---|
-| Time to first paint (cold) | 139 ms |
-| Time to first paint (warm reload; 3 samples) | 72 ms (97 / 72 / 61 ms) |
+| Time to first paint (cold) | 137 ms |
+| Time to first paint (warm reload; 3 samples) | 78 ms (94 / 78 / 60 ms) |
 | Warm reload once the daemon is quiet: git spawns (per worktree, worst of 3; reported, not judged) | 3 / 3 / 3 (0.03) |
-| Idle CPU, daemon + git children (avg over 60 s / worst 1 s) | 0.40 % / 5.00 % |
-| Refresh: write → SSE `worktree.changed` (p50 / p95 / max) | 15 ms / 19 ms / 19 ms (15/15) |
-| Refresh: write → UI sidebar update (p50 / p95 / max) | 30 ms / 34 ms / 34 ms (15/15) |
+| Idle CPU, daemon + git children (avg over 60 s / worst 1 s) | 0.35 % / 4.00 % |
+| Refresh: write → SSE `worktree.changed` (p50 / p95 / max) | 15 ms / 20 ms / 20 ms (15/15) |
+| Refresh: write → UI sidebar update (p50 / p95 / max) | 26 ms / 38 ms / 38 ms (15/15) |
 | Browser traffic per edit, Inbox view (median / worst; requests median / worst; `/api/projects` in all edits) | 1.4 KiB / 1.4 KiB; 1 / 1; 0 |
-| Daemon startup: listening / all summaries | 790 ms / 956 ms |
-| Daemon RSS: end of run / peak | 138.81 MiB / 144.82 MiB |
+| Daemon startup: listening / all summaries | 776 ms / 958 ms |
+| Daemon RSS: end of run / peak | 155.21 MiB / 156.95 MiB |
 
-## Startup git spawns (406 for 90 worktrees = 4.5 per worktree, 3012 ms of git wall time summed)
+## Startup git spawns (406 for 90 worktrees = 4.5 per worktree, 3009 ms of git wall time summed)
 
 | Subcommand | Spawns | Wall time (sum) | p50 | p95 |
 |---|---|---|---|---|
-| `status` | 90 | 664 ms | 6.9 ms | 11.9 ms |
-| `diff` | 90 | 835 ms | 8.8 ms | 15.2 ms |
-| `check-attr` | 90 | 621 ms | 6.3 ms | 11.3 ms |
-| `config` | 45 | 317 ms | 6.1 ms | 11.9 ms |
-| `rev-parse` | 30 | 192 ms | 6.3 ms | 13.3 ms |
-| `worktree` | 30 | 157 ms | 5.1 ms | 7.2 ms |
-| `for-each-ref` | 30 | 223 ms | 6.2 ms | 18.2 ms |
-| `--version` | 1 | 2 ms | 2.4 ms | 2.4 ms |
+| `status` | 90 | 650 ms | 7.1 ms | 10.6 ms |
+| `diff` | 90 | 876 ms | 9 ms | 15.9 ms |
+| `check-attr` | 90 | 620 ms | 6.4 ms | 12.8 ms |
+| `config` | 45 | 292 ms | 5.5 ms | 11.9 ms |
+| `rev-parse` | 30 | 209 ms | 6.3 ms | 14.4 ms |
+| `worktree` | 30 | 159 ms | 5.3 ms | 7.1 ms |
+| `for-each-ref` | 30 | 199 ms | 5.8 ms | 13.4 ms |
+| `--version` | 1 | 3 ms | 2.5 ms | 2.5 ms |
 
 ## Spawns caused by the UI
 
 | Phase | Git spawns | Wall time (sum) |
 |---|---|---|
 | coldPaint | 9 | 59 ms |
-| warmReload1 | 12 | 83 ms |
-| warmReload2 | 9 | 67 ms |
-| warmReload3 | 6 | 20 ms |
-| settledReload1 | 3 | 9 ms |
-| settledReload2 | 3 | 10 ms |
+| warmReload1 | 12 | 73 ms |
+| warmReload2 | 12 | 66 ms |
+| warmReload3 | 3 | 8 ms |
+| settledReload1 | 3 | 10 ms |
+| settledReload2 | 3 | 9 ms |
 | settledReload3 | 3 | 9 ms |
-| editBurst | 329 | 2497 ms |
+| editBurst | 330 | 2516 ms |
 
 `warmReload1-3` start right after the cold paint and end at `data-ready`, so they also count the work the cold paint started (review states and labels still being computed). `settledReload1-3` start once no git process ran for 1 s and last until the daemon is quiet again: what one reload costs on its own (issue #74).
 
@@ -68,20 +68,20 @@ Tracked budgets are known to fail until the issue they name lands: they are list
 
 ## A diff opened during a 60-edit burst (issue #44)
 
-60 appends to `README.md` over 60 other worktrees, back to back, each one a summary refresh in the background; meanwhile `GET /diff` of one changed file of an untouched worktree, one at a time, every 100 ms from the first edit until 2 s after the last; the phase ends when the daemon is quiet again (3188 ms). git-core runs `/diff` in its interactive lane, ahead of queued summaries.
+60 appends to `README.md` over 60 other worktrees, back to back, each one a summary refresh in the background; meanwhile `GET /diff` of one changed file of an untouched worktree, one at a time, every 100 ms from the first edit until 2 s after the last; the phase ends when the daemon is quiet again (3880 ms). git-core runs `/diff` in its interactive lane, ahead of queued summaries.
 
 | Metric | Result |
 |---|---|
 | Diff on the quiet daemon (p50 / max of 7) | 8 ms / 9 ms |
-| Diff under the burst (p50 / p95 / max of 19) | 9 ms / 34 ms / 34 ms |
-| Added by the burst (p95 − quiet p50) | 26 ms |
-| Git spawns during the phase | 329 |
+| Diff under the burst (p50 / p95 / max of 19) | 8 ms / 40 ms / 40 ms |
+| Added by the burst (p95 − quiet p50) | 32 ms |
+| Git spawns during the phase | 330 |
 
 ## Edit → SSE by worktree role
 
 | Role | Edits | SSE p50 / p95 / max | Git spawns to SSE | Git spawns per edit |
 |---|---|---|---|---|
-| bench | 15 | 15 ms / 19 ms / 19 ms | 3–5 | 4–6 |
+| bench | 15 | 15 ms / 20 ms / 20 ms | 3–5 | 4–7 |
 
 *To SSE*: processes started between the write and the worktree's `worktree.changed` (the summary and the review state the event waits for). *Per edit*: until the daemon is quiet again, the UI's refetches included.
 
@@ -90,10 +90,10 @@ Tracked budgets are known to fail until the issue they name lands: they are list
 | Request | Raw | Gzipped (computed) | Sent when asked for gzip | First / warm request |
 |---|---|---|---|---|
 | projects | 100.6 KiB | 8.5 KiB | gzip: 10.2 KiB | 5 ms / 2 ms |
-| inbox, working | 204.4 KiB | 21.6 KiB | gzip: 25.4 KiB | 219 ms / 10 ms |
-| inbox, review (To review) | 204.4 KiB | 21.5 KiB | gzip: 25.4 KiB | 128 ms / 9 ms |
-| inbox, branch + working (All on branch) | 204.4 KiB | 21.6 KiB | gzip: 25.5 KiB | 33 ms / 27 ms |
-| files bench, working | 1.3 KiB | 446 B | gzip: 454 B | 1 ms / 1 ms |
+| inbox, working | 204.4 KiB | 21.6 KiB | gzip: 25.4 KiB | 238 ms / 8 ms |
+| inbox, review (To review) | 204.4 KiB | 21.6 KiB | gzip: 25.4 KiB | 130 ms / 8 ms |
+| inbox, branch + working (All on branch) | 204.4 KiB | 21.6 KiB | gzip: 25.5 KiB | 31 ms / 30 ms |
+| files bench, working | 1.3 KiB | 447 B | gzip: 456 B | 1 ms / 1 ms |
 
 ## Baseline: the 2026-11-11 profiling pass (issue #24)
 
