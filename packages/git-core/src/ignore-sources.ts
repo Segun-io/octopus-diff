@@ -1,4 +1,4 @@
-import { lstat } from 'node:fs/promises';
+import { lstat, stat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { mapLimit } from './fs-utils.js';
@@ -65,6 +65,10 @@ export async function ignoreFileState(root: string, dir: string, at: number): Pr
   const file = absolutePathBuffer(root, dir === '' ? '.gitignore' : `${dir}/.gitignore`);
   try {
     const info = await lstat(file, { bigint: true });
+    // git warns and skips a `.gitignore` that is a symlink (a worktree file it will not follow);
+    // whether every version does is not ours to assume, and a link's target moves unseen: never
+    // believed.
+    if (info.isSymbolicLink()) return UNSTABLE;
     return youngMs(info) >= at - IGNORE_MARGIN_MS ? UNSTABLE : sigOf(info);
   } catch (error) {
     if (!missing(error)) return UNSTABLE;
@@ -115,14 +119,36 @@ export async function excludesFileState(
 ): Promise<string> {
   const last = configured[configured.length - 1];
   if (!last) return '';
-  const expanded = last.startsWith('~/') ? path.join(home || os.homedir(), last.slice(2)) : last;
-  const resolved = path.resolve(root, expanded);
-  try {
-    const info = await lstat(resolved, { bigint: true });
-    return `${resolved}\u0000${youngMs(info) >= at - IGNORE_MARGIN_MS ? UNSTABLE : sigOf(info)}`;
-  } catch (error) {
-    return `${resolved}\u0000${missing(error) ? 'absent' : UNSTABLE}`;
+  // `~user` and the like are not expanded here: never believed.
+  if (last.startsWith('~') && !last.startsWith('~/') && last !== '~') {
+    return `${last}\u0000${UNSTABLE}`;
   }
+  const expanded =
+    last === '~' || last.startsWith('~/') ? path.join(home || os.homedir(), last.slice(1)) : last;
+  const resolved = path.resolve(root, expanded);
+  const state = async (): Promise<string> => {
+    try {
+      const link = await lstat(resolved, { bigint: true });
+      let young = youngMs(link);
+      let text = sigOf(link);
+      if (link.isSymbolicLink()) {
+        // git reads the target: its state is part of the source (every component of the link's
+        // path is followed by `stat`; the file's own path by `lstat` above).
+        try {
+          const target = await stat(resolved, { bigint: true });
+          young = Math.max(young, youngMs(target));
+          text = `${text}>${sigOf(target)}`;
+        } catch (error) {
+          if (!missing(error)) return UNSTABLE;
+          text = `${text}>dangling`;
+        }
+      }
+      return young >= at - IGNORE_MARGIN_MS ? UNSTABLE : text;
+    } catch (error) {
+      return missing(error) ? 'absent' : UNSTABLE;
+    }
+  };
+  return `${resolved}\u0000${await state()}`;
 }
 
 /**
@@ -137,17 +163,21 @@ export async function recordIgnore(
   keys: Iterable<string>,
   previous: IgnoreRecord | undefined,
   excludes: () => Promise<string>,
+  relisted: (dir: string) => boolean = () => false,
 ): Promise<IgnoreRecord> {
   const dirs = new Map(previous?.dirs ?? []);
   const wanted: string[] = [];
   for (const dir of ignoreDirsOf(keys)) {
     if (!dirs.has(dir)) wanted.push(dir);
   }
-  for (const [dir, state] of dirs) if (state === UNSTABLE) wanted.push(dir);
+  // A directory recorded `unstable` was too young to vouch for, and the untracked entries under it
+  // were listed under rules that may have changed since: only a refresh that lists them all again
+  // (its pathspecs cover the directory) may record it afresh; any other leaves it refusing.
+  for (const [dir, state] of dirs) if (state === UNSTABLE && relisted(dir)) wanted.push(dir);
   const states = await mapLimit(wanted, 32, (dir) => ignoreFileState(root, dir, at));
   for (const [i, dir] of wanted.entries()) dirs.set(dir, states[i] as string);
-  const held = previous?.excludes ?? null;
-  return { dirs, excludes: held !== null && !excludesUnstable(held) ? held : await excludes() };
+  // Likewise the excludes file: a held record, unstable or not, is only replaced by a full refresh.
+  return { dirs, excludes: previous?.excludes ?? (await excludes()) };
 }
 
 /**

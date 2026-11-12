@@ -877,6 +877,8 @@ async function finish(
           ctx.runner.envValue('HOME') || undefined,
           c.stamp.at,
         ),
+      // The directories whose untracked entries this refresh listed again (its pathspecs).
+      (dir) => c.region?.has(dir) ?? false,
     );
   } else if (c.mode === 'incremental' && previous) ignore = previous.ignore;
   const track: SummaryTrack = {

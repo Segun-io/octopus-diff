@@ -290,6 +290,25 @@ export const OPS: Array<[number, Op]> = [
     },
   ],
   [
+    2,
+    (_fx, repo, r) => {
+      // A `.gitignore` written or deleted with its event lost, likely right after a summary that
+      // listed a new file under younger rules (PR #93 P1: a refresh elsewhere must not trust the
+      // new rules for the old entry).
+      const dir = pick(r, ['', 'dir', 'dir/sub', 'other']);
+      const rel = dir === '' ? '.gitignore' : `${dir}/.gitignore`;
+      const full = abs(repo, rel);
+      if (r() < 0.3) {
+        if (!exists(full) || lstatSync(full).isDirectory()) return null;
+        rmSync(full);
+      } else {
+        if (dir !== '' && ensureParent(repo, rel) === 'blocked') return null;
+        writeFileSync(full, pick(r, ['*.log\n', '!keep.log\n', 'keep.log\n', '*.txt\n']));
+      }
+      return { name: `silent ${rel}`, touched: [], silent: true };
+    },
+  ],
+  [
     1,
     (_fx, repo, r) => {
       // The file `core.excludesFile` names (some fuzz repositories set it): no event, no hint.

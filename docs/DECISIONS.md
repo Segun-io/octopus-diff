@@ -3738,3 +3738,40 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      believed, previous record not kept, recorded states not compared, the excludes file not recorded; two survive as
      equivalent mutants (an unrecorded directory or a null excludes record believed: `undefined`/`null` never equal the
      state read now, so they refuse anyway).
+
+### Ignore sources: symlinks and partial refreshes (PR #93, two more P1, 2026-11-12)
+
+336. **A symlinked ignore source is followed or refused, never lstat-only.** (Review: `core.excludesFile` naming a
+     symlink was signed by the link, so editing the target changed nothing recorded.) `excludesFileState` now records
+     the link's `lstat` **and the target's `stat`** (`<link sig>><target sig>`, `dangling` when the target is missing;
+     the target's age counts for the margin); a symlinked directory component needed nothing (`lstat` resolves every
+     component but the last, and a test pins it). A `~user` value, which git-core does not expand, is `unstable`; `~`
+     and `~/…` use the HOME of the git environment, as the attributes file does. **A `.gitignore` that is a symlink is
+     `unstable`** (refused). Git's real behaviour, checked: it prints `unable to access '.gitignore': Too many levels
+     of symbolic links` and skips the file, so the link is not an ignore source at all, but a different git version
+     may follow it and its target moves unseen, so we do not assume. `info/exclude` and the default global ignore file
+     are in the `Stamp`, which signs them with `stat` (it follows links), so they were already safe. Tests: the excludes
+     file as a symlink and through a symlinked directory (edit the target, compare with the reference core), a
+     symlinked `.gitignore` (git lists the file; the route refuses).
+337. **An `unstable` record is upgraded only by a refresh that lists the entries again; nothing else launders it.**
+     (Review: a summary right after creating an untracked file leaves its directory `unstable`; a `.gitignore` that hides
+     the file is created with the event lost; an incremental refresh of an unrelated file after the margin re-read the
+     directory, found the new rules stable, recorded them and kept the old entry: the diff of a now-ignored file was
+     served.) `recordIgnore` now re-reads an `unstable` directory only when the refresh's region (`Region.has`: its
+     pathspecs name the directory or an ancestor) covers it, which means the status listed every untracked entry under it
+     again; otherwise it stays `unstable` and the route refuses until a refresh that does (a full one at the latest: the
+     daemon reconciles 30 s after the first incremental refresh, and a hint naming a directory is a full refresh).
+     The excludes record is likewise only replaced by a full refresh, never by an incremental one (same laundering,
+     covered by a test and a mutation). Cost: the route stays on the whole way for a directory that was young at its
+     summary until the next full refresh (at most ~30 s in the daemon; with the 100 ms debounce a file created and
+     summarized by the watcher is older than the 30 ms margin, so the usual case is unaffected). Tests: the exact
+     scenario (summary at once, `.gitignore` hiding the file with the event lost, a refresh elsewhere after the margin:
+     the route refuses and equals `not_found`), the same for `core.excludesFile`, fuzz ops writing and deleting ignore
+     files silently. Mutations killed: unstable re-recorded without a re-listing, a symlinked `.gitignore` believed,
+     the excludes target not followed, the held excludes record replaced. (#334's sentence "ones recorded `unstable`
+     are read again" is amended by this entry.)
+338. **`watch-paths.test.ts` "passes the files its events named" no longer waits a fixed time (CI flake, Node 26 job).**
+     It slept 400 ms after `setProject` and 400 ms after the first event, so a slow runner's second event (a nested
+     path) could land after the assertion. It now writes probe files until an event for one arrives (the tree is watched),
+     lets their refreshes finish, then waits with `eventually` for each expected path and asserts that nothing but the
+     probes and those two paths was named. Product untouched. 20 serial runs and 20 under a 4-way parallel load pass.

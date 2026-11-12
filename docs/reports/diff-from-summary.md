@@ -148,3 +148,16 @@ None added or removed (`pnpm credits:check`: up to date).
   skipped, the rest as above); git-core and daemon run once more with the same counts; with `OCTOPUS_DIFF_TEST_FOLDS_CASE=1` git-core 380 + 15
   skipped, daemon 389 + 6 skipped; `pnpm test:e2e` (1 worker) 102 passed (3.2 min), read-only proof 12 repos, 4692 lock polls, 0 violations;
   `perf:smoke` exit 0; fuzz seeds 11, 424242, 90210, 5150 at 100 steps pass.
+
+## PR #93 review, round 3
+
+- **Symlinked ignore sources** (#336): `core.excludesFile` is signed by its link and its target; a symlinked `.gitignore` is never believed
+  (git skips it with a warning; checked); `info/exclude` and the global default were already safe (the stamp uses `stat`).
+- **Partial refresh laundering** (#337): an `unstable` directory is re-recorded only when the refresh's pathspecs cover it; the excludes record only
+  by a full refresh. Tests: the reviewer's scenario with a lost event, the same for the excludes file, the symlink cases (all failing first), fuzz
+  ops for silent ignore-file writes and deletions.
+- **CI flake** (#338): `watch-paths.test.ts` probes until subscribed and waits per expected path; 20 + 20 loaded runs pass.
+- **Verification (round 3, final code):** lint, typecheck, build exit 0; `pnpm test` exit 0 (git-core 398 + 1 skipped, daemon 391 + 4 skipped; both
+  run twice more with the same counts); folding mode git-core 384 + 15 skipped, daemon 389 + 6 skipped; `pnpm test:e2e` 102 passed (3.6 min),
+  read-only proof 12 repos, 4968 lock polls, 0 violations; `perf:smoke` exit 0; diff-open 100k: modified 15-16 ms / 1 spawn, untracked 2 ms
+  (21 ms in the 30.7k-untracked worktree) / 0 spawns, 300k-line rewrite 299 ms; fuzz seeds 11, 424242, 90210 at 100 steps pass.

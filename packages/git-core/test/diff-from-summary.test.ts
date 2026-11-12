@@ -10,7 +10,7 @@
  * On a case-folding filesystem (macOS, `OCTOPUS_DIFF_TEST_FOLDS_CASE=1`) the summary route is off by
  * design (#288): the expected route becomes `case-insensitive` and equality is still asserted.
  */
-import { chmodSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import {
   type DiffOptions,
@@ -514,6 +514,90 @@ describe('ignore rules that changed since the summary (PR #93 review, P1)', () =
     const info = await diffBoth(repo, WORKING, 'a.log');
     expect(info.route).toBe(REASON('ignore-rules'));
     expect(info.result).toEqual({ error: 'not_found' });
+  });
+
+  it('core.excludesFile naming a symlink: the target is what git reads, so the target is what is compared', async () => {
+    const real = path.join(fx.root, 'sym-excludes-real');
+    const link = path.join(fx.root, 'sym-excludes-link');
+    writeFileSync(real, '*.nothing\n');
+    symlinkSync(real, link);
+    // And through a symlinked directory component.
+    mkdirSync(path.join(fx.root, 'sym-excludes-dir'), { recursive: true });
+    symlinkSync(path.join(fx.root, 'sym-excludes-dir'), path.join(fx.root, 'sym-excludes-dirlink'));
+    const viaDir = path.join(fx.root, 'sym-excludes-dirlink', 'excludes');
+    writeFileSync(path.join(fx.root, 'sym-excludes-dir', 'excludes'), '*.nothing\n');
+    for (const [name, configured, target] of [
+      ['sym-excl-link', link, real],
+      ['sym-excl-dir', viaDir, path.join(fx.root, 'sym-excludes-dir', 'excludes')],
+    ] as const) {
+      const repo = await untrackedRepo(name, (r) => {
+        fx.git(r, ['config', 'core.excludesFile', configured]);
+        text(r, 'a.log', 'a\n');
+      });
+      expect((await diffBoth(repo, WORKING, 'a.log')).route, name).toBe(SUMMARY);
+      writeFileSync(target, '*.log\n');
+      await settle();
+      const outcome = await diffBoth(repo, WORKING, 'a.log');
+      expect(outcome.route, name).toBe(REASON('ignore-rules'));
+      expect(outcome.result, name).toEqual({ error: 'not_found' });
+      writeFileSync(target, '*.nothing\n');
+    }
+  });
+
+  it('a core.excludesFile edited with its event lost is not trusted by a refresh elsewhere', async () => {
+    const excludes = path.join(fx.root, 'ignore-laundered.excludes');
+    writeFileSync(excludes, '*.nothing\n');
+    const repo = await untrackedRepo('ignore-excl-laundered', (r) => {
+      fx.git(r, ['config', 'core.excludesFile', excludes]);
+      text(r, 'a.log', 'a\n');
+      text(r, 'b.txt', 'b\n');
+    });
+    expect((await diffBoth(repo, WORKING, 'a.log')).route).toBe(SUMMARY);
+    writeFileSync(excludes, '*.log\n');
+    await settle();
+    text(repo, 'b.txt', 'b, edited\n');
+    const refreshed = await fast.getSummary(locator(repo), { changedPaths: ['b.txt'] });
+    if (!FOLDS) expect(refreshed.refresh?.mode).toBe('incremental');
+    const outcome = await diffBoth(repo, WORKING, 'a.log');
+    expect(outcome.route).toBe(REASON('ignore-rules'));
+    expect(outcome.result).toEqual({ error: 'not_found' });
+  });
+
+  it('a .gitignore that is a symlink is never believed (git itself refuses to read one)', async () => {
+    const repo = await untrackedRepo('ignore-symlink', (r) => {
+      text(r, 'rules', 'x.log\n');
+      text(r, 'dir/x.log', 'x\n');
+      symlinkSync('../rules', path.join(r, 'dir', '.gitignore'));
+    });
+    const outcome = await diffBoth(repo, WORKING, 'dir/x.log');
+    expect(outcome.route).toBe(REASON('ignore-rules'));
+    // git warns and ignores the link: the file is listed, and the whole route shows it.
+    expect((outcome.result as { ok: GitFileDiff }).ok.status).toBe('untracked');
+  });
+
+  it('a lost .gitignore after a summary taken at once cannot be trusted by a refresh elsewhere (PR #93, P1)', async () => {
+    const repo = fx.repo('ignore-unstable', { files: { 'a.txt': lines(3), 'b.txt': 'b\n' } });
+    await settle();
+    await fast.getSummary(locator(repo));
+    // A new untracked file and a summary at once: its directory is still too young to vouch for.
+    text(repo, 'new.log', 'n\n');
+    const refreshed = await fast.getSummary(locator(repo), { changedPaths: ['new.log'] });
+    if (!FOLDS) expect(refreshed.refresh?.mode).toBe('incremental');
+    expect((await diffBoth(repo, WORKING, 'new.log')).route).toBe(REASON('ignore-rules'));
+    // A rule hiding it arrives and its event is lost.
+    text(repo, '.gitignore', '*.log\n');
+    await settle();
+    // A refresh of an unrelated file, after the margin, must not make the old entry trusted.
+    text(repo, 'a.txt', lines(4));
+    const again = await fast.getSummary(locator(repo), { changedPaths: ['a.txt'] });
+    if (!FOLDS) expect(again.refresh?.mode).toBe('incremental');
+    const outcome = await diffBoth(repo, WORKING, 'new.log');
+    expect(outcome.route).toBe(REASON('ignore-rules'));
+    expect(outcome.result).toEqual({ error: 'not_found' });
+    // A refresh that lists everything again vouches once the rules are old enough.
+    await settle();
+    await fast.getSummary(locator(repo));
+    expect((await diffBoth(repo, WORKING, 'b.txt')).route).toBe(REASON('not-in-state'));
   });
 
   it('an incremental summary elsewhere in the directory does not launder a lost ignore-file event', async () => {
