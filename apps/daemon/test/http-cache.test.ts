@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { gunzipSync } from 'node:zlib';
+import { gunzipSync, gzipSync } from 'node:zlib';
 import { InboxResponseSchema } from '@octopus-diff/contracts';
 import { type Context, Hono } from 'hono';
 import { beforeEach, describe, expect, it } from 'vitest';
@@ -252,7 +252,7 @@ describe('gzip and ETag on the JSON API (fake git-core)', () => {
 });
 
 describe('cost of the middleware', () => {
-  it('adds under 50 ms CPU per 10 MB (gzip level 1 plus the ETag hash)', async () => {
+  it('adds about 50 ms CPU per 10 MB at most (gzip level 1 plus the ETag hash)', async () => {
     // ~10 MB of JSON shaped like a file list, with random ids so it does not compress unrealistically well
     // (the measured inbox gzips about 9x; gzip's cost grows with the entropy of its input).
     const files = Array.from({ length: 80_000 }, (_, i) => ({
@@ -287,8 +287,21 @@ describe('cost of the middleware', () => {
     const base = await best(plain, {});
     const withMiddleware = await best(cached, { 'accept-encoding': 'gzip' });
     const extra = withMiddleware - base;
-    expect(extra, `+${extra.toFixed(1)} ms per ${(json.length / 1e6).toFixed(1)} MB`).toBeLessThan(
-      50,
+    // The budget follows the machine (DECISIONS #163 did the same for the bulk bench): 50 ms on a
+    // normal machine, more on a slow shared CI runner. The reference is the same work done directly
+    // (gzip level 1 plus the SHA-1 of the body), so only overhead beyond that work can fail the test.
+    const reference = Math.min(
+      ...Array.from({ length: 3 }, () => {
+        const started = performance.now();
+        gzipSync(json, { level: 1 });
+        createHash('sha1').update(json).digest('hex');
+        return performance.now() - started;
+      }),
     );
+    const budget = Math.max(50, reference * 1.5 + 15);
+    expect(
+      extra,
+      `+${extra.toFixed(1)} ms per ${(json.length / 1e6).toFixed(1)} MB (budget ${budget.toFixed(0)} ms, reference ${reference.toFixed(0)} ms)`,
+    ).toBeLessThan(budget);
   });
 });
