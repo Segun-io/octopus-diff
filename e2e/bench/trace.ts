@@ -10,6 +10,8 @@ export interface TracedSpawn {
   cmd?: string;
   sub: string;
   args: string[];
+  /** Every argument after the subcommand (cut); absent in traces written before it was recorded. */
+  argv?: string[];
   cwd: string | null;
   code: number | null;
 }
