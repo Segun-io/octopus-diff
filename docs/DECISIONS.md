@@ -2609,3 +2609,20 @@ Numbers: #205 and up (#201-#204 are the daemon branch's, `feat/daemon-file-origi
      scope's viewer and measured an empty list. `scripts/shots.ts` has `merge-noise`, `merge-noise-open` and
      `merge-noise-chip` states. The README screenshots are fixture-driven by the e2e scripts, whose repositories have
      no merge noise, and nothing they show changed, so they were not regenerated.
+
+## Live feed: summary snapshot and blob read (session, 2026-11-12; roadmap #37, step 18)
+
+Numbers: #209 and up (other sessions may also have used #209; renumber at merge).
+
+209. **contracts (additive, `packages/contracts/src/live.ts`, `contracts:` commit).** `getSummary(worktree, options?)`
+     takes `SummaryOptions = ScopeOptions & { snapshot?: boolean | { maxEntries?: number } }` and returns
+     `SummaryResult = WorktreeSummary & { snapshot?: SummarySnapshot }`; without the option the object is the one
+     it always was (no new key, so no new cost and no new bytes). `WorktreeSummarySchema` is **not** changed: the
+     snapshot is an in-process value for the daemon's activity feed (#38) and must not reach an API payload by
+     accident. `SummarySnapshot = { entries, total, truncated }`, an entry is `{ path, rawPath?, oldPath?,
+     oldRawPath?, xy, hH, hI, sig, added, deleted }` (oids null when absent, zero ids never leak). Optional
+     `GitCore.readBlob?(worktree, { oid, maxBytes? }) -> BlobRead = { oid, kind: text | binary | too_large, size,
+     maxBytes, content }`. `GitObjectIdSchema` is the boundary check: exactly 40 or 64 **lowercase** hex digits
+     and not the null id (the existing `CommitShaSchema` takes 4-64 digits and abbreviations, which a blob read
+     must not). Constants: `SNAPSHOT_MAX_ENTRIES_DEFAULT` 2000 / `_LIMIT` 20000, `BLOB_MAX_BYTES_DEFAULT` 1 MiB /
+     `_LIMIT` 16 MiB. No error code added: bad id or a non-blob is `invalid_argument`, an unknown id `not_found`.
