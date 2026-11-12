@@ -81,10 +81,7 @@ export function budgetPhrase(
 }
 
 /** The text of a wait: the budget's reason when the host is held back, else who is slow. */
-export function waitText(
-  source: WaitSource,
-  clock: (iso: string) => string = clockTime,
-): string {
+export function waitText(source: WaitSource, clock: (iso: string) => string = clockTime): string {
   if (source.kind === 'local') return 'Loading from your computer…';
   return budgetPhrase(source.budget, clock) ?? `Waiting for ${names(source.forge)}…`;
 }
@@ -160,7 +157,9 @@ export function describeStale(input: {
   if (input.message) {
     return {
       updatedAt,
-      reason: input.forge ? `Could not refresh from ${forgeName(input.forge)}` : 'Could not refresh',
+      reason: input.forge
+        ? `Could not refresh from ${forgeName(input.forge)}`
+        : 'Could not refresh',
       detail: input.message,
       held: false,
     };

@@ -74,7 +74,10 @@ export function FloatSlot({
   children,
   className = '',
   ...rest
-}: { children?: ReactNode; className?: string } & Omit<HTMLAttributes<HTMLDivElement>, 'className'> &
+}: { children?: ReactNode; className?: string } & Omit<
+  HTMLAttributes<HTMLDivElement>,
+  'className'
+> &
   Record<`data-${string}`, string | undefined>) {
   return (
     <div

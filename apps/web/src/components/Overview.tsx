@@ -18,6 +18,7 @@ import {
   useSettingsQuery,
   useSettingsSupport,
 } from '../api/settings.ts';
+import { useReviewComputing } from '../api/wait.ts';
 import { type ForgeIndexEntry, needsAttention, REVIEW_WORD, remoteLabel } from '../lib/forge.ts';
 import {
   branchesWithoutWorktree,
@@ -35,6 +36,7 @@ import {
 import { SOURCE_LABELS, shortenHome } from '../lib/policy.ts';
 import { worktreeSource } from '../lib/source.ts';
 import { absoluteTime, relativeTime } from '../lib/time.ts';
+import { LOCAL_WAIT } from '../lib/wait.ts';
 import { useCommandsContext } from '../state/commandsContext.tsx';
 import { type CopyFn, copyAndReport } from '../state/copy.ts';
 import { useAppModel } from '../state/model.tsx';
@@ -51,6 +53,7 @@ import {
   OpenRequests,
 } from './RepositoryInfo.tsx';
 import { SegmentedTabs, type TabItem, tabPanelProps } from './Tabs.tsx';
+import { WaitNote } from './WaitNote.tsx';
 import { DefaultBranchChip } from './WorktreeChips.tsx';
 /**
  * Overview for a folder or a project (views/registry.ts): figures, the worktrees or projects
@@ -369,6 +372,7 @@ function FolderOverview({ node }: { node: FolderNode }) {
               Repositories added one by one, without a folder.
             </p>
           )}
+          <WaitNote active={repositories.isPending} source={LOCAL_WAIT} />
         </div>
         <div className="flex flex-col items-end gap-2">
           <BulkButtons
@@ -469,6 +473,7 @@ function ProjectOverview({ group }: { group: ProjectGroup }) {
   // the pages start over (the lists below are keyed by project).
   const [tab, setTab] = useState<OverviewTab>('worktrees');
   const { project } = group;
+  const reviewComputing = useReviewComputing();
   const repositories = useRepositories([project.id]);
   const entry = repositories.data?.get(project.id);
   const forgeState = useForgesQuery().data?.projects.find((p) => p.projectId === project.id);
@@ -509,6 +514,7 @@ function ProjectOverview({ group }: { group: ProjectGroup }) {
               base <span className="font-mono">{project.defaultBranch ?? 'unknown'}</span>
             </span>
           </p>
+          <WaitNote active={reviewComputing} source={LOCAL_WAIT} />
         </div>
         <div className="flex flex-col items-end gap-2">
           <BulkButtons

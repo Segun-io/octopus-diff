@@ -15,6 +15,7 @@ import {
   findSuspicious,
   hasSuspicious,
 } from '../../lib/unicode.ts';
+import { LOCAL_WAIT } from '../../lib/wait.ts';
 import { useCommandsContext } from '../../state/commandsContext.tsx';
 import { type CopyFn, copyAndReport } from '../../state/copy.ts';
 import {
@@ -42,7 +43,6 @@ import {
 import { ContextMenu, useContextMenu } from '../ContextMenu.tsx';
 import { CopyButton } from '../CopyButton.tsx';
 import { COPY_TEST_IDS, fileCopyItems, separated, worktreeCopyItems } from '../copyMenu.ts';
-import { LOCAL_WAIT } from '../../lib/wait.ts';
 import { SkeletonLines, WaitNote } from '../WaitNote.tsx';
 import { ImageDiff } from './ImageDiff.tsx';
 

@@ -107,11 +107,7 @@ export function Timeline({
   return (
     <div className="px-4 py-3">
       <div className="mb-3 flex items-center gap-2 text-[11px] text-muted">
-        <WaitNote
-          variant="inline"
-          active={!data && !conversation.isError}
-          source={waitSource}
-        />
+        <WaitNote variant="inline" active={!data && !conversation.isError} source={waitSource} />
         {data?.conversation?.truncated && (
           <span>
             Only partially loaded.{' '}

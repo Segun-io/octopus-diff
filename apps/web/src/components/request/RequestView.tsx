@@ -1,16 +1,16 @@
 import { changeRequestNoun, TEST_IDS } from '@octopus-diff/contracts';
 import { useState } from 'react';
 import { useForgeIndex } from '../../api/forges.ts';
-import { useForgeWaitSource, useHostBudget } from '../../api/wait.ts';
 import { describeError } from '../../api/queries.ts';
 import { useChangeRequestDetail, useRefreshChangeRequest } from '../../api/request.ts';
+import { useForgeWaitSource, useHostBudget } from '../../api/wait.ts';
 import { LOOK_TONE, LOOK_WORD, lookOf } from '../../lib/forge.ts';
 import { checksTone, describeChecks } from '../../lib/request.ts';
 import { absoluteTime, relativeTime } from '../../lib/time.ts';
 import { describeStale } from '../../lib/wait.ts';
 import { ChangeRequestGlyph } from '../ChangeRequest.tsx';
-import { SkeletonLines, StaleNote, WaitNote } from '../WaitNote.tsx';
 import { SegmentedTabs, tabPanelProps } from '../Tabs.tsx';
+import { SkeletonLines, StaleNote, WaitNote } from '../WaitNote.tsx';
 import { Files } from './Files.tsx';
 import { Banner, ExternalLink, FileDiffGlyph, StatusDot } from './parts.tsx';
 import { Summary } from './Summary.tsx';
@@ -219,7 +219,7 @@ export function RequestView({ worktreeId }: { worktreeId: string }) {
           )}
         </div>
       ) : status === 'loading' ? (
-        <div className="px-4 py-3" aria-busy="true" aria-label={`Loading the ${noun.long}`}>
+        <div className="px-4 py-3" aria-busy="true">
           <SkeletonLines widths={[70, 45, 60]} />
           <WaitNote active source={waitSource} />
         </div>

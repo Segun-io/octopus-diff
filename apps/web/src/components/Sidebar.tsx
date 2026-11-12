@@ -13,6 +13,7 @@ import {
   useSettingsQuery,
   useSettingsSupport,
 } from '../api/settings.ts';
+import { useSidebarNote } from '../api/wait.ts';
 import {
   DIRECT_FOLDER_ID,
   type FolderNode,
@@ -24,20 +25,19 @@ import {
   worktreeLabel,
 } from '../lib/model.ts';
 import { worktreeSource } from '../lib/source.ts';
+import { useDelayedFlag } from '../lib/useWait.ts';
+import { waitText } from '../lib/wait.ts';
 import { useCommandsContext } from '../state/commandsContext.tsx';
 import { type CopyFn, copyAndReport } from '../state/copy.ts';
 import { useAppModel } from '../state/model.tsx';
 import { actions, useUi, useUiStore, type View } from '../state/ui.tsx';
 import { ChangeRequestHoverBlock } from './ChangeRequest.tsx';
-import { useSidebarNote } from '../api/wait.ts';
-import { useDelayedFlag } from '../lib/useWait.ts';
-import { waitText } from '../lib/wait.ts';
-import { FloatPill, FloatSlot, StaleNote } from './WaitNote.tsx';
 import { ContextMenu, type MenuItem, useContextMenu } from './ContextMenu.tsx';
 import { separated, worktreeCopyItems } from './copyMenu.ts';
 import { useFolderStart } from './FolderBrowser.tsx';
 import { Wordmark } from './Mark.tsx';
 import { SidebarFilter } from './SidebarFilter.tsx';
+import { FloatPill, FloatSlot, StaleNote } from './WaitNote.tsx';
 import { DefaultBranchChip, RowChips } from './WorktreeChips.tsx';
 
 /**

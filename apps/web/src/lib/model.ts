@@ -477,9 +477,7 @@ function matchesPicked(row: WorktreeRow, filters: SidebarFilters): boolean {
  * A row with changes whose review state the daemon has not computed yet (#10): it may well have
  * something to review, so it stays listed, and the UI says it is being worked out (#11).
  */
-export function reviewPending(
-  row: Pick<WorktreeRow, 'review' | 'summary'>,
-): boolean {
+export function reviewPending(row: Pick<WorktreeRow, 'review' | 'summary'>): boolean {
   return row.review.enabled && !!row.summary && !row.summary.review && row.summary.changedFiles > 0;
 }
 
