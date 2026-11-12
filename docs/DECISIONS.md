@@ -2725,9 +2725,53 @@ branches also use #213+: renumber at merge.
      pending,backoff,error` and `POST /api/__mock/forge-sim?...` (no parameters resets). `scripts/shots.ts` has
      `wait-forge`, `rate-limit`, `rate-limit-stale`, `stale-request`. No e2e was added: the e2e run the real daemon,
      whose forge and local answers cannot be slowed on demand without timing-dependent tests.
+## Watcher: new directories (session, 2026-11-12; roadmap #36, step 17)
+
+Numbers: #213 (renumbered from #212 when the perf-script entry took #212).
+
+213. **Linux: a directory that appears with subdirectories already inside is subscribed again; so is a tree after a
+     creation burst big enough to overflow the inotify queue (`apps/daemon/src/watch-subtree.ts`).** Cause of
+     issue #36, reproduced with the raw `@parcel/watcher`: its inotify backend answers `IN_CREATE` of a directory with
+     `watchDir(path)` for that one directory (`InotifyBackend::handleSubscription`; it never crawls the new
+     directory). A subdirectory that exists by then (`mkdir -p vendor/pkg/deep`, `cp -r`, `tar x`, a `mv` of a tree
+     into the worktree, `git branch a/b/c` or a fetch creating `refs/remotes/origin/a/b` in the git dir) is therefore
+     never watched: the stream is `create vendor` and nothing else, for the life of the subscription (an edit of an
+     existing file in `vendor/pkg/deep` is silent as well). `git status` lists no empty directory, so that one event
+     refreshes to an unchanged `stateHash`, `worktree.changed` is not emitted, and files written later are never
+     seen until the fallback poll (30 s focused, 5 min otherwise) or a restart. It is not the ignore list (`vendor*`
+     is not a build name; `dist`, `build`, `out`, `target` and `node_modules` behave the same), not event batching,
+     and not the EINTR area (the in-process watcher shows it; the watch host only adds a process boundary).
+     Measured with the raw watcher (500 ms after subscribing): `mkdir -p vendor-x/pkg/deep` then 100, 5000 or
+     30000 files: exactly 1 event, `create vendor-x`, 0 file events; `mkdir`, wait, `mkdir`, wait ... one by one: every
+     directory and file is reported; `mkdir -p`, wait 1 s, write: 1 event (`create A`), the later write and a later
+     edit are silent; unsubscribe, then subscribe again on the same root: the nested directory is watched
+     (subscribing a second time while the first subscription is alive reuses the first one's cached tree and
+     watches nothing new, so the order matters, and it is the one `#subscribeWorktree` already uses).
+     *Fix.* The watcher notes the `create` events of a burst (worktree and git dir). When the burst is quiet (the
+     debounce, at most `maxWaitMs`) one pass `readdir`s the created paths (read-only; at most 4096 of them, 64 at a
+     time) for a subdirectory that is not ignored by design (the default names, the user's names, build
+     directories git ignores, other worktrees' roots; `GIT_DIR_IGNORES` for the git dir) and that did not report its
+     own creation, in this pass or the previous one: such a directory was not watched. Then the tree is
+     re-subscribed (`#subscribeWorktree` / `#subscribeProject`, the path used for changed ignore rules), and the
+     worktree is marked dirty afterwards (`fs`, or `git` for the git dir) for what was written meanwhile. At most
+     one re-subscribe per gap: `max(2 s, 10 x the last re-subscribe's duration)`, coalesced; requests made while one
+     runs cause one more run. *Overflow:* @parcel/watcher skips `IN_Q_OVERFLOW` without a trace (no event, no error),
+     so a burst may have lost the creation of a directory (30000 files give about 29000 events here); a pass that saw
+     at least half of `fs.inotify.max_queued_events` creations (16384 by default, so 8192) re-subscribes without
+     looking. More than 4096 distinct created paths in a pass re-subscribe too (their directories were not
+     inspected). *Cost and limits.* Nothing runs without events, so idle CPU and the start-up spawn count are
+     unchanged. A re-subscribe is one crawl (about 0.3 s per 50k files, in the watch host process), only for a new
+     directory with unreported subdirectories, so `mkdir a` then `mkdir a/b` one after the other costs nothing. The
+     debounce is the trigger, so the first events of the new tree are caught by the refresh that follows the
+     re-subscribe, not by the stream. Not covered: a user ignore entry that is a glob or a path (the check treats
+     its directories as watchable, which can cost one extra re-subscribe, never a missed edit), and a `dist`-like
+     directory whose nested `.gitignore` is not read yet (treated as watchable). macOS and Windows get recursive
+     events from the OS and the check is off there (`watchNewSubtrees`, default `process.platform` is neither
+     `darwin` nor `win32`; tests force it on). `onSubtreeCheck` and `newSubtreeGapMs` are options for tests.
+
 ## Live view: activity ring and `/activity` route (session, 2026-11-12; roadmap #38, step 19)
 
-Numbers: #212 and up (#209-#211 are on `main`; other open branches may use the same numbers, renumber at merge).
+Numbers: #218 and up (renumbered after #212-#217 and the watcher entry #213 reached `main`).
 
 218. **contracts (additive, `packages/contracts/src/activity.ts`, `contracts:` commit).** `ActivityEntrySchema` is one flat
      object (`id`, `seq`, `kind`, `at`, `updatedAt`, `count` plus optional per-kind fields) rather than a discriminated
@@ -2808,3 +2852,4 @@ Numbers: #212 and up (#209-#211 are on `main`; other open branches may use the s
      "polling every N s" from it.
      PR #77 review (contracts, additive): `ActivityResponse.run` and `ActivityQuery.run` identify the daemon run. A cursor (`after`) from before a restart can look valid when this run's counters overlap it (other worktrees advanced the daemon-wide counter past the old value), so a client sends back the `run` it saw and a different one is `dropped`; without it, a cursor beyond the worktree's own newest `seq` is treated as stale as well. Also: a truncated snapshot (more than 2000 paths) now compares a whole-worktree hash (round 2 below: `contentHash`), because an edit to a path beyond the cap changes neither `total` nor a retained entry; and a refresh that waited for the commit list does not write its snapshot if the worktree was removed or its baseline reset meanwhile.
      PR #77 review round 2 (contracts, additive): `SummarySnapshot.contentHash` (optional) is a hash of every changed path's status codes, object ids, content signatures and counts, including paths beyond the cap, and nothing about refs. It replaces the summary's `stateHash` as the truncated-snapshot signal: that hash is extended with the default branch's commit (and the status header carries the upstream), so a commit in another worktree or a fetch looked like activity once a worktree had more than 2000 changed paths. A worktree whose files did not change now records nothing. Computed in `git-core/src/snapshot.ts` from inputs the summary already has (no new git process).
+||||||| ed407f8

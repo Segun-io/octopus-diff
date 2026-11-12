@@ -136,12 +136,15 @@ describe('WatcherService', () => {
   it('ignores node_modules, .git internals and extra ignore entries', async () => {
     const layout = await makeLayout();
     await mkdir(path.join(layout.main, 'generated'), { recursive: true });
-    const { watcher, rec } = makeWatcher({ ignore: ['generated'] });
-    await watcher.setProject('p1', layout.common, layout.worktrees);
+    // Created before subscribing: a directory that appears afterwards with subdirectories inside
+    // makes the watcher re-subscribe and refresh once (DECISIONS #213), which is not what this
+    // test is about.
     await mkdir(path.join(layout.main, 'packages', 'a', 'node_modules', 'dep'), {
       recursive: true,
     });
     await mkdir(path.join(layout.main, 'packages', 'a', 'generated'), { recursive: true });
+    const { watcher, rec } = makeWatcher({ ignore: ['generated'] });
+    await watcher.setProject('p1', layout.common, layout.worktrees);
     await sleep(300); // FSEvents (macOS) replays the directories created just before
     const start = rec.dirty.length;
     await writeFile(path.join(layout.main, 'node_modules', 'pkg', 'index.js'), 'x');
