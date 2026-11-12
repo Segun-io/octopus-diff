@@ -10,8 +10,10 @@ import {
   APP_NAME,
   type BlobResponse,
   type BulkReviewTarget,
+  type CallOptions,
   type ChangedFile,
   type CommitInfo,
+  type DiffOptions,
   type DiffQuery,
   type DiffResponse,
   type DiffScope,
@@ -20,6 +22,7 @@ import {
   type FilesResponse,
   type GitChangedFile,
   type GitCore,
+  type GitPriority,
   type HealthResponse,
   type InboxEntry,
   type InboxResponse,
@@ -57,6 +60,7 @@ import type { BulkWorktree, ReviewSource } from './bulk-review.js';
 import { Coalescer, settleWithin } from './coalesce.js';
 import { ApiError, type ApiErrorInfo, isShutdownError, notFound, toApiError } from './errors.js';
 import type { EventHub } from './events.js';
+import { FlightMap, raceSignal, SharedFlight } from './flight.js';
 import { hashId } from './ids.js';
 import { Limiter } from './limit.js';
 import { resolveInputPath } from './paths.js';
@@ -97,6 +101,28 @@ export const CORE_DEFAULTS = {
    */
   originsConcurrency: 2,
 } as const;
+
+/**
+ * What a request wants from shared work (#44): its abort signal (the HTTP request's) and the lane
+ * its git processes run in. Background work (summaries, the inbox, review states) passes none.
+ */
+interface Want {
+  signal?: AbortSignal;
+  priority?: GitPriority;
+}
+
+/**
+ * `CallOptions` for a git-core call made for `want`. `shared`: the signal of the shared run the
+ * call belongs to (`SharedFlight`), used instead of the request's when the request has one (a run
+ * started without a signal is pinned and never cancelled). Empty for background work, so such
+ * calls look exactly as before.
+ */
+function callOptions(want: Want, shared?: AbortSignal): CallOptions {
+  const options: CallOptions = {};
+  if (want.signal) options.signal = shared ?? want.signal;
+  if (want.priority) options.priority = want.priority;
+  return options;
+}
 
 /** A listed file with its origin attached (#33); `origin` absent = own. */
 export type LabeledFile = GitChangedFile & Pick<ChangedFile, 'origin' | 'originVia'>;
@@ -349,7 +375,12 @@ export class DaemonCore {
     string,
     { stateHash: string; base: string | null; attrs: string; files: GitChangedFile[] }
   >();
-  readonly #filesInflight = new Map<string, Promise<GitChangedFile[]>>();
+  /**
+   * `#gitFiles` runs in flight (#27), shared by every request that wants the same list. A run is
+   * cancelled only when every request waiting for it went away (#44, `FlightMap`): the others
+   * keep waiting for the same run, and a cancelled run caches nothing.
+   */
+  readonly #filesInflight = new FlightMap<string, GitChangedFile[]>();
   /**
    * File origins (#33) per listed file array: `#gitFiles` hands out the same array while its
    * cache entry (worktree, scope, stateHash, base, attributes) is current, so the array's identity
@@ -359,7 +390,7 @@ export class DaemonCore {
    */
   readonly #origins = new WeakMap<
     readonly GitChangedFile[],
-    { key: string; run: Promise<Labels> }
+    { key: string; run: SharedFlight<Labels> }
   >();
   readonly #originsLimit = new Limiter(CORE_DEFAULTS.originsConcurrency);
   /** The live view's activity rings (#38): memory only, never written to the store. */
@@ -1327,7 +1358,12 @@ export class DaemonCore {
    * worktree (so the route cannot read arbitrary objects of the repository), only through
    * `readBlob`, capped at `ACTIVITY_BLOB_MAX_BYTES`.
    */
-  async readBlob(worktreeId: string, oid: string, maxBytes?: number): Promise<BlobResponse> {
+  async readBlob(
+    worktreeId: string,
+    oid: string,
+    maxBytes?: number,
+    signal?: AbortSignal,
+  ): Promise<BlobResponse> {
     const { entry } = this.#requireWorktree(worktreeId);
     const read = this.#git.readBlob;
     if (!read) throw new ApiError('internal', 'blob reads are not available', { status: 501 });
@@ -1338,6 +1374,7 @@ export class DaemonCore {
       const blob = await read.call(this.#git, this.#locator(entry), {
         oid,
         maxBytes: Math.min(maxBytes ?? ACTIVITY_BLOB_MAX_BYTES, ACTIVITY_BLOB_MAX_BYTES),
+        ...callOptions({ signal, priority: 'interactive' }),
       });
       return { worktreeId, blob };
     } catch (error) {
@@ -1435,6 +1472,7 @@ export class DaemonCore {
     project: ProjectEntry,
     entry: WorktreeEntry,
     scope: DiffScope,
+    want: Want = {},
   ): Promise<GitChangedFile[]> {
     const key = this.#filesKey(entry.worktree.id, scope);
     const stateHash = scope.kind === 'commit' ? 'immutable' : (entry.summary?.stateHash ?? null);
@@ -1456,36 +1494,36 @@ export class DaemonCore {
       }
     }
     const flightKey = `${key}\u0000${stateHash ?? ''}\u0000${base ?? ''}\u0000${attrs}`;
-    const inflight = this.#filesInflight.get(flightKey);
-    if (inflight) return inflight;
-    const run = this.#git
-      .listChangedFiles(this.#locator(entry), scope, {
-        defaultBranch: this.#defaultBranch(project),
-      })
-      .then((files) => {
-        // Tracked files under ignored build directories make them watched (review F5).
-        const tracked: string[] = [];
-        for (const f of files) {
-          if (f.status === 'untracked') continue;
-          tracked.push(f.path);
-          if (f.oldPath) tracked.push(f.oldPath);
-        }
-        if (tracked.length) this.#watcher.noteTrackedPaths(entry.worktree.id, tracked);
-        if (cacheable && stateHash !== null && project.worktrees.get(entry.worktree.id) === entry) {
-          this.#filesCache.set(key, { stateHash, base, attrs, files });
-          while (this.#filesCache.size > CORE_DEFAULTS.filesCacheSize) {
-            const oldest = this.#filesCache.keys().next().value;
-            if (oldest === undefined) break;
-            this.#filesCache.delete(oldest);
+    return this.#filesInflight.run(flightKey, want.signal, (signal) =>
+      this.#git
+        .listChangedFiles(this.#locator(entry), scope, {
+          defaultBranch: this.#defaultBranch(project),
+          ...callOptions(want, signal),
+        })
+        .then((files) => {
+          // Tracked files under ignored build directories make them watched (review F5).
+          const tracked: string[] = [];
+          for (const f of files) {
+            if (f.status === 'untracked') continue;
+            tracked.push(f.path);
+            if (f.oldPath) tracked.push(f.oldPath);
           }
-        }
-        return files;
-      })
-      .finally(() => {
-        this.#filesInflight.delete(flightKey);
-      });
-    this.#filesInflight.set(flightKey, run);
-    return run;
+          if (tracked.length) this.#watcher.noteTrackedPaths(entry.worktree.id, tracked);
+          if (
+            cacheable &&
+            stateHash !== null &&
+            project.worktrees.get(entry.worktree.id) === entry
+          ) {
+            this.#filesCache.set(key, { stateHash, base, attrs, files });
+            while (this.#filesCache.size > CORE_DEFAULTS.filesCacheSize) {
+              const oldest = this.#filesCache.keys().next().value;
+              if (oldest === undefined) break;
+              this.#filesCache.delete(oldest);
+            }
+          }
+          return files;
+        }),
+    );
   }
 
   /**
@@ -1502,6 +1540,7 @@ export class DaemonCore {
     scope: DiffScope,
     files: GitChangedFile[],
     required = false,
+    want: Want = {},
   ): Promise<Labels> {
     const plain: Labels = { files, known: false, integrationRef: null, n: null };
     const read = this.#git.readFileOrigins;
@@ -1519,29 +1558,43 @@ export class DaemonCore {
     const defaultBranch = this.#defaultBranch(project);
     const key = [scopeKey(scope), base ?? '', defaultBranch ?? '', refs ?? ''].join('\u0000');
     const cached = this.#origins.get(files);
-    if (cached && cached.key === key) return cached.run;
-    // The fallback is part of the cached promise: every caller that shares it gets the same answer,
-    // so an overlapping `/files` and `/inbox` request never sees the raw failure.
-    const run: Promise<Labels> = this.#originsLimit
-      .run(() => read.call(this.#git, this.#locator(entry), { base, defaultBranch, files }))
-      .then(
-        (result): Labels => ({
-          files: applyOrigins(files, result.origins),
-          known: true,
-          integrationRef: result.integrationRef,
-          n: result.n,
-        }),
-      )
-      .catch((error: unknown) => {
+    if (cached && cached.key === key && !cached.run.cancelled) return cached.run.join(want.signal);
+    // The fallback is part of the cached run: every caller that shares it gets the same answer,
+    // so an overlapping `/files` and `/inbox` request never sees the raw failure. The run is
+    // cancelled only when every request waiting for it went away (#44); then it is dropped.
+    const run: SharedFlight<Labels> = new SharedFlight(
+      (signal) =>
+        this.#originsLimit
+          .run(() =>
+            read.call(this.#git, this.#locator(entry), {
+              base,
+              defaultBranch,
+              files,
+              ...callOptions(want, signal),
+            }),
+          )
+          .then(
+            (result): Labels => ({
+              files: applyOrigins(files, result.origins),
+              known: true,
+              integrationRef: result.integrationRef,
+              n: result.n,
+            }),
+          )
+          .catch((error: unknown) => {
+            if (this.#origins.get(files)?.run === run) this.#origins.delete(files);
+            if (!isShutdownError(error)) {
+              this.#log.debug('file origins unavailable', { worktreeId: entry.worktree.id, error });
+            }
+            return plain;
+          }),
+      () => {
         if (this.#origins.get(files)?.run === run) this.#origins.delete(files);
-        if (!isShutdownError(error)) {
-          this.#log.debug('file origins unavailable', { worktreeId: entry.worktree.id, error });
-        }
-        return plain;
-      });
+      },
+    );
     // Unreadable default-branch refs: no identity to cache under (as `#gitFiles`).
     if (refs !== null) this.#origins.set(files, { key, run });
-    return run;
+    return run.join(want.signal);
   }
 
   /** `#gitFiles` with the origins attached (`#labelFiles`). */
@@ -1549,9 +1602,10 @@ export class DaemonCore {
     project: ProjectEntry,
     entry: WorktreeEntry,
     scope: DiffScope,
+    want: Want = {},
   ): Promise<LabeledFile[]> {
-    const files = await this.#gitFiles(project, entry, scope);
-    return (await this.#labelFiles(project, entry, scope, files)).files;
+    const files = await this.#gitFiles(project, entry, scope, want);
+    return (await this.#labelFiles(project, entry, scope, files, false, want)).files;
   }
 
   #summaryOrThrow(entry: WorktreeEntry): string {
@@ -1560,12 +1614,22 @@ export class DaemonCore {
     throw this.#errorFromInfo(entry.error);
   }
 
-  async listFiles(worktreeId: string, scope: DiffScope): Promise<FilesResponse> {
+  /**
+   * The selected worktree's file list (`GET /files`). `signal`: the request's (#44): the call runs
+   * in git-core's interactive lane and stops waiting when the client goes away; shared work it
+   * joined (summary, review state, an in-flight list) continues for its other waiters.
+   */
+  async listFiles(
+    worktreeId: string,
+    scope: DiffScope,
+    signal?: AbortSignal,
+  ): Promise<FilesResponse> {
     const { project, entry } = this.#requireWorktree(worktreeId);
-    await this.#ensureSummary(entry);
+    const want: Want = { signal, priority: 'interactive' };
+    await raceSignal(this.#ensureSummary(entry), signal);
     const stateHash = this.#summaryOrThrow(entry);
-    const resolved = await this.#resolveScope(project, entry, scope);
-    const files = await this.#labeledFiles(project, entry, resolved.scope);
+    const resolved = await raceSignal(this.#resolveScope(project, entry, scope), signal);
+    const files = await this.#labeledFiles(project, entry, resolved.scope, want);
     return {
       worktreeId,
       scope: resolved.scope,
@@ -1574,24 +1638,21 @@ export class DaemonCore {
     };
   }
 
-  async getDiff(worktreeId: string, query: DiffQuery): Promise<DiffResponse> {
+  /** One file's diff (`GET /diff`); `signal` as in `listFiles` (interactive lane, #44). */
+  async getDiff(worktreeId: string, query: DiffQuery, signal?: AbortSignal): Promise<DiffResponse> {
     const { project, entry } = this.#requireWorktree(worktreeId);
-    const options: {
-      defaultBranch: string | null;
-      ignoreWhitespace: boolean;
-      full: boolean;
-      contextLines?: number;
-    } = {
+    const options: DiffOptions = {
       defaultBranch: this.#defaultBranch(project),
       ignoreWhitespace: query.ignoreWhitespace,
       full: query.full,
+      ...callOptions({ signal, priority: 'interactive' }),
     };
     if (query.context !== undefined) options.contextLines = query.context;
     const selector =
       query.rawPath === undefined
         ? { path: query.path }
         : { path: query.path, rawPath: query.rawPath };
-    const resolved = await this.#resolveScope(project, entry, query.scope);
+    const resolved = await raceSignal(this.#resolveScope(project, entry, query.scope), signal);
     const diff = await this.#git.getFileDiff(
       this.#locator(entry),
       resolved.scope,
@@ -1611,9 +1672,16 @@ export class DaemonCore {
     };
   }
 
-  async listCommits(worktreeId: string, limit: number): Promise<CommitInfo[]> {
+  async listCommits(
+    worktreeId: string,
+    limit: number,
+    signal?: AbortSignal,
+  ): Promise<CommitInfo[]> {
     const { entry } = this.#requireWorktree(worktreeId);
-    return this.#git.listCommits(this.#locator(entry), { limit });
+    return this.#git.listCommits(this.#locator(entry), {
+      limit,
+      ...callOptions({ signal, priority: 'interactive' }),
+    });
   }
 
   /** Dirty worktrees' files in `scope`, of every project or only of `projectIds` (#10). */

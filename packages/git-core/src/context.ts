@@ -8,6 +8,7 @@ import {
   type Logger,
 } from '@octopus-diff/contracts';
 import { LruCache, readFileHead, realpathOrSelf } from './fs-utils.js';
+import { Flight, shared } from './runner/call-context.js';
 import type { GitLocation, GitRunner, GitRunOptions, GitRunResult } from './runner/runner.js';
 import { MIN_GIT_VERSION, parseGitVersion } from './version.js';
 
@@ -66,7 +67,7 @@ export interface ConfigScan {
 interface ConfigReadRun {
   /** `performance.now()` when its git process started; null while it waits for a slot. */
   spawnedAt: number | null;
-  promise: Promise<unknown>;
+  flight: Flight<unknown>;
 }
 
 interface CachedRepo {
@@ -104,7 +105,7 @@ const TRUSTED_SCOPES = new Set(['system', 'global', 'command']);
 export class GitContext {
   private versionPromise: Promise<GitVersion> | null = null;
   private readonly repos = new Map<string, CachedRepo>();
-  private readonly resolving = new Map<string, Promise<RepoInfo>>();
+  private readonly resolving = new Map<string, Flight<RepoInfo>>();
   /**
    * Config reads (the scan, #29; the remote config, #74) by
    * `<kind>\0<commonDir>\0<signatures of every config file git reads>`.
@@ -120,7 +121,7 @@ export class GitContext {
    * immutable; only positive results are stored (a commit that is missing now may be fetched).
    */
   private readonly immutable = new LruCache<string, unknown>(IMMUTABLE_CACHE_MAX);
-  private readonly immutableRuns = new Map<string, Promise<unknown>>();
+  private readonly immutableRuns = new Map<string, Flight<unknown>>();
   /** Branch refs checked out in a project's worktrees, from the last `worktree list` (#29). */
   private readonly checkedOut = new Map<string, readonly string[]>();
 
@@ -132,7 +133,8 @@ export class GitContext {
   /** `git --version`, parsed and cached. */
   version(): Promise<GitVersion> {
     if (!this.versionPromise) {
-      this.versionPromise = this.runner.version().then((raw) => {
+      // Shared by every call (#44: not cancelled by the one that happened to start it).
+      this.versionPromise = shared(() => this.runner.version()).then((raw) => {
         const parsed = parseGitVersion(raw);
         if (!parsed) {
           throw new GitCoreError('git_unsupported', `cannot parse git version from "${raw}"`, {
@@ -169,18 +171,24 @@ export class GitContext {
     if (cached && Date.now() - cached.at < REPO_TTL_MS) return { ...cached.info };
     let run = this.resolving.get(cwd);
     if (!run) {
-      run = this.resolveRepo(cwd).then((info) => {
-        this.repos.set(cwd, { info, at: Date.now() });
-        return info;
-      });
-      const pending = run;
-      this.resolving.set(cwd, pending);
-      void pending.then(
-        () => this.resolving.delete(cwd),
-        () => this.resolving.delete(cwd),
+      // Single-flight: cancelled only when every call waiting for it aborted (#44).
+      const flight: Flight<RepoInfo> = new Flight(
+        () =>
+          this.resolveRepo(cwd).then((info) => {
+            this.repos.set(cwd, { info, at: Date.now() });
+            return info;
+          }),
+        () => {
+          if (this.resolving.get(cwd) === flight) this.resolving.delete(cwd);
+        },
       );
+      run = flight;
+      this.resolving.set(cwd, flight);
+      void flight.settled.then(() => {
+        if (this.resolving.get(cwd) === flight) this.resolving.delete(cwd);
+      });
     }
-    return { ...(await run) };
+    return { ...(await run.join()) };
   }
 
   forgetRepo(cwd: string): void {
@@ -259,17 +267,25 @@ export class GitContext {
     const hit = this.immutable.get(key);
     if (hit !== undefined) return hit as T;
     const running = this.immutableRuns.get(key);
-    if (running) return (await running) as T | undefined;
-    const run = compute().then((value) => {
-      if (value !== undefined) this.immutable.set(key, value);
-      return value;
-    });
+    if (running) return (await running.join()) as T | undefined;
+    const run: Flight<unknown> = new Flight(
+      () =>
+        compute().then((value) => {
+          if (value !== undefined) this.immutable.set(key, value);
+          return value;
+        }),
+      () => {
+        if (this.immutableRuns.get(key) === run) this.immutableRuns.delete(key);
+      },
+    );
     this.immutableRuns.set(key, run);
-    try {
-      return await run;
-    } finally {
-      this.immutableRuns.delete(key);
-    }
+    // Dropped when the work settles or loses its last waiter (`onCancel`), not when this caller
+    // stops waiting: other calls may still be joined to it, and a third must join them, not start
+    // the same git work again.
+    void run.settled.then(() => {
+      if (this.immutableRuns.get(key) === run) this.immutableRuns.delete(key);
+    });
+    return (await run.join()) as T | undefined;
   }
 
   /** Stores an immutable fact found as a by-product (e.g. one row of a batched query). */
@@ -434,29 +450,41 @@ export class GitContext {
       // file) could resolve differently (a filter or fsmonitor enabled in one worktree only).
       // Such a read is not shared: this operation reads for itself.
       if (running.spawnedAt === null || running.spawnedAt > askedAt) {
-        const shared = (await running.promise) as { value: T; includes: boolean };
+        const shared = (await running.flight.join()) as { value: T; includes: boolean };
         if (!shared.includes) return shared.value;
       } else if (!signature.racy) {
         // Started before this operation asked, but its signatures (taken before git read) are this
         // operation's: nothing changed in between.
-        const shared = (await running.promise) as { value: T; includes: boolean };
+        const shared = (await running.flight.join()) as { value: T; includes: boolean };
         if (!shared.includes) return shared.value;
       }
     }
     const at = Date.now();
-    const run: ConfigReadRun = { spawnedAt: null, promise: Promise.resolve(null) };
-    const promise = read(() => {
-      run.spawnedAt = performance.now();
-    });
-    run.promise = promise;
+    // Other operations may join this read: it is cancelled only when all of them aborted (#44).
+    // `onSpawn` may run synchronously, inside the `Flight` constructor (a free slot).
+    const spawn = { at: null as number | null };
+    const flight = new Flight(
+      () =>
+        read(() => {
+          spawn.at = performance.now();
+        }),
+      () => {
+        if (this.configReadRuns.get(key) === run) this.configReadRuns.delete(key);
+      },
+    );
+    const run: ConfigReadRun = {
+      get spawnedAt() {
+        return spawn.at;
+      },
+      flight,
+    };
     this.configReadRuns.set(key, run);
-    try {
-      const { value, includes } = await promise;
-      if (!includes && !signature.racy) this.configReads.set(key, { at, value });
-      return value;
-    } finally {
+    void flight.settled.then(() => {
       if (this.configReadRuns.get(key) === run) this.configReadRuns.delete(key);
-    }
+    });
+    const { value, includes } = (await run.flight.join()) as { value: T; includes: boolean };
+    if (!includes && !signature.racy) this.configReads.set(key, { at, value });
+    return value;
   }
 
   /**

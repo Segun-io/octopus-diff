@@ -1,6 +1,7 @@
 import { GitCoreError, isGitCoreError } from '@octopus-diff/contracts';
 import type { GitContext, RepoInfo } from './context.js';
 import { OID } from './ref-files.js';
+import { Flight } from './runner/call-context.js';
 
 /**
  * Facts about commits, shared by every worktree of a repository (#29). Objects are immutable, so
@@ -149,7 +150,7 @@ const abKey = (repo: RepoInfo, stamp: string, head: string, base: string): strin
 /** Patterns `for-each-ref` takes literally: plain branch refs (no glob characters). */
 const BRANCH_PATTERN = /^refs\/heads\/[^*?[\\\s]+$/;
 
-const batches = new WeakMap<GitContext, Map<string, Promise<void>>>();
+const batches = new WeakMap<GitContext, Map<string, Flight<void>>>();
 
 /**
  * Ahead/behind counts of `head` against `base` (both object ids): `rev-list --left-right
@@ -203,7 +204,7 @@ async function batchAheadBehind(
   const runKey = `${repo.commonDir}${NUL}${stamp}${NUL}${base}`;
   const inFlight = running.get(runKey);
   if (inFlight) {
-    await inFlight;
+    await inFlight.join();
     return;
   }
   const patterns = new Set(ctx.checkedOutBranches(repo.commonDir));
@@ -211,32 +212,39 @@ async function batchAheadBehind(
   const list = [...patterns].filter((p) => BRANCH_PATTERN.test(p)).sort();
   if (list.length === 0) return;
   const table = running;
-  const run = (async () => {
-    try {
-      const result = await ctx.git(repo, [
-        'for-each-ref',
-        `--format=%(objectname)%00%(ahead-behind:${base})`,
-        ...list,
-      ]);
-      for (const line of result.stdout.toString('utf8').split('\n')) {
-        const [oid = '', counts = ''] = line.split(NUL);
-        const match = /^(\d+) (\d+)$/.exec(counts.trim());
-        if (!OID.test(oid) || !match) continue;
-        ctx.remember(abKey(repo, stamp, oid, base), {
-          ahead: Number(match[1]),
-          behind: Number(match[2]),
-        });
+  // Shared by every summary of the project that asks meanwhile (#44: cancelled only when all of
+  // them aborted).
+  const run: Flight<void> = new Flight(
+    async () => {
+      try {
+        const result = await ctx.git(repo, [
+          'for-each-ref',
+          `--format=%(objectname)%00%(ahead-behind:${base})`,
+          ...list,
+        ]);
+        for (const line of result.stdout.toString('utf8').split('\n')) {
+          const [oid = '', counts = ''] = line.split(NUL);
+          const match = /^(\d+) (\d+)$/.exec(counts.trim());
+          if (!OID.test(oid) || !match) continue;
+          ctx.remember(abKey(repo, stamp, oid, base), {
+            ahead: Number(match[1]),
+            behind: Number(match[2]),
+          });
+        }
+      } catch (error) {
+        // A base git cannot read, or an old git that slipped past the version gate: rev-list
+        // answers each head instead.
+        if (!isGitCoreError(error, 'git_failed')) throw error;
       }
-    } catch (error) {
-      // A base git cannot read, or an old git that slipped past the version gate: rev-list
-      // answers each head instead.
-      if (!isGitCoreError(error, 'git_failed')) throw error;
-    }
-  })();
+    },
+    () => {
+      if (table.get(runKey) === run) table.delete(runKey);
+    },
+  );
   table.set(runKey, run);
-  try {
-    await run;
-  } finally {
-    table.delete(runKey);
-  }
+  // Dropped when the work settles or loses its last waiter, not when this caller stops waiting.
+  void run.settled.then(() => {
+    if (table.get(runKey) === run) table.delete(runKey);
+  });
+  await run.join();
 }

@@ -13,7 +13,8 @@
  * - single-file refresh latency: file write → SSE `worktree.changed` (p50 / p95 / max, per
  *   worktree role) and → sidebar update in the UI, with the spawns per edit;
  * - API payload sizes (raw, gzip, and what the daemon sends when asked for gzip);
- * - daemon RSS (idle and peak).
+ * - daemon RSS (idle and peak);
+ * - a diff opened during a 60-edit burst over the other worktrees (issue #44, `burst.ts`).
  *
  * `--after-fetch` (small layout only, issue #35): every repository gets a bare `origin`, every linked
  * worktree merged `origin/main` and a fetch moved `origin/main` before the daemon starts, so every
@@ -67,6 +68,7 @@ import {
   WEB_DIST,
   webUiProblem,
 } from '../support/env.js';
+import { type BurstResult, diffDuringBurst } from './burst.js';
 import { gitSpawns, readSpawns, type SpawnStats, spawnStats, within } from './trace.js';
 
 const { values: args } = parseArgs({
@@ -109,6 +111,11 @@ const TARGETS = {
   refreshMs: 1000,
   warmReloadMs: 300,
   startupSpawnsPerWorktree: 8,
+  /**
+   * A diff opened during a 60-edit burst, p95 (#44: interactive lane ahead of summaries). Measured
+   * 2026-11-12, 30 × 3: 26-28 ms with the lane, 214-221 ms with every request in one lane.
+   */
+  burstDiffMs: 100,
 };
 
 /**
@@ -733,6 +740,35 @@ async function main() {
     }
     sub.close();
 
+    // Issue #44: opening a diff while a 60-edit burst keeps the daemon busy with summaries.
+    let burst: BurstResult | null = null;
+    let burstSpawns: SpawnStats | null = null;
+    const diffTarget = targets[0];
+    if (LAYOUT === 'small' && diffTarget) {
+      const listed = await client.listFiles(diffTarget.id, { scope: { kind: 'working' } });
+      const file = listed.files.find((f) => !f.binary && f.status !== 'deleted')?.path;
+      const { spawnFile, activeFile } = daemon;
+      if (file) {
+        log(
+          `diff during a 60-edit burst (${file} in ${setup.roles.get(diffTarget.path) ?? 'bench'})…`,
+        );
+        burst = await diffDuringBurst({
+          client,
+          target: diffTarget,
+          file,
+          editTargets: targets.filter((w) => w.id !== diffTarget.id),
+          quiet: () => settled(spawnFile, activeFile, 1000, EDIT_WAIT_MS),
+        });
+        phases.editBurst = burst.window;
+        burstSpawns = spawnStats(
+          within(gitSpawns(await readSpawns(spawnFile)), burst.window[0], burst.window[1]),
+        );
+        log(
+          `diff during the burst: quiet p50 ${fmt(burst.idle.p50)}, under the burst p50 ${fmt(burst.underBurst.p50)} / p95 ${fmt(burst.underBurst.p95)} / max ${fmt(burst.underBurst.max)} (${burst.underBurst.count} probes over ${burst.burstMs} ms, ${burstSpawns.total} git spawns)`,
+        );
+      }
+    }
+
     // Payloads, once the daemon has seen everything (second and third requests are warm).
     const payloads: PayloadRow[] = [];
     const scopes: Array<[string, DiffScope]> = [
@@ -894,6 +930,14 @@ async function main() {
           applies: standard,
         },
         {
+          id: 'burstDiff',
+          label: 'Diff opened during a 60-edit burst, p95 (#44)',
+          actual: burst ? (burst.settled ? burst.underBurst.p95 : Number.POSITIVE_INFINITY) : null,
+          limit: TARGETS.burstDiffMs,
+          unit: 'ms',
+          applies: standard,
+        },
+        {
           id: 'refreshUi',
           label: 'Refresh: write → UI sidebar update p95',
           actual: page ? (ui.length === iterations ? uiStats.p95 : Number.POSITIVE_INFINITY) : null,
@@ -958,6 +1002,14 @@ async function main() {
         spawnsPerEdit: editSpawns,
         samples: samples.map(({ window: _window, ...rest }) => rest),
       },
+      burst: burst
+        ? {
+            ...burst,
+            window: undefined,
+            spawns: burstSpawns?.total ?? null,
+            bySubcommand: burstSpawns?.bySub ?? null,
+          }
+        : null,
       payloads,
       afterFetch:
         AFTER_FETCH && setup.origins
@@ -1202,6 +1254,7 @@ ${phaseRows}
     : ''
 }
 ${afterFetchSection}
+${burstSection(r)}
 ## Edit → SSE by worktree role
 
 | Role | Edits | SSE p50 / p95 / max | Git spawns per edit |
@@ -1223,6 +1276,24 @@ Static reference from the roadmap issue (12-core WSL2, Node 26, git 2.53), not m
 ${baselineRows}
 
 Raw numbers: \`${stem}.json\` next to this file. Re-run: \`pnpm --filter @octopus-diff/e2e bench${af ? ' --after-fetch' : r.layout.toReview ? ' --to-review' : r.layout.name === 'small' ? '' : ` --layout ${r.layout.name}`}\`.
+`;
+}
+
+// biome-ignore lint/suspicious/noExplicitAny: the result object is plain JSON
+function burstSection(r: any): string {
+  const b = r.burst;
+  if (!b) return '';
+  return `
+## A diff opened during a 60-edit burst (issue #44)
+
+${b.edits} appends to \`README.md\` over ${b.editedWorktrees} other worktrees, ${b.intervalMs ? `${b.intervalMs} ms apart` : 'back to back'}, each one a summary refresh in the background; meanwhile \`GET /diff\` of one changed file of an untouched worktree, one at a time, every 100 ms from the first edit until 2 s after the last; the phase ends when the daemon is quiet again (${fmt(b.burstMs)}${b.settled ? '' : ', never quiet'}). git-core runs \`/diff\` in its interactive lane, ahead of queued summaries.
+
+| Metric | Result |
+|---|---|
+| Diff on the quiet daemon (p50 / max of ${b.idle.count}) | ${fmt(b.idle.p50)} / ${fmt(b.idle.max)} |
+| Diff under the burst (p50 / p95 / max of ${b.underBurst.count}) | ${fmt(b.underBurst.p50)} / ${fmt(b.underBurst.p95)} / ${fmt(b.underBurst.max)} |
+| Added by the burst (p95 − quiet p50) | ${fmt(b.delayP95Ms)} |
+| Git spawns during the phase | ${b.spawns ?? 'n/a'} |
 `;
 }
 

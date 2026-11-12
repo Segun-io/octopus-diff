@@ -288,11 +288,22 @@ export function useInboxQuery(scope: DiffScope) {
   });
 }
 
+/**
+ * The file list query. React Query's signal goes to the request (#44): a superseded fetch (an
+ * invalidation while one is in flight, e.g. two `worktree.changed` in a row, or the last observer
+ * leaving) aborts its request instead of leaving it running, and the daemon stops its git work.
+ */
+export function filesQueryOptions(api: ApiClient, worktreeId: string, scope: DiffScope) {
+  return {
+    queryKey: queryKeys.files(worktreeId, scope),
+    queryFn: ({ signal }: { signal: AbortSignal }) => api.listFiles(worktreeId, { scope, signal }),
+  };
+}
+
 export function useFilesQuery(worktreeId: string | null, scope: DiffScope) {
   const api = useApi();
   return useQuery({
-    queryKey: queryKeys.files(worktreeId ?? '', scope),
-    queryFn: () => api.listFiles(worktreeId ?? '', { scope }),
+    ...filesQueryOptions(api, worktreeId ?? '', scope),
     enabled: worktreeId !== null,
   });
 }
@@ -302,8 +313,9 @@ export function useDiffQuery(ref: FileRef | null, scope: DiffScope, params: Diff
   const fileKey = ref ? (ref.rawPath ?? ref.path) : '';
   return useQuery({
     queryKey: queryKeys.diff(ref ?? { worktreeId: '', path: '' }, scope, params),
-    queryFn: async (): Promise<DiffQueryData> => {
+    queryFn: async ({ signal }): Promise<DiffQueryData> => {
       const response = await api.getDiff(ref?.worktreeId ?? '', {
+        signal,
         scope,
         path: ref?.path ?? '',
         ...(ref?.rawPath ? { rawPath: ref.rawPath } : {}),
@@ -330,7 +342,7 @@ export function useCommitsQuery(worktreeId: string | null, enabled: boolean) {
   const api = useApi();
   return useQuery({
     queryKey: queryKeys.commits(worktreeId ?? ''),
-    queryFn: () => api.listCommits(worktreeId ?? '', { limit: 100 }),
+    queryFn: ({ signal }) => api.listCommits(worktreeId ?? '', { limit: 100, signal }),
     enabled: enabled && worktreeId !== null,
   });
 }
