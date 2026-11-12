@@ -2275,3 +2275,7 @@ needed.
      (`pushKey`) refetches at once and, if the pushed branch has no request, again after 30 s and 90 s
      (`followUpMs`, forced). Web: `useRefreshChangeRequest` also invalidates `['forges']`. Deliberately not
      changed (belongs to #8): stale times, the 2-minute poll, the 15 s project spacing, window-focus refetching.
+     PR #60 review: the state hash does not cover branch config, so `DaemonCore` reports every watcher `git`
+     dirtying of a project's worktrees to the forge service (`onGitChange` -> `ForgeService.gitChanged`), whose
+     debounced refresh reads the push configuration; and a forced project refresh shares a forced batch fetch
+     already running (`inflightForced`), as details do.

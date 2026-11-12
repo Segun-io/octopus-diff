@@ -88,3 +88,10 @@ None added or removed (`pnpm credits` not needed).
 ## Notes for integration
 
 Daemon + web only, plus docs. No contract changes. `DaemonInternals.forges.followUpMs` is test-only.
+
+## PR review round 1 (Greptile on #60)
+
+Both findings were valid (`apps/daemon/src/forges.ts`, `core.ts`, `daemon.ts`):
+
+- **A change to the push destination alone went unnoticed.** `branch.<name>.pushRemote` and `remote.pushDefault` do not change the summary's state hash, so no `worktree.changed` was announced and the push lookup waited for the 2-minute poll. `DaemonCore` now reports every watcher `git` dirtying of a project's worktree through an `onGitChange` option (wired to `ForgeService.gitChanged` in `daemon.ts`); the forge service runs its debounced refresh, whose first step already reads the push configuration (one `git config` read when nothing else changed) and looks the project up when it differs. Cost: one `git config` read per git change burst (commit, checkout, config) per project, after the debounce. Regression test through the real native watcher (`forge-details.test.ts`, last describe): `git config branch.other.pushRemote origin` alone triggers a forge lookup within a few seconds; it fails without the change (no event, no lookup).
+- **Overlapping forced refreshes repeated work.** A forced project refresh now shares a forced batch fetch that is already running (`ProjectCache.inflightForced`), as details already did in `#load`; it still waits for a plain fetch that started earlier. Regression test: two concurrent `refreshChangeRequest` calls cost one batch query (it fails without the change).

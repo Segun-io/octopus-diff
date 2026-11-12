@@ -14,6 +14,7 @@ import {
   RepositoriesResponseSchema,
   RepositoryForgeResponseSchema,
 } from '@octopus-diff/contracts';
+import parcelWatcher from '@parcel/watcher';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { type Daemon, startDaemon } from '../src/daemon.js';
 import { type ForgeClientLike, type ForgeTargetLike, forgeImageHosts } from '../src/forges.js';
@@ -111,6 +112,8 @@ class FakeDetailClient implements ForgeClientLike {
   repositories: string[] = [];
   fail: string | null = null;
   gate: Promise<void> | null = null;
+  /** Holds the project batch fetch (a slow forge answer). */
+  batchGate: Promise<void> | null = null;
   missing = false;
   /** Open requests the repository query lists besides 7 and 8. */
   extraOpen: number[] = [];
@@ -123,6 +126,7 @@ class FakeDetailClient implements ForgeClientLike {
     branches: readonly string[],
   ) {
     this.batchFetches += 1;
+    await this.batchGate;
     return new Map(branches.map((b) => [b, this.requests.get(`${forge.repository}#${b}`) ?? []]));
   }
   async fetchDetail(_forge: ForgeTargetLike, number: number) {
@@ -300,6 +304,24 @@ describe('request detail and repository routes (fake git-core, fake gh)', () => 
     await plain;
     expect((await refreshed).request?.title).toBe('Renamed');
     expect(forge.details).toEqual([7, 7]);
+  });
+
+  it('two refreshes of one request at the same time share one forced batch query (PR #60 review)', async () => {
+    let release = () => {};
+    forge.batchGate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const batches = forge.batchFetches;
+    // Two browser tabs press Refresh together: each forces the project batch first.
+    const first = api.refreshChangeRequest(featId());
+    await eventually(() => forge.batchFetches === batches + 1);
+    const second = api.refreshChangeRequest(featId());
+    // Give the second one the chance to queue its own forge query (it must not).
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    forge.batchGate = null;
+    release();
+    await Promise.all([first, second]);
+    expect(forge.batchFetches).toBe(batches + 1);
   });
 
   it('errors on a refresh keep the last good data', async () => {
@@ -565,4 +587,47 @@ describe('repositories route (real git)', () => {
     );
     expect((await http(daemon, '/api/repositories')).status).toBe(400);
   });
+});
+
+describe('a changed push destination reaches the forge service through the real watcher (PR #60 review)', () => {
+  it('`git config branch.x.pushRemote` triggers an immediate lookup of the project', async () => {
+    const fx = await makeRealGitFixture();
+    const repo = await makeRealRepo(fx, 'alpha', { 'README.md': '# a\n' });
+    fx.git(repo, 'remote', 'add', 'origin', 'https://github.com/org/alpha.git');
+    const other = path.join(fx.root, 'alpha-other');
+    fx.git(repo, 'worktree', 'add', '-q', '-b', 'other', other);
+    const forge = new FakeDetailClient();
+    const daemon = await startDaemon({
+      host: '127.0.0.1',
+      port: 0,
+      token: TEST_TOKEN,
+      stateDir: await tempDir(),
+      logLevel: 'silent',
+      git: { env: fx.env },
+      watch: { debounceMs: 100 },
+      projects: [repo],
+      internal: {
+        // The native watcher, as in the other real-git watch tests.
+        subscribe: async (dir, fn, opts) => parcelWatcher.subscribe(dir, fn, opts),
+        forges: { client: forge, debounceMs: 20, followUpMs: [], readSshConfig: async () => null },
+      },
+    });
+    onCleanup(() => daemon.close());
+    const api = client(daemon);
+    const projectId = (await api.listProjects()).projects[0]?.project.id ?? '';
+    await eventually(() => forge.batchFetches >= 1, 8000);
+    // Let the watcher settle (the startup refreshes) before the config change.
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    const batches = forge.batchFetches;
+    const before = await api.getForges();
+    expect(before.projects.find((p) => p.projectId === projectId)).toBeDefined();
+
+    // Only the push destination changes: no commit, no file edit, so the summary's state hash
+    // (and with it `worktree.changed`) does not move. The request already exists on the forge.
+    forge.requests.set('org/alpha#other', [
+      pr({ number: 9, headBranch: 'other', url: 'https://github.com/org/alpha/pull/9' }),
+    ]);
+    fx.git(repo, 'config', 'branch.other.pushRemote', 'origin');
+    await eventually(() => forge.batchFetches > batches, 8000);
+  }, 20_000);
 });

@@ -173,7 +173,10 @@ export const startDaemon = (async (options: DaemonOptions = {}): Promise<Daemon>
   const debounceMs = clampDebounce(watch.debounceMs, logger);
   if (debounceMs !== undefined) watch.debounceMs = debounceMs;
 
+  // The forge service is built after the core (it needs it); git changes reach it through this.
+  let forgeGitChanged: ((projectId: string) => void) | undefined;
   const core = new DaemonCore({
+    onGitChange: (projectId) => forgeGitChanged?.(projectId),
     gitCore,
     store,
     hub,
@@ -217,6 +220,8 @@ export const startDaemon = (async (options: DaemonOptions = {}): Promise<Daemon>
           ...(internal.forges ?? {}),
           ...(internal.now ? { now: internal.now } : {}),
         });
+
+  forgeGitChanged = forges ? (projectId) => forges.gitChanged(projectId) : undefined;
 
   const repositories = new RepositoryInfoService({
     core,

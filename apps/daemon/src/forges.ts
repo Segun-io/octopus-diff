@@ -187,6 +187,8 @@ interface ProjectCache {
   /** Head branch -> requests with that head branch name. */
   requests: Map<string, ChangeRequest[]>;
   inflight: Promise<void> | null;
+  /** The in-flight batch fetch was forced (a later forced call shares it). */
+  inflightForced: boolean;
 }
 
 interface Candidate {
@@ -238,6 +240,7 @@ function emptyCache(): ProjectCache {
     heads: new Map(),
     requests: new Map(),
     inflight: null,
+    inflightForced: false,
   };
 }
 
@@ -347,6 +350,17 @@ export class ForgeService {
   }
 
   /**
+   * A git change in one of the project's worktrees that `worktree.changed` does not announce: the
+   * summary's state hash ignores branch config, so `git config branch.x.pushRemote` or
+   * `remote.pushDefault` (a push destination change) never raises that event. The core reports
+   * every watcher `git` dirtying here; the debounced refresh reads the push configuration (one
+   * `git config` read when nothing else changed) and looks the project up when it differs.
+   */
+  gitChanged(projectId: string): void {
+    this.#schedule(projectId);
+  }
+
+  /**
    * Debounced per-project refresh. `worktree.changed` fires on every edit; the refresh itself is
    * cheap unless the set of branches changed or the cache is older than `minRefetchMs`.
    */
@@ -441,8 +455,10 @@ export class ForgeService {
       this.#projects.set(id, cache);
     }
     if (cache.inflight) {
-      if (!options.force) return cache.inflight;
-      // A forced refresh must see the forge as it is now, not a lookup that started earlier.
+      // A forced fetch already running is as fresh as a new one would be (two browser tabs
+      // refreshing the same project cost one forge query, as for details in `#load`).
+      if (!options.force || cache.inflightForced) return cache.inflight;
+      // A forced refresh must see the forge as it is now, not a plain lookup that started earlier.
       return cache.inflight.then(() => this.#refreshProject(item, options));
     }
     const run = this.#doRefresh(item, cache, options)
@@ -452,9 +468,13 @@ export class ForgeService {
         this.#o.logger.warn('forge refresh failed', { projectId: id, error });
       })
       .finally(() => {
-        if (cache) cache.inflight = null;
+        if (cache) {
+          cache.inflight = null;
+          cache.inflightForced = false;
+        }
       });
     cache.inflight = run;
+    cache.inflightForced = options.force === true;
     return run;
   }
 
