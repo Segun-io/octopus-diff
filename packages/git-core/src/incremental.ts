@@ -8,6 +8,7 @@ import { mapLimit } from './fs-utils.js';
 import type { NumstatEntry } from './parse/diff-output.js';
 import type { StatusBranch, StatusEntry } from './parse/status.js';
 import type { UntrackedInfo } from './untracked.js';
+import type { UntrackedPlan } from './untracked-plan.js';
 
 /**
  * Incremental summaries (#40): the state a summary was computed from, kept per worktree, and
@@ -106,6 +107,11 @@ export interface SummaryTrack {
   untrackedInfos: Map<string, { info: UntrackedInfo; attribute: string }>;
   /** Contents of untracked files were read (`inspectOptions.readContent`). */
   readContent: boolean;
+  /**
+   * Which untracked files went uninspected and unlisted (#43; null: none). `untrackedInfos` holds
+   * the listed ones only.
+   */
+  untrackedPlan: UntrackedPlan | null;
   /** lstat signatures of the paths with worktree changes and of the fully staged paths. */
   signatures: Map<string, string>;
   /** `SummaryOptions.defaultBranch` the summary used. */
@@ -637,6 +643,8 @@ export function changedKeys(
   if (previous.stamp.config !== next.stamp.config) return null;
   if (previous.degraded || next.degraded) return null;
   if (previous.readContent !== next.readContent) return null;
+  // Other untracked files listed: lists are seeded again rather than patched (#43).
+  if ((previous.untrackedPlan?.id ?? null) !== (next.untrackedPlan?.id ?? null)) return null;
   const out = new Set<string>();
   const all = keysOf(previous, untrackedCandidates === null);
   for (const key of keysOf(next, untrackedCandidates === null)) all.add(key);

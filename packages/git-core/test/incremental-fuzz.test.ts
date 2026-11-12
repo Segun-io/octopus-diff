@@ -393,6 +393,8 @@ function scopesFor(base: string): DiffScope[] {
 }
 
 let fx: Fixture;
+/** Repositories made so far (one seed may run twice, with different cores). */
+let repoCount = 0;
 let inc: GitCore;
 let full: GitCore;
 
@@ -440,20 +442,25 @@ function checkCanonical(repo: string): void {
 async function runSeed(
   seed: number,
   config: string[][] = [],
-): Promise<{ incremental: number; hinted: number }> {
+  cores: { inc: GitCore; full: GitCore } = { inc, full },
+): Promise<{ incremental: number; hinted: number; omitted: number; omittedIncremental: number }> {
   const r = prng(seed);
   silentlyEdited.length = 0;
-  const repo = setupRepo(`fuzz-${seed.toString(16)}-${config.length}`, r, config);
+  repoCount += 1;
+  const repo = setupRepo(`fuzz-${seed.toString(16)}-${config.length}-${repoCount}`, r, config);
   const wt = locator(repo);
   const root = fx.git(repo, ['rev-list', '--max-parents=0', 'HEAD']).trim();
   const SCOPES = scopesFor(root);
   const log: string[] = [];
   let incremental = 0;
+  /** Steps whose summary omitted untracked files (#43, `maxListedUntracked`). */
+  let omitted = 0;
+  let omittedIncremental = 0;
   /** Steps whose hint named at least one path (an empty hint is a full refresh by design). */
   let hinted = 0;
   const reasons = new Map<string, number>();
   // Baseline: the first summary has no state to update.
-  let held = (await inc.getSummary(wt, { snapshot: true })).stateHash;
+  let held = (await cores.inc.getSummary(wt, { snapshot: true })).stateHash;
   /**
    * A hint named fewer paths than the step touched (lost events): the incremental state may be
    * behind the files until a full summary reconciles it. Until then summaries and lists are not
@@ -463,7 +470,7 @@ async function runSeed(
   const hints = { exact: 0, more: 0, fewer: 0, reconciled: 0 };
   /** Review bases listed so far: their cached lists are checked again later. */
   const bases: string[] = [];
-  for (const scope of SCOPES) await inc.listChangedFiles(wt, scope);
+  for (const scope of SCOPES) await cores.inc.listChangedFiles(wt, scope);
   for (let step = 0; step < STEPS; step++) {
     const ops = 1 + Math.floor(r() * 3);
     const touched = new Set<string>();
@@ -479,13 +486,13 @@ async function runSeed(
       // or none at all. A later operation may undo what they saw before any summary does.
       for (const scope of SCOPES) {
         const roll = r();
-        if (roll < 0.2) await inc.listChangedFiles(wt, scope, { summaryState: held });
-        else if (roll < 0.3) await inc.listChangedFiles(wt, scope);
+        if (roll < 0.2) await cores.inc.listChangedFiles(wt, scope, { summaryState: held });
+        else if (roll < 0.3) await cores.inc.listChangedFiles(wt, scope);
       }
       // And a review list against a base seeded before: an update that reads this step's files.
       if (bases.length > 0 && r() < 0.3) {
         const scope: DiffScope = { kind: 'review', base: pick(r, bases) };
-        await inc.listChangedFiles(wt, scope, { summaryState: held });
+        await cores.inc.listChangedFiles(wt, scope, { summaryState: held });
       }
     }
     const context = () => `seed 0x${seed.toString(16)} step ${step}\n${log.slice(-12).join('\n')}`;
@@ -506,13 +513,13 @@ async function runSeed(
     } else hints.exact++;
     let reconciled = false;
     if (hint.length > 0) hinted++;
-    let got = await inc.getSummary(wt, { snapshot: true, changedPaths: hint });
+    let got = await cores.inc.getSummary(wt, { snapshot: true, changedPaths: hint });
     if (lost) stale = true;
     if (got.refresh?.mode === 'full') stale = false;
     if (stale && r() < 0.5) {
       // The daemon's reconciliation: a full summary, without a hint.
       hints.reconciled++;
-      got = await inc.getSummary(wt, { snapshot: true });
+      got = await cores.inc.getSummary(wt, { snapshot: true });
       stale = false;
       reconciled = true;
     }
@@ -520,7 +527,7 @@ async function runSeed(
     if (stale) {
       // Lists of the stale state still get asked for and cached, to be checked after reconciling.
       for (const scope of SCOPES) {
-        if (r() < 0.5) await inc.listChangedFiles(wt, scope, { summaryState: got.stateHash });
+        if (r() < 0.5) await cores.inc.listChangedFiles(wt, scope, { summaryState: got.stateHash });
       }
       // A seed of a review scope against a random commit, reading files whose events were lost
       // (PR #89 F1: what it read must still be checked after later updates and a blind summary).
@@ -533,14 +540,20 @@ async function runSeed(
           bases.push(pick(r, commits));
           if (bases.length > 6) bases.shift();
           const base = pick(r, bases);
-          await inc.listChangedFiles(wt, { kind: 'review', base }, { summaryState: got.stateHash });
+          await cores.inc.listChangedFiles(
+            wt,
+            { kind: 'review', base },
+            { summaryState: got.stateHash },
+          );
         }
       }
       if (step % 10 === 0) checkCanonical(repo);
       continue;
     }
-    const want = await full.getSummary(wt, { snapshot: true });
+    const want = await cores.full.getSummary(wt, { snapshot: true });
     if (got.refresh?.mode === 'incremental') incremental++;
+    if (got.untrackedOmitted) omitted++;
+    if (got.untrackedOmitted && got.refresh?.mode === 'incremental') omittedIncremental++;
     const why = got.refresh?.reason ?? got.refresh?.mode ?? 'none';
     reasons.set(why, (reasons.get(why) ?? 0) + 1);
     if (
@@ -556,8 +569,8 @@ async function runSeed(
     // Lists are not asked for after every summary: the journal must cover several steps.
     for (const scope of SCOPES) {
       if (r() < 0.3) continue;
-      const gotFiles = await inc.listChangedFiles(wt, scope, { summaryState: got.stateHash });
-      const wantFiles = await full.listChangedFiles(wt, scope);
+      const gotFiles = await cores.inc.listChangedFiles(wt, scope, { summaryState: got.stateHash });
+      const wantFiles = await cores.full.listChangedFiles(wt, scope);
       expect(gotFiles, `${context()}\nscope ${scope.kind}`).toEqual(wantFiles);
     }
     // A review scope against a random commit of the history: mostly a list never asked for (seeded
@@ -571,8 +584,10 @@ async function runSeed(
         // Mostly a base seeded while stale (now updated), sometimes a new one.
         const base = bases.length > 0 && r() < 0.7 ? pick(r, bases) : pick(r, commits);
         const scope: DiffScope = { kind: 'review', base };
-        const gotFiles = await inc.listChangedFiles(wt, scope, { summaryState: got.stateHash });
-        const wantFiles = await full.listChangedFiles(wt, scope);
+        const gotFiles = await cores.inc.listChangedFiles(wt, scope, {
+          summaryState: got.stateHash,
+        });
+        const wantFiles = await cores.full.listChangedFiles(wt, scope);
         expect(gotFiles, `${context()}\nscope review ${scope.base}`).toEqual(wantFiles);
       }
     }
@@ -580,8 +595,10 @@ async function runSeed(
     if (reconciled) {
       for (const base of new Set(bases)) {
         const scope: DiffScope = { kind: 'review', base };
-        const gotFiles = await inc.listChangedFiles(wt, scope, { summaryState: got.stateHash });
-        const wantFiles = await full.listChangedFiles(wt, scope);
+        const gotFiles = await cores.inc.listChangedFiles(wt, scope, {
+          summaryState: got.stateHash,
+        });
+        const wantFiles = await cores.full.listChangedFiles(wt, scope);
         expect(gotFiles, `${context()}\nreconciled, review ${base}`).toEqual(wantFiles);
       }
     }
@@ -595,7 +612,7 @@ async function runSeed(
       hints,
     );
   }
-  return { incremental, hinted };
+  return { incremental, hinted, omitted, omittedIncremental };
 }
 
 describe('incremental summary fuzz', () => {
@@ -621,6 +638,43 @@ describe('incremental summary fuzz', () => {
     },
     120_000,
   );
+
+  // #43: above `maxListedUntracked` untracked files are counted, not inspected or listed. With a cap
+  // of 2 the fuzz's few untracked files cross it all the time and the omission plan keeps changing
+  // (directories, then a cut in path order): summaries, snapshots and lists must still equal a full
+  // core's with the same cap after every step.
+  const capped: ReadonlyArray<readonly [number, number]> = process.env.FUZZ_SEED
+    ? [
+        [Number(process.env.FUZZ_SEED), 1],
+        [Number(process.env.FUZZ_SEED), 2],
+      ]
+    : [
+        [0xca9001, 1],
+        [0xca9002, 1],
+        [0xca9003, 2],
+      ];
+  for (const [seed, cap] of capped) {
+    it(`seed 0x${seed.toString(16)}: capped untracked files (maxListedUntracked ${cap})`, async () => {
+      const cappedInc = createGitCore(fx.coreOptions({ maxListedUntracked: cap }));
+      const cappedFull = createGitCore(
+        fx.coreOptions({ maxListedUntracked: cap, incremental: false }),
+      );
+      try {
+        const result = await runSeed(seed, [], { inc: cappedInc, full: cappedFull });
+        // The capped mode must really be exercised, and incrementally.
+        expect(result.omitted).toBeGreaterThan(STEPS / 10);
+        if (FOLDS) expect(result.incremental).toBe(0);
+        else {
+          expect(result.incremental).toBeGreaterThan(result.hinted / 5);
+          // A cap of 2 is crossed less often: some capped incremental steps, not a share.
+          expect(result.omittedIncremental).toBeGreaterThan(cap === 1 ? STEPS / 20 : 0);
+        }
+      } finally {
+        await cappedInc.dispose();
+        await cappedFull.dispose();
+      }
+    }, 120_000);
+  }
 
   it('the directory tree used by the fuzz exists', () => {
     // Guards the helpers above against silently doing nothing (an empty universe).

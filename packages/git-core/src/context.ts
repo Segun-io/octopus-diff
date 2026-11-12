@@ -17,6 +17,8 @@ export interface Settings {
   maxOutputBytes: number;
   maxPatchBytes: number;
   maxUntrackedFiles: number;
+  /** Most untracked files inspected and listed per worktree (#43, `untracked-plan.ts`). */
+  maxListedUntracked: number;
   /** Pinned `core.bigFileThreshold`: larger files are diffed (and listed) as binary. */
   bigFileThreshold: number;
   logger: Logger;

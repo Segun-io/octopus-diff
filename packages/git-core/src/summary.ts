@@ -20,9 +20,9 @@ import {
   inspectOptions,
   lstatSignature,
   pathspecsExcluding,
-  readDiffAttributes,
   readStatus,
   STATUS_ARGS,
+  untrackedAttributes,
 } from './diff.js';
 import { exists, mapLimit } from './fs-utils.js';
 import { hashParts, STATE_HASH_LENGTH } from './hash.js';
@@ -48,6 +48,7 @@ import {
   type StatusEntry,
   StatusParseError,
 } from './parse/status.js';
+import { readHeadFromFiles } from './ref-files.js';
 import { DIFF_PINS, resolveDefaultBranch } from './scope.js';
 import { buildSnapshot, emptySnapshot, snapshotCap } from './snapshot.js';
 import {
@@ -56,6 +57,13 @@ import {
   nestedRepoHead,
   type UntrackedInfo,
 } from './untracked.js';
+import {
+  isOmitted,
+  listedKeys,
+  omissionOf,
+  planUntracked,
+  type UntrackedPlan,
+} from './untracked-plan.js';
 
 const STAT_CONCURRENCY = 32;
 
@@ -144,6 +152,36 @@ async function trackedNumstat(
       return { output: '', unreadable, statusOnly: true };
     }
   }
+}
+
+/**
+ * Index size above which a first summary runs numstat alongside its status (#43): about 30k
+ * files. Mutable for tests.
+ */
+export const summaryLimits = { speculateIndexBytes: 4 * 1024 * 1024 };
+
+/** The index's size from its stamp signature (`size:mtimeNs:…`), 0 when unknown. */
+function indexBytes(stamp: Stamp): number {
+  const size = Number(stamp.index.split(':', 1)[0]);
+  return Number.isFinite(size) ? size : 0;
+}
+
+/**
+ * `git diff --numstat` of the working scope against `commit`, without the unreadable-file
+ * fallbacks of `trackedNumstat` (a failure is `ok: false`: the caller runs that instead).
+ */
+function plainNumstat(
+  ctx: GitContext,
+  repo: RepoInfo,
+  commit: string,
+): Promise<{ ok: true; output: string } | { ok: false }> {
+  return ctx.git(repo, ['diff', ...DIFF_PINS, '--numstat', '-z', commit, '--']).then(
+    (run) => ({ ok: true as const, output: bstrFromBuffer(run.stdout) }),
+    (error: unknown) => {
+      if (isGitCoreError(error, 'git_failed')) return { ok: false as const };
+      throw error;
+    },
+  );
 }
 
 /** Milliseconds from the mtime field of an `lstatSignature` / untracked `statSig` (`size:mtimeNs:…`). */
@@ -335,16 +373,37 @@ async function collectFull(
   // Without incremental refreshes nothing is kept, so nothing is stamped either: the kill switch
   // gives the old calls exactly (no index scan, PR #89 F3).
   const stamp = deps.incremental ? await readStamp(repo, envOf(ctx)) : UNSTAMPED;
+  // A worktree that had tracked changes most likely still has them: numstat runs alongside the
+  // status, at the last state's HEAD, which the status then confirms (#43: in a 100k-file worktree
+  // each one refreshes the index, 300-400 ms, so in sequence they were most of a full summary).
+  // Only with a kept state (never with `incremental: false`, which keeps the old calls).
+  // Without a kept state (the first summary in a session), only where numstat is expensive: an
+  // index of `summaryLimits.speculateIndexBytes` or more, HEAD read from the ref files.
+  let speculated: string | null | undefined;
+  if (previous !== undefined) {
+    speculated = previous.tracked.size > 0 ? previous.branch.oid : undefined;
+  } else if (deps.incremental && indexBytes(stamp) >= summaryLimits.speculateIndexBytes) {
+    speculated = (await readHeadFromFiles(repo.gitDir, repo.commonDir))?.sha;
+  }
+  const early =
+    speculated === undefined ? null : plainNumstat(ctx, repo, speculated ?? repo.emptyTree);
+  early?.catch(() => {});
   const status = await readStatus(ctx, repo);
   const { tracked, untracked } = splitEntries(status.entries);
   const numstat = new Map<string, NumstatRecord[]>();
   let unreadable = new Set<string>();
   let statusOnly = false;
   if (tracked.size > 0) {
-    const result = await trackedNumstat(ctx, repo, status.branch.oid, status.entries);
+    const ready = early && speculated === status.branch.oid ? await early : null;
+    const result = ready?.ok
+      ? { output: ready.output, unreadable, statusOnly }
+      : await trackedNumstat(ctx, repo, status.branch.oid, status.entries);
     unreadable = result.unreadable;
     statusOnly = result.statusOnly;
     relevantRecords(result.output, statusPathsOf(tracked), numstat, null);
+  } else if (early) {
+    // Clean after all: the speculative run is not needed, and its failure is nobody's business.
+    await early.catch(() => null);
   }
   return {
     mode: 'full',
@@ -536,6 +595,29 @@ async function collectIncremental(
   };
 }
 
+/**
+ * The omission plan of a set of untracked keys (sorted), reusing the last state's while the set
+ * is the same (an incremental refresh that touched no untracked path, or a full one that found
+ * the same paths): computing it walks every path's directories.
+ */
+function untrackedPlanOf(
+  previous: SummaryTrack | undefined,
+  order: readonly string[],
+  limit: number,
+): UntrackedPlan | null {
+  if (order.length <= limit) return null;
+  const held = previous?.untrackedPlan;
+  if (held && held.limit === limit && sameKeys(previous.untrackedOrder, order)) return held;
+  return planUntracked(order, limit);
+}
+
+function sameKeys(a: readonly string[], b: readonly string[]): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i += 1) if (a[i] !== b[i]) return false;
+  return true;
+}
+
 function envOf(ctx: GitContext): (name: string) => string | undefined {
   return (name) => ctx.runner.envValue(name) || undefined;
 }
@@ -721,7 +803,10 @@ async function finish(
     const early = region && !region.has(key) ? c.presigs?.get(key) : undefined;
     return early !== undefined ? Promise.resolve(early) : dirtySignature(repo.cwd, key, gitlink);
   };
-  const untrackedPromise = readDiffAttributes(deps, repo, untrackedRaw, entries).then(
+  // Above the cap, only the listed untracked files are inspected (#43, `untracked-plan.ts`).
+  const plan = untrackedPlanOf(previous, c.untrackedOrder, ctx.settings.maxListedUntracked);
+  const listedRaw = plan === null ? untrackedRaw : listedKeys(plan, untrackedRaw);
+  const untrackedPromise = untrackedAttributes(deps, repo, untrackedRaw, plan, entries).then(
     async (attributes) => {
       const inspect = inspectOptions(ctx, repo, untrackedRaw.length, attributes);
       const touched = c.untrackedTouched;
@@ -729,7 +814,7 @@ async function finish(
         touched !== null && previous !== undefined && previous.readContent === inspect.readContent;
       const fresh: string[] = [];
       const kept = new Map<string, UntrackedInfo>();
-      for (const raw of untrackedRaw) {
+      for (const raw of listedRaw) {
         const key = raw.endsWith('/') ? raw.slice(0, -1) : raw;
         const old = reuse && !touched.has(raw) ? previous.untrackedInfos.get(key) : undefined;
         if (old && old.attribute === (attributes.get(key) ?? '')) kept.set(raw, old.info);
@@ -738,7 +823,7 @@ async function finish(
       const inspected = await inspectUntracked(repo.cwd, fresh, deps.untrackedCache, inspect);
       const byRaw = new Map<string, UntrackedInfo>();
       for (const [i, raw] of fresh.entries()) byRaw.set(raw, inspected[i] as UntrackedInfo);
-      const infos = untrackedRaw.map((raw) => (kept.get(raw) ?? byRaw.get(raw)) as UntrackedInfo);
+      const infos = listedRaw.map((raw) => (kept.get(raw) ?? byRaw.get(raw)) as UntrackedInfo);
       return { attributes, infos, readContent: inspect.readContent, fresh: reuse ? fresh : null };
     },
   );
@@ -781,6 +866,16 @@ async function finish(
     if (trackedPaths.has(info.key)) continue;
     untrackedChanged += 1;
     additions += info.lines ?? 0;
+  }
+  // Omitted untracked files count as changed files (git status lists them); their lines are
+  // unknown and stay out of `additions`. A path that is also a tracked change counts once.
+  let omittedCount = plan?.omitted ?? 0;
+  if (plan !== null) {
+    for (const key of trackedPaths) {
+      const raw = c.untracked.has(key) ? key : c.untracked.has(`${key}/`) ? `${key}/` : null;
+      if (raw !== null && isOmitted(plan, raw)) omittedCount -= 1;
+    }
+    untrackedChanged += omittedCount;
   }
 
   // The untracked parts of the hashed text are rebuilt only when an untracked record changed (the
@@ -837,6 +932,9 @@ async function finish(
     additions,
     deletions,
     inProgress,
+    ...(plan !== null && omittedCount > 0
+      ? { untrackedOmitted: omissionOf(plan, omittedCount) }
+      : {}),
     stateHash,
     updatedAt: new Date().toISOString(),
     activityAt: activityAt(headMs.ms, [
@@ -868,6 +966,7 @@ async function finish(
     degraded: c.statusOnly || c.unreadable.size > 0,
     untrackedInfos: infosByKey,
     readContent: untracked.readContent,
+    untrackedPlan: plan,
     signatures: signatureByKey,
     defaultBranch: options?.defaultBranch ?? null,
     headCommitMs: headMs.commit,
@@ -891,6 +990,16 @@ async function finish(
         counts: snapshotCounts,
         untracked: untrackedInfos,
         cap: snapshotLimit,
+        omitted:
+          plan === null || omittedCount === 0
+            ? null
+            : {
+                plan: plan.id,
+                keys: untrackedRaw
+                  .filter((raw) => isOmitted(plan, raw))
+                  .map((raw) => (raw.endsWith('/') ? raw.slice(0, -1) : raw))
+                  .filter((key) => !trackedPaths.has(key)),
+              },
       }),
     },
     track,
