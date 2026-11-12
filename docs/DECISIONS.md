@@ -3283,3 +3283,13 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      ("a refresh fetches (projects + files)", ≥ 2 requests) described the old behaviour. It now checks that each
      refresh asks `/api/inbox?worktreeIds=` and never `/api/projects`, and still prints the requests and paths per
      refresh (1 / 1 / 1 locally). It judges no timing, as before.
+
+## Incremental summary and file lists from the watcher's paths (session, 2026-11-12; roadmap #40, step 23)
+
+272. **Contract (additive).** `SummaryOptions.changedPaths?: readonly string[]` (worktree-relative, `/`-separated
+     paths a watcher saw change since the previous `getSummary` of the worktree; absent = full refresh),
+     `SummaryResult.refresh?: SummaryRefresh` (`mode: 'full' | 'incremental'`, `reason` why a hinted refresh was
+     full, `pathspecs` passed to git; set by git-core, absent from test doubles; the daemon strips it like
+     `snapshot`, so it never reaches an API payload) and `GitCoreOptions.incremental?: boolean` (default true; false =
+     every summary and file list in full, the kill switch and the bench's A/B). Nothing is renamed or removed, and a
+     caller that passes none of it gets the old behaviour.

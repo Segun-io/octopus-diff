@@ -165,10 +165,36 @@ export interface SummaryOptions extends ScopeOptions {
    * (`SNAPSHOT_MAX_ENTRIES_DEFAULT`); `{ maxEntries }` sets it (1..`SNAPSHOT_MAX_ENTRIES_LIMIT`).
    */
   snapshot?: boolean | { maxEntries?: number };
+  /**
+   * Paths (worktree-relative, `/`-separated) that may have changed since the previous
+   * `getSummary` of this worktree, as a file watcher reported them (#40). git-core may then run
+   * `status` / `diff --numstat` limited to them (plus what they depend on) and merge the result
+   * into the previous state; the summary means the same as a full refresh would. git-core still
+   * refreshes fully whenever it cannot trust the hint (no previous state, HEAD / index / refs /
+   * config changed, ignore or attribute files among the paths, directories, submodules, too
+   * many paths, ...). Absent: a full refresh. Ignored when `GitCoreOptions.incremental` is false.
+   */
+  changedPaths?: readonly string[];
 }
 
-/** `WorktreeSummary`, plus `snapshot` when `SummaryOptions.snapshot` asked for it. */
-export type SummaryResult = WorktreeSummary & { snapshot?: SummarySnapshot };
+/** How a summary was computed (#40): diagnostics, tests and the daemon's reconciliation timer. */
+export interface SummaryRefresh {
+  /** `incremental`: limited to `SummaryOptions.changedPaths` and merged into the last state. */
+  mode: 'full' | 'incremental';
+  /** Why a refresh with `changedPaths` was full (e.g. `index`, `head`, `directory`); else null. */
+  reason: string | null;
+  /** Paths passed to the pathspec-limited git calls (0 for a full refresh). */
+  pathspecs: number;
+}
+
+/**
+ * `WorktreeSummary`, plus `snapshot` when `SummaryOptions.snapshot` asked for it, plus `refresh`
+ * (git-core always sets it since #40; test doubles may not).
+ */
+export type SummaryResult = WorktreeSummary & {
+  snapshot?: SummarySnapshot;
+  refresh?: SummaryRefresh;
+};
 
 /** A file to classify: the fields of a listed `GitChangedFile` that `readFileOrigins` reads. */
 export type FileOriginInput = Pick<
@@ -309,6 +335,12 @@ export interface GitCoreOptions {
    */
   env?: Record<string, string>;
   logger?: Logger;
+  /**
+   * Incremental refreshes (#40, default true): `getSummary` honours `SummaryOptions.changedPaths`,
+   * and file lists of the scopes that read the worktree are updated from the paths that changed
+   * since the last list. False: every summary and list is computed in full (kill switch, bench A/B).
+   */
+  incremental?: boolean;
 }
 
 /** `createGitCore` in `@octopus-diff/git-core` has this signature. */
