@@ -218,7 +218,7 @@ describe('request detail and repository routes (fake git-core, fake gh)', () => 
         forges: {
           client: forge,
           debounceMs: 20,
-          followUpMs: [100],
+          followUpMs: [250],
           readSshConfig: async () => null,
         },
         now: () => new Date(Date.now() + clock),

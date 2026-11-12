@@ -67,6 +67,7 @@ export interface DaemonInternals {
         pollMs?: number;
         debounceMs?: number;
         minRefetchMs?: number;
+        followUpMs?: readonly number[];
         readSshConfig?: () => Promise<string | null>;
       };
 }
