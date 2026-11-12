@@ -32,7 +32,7 @@ const WORKING: DiffScope = { kind: 'working' };
 /** git-core never reuses a config file younger than this (the racy window, DECISIONS #191). */
 const RACY_WAIT_MS = 2100;
 
-const lines = (n: number) => Array.from({ length: n }, (_, i) => `line ${i + 1}`).join('\n') + '\n';
+const lines = (n: number) => `${Array.from({ length: n }, (_, i) => `line ${i + 1}`).join('\n')}\n`;
 
 /** The forge layer must never get this far: `origin` is a local path, not a forge host. */
 const noForge: ForgeClientLike = {
