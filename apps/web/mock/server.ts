@@ -3,7 +3,8 @@
  * plus `/api/events` (SSE) and runs the change simulator.
  *
  * Env: MOCK_PORT (default 7429), MOCK_DATASET (demo | large | empty), MOCK_INTERVAL_MS
- * (simulator period, 0 disables; default 5000), MOCK_TOKEN (require auth), MOCK_LATENCY_MS.
+ * (simulator period, 0 disables; default 5000), MOCK_TOKEN (require auth), MOCK_LATENCY_MS,
+ * MOCK_MERGE_NOISE (0 turns off the files that came from a merge, rebase or update of main).
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import {
@@ -21,6 +22,8 @@ export interface MockServerOptions {
   intervalMs?: number;
   token?: string;
   latencyMs?: number;
+  /** Merge noise on the demo and large datasets (`MockBackendOptions.mergeNoise`). */
+  mergeNoise?: boolean;
 }
 
 export interface MockServer {
@@ -48,7 +51,10 @@ async function toRequest(req: IncomingMessage, origin: string): Promise<Request>
 
 export async function startMockServer(options: MockServerOptions = {}): Promise<MockServer> {
   const host = options.host ?? '127.0.0.1';
-  const backend = new MockBackend({ dataset: options.dataset ?? 'demo' });
+  const backend = new MockBackend({
+    dataset: options.dataset ?? 'demo',
+    ...(options.mergeNoise !== undefined ? { mergeNoise: options.mergeNoise } : {}),
+  });
   const handle = createMockRouter(backend, {
     ...(options.token ? { token: options.token } : {}),
     ...(options.latencyMs ? { latencyMs: options.latencyMs } : {}),
@@ -127,6 +133,7 @@ export function mockServerOptionsFromEnv(): MockServerOptions {
     dataset: (process.env.MOCK_DATASET as MockDataset | undefined) ?? 'demo',
     intervalMs: envNumber('MOCK_INTERVAL_MS', 5000),
     latencyMs: envNumber('MOCK_LATENCY_MS', 0),
+    mergeNoise: process.env.MOCK_MERGE_NOISE !== '0',
     ...(process.env.MOCK_TOKEN ? { token: process.env.MOCK_TOKEN } : {}),
   };
 }

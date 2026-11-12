@@ -1,7 +1,7 @@
 /**
  * Synthetic file contents and git-style unified patches for the mock backend.
  */
-import type { FileStatus } from '@octopus-diff/contracts';
+import type { FileOrigin, FileOriginVia, FileStatus } from '@octopus-diff/contracts';
 import { structuredPatch } from 'diff';
 import { fnv1a32, hash40, intBetween, pick, prng } from './util.js';
 
@@ -34,6 +34,11 @@ export interface MockFile {
   version: number;
   /** Approximate base length in lines. */
   lines: number;
+  /**
+   * Merge noise: the default branch's part of a committed file (what the daemon labels in To
+   * review). `base` files exist only there; `mixed` ones are also own changes in All on branch.
+   */
+  noise?: { origin: Exclude<FileOrigin, 'own'>; via: FileOriginVia };
 }
 
 const WORDS = [
