@@ -44,7 +44,9 @@ export interface ReviewSource extends TargetRegistry {
   /**
    * Changed files of a worktree in a scope (the same list `GET .../files` returns), with their
    * origins where the scope has them (#33; `origin` absent = own), and the summary the list was
-   * built for: what is marked and reported comes from that one state (Greptile on PR #91).
+   * built for: what is marked and reported comes from that one state (Greptile on PR #91). A null
+   * summary: the list is of no summary held (every attempt overtaken by refreshes, PR #95), so
+   * the worktree is reported stale, never marked.
    */
   changedFiles(
     worktreeId: string,

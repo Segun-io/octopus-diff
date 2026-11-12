@@ -10,7 +10,7 @@ import path from 'node:path';
 import type { ApiClient, FilesResponse, GitCore, WorktreeSummary } from '@octopus-diff/contracts';
 import { createGitCore } from '@octopus-diff/git-core';
 import { describe, expect, it } from 'vitest';
-import { listsRetried } from '../src/core.js';
+import { listsRetried, listsUnlabelled } from '../src/core.js';
 import { startDaemon } from '../src/daemon.js';
 import { hashId } from '../src/ids.js';
 import { client, eventually, onCleanup, TEST_TOKEN, tempDir } from './helpers.js';
@@ -25,10 +25,12 @@ function gatedCore(core: GitCore) {
     get(target, prop, receiver) {
       const value = Reflect.get(target, prop, receiver);
       if (typeof value !== 'function' || typeof prop !== 'string') return value;
+      // One gate for both list calls (the daemon uses the one that reports its state).
+      const name = prop === 'listChangedFilesWithState' ? 'listChangedFiles' : prop;
       return async (...args: unknown[]) => {
-        const gate = armed.get(prop);
+        const gate = armed.get(name);
         if (gate) {
-          armed.delete(prop);
+          armed.delete(name);
           gate.entered();
           await gate.release;
         }
@@ -56,7 +58,7 @@ function gatedCore(core: GitCore) {
   };
 }
 
-async function start(fx: RealGitFixture, dir: string) {
+async function start_(fx: RealGitFixture, dir: string) {
   const real = createGitCore({ env: fx.env, maxListedUntracked: CAP });
   const gated = gatedCore(real);
   const daemon = await startDaemon({
@@ -143,7 +145,7 @@ describe('GET /files describes one summary state (#43 follow-up)', { timeout: 60
       // 1 + 3 untracked files: under the cap; 1 + 12: above it.
       const dir = await repoWith(fx, crossing === 'into' ? 3 : 12);
       const id = hashId(dir);
-      const { api, gated } = await start(fx, dir);
+      const { api, gated } = await start_(fx, dir);
       const first = await eventually(() => summaryOf(api, id), 15_000);
       expect(first.untrackedOmitted !== undefined).toBe(crossing === 'out of');
       // The review state is computed on demand: the request resolves it, and waits there.
@@ -166,7 +168,7 @@ describe('GET /files describes one summary state (#43 follow-up)', { timeout: 60
       const fx = await makeRealGitFixture();
       const dir = await repoWith(fx, crossing === 'into' ? 3 : 12);
       const id = hashId(dir);
-      const { api, gated } = await start(fx, dir);
+      const { api, gated } = await start_(fx, dir);
       const first = await eventually(() => summaryOf(api, id), 15_000);
       const gate = gated.arm('listChangedFiles');
       const request = api.listFiles(id, { scope: { kind: 'working' } });
@@ -184,38 +186,146 @@ describe('GET /files describes one summary state (#43 follow-up)', { timeout: 60
     });
   }
 
-  it('a state that moves again during the retry is labelled with the summary the list was built for', async () => {
+  /** Moves a prepared directory of `n` files in as `name` (one event), or `name` out. */
+  async function move(fx: RealGitFixture, dir: string, name: string, n: number | 'out') {
+    if (n === 'out') {
+      await rename(path.join(dir, name), path.join(fx.root, `${name}-away`));
+      return;
+    }
+    const ready = path.join(fx.root, `${name}-ready`);
+    await mkdir(ready);
+    for (let i = 0; i < n; i++) await writeFile(path.join(ready, `x${i}.js`), `${i}\n`);
+    await rename(ready, path.join(dir, name));
+  }
+
+  // Greptile on PR #95: the second attempt can be overtaken too, by a move that crosses the cap
+  // again; git-core then lists the worktree as it is now, which no summary held so far describes.
+  for (const start of ['under', 'above'] as const) {
+    it(`a second move across the cap during the retry (starting ${start} it)`, async () => {
+      const fx = await makeRealGitFixture();
+      // under: 1 + 3 untracked; above: 1 + 12.
+      const dir = await repoWith(fx, start === 'under' ? 3 : 12);
+      const id = hashId(dir);
+      const { api, gated } = await start_(fx, dir);
+      const first = await eventually(() => summaryOf(api, id), 15_000);
+      const capped = (s: WorktreeSummary) => s.untrackedOmitted !== undefined;
+      const gate1 = gated.arm('listChangedFiles');
+      const request = api.listFiles(id, { scope: { kind: 'working' } });
+      await gate1.entered;
+      // First move across the cap...
+      if (start === 'under') await move(fx, dir, 'more', 9);
+      else await move(fx, dir, 'gen', 'out');
+      const s2 = await movedTo(api, id, first.stateHash, (s) => capped(s) === (start === 'under'));
+      const gate2 = gated.arm('listChangedFiles');
+      gate1.release();
+      await gate2.entered;
+      // ...and back across it while the retry's list waits.
+      if (start === 'under') await move(fx, dir, 'more', 'out');
+      else await move(fx, dir, 'more', 9);
+      const s3 = await movedTo(api, id, s2.stateHash, (s) => capped(s) === (start === 'above'));
+      const unlabelled = listsUnlabelled.count;
+      gate2.release();
+      const res = await request;
+      // The third attempt listed the current state: labelled with its summary.
+      expect(listsUnlabelled.count).toBe(unlabelled);
+      // One state, the current one, and what a fresh listing says.
+      expectOneState(res, s3);
+      const fresh = await api.listFiles(id, { scope: { kind: 'working' } });
+      expect(res.files).toEqual(fresh.files);
+      expect(res.untrackedOmitted).toEqual(fresh.untrackedOmitted);
+      expect(res.stateHash).toBe(fresh.stateHash);
+    });
+  }
+
+  /**
+   * Runs `request` while every list attempt is overtaken by a move across the cap (into, out of,
+   * into again), and returns its result with the last summary.
+   */
+  async function overtaken<T>(
+    fx: RealGitFixture,
+    dir: string,
+    api: ApiClient,
+    gated: ReturnType<typeof gatedCore>,
+    id: string,
+    request: () => Promise<T>,
+  ): Promise<{ result: T; first: WorktreeSummary; last: WorktreeSummary }> {
+    const first = await eventually(() => summaryOf(api, id), 15_000);
+    const capped = (s: WorktreeSummary) => s.untrackedOmitted !== undefined;
+    let gate = gated.arm('listChangedFiles');
+    const running = request();
+    let before = first.stateHash;
+    const moves: Array<[string, number | 'out', boolean]> = [
+      ['more', 9, true],
+      ['more', 'out', false],
+      ['other', 9, true],
+    ];
+    let last = first;
+    for (const [i, [name, n, wantCapped]] of moves.entries()) {
+      await gate.entered;
+      await move(fx, dir, name, n);
+      last = await movedTo(api, id, before, (s) => capped(s) === wantCapped);
+      before = last.stateHash;
+      const held = gate;
+      if (i < moves.length - 1) gate = gated.arm('listChangedFiles');
+      held.release();
+    }
+    return { result: await running, first, last };
+  }
+
+  it('when every attempt is overtaken, the list is labelled with what git-core listed', async () => {
     const fx = await makeRealGitFixture();
     const dir = await repoWith(fx, 3);
     const id = hashId(dir);
-    const { api, gated } = await start(fx, dir);
-    const first = await eventually(() => summaryOf(api, id), 15_000);
-    const gate1 = gated.arm('listChangedFiles');
-    const request = api.listFiles(id, { scope: { kind: 'working' } });
-    await gate1.entered;
-    await cross(fx, dir, 'into');
-    const s2 = await movedTo(api, id, first.stateHash, (s) => s.untrackedOmitted !== undefined);
-    // The retry's list waits too, while the worktree moves on once more.
-    const gate2 = gated.arm('listChangedFiles');
-    gate1.release();
-    await gate2.entered;
-    await writeFile(path.join(dir, 'more', 'm9.js'), '9\n');
-    const s3 = await movedTo(api, id, s2.stateHash, (s) => s.untrackedOmitted?.count === 10);
-    gate2.release();
-    const res = await request;
-    // Not two states mixed in the labels: stateHash and notice are both s2's, the list's own.
-    expect(res.stateHash).toBe(s2.stateHash);
-    expect(res.untrackedOmitted).toEqual(s2.untrackedOmitted);
-    expect(res.stateHash).not.toBe(s3.stateHash);
-    // The client sees a stateHash that is not current and fetches again: one state again.
-    expectOneState(await api.listFiles(id, { scope: { kind: 'working' } }), s3);
+    const { api, gated } = await start_(fx, dir);
+    const unlabelled = listsUnlabelled.count;
+    const {
+      result: res,
+      first,
+      last,
+    } = await overtaken(fx, dir, api, gated, id, () =>
+      api.listFiles(id, { scope: { kind: 'working' } }),
+    );
+    expect(listsUnlabelled.count).toBe(unlabelled + 1);
+    // No summary the daemon held matches what was listed: not labelled as one of them, and the
+    // notice is the one the list itself applied.
+    expect(res.stateHash).not.toBe(last.stateHash);
+    expect(res.stateHash).not.toBe(first.stateHash);
+    const untracked = res.files.filter((f) => f.status === 'untracked').length;
+    expect(untracked + (res.untrackedOmitted?.count ?? 0)).toBe(last.counts.untracked);
+    expect(res.untrackedOmitted?.count).toBe(last.untrackedOmitted?.count);
+    // A client that sees a stateHash it does not hold fetches again: the current state.
+    expectOneState(await api.listFiles(id, { scope: { kind: 'working' } }), last);
+  });
+
+  it('an inbox row overtaken on every attempt is left out, never paired with another summary', async () => {
+    const fx = await makeRealGitFixture();
+    const dir = await repoWith(fx, 3);
+    const id = hashId(dir);
+    const { api, gated } = await start_(fx, dir);
+    const { result, last } = await overtaken(fx, dir, api, gated, id, () =>
+      api.inbox({ scope: { kind: 'working' } }),
+    );
+    const row = result.entries.find((e) => e.worktree.id === id);
+    if (row) expect(row.summary.stateHash).toBe(last.stateHash);
+    expect(row).toBeUndefined();
+  });
+
+  it('bulk review overtaken on every attempt marks nothing and reports the worktree stale', async () => {
+    const fx = await makeRealGitFixture();
+    const dir = await repoWith(fx, 3);
+    const id = hashId(dir);
+    const { api, gated } = await start_(fx, dir);
+    const { result } = await overtaken(fx, dir, api, gated, id, () =>
+      api.bulkReview({ target: { kind: 'worktree', worktreeId: id }, scope: { kind: 'working' } }),
+    );
+    expect(result).toMatchObject({ changed: 0, stale: [id] });
   });
 
   it('inbox rows pair their files with the summary they were listed for', async () => {
     const fx = await makeRealGitFixture();
     const dir = await repoWith(fx, 3);
     const id = hashId(dir);
-    const { api, gated } = await start(fx, dir);
+    const { api, gated } = await start_(fx, dir);
     const first = await eventually(() => summaryOf(api, id), 15_000);
     const gate = gated.arm('listChangedFiles');
     const request = api.inbox({ scope: { kind: 'working' } });
@@ -236,7 +346,7 @@ describe('GET /files describes one summary state (#43 follow-up)', { timeout: 60
     const fx = await makeRealGitFixture();
     const dir = await repoWith(fx, 3);
     const id = hashId(dir);
-    const { api, gated } = await start(fx, dir);
+    const { api, gated } = await start_(fx, dir);
     const first = await eventually(() => summaryOf(api, id), 15_000);
     const gate = gated.arm('listChangedFiles');
     const request = api.bulkReview({
@@ -258,7 +368,7 @@ describe('GET /files describes one summary state (#43 follow-up)', { timeout: 60
     const fx = await makeRealGitFixture();
     const dir = await repoWith(fx, 3);
     const id = hashId(dir);
-    const { api, gated } = await start(fx, dir);
+    const { api, gated } = await start_(fx, dir);
     const first = await eventually(() => summaryOf(api, id), 15_000);
     // The first list of the call (its review state's) waits while a commit lands.
     const gate = gated.arm('listChangedFiles');

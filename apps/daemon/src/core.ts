@@ -27,6 +27,7 @@ import {
   type InboxEntry,
   type InboxResponse,
   isGitCoreError,
+  type ListedChangedFiles,
   type Logger,
   type Project,
   type ProjectListItem,
@@ -39,6 +40,7 @@ import {
   type ServerEventOf,
   type SummarySnapshot,
   scopeKey,
+  type UntrackedOmission,
   type UpdateProjectRequest,
   type WatchOptions,
   type WatchTargets,
@@ -362,6 +364,36 @@ function isCacheableScope(scope: DiffScope): boolean {
 
 /** Lists that were built again because a refresh landed meanwhile (`#listedAt`; tests). */
 export const listsRetried = { count: 0 };
+/** Lists returned as of no held summary, every attempt overtaken (`#listedAt`; tests). */
+export const listsUnlabelled = { count: 0 };
+
+/** Attempts `#listedAt` makes before it labels a list with the state git-core says it is of. */
+export const LIST_ATTEMPTS = 3;
+
+/** A list and the state it is of (`#gitFilesAt`). */
+interface ListedAt<F> {
+  files: F[];
+  /** The summary read when the list was asked for. */
+  summary: WorktreeSummary | null;
+  /** `summary`: the list is that summary's; `now`: git-core listed the worktree as it is now. */
+  of: 'summary' | 'now';
+  /** With `now`: the omission git-core applied to this list. */
+  untrackedOmitted?: UntrackedOmission;
+}
+
+/**
+ * The `stateHash` of a list of no held summary: never equal to a summary's (another prefix), so
+ * a client compares it with the summary it holds, sees a mismatch and fetches again.
+ */
+function listedStateHash(
+  files: ReadonlyArray<Pick<GitChangedFile, 'path' | 'patchHash'>>,
+  omitted: UntrackedOmission | undefined,
+): string {
+  const hash = createHash('sha1');
+  for (const f of files) hash.update(`${f.path}\u0000${f.patchHash}\u0000`);
+  hash.update(JSON.stringify(omitted ?? null));
+  return `listed-${hash.digest('hex').slice(0, 24)}`;
+}
 
 /** The scope whose base is the project's default branch (what "All on branch" measures). */
 const DEFAULT_BASE_SCOPE: DiffScope = { kind: 'branch' };
@@ -461,7 +493,7 @@ export class DaemonCore {
    * cancelled only when every request waiting for it went away (#44, `FlightMap`): the others
    * keep waiting for the same run, and a cancelled run caches nothing.
    */
-  readonly #filesInflight = new FlightMap<string, GitChangedFile[]>();
+  readonly #filesInflight = new FlightMap<string, ListedChangedFiles>();
   /**
    * File origins (#33) per listed file array: `#gitFiles` hands out the same array while its
    * cache entry (worktree, scope, stateHash, base, attributes) is current, so the array's identity
@@ -1771,7 +1803,7 @@ export class DaemonCore {
     entry: WorktreeEntry,
     scope: DiffScope,
     want: Want = {},
-  ): Promise<{ files: GitChangedFile[]; summary: WorktreeSummary | null }> {
+  ): Promise<ListedAt<GitChangedFile>> {
     const summary = entry.summary;
     const gitStateHash = entry.gitStateHash;
     const key = this.#filesKey(entry.worktree.id, scope);
@@ -1790,46 +1822,68 @@ export class DaemonCore {
       ) {
         this.#filesCache.delete(key);
         this.#filesCache.set(key, cached);
-        return { files: cached.files, summary };
+        return { files: cached.files, summary, of: 'summary' };
       }
     }
     const flightKey = `${key}\u0000${stateHash ?? ''}\u0000${base ?? ''}\u0000${attrs}`;
-    const files = await this.#filesInflight.run(flightKey, want.signal, (signal) =>
-      this.#git
-        .listChangedFiles(this.#locator(entry), scope, {
-          defaultBranch: this.#defaultBranch(project),
-          // The list of the summary state this cache entry is for: git-core may update its last
-          // list from the paths that changed since (#40).
-          ...(this.#incremental && gitStateHash !== null && stateHash !== null
-            ? { summaryState: gitStateHash }
-            : {}),
-          ...callOptions(want, signal),
-        })
-        .then((files) => {
-          // Tracked files under ignored build directories make them watched (review F5).
-          const tracked: string[] = [];
-          for (const f of files) {
-            if (f.status === 'untracked') continue;
-            tracked.push(f.path);
-            if (f.oldPath) tracked.push(f.oldPath);
+    // The list of the summary state this cache entry is for: git-core may update its last list
+    // from the paths that changed since (#40), and says whether it did (Greptile on PR #95).
+    const asked =
+      this.#incremental && gitStateHash !== null && stateHash !== null ? gitStateHash : null;
+    const listOptions = {
+      defaultBranch: this.#defaultBranch(project),
+      ...(asked !== null ? { summaryState: asked } : {}),
+    };
+    const withState = this.#git.listChangedFilesWithState;
+    const listed = await this.#filesInflight.run(flightKey, want.signal, (signal) =>
+      (withState
+        ? withState.call(this.#git, this.#locator(entry), scope, {
+            ...listOptions,
+            ...callOptions(want, signal),
+          })
+        : this.#git
+            .listChangedFiles(this.#locator(entry), scope, {
+              ...listOptions,
+              ...callOptions(want, signal),
+            })
+            // Without the report (older git-core, test doubles): the state asked for, as before.
+            .then((files): ListedChangedFiles => ({ files, summaryState: asked }))
+      ).then((result) => {
+        const files = result.files;
+        // Tracked files under ignored build directories make them watched (review F5).
+        const tracked: string[] = [];
+        for (const f of files) {
+          if (f.status === 'untracked') continue;
+          tracked.push(f.path);
+          if (f.oldPath) tracked.push(f.oldPath);
+        }
+        if (tracked.length) this.#watcher.noteTrackedPaths(entry.worktree.id, tracked);
+        // Cached under the summary's stateHash only when it is that summary's list: git-core
+        // listed the state asked for (or nothing was asked: the kill switch, committed scopes).
+        if (
+          cacheable &&
+          stateHash !== null &&
+          result.summaryState === asked &&
+          project.worktrees.get(entry.worktree.id) === entry
+        ) {
+          this.#filesCache.set(key, { stateHash, base, attrs, files });
+          while (this.#filesCache.size > CORE_DEFAULTS.filesCacheSize) {
+            const oldest = this.#filesCache.keys().next().value;
+            if (oldest === undefined) break;
+            this.#filesCache.delete(oldest);
           }
-          if (tracked.length) this.#watcher.noteTrackedPaths(entry.worktree.id, tracked);
-          if (
-            cacheable &&
-            stateHash !== null &&
-            project.worktrees.get(entry.worktree.id) === entry
-          ) {
-            this.#filesCache.set(key, { stateHash, base, attrs, files });
-            while (this.#filesCache.size > CORE_DEFAULTS.filesCacheSize) {
-              const oldest = this.#filesCache.keys().next().value;
-              if (oldest === undefined) break;
-              this.#filesCache.delete(oldest);
-            }
-          }
-          return files;
-        }),
+        }
+        return result;
+      }),
     );
-    return { files, summary };
+    if (listed.summaryState === asked) return { files: listed.files, summary, of: 'summary' };
+    // git-core listed the worktree as it is now: no summary held here describes this list.
+    return {
+      files: listed.files,
+      summary,
+      of: 'now',
+      ...(listed.untrackedOmitted ? { untrackedOmitted: listed.untrackedOmitted } : {}),
+    };
   }
 
   /**
@@ -1915,7 +1969,7 @@ export class DaemonCore {
     entry: WorktreeEntry,
     scope: DiffScope,
     want: Want = {},
-  ): Promise<{ files: LabeledFile[]; summary: WorktreeSummary | null }> {
+  ): Promise<ListedAt<LabeledFile>> {
     const listed = await this.#gitFilesAt(project, entry, scope, want);
     const labels = await this.#labelFiles(
       project,
@@ -1926,14 +1980,17 @@ export class DaemonCore {
       want,
       listed.summary,
     );
-    return { files: labels.files, summary: listed.summary };
+    return { ...listed, files: labels.files };
   }
 
   /**
-   * A list and the summary it was built for, resolving the scope first. A refresh that lands while
-   * the scope is resolved or the list is built means the list may be of another state than the one
-   * the caller started with: then it is done once more, and the result is always labelled with the
-   * summary it was built for, never with one read before or after (Greptile on PR #91).
+   * A list and the state it is of, resolving the scope first. A refresh that lands while the scope
+   * is resolved or the list is built means the list may be of another state than the one the
+   * caller started with (Greptile on PR #91), and git-core may even have listed the worktree as it
+   * is now, of no summary held here (PR #95). Then, after any refresh in flight, it is done again,
+   * up to `LIST_ATTEMPTS` times. The result is labelled with the state it is of: its summary
+   * (`summary`), or, when the last attempt was overtaken too, `summary: null` with a `stateHash`
+   * that is no summary's and the omission git-core applied to that list. Never a mix.
    */
   async #listedAt(
     project: ProjectEntry,
@@ -1943,18 +2000,41 @@ export class DaemonCore {
   ): Promise<{
     resolved: { scope: DiffScope; review: ReviewComputed | null };
     files: LabeledFile[];
+    /** The summary the list is of; null when it is of none (see `stateHash`). */
     summary: WorktreeSummary | null;
+    stateHash: string | null;
+    untrackedOmitted: UntrackedOmission | undefined;
   }> {
-    for (let attempt = 0; ; attempt++) {
+    for (let attempt = 1; ; attempt++) {
       const before = entry.summary?.stateHash ?? null;
       const resolved = await raceSignal(this.#resolveScope(project, entry, scope), want.signal);
       const listed = await this.#labeledFilesAt(project, entry, resolved.scope, want);
       const used = listed.summary?.stateHash ?? null;
       const now = entry.summary?.stateHash ?? null;
-      if ((used === before && used === now) || attempt >= 1) {
-        listsRetried.count += attempt;
-        return { resolved, ...listed };
+      const last = attempt >= LIST_ATTEMPTS;
+      if (listed.of === 'summary' && ((used === before && used === now) || last)) {
+        listsRetried.count += attempt - 1;
+        return {
+          resolved,
+          files: listed.files,
+          summary: listed.summary,
+          stateHash: used,
+          untrackedOmitted: listed.summary?.untrackedOmitted,
+        };
       }
+      if (last) {
+        listsRetried.count += attempt - 1;
+        listsUnlabelled.count++;
+        return {
+          resolved,
+          files: listed.files,
+          summary: null,
+          stateHash: listedStateHash(listed.files, listed.untrackedOmitted),
+          untrackedOmitted: listed.untrackedOmitted,
+        };
+      }
+      // The daemon's summary may still be on its way (git-core's state is newer): wait for it.
+      await raceSignal(entry.refresher.current ?? Promise.resolve(), want.signal);
     }
   }
 
@@ -1980,10 +2060,11 @@ export class DaemonCore {
     this.#summaryOrThrow(entry);
     // The list, its stateHash and its omission notice all come from the summary the list was
     // built for (Greptile on PR #91).
-    const { resolved, files, summary } = await this.#listedAt(project, entry, scope, want);
-    const stateHash = summary?.stateHash ?? this.#summaryOrThrow(entry);
-    // The summary of that stateHash says which untracked files no list holds (#43).
-    const omitted = summary?.untrackedOmitted;
+    const listed = await this.#listedAt(project, entry, scope, want);
+    const { resolved, files } = listed;
+    const stateHash = listed.stateHash ?? this.#summaryOrThrow(entry);
+    // The state the list is of says which untracked files no list holds (#43).
+    const omitted = listed.untrackedOmitted;
     return {
       worktreeId,
       scope: resolved.scope,
@@ -2124,6 +2205,14 @@ export class DaemonCore {
       candidates.map(async (c): Promise<InboxEntry | null> => {
         try {
           const listed = await this.#listedAt(c.project, c.entry, scope);
+          // A list of no held summary cannot be a row (a row is a summary with its files): the
+          // refresh that overtook it announces the worktree, and the client asks for its row.
+          if (listed.summary === null && !c.entry.worktree.bare) {
+            this.#log.debug('inbox: row overtaken by refreshes', {
+              worktreeId: c.entry.worktree.id,
+            });
+            return null;
+          }
           const resolved = listed.resolved;
           const gitFiles = listed.files;
           let files = this.#attachReviewedFor(
@@ -2138,7 +2227,7 @@ export class DaemonCore {
             project: this.#toProject(c.project.row),
             worktree: c.entry.worktree,
             // The row's summary is the one its files were listed for (Greptile on PR #91).
-            summary: listed.summary ?? c.summary,
+            summary: listed.summary ?? c.summary, // bare: no summary changes under it
             files,
             ...(c.review ? { review: c.review } : {}),
           };
