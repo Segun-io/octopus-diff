@@ -81,6 +81,12 @@ export const SummarySnapshotSchema = z.object({
   total: z.number().int().nonnegative(),
   /** `total` exceeded `maxEntries`; `entries` holds the first `maxEntries`. */
   truncated: z.boolean(),
+  /**
+   * A hash of every changed path's state (status codes, object ids, content signatures, counts),
+   * including paths beyond the cap. Unlike `WorktreeSummary.stateHash` it holds nothing about
+   * refs (the upstream, the default branch): it moves only when a file of this worktree changes.
+   */
+  contentHash: z.string().optional(),
 });
 export type SummarySnapshot = z.infer<typeof SummarySnapshotSchema>;
 
