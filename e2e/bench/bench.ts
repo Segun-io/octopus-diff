@@ -15,6 +15,13 @@
  * - API payload sizes (raw, gzip, and what the daemon sends when asked for gzip);
  * - daemon RSS (idle and peak).
  *
+ * `--after-fetch` (small layout only, issue #35): every repository gets a bare `origin`, every linked
+ * worktree merged `origin/main` and a fetch moved `origin/main` before the daemon starts, so every
+ * worktree's file labels have to be computed from scratch; after the usual phases a second fetch
+ * moves it again while the daemon runs (every label invalidated at once). It records the cold paint,
+ * the startup spawns by subcommand, the time until every worktree's labels are known, the relabel
+ * time after the live fetch with its spawns, and RSS. Written to `results-after-fetch.{json,md}`.
+ *
  * Budgets (see `BUDGETS`) decide the exit code. A budget in `TRACKED` is known to fail until the
  * issue it names lands: it is reported as `FAIL (tracked #n)` and does not fail the run (`--strict`
  * counts it). Large layouts are report-only except the spawn budget.
@@ -39,6 +46,8 @@ import {
   TEST_IDS,
 } from '@octopus-diff/contracts';
 import {
+  addBenchOrigins,
+  type BenchOrigins,
   generateFixtures,
   generateLargeFixtures,
   type IsolatedGitEnv,
@@ -73,6 +82,8 @@ const { values: args } = parseArgs({
     'no-ui': { type: 'boolean', default: false },
     seed: { type: 'string', default: '1' },
     strict: { type: 'boolean', default: false },
+    'after-fetch': { type: 'boolean', default: false },
+    'to-review': { type: 'boolean', default: false },
   },
 });
 
@@ -81,6 +92,12 @@ if (!LAYOUTS.includes(args.layout as string)) {
   throw new Error(`--layout must be one of ${LAYOUTS.join(', ')}`);
 }
 const LAYOUT = args.layout as 'small' | LargeLayoutName;
+const AFTER_FETCH = args['after-fetch'];
+/** The UI opens on To review (every review state, and with origins every label, is part of the paint). */
+const TO_REVIEW = args['to-review'] || AFTER_FETCH;
+if (TO_REVIEW && LAYOUT !== 'small') {
+  throw new Error('--after-fetch and --to-review need --layout small');
+}
 /** How long one edit may take to show up. The 100k-file layout needs minutes while the UI refetches. */
 const EDIT_WAIT_MS = LAYOUT === 'large' ? 300_000 : LAYOUT === 'small' ? 10_000 : 60_000;
 
@@ -143,6 +160,10 @@ interface BenchSetup {
   /** Worktree path → role (`bench`, `main`, `stale-index`, `untracked-heavy`). */
   roles: Map<string, string>;
   layout: Record<string, unknown>;
+  /** `--after-fetch`: the bare origins and the fetch that moves them. */
+  origins: BenchOrigins | null;
+  /** `--after-fetch`: how long the first fetch (before the daemon starts) took. */
+  firstFetchMs: number | null;
   cleanup(): Promise<void>;
 }
 
@@ -161,9 +182,18 @@ async function setUp(): Promise<BenchSetup> {
     const roles = new Map<string, string>();
     for (const p of fixtures.manifest.projects)
       for (const w of p.worktrees) if (!w.bare) roles.set(w.path, 'bench');
+    let origins: BenchOrigins | null = null;
+    let firstFetchMs: number | null = null;
+    if (AFTER_FETCH) {
+      log('adding a bare origin to every repo, merging origin/main in the linked worktrees…');
+      origins = await addBenchOrigins(fixtures.manifest, fixtures.env, fixtures.root);
+      // The simulated fetch: origin/main moves in every repository before the daemon starts.
+      firstFetchMs = (await origins.fetchMovesOrigin(1)).ms;
+      log(`origin/main moved in ${origins.repos} repos by a fetch (${firstFetchMs} ms)`);
+    }
     return {
       root: fixtures.root,
-      description: `${repos} repos × ${worktreesPerRepo} worktrees (all dirty)`,
+      description: `${repos} repos × ${worktreesPerRepo} worktrees (all dirty)${TO_REVIEW ? ', the UI opens on To review' : ''}${AFTER_FETCH ? ', each linked worktree merged origin/main, then a fetch moved origin/main in every repo' : ''}`,
       generationMs: performance.now() - started,
       projectPaths: registeredProjects(fixtures.manifest).flatMap((p) =>
         p.registration?.kind === 'path' ? [p.registration.path] : [],
@@ -171,7 +201,15 @@ async function setUp(): Promise<BenchSetup> {
       gitVars: { ...fixtures.manifest.git.vars },
       gitEnv: fixtures.env,
       roles,
-      layout: { name: 'small', repos, worktreesPerRepo },
+      layout: {
+        name: 'small',
+        repos,
+        worktreesPerRepo,
+        toReview: TO_REVIEW,
+        afterFetch: AFTER_FETCH,
+      },
+      origins,
+      firstFetchMs,
       cleanup: () => fixtures.cleanup(),
     };
   }
@@ -186,6 +224,8 @@ async function setUp(): Promise<BenchSetup> {
     gitEnv: set.env,
     roles: new Map(set.worktrees.map((w) => [w.path, w.role])),
     layout: { name: LAYOUT, ...set.options },
+    origins: null,
+    firstFetchMs: null,
     cleanup: () => set.cleanup(),
   };
 }
@@ -442,6 +482,46 @@ function judge(budgets: Budget[], strict: boolean): BudgetResult[] {
   });
 }
 
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * `--after-fetch`: polls `/api/projects` until every worktree's review summary carries its file
+ * labels (`review.baseFiles`, which the daemon fills once `readFileOrigins` has run for that worktree).
+ * `ms` is measured from `startedAt`; null when the labels were not all known in time.
+ */
+async function waitForLabels(
+  client: ReturnType<typeof createApiClient>,
+  expected: number,
+  startedAt: number,
+  timeoutMs = 120_000,
+): Promise<{ ms: number | null; known: number }> {
+  let known = 0;
+  while (Date.now() - startedAt < timeoutMs) {
+    const worktrees = (await client.listProjects()).projects.flatMap((p) => p.worktrees);
+    known = worktrees.filter((w) => w.summary?.review?.baseFiles !== undefined).length;
+    if (known >= expected) return { ms: Date.now() - startedAt, known };
+    await sleep(50);
+  }
+  return { ms: null, known };
+}
+
+/** What the To review inbox says about merge noise: worktrees and files by label. */
+async function labelStats(client: ReturnType<typeof createApiClient>) {
+  const { entries } = await client.inbox({ scope: { kind: 'review' } });
+  let withBase = 0;
+  let baseFiles = 0;
+  let sameAsBase = 0;
+  let viaMerge = 0;
+  for (const entry of entries) {
+    const base = entry.files.filter((f) => f.origin === 'base');
+    if (base.length > 0) withBase++;
+    baseFiles += base.length;
+    if (base.some((f) => f.originVia === 'same-as-base')) sameAsBase++;
+    viaMerge += base.filter((f) => f.originVia === 'merge').length;
+  }
+  return { worktrees: entries.length, withBase, baseFiles, sameAsBase, viaMerge };
+}
+
 async function main() {
   assertBuilt();
   const idleMs = Number(args['idle-seconds']) * 1000;
@@ -472,11 +552,26 @@ async function main() {
 
     let page: Page | null = null;
     let paint: { cold: number; warm: number[]; fcp: number | null } | null = null;
+    // --after-fetch: when is every worktree's merge-noise labelling known? Counted from the start of
+    // the cold paint (a browser opening the app right after the daemon came up).
+    const labelsStart = Date.now();
+    const labelsPoll = AFTER_FETCH ? waitForLabels(client, worktreeCount, labelsStart) : null;
     const phases: Record<string, [number, number]> = { startup: [startEpoch, summariesEpoch] };
     if (!uiProblem) {
       applyChromiumLibraryPath();
       browser = await chromium.launch();
-      page = await (await browser.newContext({ viewport: { width: 1440, height: 900 } })).newPage();
+      const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+      if (TO_REVIEW) {
+        // A fresh profile opens on All on branch; this one opens on To review, the default of a
+        // reviewer's profile, which makes the daemon compute every review state (and label) at paint.
+        await context.addInitScript(() => {
+          localStorage.setItem(
+            'octopus-diff:prefs',
+            JSON.stringify({ version: 2, defaultScope: 'review' }),
+          );
+        });
+      }
+      page = await context.newPage();
       let from = Date.now();
       const cold = await firstPaint(page, daemon.authUrl);
       phases.coldPaint = [from, Date.now()];
@@ -490,6 +585,33 @@ async function main() {
       await page.locator(`[data-testid="${TEST_IDS.inboxItem}"]`).click();
       log(
         `first paint: cold ${cold.ms.toFixed(0)} ms, warm ${warm.map((w) => w.toFixed(0)).join(' / ')} ms`,
+      );
+    }
+
+    let labels: {
+      knownMs: number | null;
+      known: number;
+      triggeredByBench: boolean;
+      stats: Awaited<ReturnType<typeof labelStats>>;
+    } | null = null;
+    if (labelsPoll) {
+      let result = await Promise.race([labelsPoll, sleep(10_000).then(() => null)]);
+      let triggeredByBench = false;
+      if (result === null) {
+        // Nothing the UI loaded asked for the review states (a default scope without them): ask the
+        // way the To review inbox does, so the labels get computed.
+        triggeredByBench = true;
+        await client.inbox({ scope: { kind: 'review' } });
+        result = await labelsPoll;
+      }
+      labels = {
+        knownMs: result.ms,
+        known: result.known,
+        triggeredByBench,
+        stats: await labelStats(client),
+      };
+      log(
+        `labels: all ${result.known} worktrees known after ${result.ms ?? 'timeout'} ms (from the cold paint's start${triggeredByBench ? '; triggered by the bench' : ''}); ${labels.stats.withBase} worktrees with base files`,
       );
     }
 
@@ -590,6 +712,53 @@ async function main() {
           `files ${setup.roles.get(w.path) ?? w.id}, working`,
           scopePath(`/api/worktrees/${w.id}/files`, { kind: 'working' }),
         ),
+      );
+    }
+    // --after-fetch, second fetch while the daemon runs: every worktree's labels are invalidated at
+    // once. Time until the To review inbox shows the new labels everywhere, spawns and RSS.
+    let liveFetch: {
+      fetchMs: number;
+      relabelMs: number;
+      polls: number;
+      complete: boolean;
+      spawns: number;
+      spawnsPerWorktree: number;
+      bySub: SpawnStats['bySub'];
+      rssBeforeBytes: number;
+      rssAfterBytes: number;
+      stats: Awaited<ReturnType<typeof labelStats>>;
+    } | null = null;
+    if (AFTER_FETCH && setup.origins) {
+      const rssBeforeBytes = (await memory(daemon.child.pid as number)).rssBytes;
+      const fetched = await setup.origins.fetchMovesOrigin(2);
+      const from = Date.now();
+      const t0 = performance.now();
+      let stats = await labelStats(client);
+      let polls = 1;
+      while (stats.sameAsBase < setup.origins.linkedWorktrees && Date.now() - from < 120_000) {
+        await sleep(50);
+        stats = await labelStats(client);
+        polls++;
+      }
+      const relabelMs = performance.now() - t0;
+      await settled(daemon.spawnFile, daemon.activeFile, 500, 30_000);
+      const spawned = spawnStats(
+        within(gitSpawns(await readSpawns(daemon.spawnFile)), from, Date.now()),
+      );
+      liveFetch = {
+        fetchMs: fetched.ms,
+        relabelMs: Math.round(relabelMs),
+        polls,
+        complete: stats.sameAsBase >= setup.origins.linkedWorktrees,
+        spawns: spawned.total,
+        spawnsPerWorktree: Math.round((spawned.total / worktreeCount) * 10) / 10,
+        bySub: spawned.bySub,
+        rssBeforeBytes,
+        rssAfterBytes: (await memory(daemon.child.pid as number)).rssBytes,
+        stats,
+      };
+      log(
+        `live fetch: relabel ${liveFetch.relabelMs} ms, ${liveFetch.spawns} spawns, ${stats.sameAsBase}/${setup.origins.linkedWorktrees} worktrees relabelled`,
       );
     }
     const mem = await memory(daemon.child.pid as number);
@@ -724,6 +893,16 @@ async function main() {
         samples: samples.map(({ window: _window, ...rest }) => rest),
       },
       payloads,
+      afterFetch:
+        AFTER_FETCH && setup.origins
+          ? {
+              repos: setup.origins.repos,
+              linkedWorktrees: setup.origins.linkedWorktrees,
+              firstFetchMs: setup.firstFetchMs,
+              labels,
+              liveFetch,
+            }
+          : null,
       targets: TARGETS,
       tracked: TRACKED,
       strict: args.strict,
@@ -731,7 +910,13 @@ async function main() {
       pass: failed.length === 0,
     };
     await mkdir(args.out, { recursive: true });
-    const stem = LAYOUT === 'small' ? 'results' : `results-${LAYOUT}`;
+    const stem = AFTER_FETCH
+      ? 'results-after-fetch'
+      : TO_REVIEW
+        ? 'results-to-review'
+        : LAYOUT === 'small'
+          ? 'results'
+          : `results-${LAYOUT}`;
     await writeFile(join(args.out, `${stem}.json`), `${JSON.stringify(result, null, 2)}\n`);
     await writeFile(join(args.out, `${stem}.md`), markdown(result));
     process.stdout.write(markdown(result));
@@ -838,6 +1023,70 @@ function markdown(r: any): string {
     )
     .join('\n');
   const baselineRows = BASELINE_2026_11_11.map(([k, v]) => `| ${k} | ${v} |`).join('\n');
+  const af = r.afterFetch as {
+    repos: number;
+    linkedWorktrees: number;
+    firstFetchMs: number | null;
+    labels: {
+      knownMs: number | null;
+      known: number;
+      triggeredByBench: boolean;
+      stats: {
+        worktrees: number;
+        withBase: number;
+        baseFiles: number;
+        sameAsBase: number;
+        viaMerge: number;
+      };
+    } | null;
+    liveFetch: {
+      fetchMs: number;
+      relabelMs: number;
+      polls: number;
+      complete: boolean;
+      spawns: number;
+      spawnsPerWorktree: number;
+      bySub: Record<string, { count: number; totalMs: number; p50: number; p95: number }>;
+      rssBeforeBytes: number;
+      rssAfterBytes: number;
+      stats: { worktrees: number; withBase: number; baseFiles: number; sameAsBase: number };
+    } | null;
+  } | null;
+  const afterFetchSection = af
+    ? `
+## After a fetch that moved origin/main (\`--after-fetch\`, issue #35)
+
+${af.repos} repositories each have a bare \`origin\`; the ${af.linkedWorktrees} linked worktrees committed one own file and merged \`origin/main\` (the local \`main\` is stale). A fetch then moved \`origin/main\` in every repository (${fmt(af.firstFetchMs)}) **before the daemon started**, so every worktree's labels are computed from scratch; the numbers above (startup spawns, cold paint, warm reloads, RSS) are for that cold start.
+
+| Metric | Result |
+|---|---|
+| Time until every worktree's labels are known (from the cold paint's start${af.labels?.triggeredByBench ? '; the UI did not ask, the bench requested To review' : ''}) | ${af.labels ? `${fmt(af.labels.knownMs)} (${af.labels.known} worktrees)` : 'n/a'} |
+| To review inbox afterwards: worktrees with base files / base files / via merge | ${af.labels ? `${af.labels.stats.withBase} / ${af.labels.stats.baseFiles} / ${af.labels.stats.viaMerge}` : 'n/a'} |
+| **Live fetch** (second fetch, daemon running, every label invalidated at once): fetch time | ${af.liveFetch ? fmt(af.liveFetch.fetchMs) : 'n/a'} |
+| Live fetch: time until the To review inbox shows the new labels in every worktree | ${af.liveFetch ? `${fmt(af.liveFetch.relabelMs)} (${af.liveFetch.stats.sameAsBase}/${af.linkedWorktrees} worktrees relabelled${af.liveFetch.complete ? '' : ', INCOMPLETE'})` : 'n/a'} |
+| Live fetch: git spawns (per worktree) | ${af.liveFetch ? `${af.liveFetch.spawns} (${af.liveFetch.spawnsPerWorktree})` : 'n/a'} |
+| Daemon RSS before / after the live fetch | ${af.liveFetch ? `${bytes(af.liveFetch.rssBeforeBytes)} / ${bytes(af.liveFetch.rssAfterBytes)}` : 'n/a'} |
+
+${
+  af.liveFetch
+    ? `Live fetch, git spawns by subcommand:
+
+| Subcommand | Spawns | Wall time (sum) | p50 | p95 |
+|---|---|---|---|---|
+${Object.entries(af.liveFetch.bySub)
+  .map(([name, g]) => `| \`${name}\` | ${g.count} | ${g.totalMs} ms | ${g.p50} ms | ${g.p95} ms |`)
+  .join('\n')}
+`
+    : ''
+}`
+    : '';
+  const stem = af
+    ? 'results-after-fetch'
+    : r.layout.toReview
+      ? 'results-to-review'
+      : r.layout.name === 'small'
+        ? 'results'
+        : `results-${r.layout.name}`;
   const trackedNote = Object.entries(r.tracked as Record<string, string>)
     .map(([id, issue]) => `\`${id}\` → ${issue}`)
     .join('; ');
@@ -883,6 +1132,7 @@ ${phaseRows}
 `
     : ''
 }
+${afterFetchSection}
 ## Edit → SSE by worktree role
 
 | Role | Edits | SSE p50 / p95 / max | Git spawns per edit |
@@ -903,7 +1153,7 @@ Static reference from the roadmap issue (12-core WSL2, Node 26, git 2.53), not m
 |---|---|
 ${baselineRows}
 
-Raw numbers: \`${r.layout.name === 'small' ? 'results' : `results-${r.layout.name}`}.json\` next to this file. Re-run: \`pnpm --filter @octopus-diff/e2e bench${r.layout.name === 'small' ? '' : ` --layout ${r.layout.name}`}\`.
+Raw numbers: \`${stem}.json\` next to this file. Re-run: \`pnpm --filter @octopus-diff/e2e bench${af ? ' --after-fetch' : r.layout.toReview ? ' --to-review' : r.layout.name === 'small' ? '' : ` --layout ${r.layout.name}`}\`.
 `;
 }
 
