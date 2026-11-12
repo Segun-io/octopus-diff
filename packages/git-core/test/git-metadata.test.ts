@@ -623,8 +623,13 @@ describe('config reads with a remote (#74)', () => {
       fx.git(repo, ['remote', 'add', 'origin', 'https://github.com/example/app.git']);
       spawns.take();
       await Promise.all(wts.map((wt) => core.getSummary(wt)));
-      // One read for the three (was one per worktree): each summary asked before it started.
-      expect(count(spawns.take(), 'config')).toBe(1);
+      // One read for the three when each summary asked before it started (was one per worktree,
+      // 3). A summary that reaches the scan after the first read's process has spawned reads for
+      // itself (the answer must be at least as new as its own ask), and how late a summary gets
+      // there depends on the runner's load (it does its own stats first), so two is allowed.
+      const shared = count(spawns.take(), 'config');
+      expect(shared).toBeGreaterThanOrEqual(1);
+      expect(shared).toBeLessThanOrEqual(2);
       // Still racy: a later operation does not reuse it.
       await core.getSummary(wts[0] as WorktreeLocator);
       expect(count(spawns.take(), 'config')).toBe(1);
