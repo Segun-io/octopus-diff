@@ -785,10 +785,16 @@ export class MockBackend {
     mw: MockWorktree,
     working: readonly ChangedFile[],
   ): NonNullable<WorktreeSummary['review']> {
-    const files = this.changedFiles(mp, mw, { kind: 'review' });
-    const noise = files.filter((f) => f.origin !== undefined);
+    const review = { kind: 'review' } as const;
     // Without status flow the review list is the uncommitted files (reviewed per scope kind, as
-    // before) plus the merge noise; with it, what the review scope lists.
+    // before) plus the merge noise, so only the noise needs building (the summary is computed
+    // for every worktree on every projects request); with it, what the review scope lists.
+    const files = this.options.statusFlow ? this.changedFiles(mp, mw, review) : [];
+    const noise = this.options.statusFlow
+      ? files.filter((f) => f.origin !== undefined)
+      : mw.worktree.isMain || mw.commitsReviewed
+        ? []
+        : mw.mergeFiles.map((f) => this.changedFile(mp, mw, review, f));
     const unreviewed = this.options.statusFlow
       ? files.filter((f) => !f.reviewed)
       : [...working.filter((f) => !f.reviewed), ...noise.filter((f) => !f.reviewed)];

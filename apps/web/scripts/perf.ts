@@ -5,6 +5,9 @@
  *   BASE_URL=http://127.0.0.1:4173 pnpm perf
  * Prints a JSON summary (all times in ms). Needs `[data-testid=scope-select]`'s `working` option and a
  * selected first file (see step 1 below); if the UI changes those, this script fails at step 1.
+ * `SCOPE=review` measures the To review scope, where the large dataset's merge noise (#34) is
+ * wrapped in a collapsed group per worktree; the default (`working`) has none and is what the
+ * numbers in docs/reports were taken with before #34.
  * Fix history: 2026-11-11 (#26) the default scope became "To review" and the old wait never ended.
  */
 import { existsSync } from 'node:fs';
@@ -17,6 +20,7 @@ if (existsSync(LIBS)) {
   process.env.LD_LIBRARY_PATH = [LIBS, process.env.LD_LIBRARY_PATH].filter(Boolean).join(':');
 }
 const base = process.env.BASE_URL ?? 'http://127.0.0.1:4173';
+const scopeKind = process.env.SCOPE ?? 'working';
 
 declare global {
   interface Window {
@@ -62,10 +66,19 @@ async function main() {
   // The default scope is "To review", which the mock has nothing in, so nothing is selected and
   // the viewer stays `empty`. The benchmark measures a busy inbox: show the uncommitted changes
   // (the scope this script was written for); the first file is then selected and the viewer ready.
-  await page.getByTestId('scope-select').selectOption('working');
-  await page
-    .locator('[data-testid="diff-viewer"][data-state="ready"]')
-    .waitFor({ timeout: 30_000 });
+  await page.getByTestId('scope-select').selectOption(scopeKind);
+  // The viewer may already be `ready` for another scope's first file: wait for this scope's list.
+  await page.waitForFunction(
+    (kind) =>
+      document
+        .querySelector('[data-testid="scope-select"]')
+        ?.getAttribute('data-scope')
+        ?.startsWith(kind) &&
+      document.querySelectorAll('[data-testid="file-item"]').length > 0 &&
+      document.querySelector('[data-testid="diff-viewer"]')?.getAttribute('data-state') === 'ready',
+    scopeKind,
+    { timeout: 30_000 },
+  );
   const load = await page.evaluate(() => {
     const nav = performance.getEntriesByType('navigation')[0] as
       | PerformanceNavigationTiming
@@ -157,6 +170,7 @@ async function main() {
 
   const summary = {
     dataset: {
+      scope: scopeKind,
       worktrees: 30,
       filesPerWorktree: 200,
       inboxGroups: groups,
