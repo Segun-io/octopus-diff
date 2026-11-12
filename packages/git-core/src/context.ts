@@ -63,6 +63,12 @@ export interface ConfigScan {
   attributesFiles: string[];
 }
 
+interface ConfigReadRun {
+  /** `performance.now()` when its git process started; null while it waits for a slot. */
+  spawnedAt: number | null;
+  promise: Promise<unknown>;
+}
+
 interface CachedRepo {
   info: RepoInfo;
   at: number;
@@ -99,19 +105,20 @@ export class GitContext {
   private versionPromise: Promise<GitVersion> | null = null;
   private readonly repos = new Map<string, CachedRepo>();
   private readonly resolving = new Map<string, Promise<RepoInfo>>();
-  /** Config scans by `<commonDir>\0<signatures of every config file git reads>` (#29). */
-  private readonly configScans = new LruCache<string, { at: number; scan: ConfigScan }>(
+  /**
+   * Config reads (the scan, #29; the remote config, #74) by
+   * `<kind>\0<commonDir>\0<signatures of every config file git reads>`.
+   */
+  private readonly configReads = new LruCache<string, { at: number; value: unknown }>(
     CONFIG_SCAN_CACHE_MAX,
   );
+  /** Config reads in flight, by the same key (`cachedConfigRead`). */
+  private readonly configReadRuns = new Map<string, ConfigReadRun>();
   /**
    * Results that cannot change for a given key: facts about commits, keyed by the common dir
    * and the commit ids (`merge-base`, ancestry, ahead/behind, review ranges). Objects are
    * immutable; only positive results are stored (a commit that is missing now may be fetched).
    */
-  private readonly configScanRuns = new Map<
-    string,
-    Promise<{ scan: ConfigScan; includes: boolean }>
-  >();
   private readonly immutable = new LruCache<string, unknown>(IMMUTABLE_CACHE_MAX);
   private readonly immutableRuns = new Map<string, Promise<unknown>>();
   /** Branch refs checked out in a project's worktrees, from the last `worktree list` (#29). */
@@ -278,7 +285,7 @@ export class GitContext {
   /** Drops every cache (dispose). */
   clearCaches(): void {
     this.repos.clear();
-    this.configScans.clear();
+    this.configReads.clear();
     this.immutable.clear();
     this.checkedOut.clear();
   }
@@ -386,32 +393,65 @@ export class GitContext {
    * while their `config.worktree` files are absent (the usual case).
    */
   configScan(repo: RepoInfo): Promise<ConfigScan> {
-    repo.configScan ??= this.cachedConfigScan(repo);
+    repo.configScan ??= this.cachedConfigRead(repo, 'scan', (onSpawn) =>
+      this.readConfigScan(repo, onSpawn),
+    );
     return repo.configScan;
   }
 
-  private async cachedConfigScan(repo: RepoInfo): Promise<ConfigScan> {
+  /**
+   * A config read through the cache of `configScan` (same signature, racy and include rules),
+   * keyed by `kind`, reused for at most `ttlMs` (default `CONFIG_SCAN_TTL_MS`). `read` reports
+   * whether the output had an `include*` key and must pass `onSpawn` to the runner.
+   *
+   * On top of reuse, an operation may join a read of the same key whose git process **started
+   * after this operation asked** (or has not started yet: it waits for a free process slot),
+   * whatever the signature says: git reads the config files after its process starts, so the
+   * answer is at least as new as one this operation would have started itself. That keeps the
+   * worktrees of a project that refresh together at one read while a config file is younger than
+   * two seconds (`git remote add`, `push -u` or `git config` just before the daemon looked, #74)
+   * or uses `include*`. Equal keys also mean the same files in the same state at the time of the
+   * operation's own stat calls, so the joined read covers this worktree's files too.
+   */
+  async cachedConfigRead<T>(
+    repo: RepoInfo,
+    kind: string,
+    read: (onSpawn: () => void) => Promise<{ value: T; includes: boolean }>,
+    ttlMs = CONFIG_SCAN_TTL_MS,
+  ): Promise<T> {
+    const askedAt = performance.now();
     const signature = await this.configSignature(repo);
-    if (signature === null) return (await this.readConfigScan(repo)).scan;
-    const key = `${repo.commonDir}\u0000${signature}`;
-    const hit = this.configScans.get(key);
-    if (hit && Date.now() - hit.at < CONFIG_SCAN_TTL_MS) return hit.scan;
-    // Worktrees of one project refreshing together share one read (same files, same key). A
-    // read that found `include*` keys is not shared: each operation then reads its own.
-    const running = this.configScanRuns.get(key);
+    if (signature === null) return (await read(() => {})).value;
+    const key = `${kind}\u0000${repo.commonDir}\u0000${signature.text}`;
+    if (!signature.racy) {
+      const hit = this.configReads.get(key);
+      if (hit && Date.now() - hit.at < ttlMs) return hit.value as T;
+    }
+    const running = this.configReadRuns.get(key);
     if (running) {
-      const shared = await running;
-      return shared.includes ? (await this.readConfigScan(repo)).scan : shared.scan;
+      if (running.spawnedAt === null || running.spawnedAt > askedAt) {
+        return ((await running.promise) as { value: T }).value;
+      }
+      if (!signature.racy) {
+        // Started before this operation asked, but its signatures (taken before git read) are this
+        // operation's: nothing changed in between. Not with `include*` (files not in the key).
+        const shared = (await running.promise) as { value: T; includes: boolean };
+        if (!shared.includes) return shared.value;
+      }
     }
     const at = Date.now();
-    const run = this.readConfigScan(repo);
-    this.configScanRuns.set(key, run);
+    const run: ConfigReadRun = { spawnedAt: null, promise: Promise.resolve(null) };
+    const promise = read(() => {
+      run.spawnedAt = performance.now();
+    });
+    run.promise = promise;
+    this.configReadRuns.set(key, run);
     try {
-      const { scan, includes } = await run;
-      if (!includes) this.configScans.set(key, { at, scan });
-      return scan;
+      const { value, includes } = await promise;
+      if (!includes && !signature.racy) this.configReads.set(key, { at, value });
+      return value;
     } finally {
-      this.configScanRuns.delete(key);
+      if (this.configReadRuns.get(key) === run) this.configReadRuns.delete(key);
     }
   }
 
@@ -451,16 +491,21 @@ export class GitContext {
     return labelled;
   }
 
-  /** Stat signatures of `configFiles`, or null when one cannot be trusted for reuse. */
-  private async configSignature(repo: RepoInfo): Promise<string | null> {
+  /**
+   * Stat signatures of `configFiles`, or null when one cannot be stat'ed. `racy`: a file changed
+   * in the last two seconds (or is stamped in the future), so equal signatures do not prove equal
+   * content and the read must not be reused (only joined before it starts, `cachedConfigRead`).
+   */
+  private async configSignature(repo: RepoInfo): Promise<{ text: string; racy: boolean } | null> {
     const files = this.configFiles(repo);
     const now = BigInt(Date.now()) * 1_000_000n;
+    let racy = false;
     const parts = await Promise.all(
       files.map(async ([label, file]): Promise<string | null> => {
         if (!path.isAbsolute(file)) return null;
         try {
           const st = await stat(file, { bigint: true });
-          if (st.mtimeNs > now - CONFIG_RACY_NS || st.ctimeNs > now - CONFIG_RACY_NS) return null;
+          if (st.mtimeNs > now - CONFIG_RACY_NS || st.ctimeNs > now - CONFIG_RACY_NS) racy = true;
           return `${label}\u0000${st.size}:${st.mtimeNs}:${st.ctimeNs}:${st.ino}:${st.mode}`;
         } catch (error) {
           const code = (error as NodeJS.ErrnoException).code;
@@ -468,10 +513,13 @@ export class GitContext {
         }
       }),
     );
-    return parts.some((part) => part === null) ? null : parts.join('\u0000');
+    return parts.some((part) => part === null) ? null : { text: parts.join('\u0000'), racy };
   }
 
-  private async readConfigScan(repo: RepoInfo): Promise<{ scan: ConfigScan; includes: boolean }> {
+  private async readConfigScan(
+    repo: RepoInfo,
+    onSpawn: () => void,
+  ): Promise<{ value: ConfigScan; includes: boolean }> {
     const result = await this.runner.run(
       ['config', '--null', '--show-scope', '--get-regexp', CONFIG_SCAN_REGEX],
       {
@@ -479,6 +527,7 @@ export class GitContext {
         queueKey: repo.commonDir,
         okExitCodes: [0, 1],
         location: repoLocation(repo),
+        onSpawn,
       },
     );
     const output = result.stdout.toString('utf8');
@@ -500,7 +549,7 @@ export class GitContext {
         attributesFiles.push(token.slice('core.attributesfile\n'.length));
       }
     }
-    return { scan: { overrides: entries, attributesFiles }, includes };
+    return { value: { overrides: entries, attributesFiles }, includes };
   }
 }
 

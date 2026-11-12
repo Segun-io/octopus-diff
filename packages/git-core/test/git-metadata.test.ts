@@ -498,3 +498,103 @@ describe('cached history facts follow the repository (PR #58 review)', () => {
     }
   });
 });
+
+describe('config reads with a remote (#74)', () => {
+  it('reads the remote config once while no config file changes, and again after a change', async () => {
+    const repo = fx.repo('remote-cache', { files: { 'a.txt': 'a\n' } });
+    fx.git(repo, ['remote', 'add', 'origin', 'https://github.com/example/app.git']);
+    fx.git(repo, ['config', 'branch.main.remote', 'origin']);
+    await sleep(RACY_WAIT_MS);
+    const spawns = spawnLog('remote-cache');
+    const core = createGitCore(fx.coreOptions({ gitBinary: spawns.wrapper }));
+    try {
+      const { project } = await core.resolveProject(repo);
+      const at = { id: project.id, commonDir: project.commonDir };
+      spawns.take();
+      const first = await core.readRemoteConfig?.(at);
+      expect(first?.remotes.map((r) => r.url)).toEqual(['https://github.com/example/app.git']);
+      expect(count(spawns.take(), 'config')).toBe(1);
+      // The forge service asks on every focus, poll and git change: no process while nothing changed.
+      for (let i = 0; i < 3; i++) expect(await core.readRemoteConfig?.(at)).toEqual(first);
+      await Promise.all([core.readRemoteConfig?.(at), core.readRemoteConfig?.(at)]);
+      expect(count(spawns.take(), 'config')).toBe(0);
+      // Every caller gets its own copy.
+      const copy = await core.readRemoteConfig?.(at);
+      copy?.remotes.splice(0);
+      expect((await core.readRemoteConfig?.(at))?.remotes).toHaveLength(1);
+
+      // A push -u / set-url changes the repository config: the very next read sees it, and while
+      // the file is younger than two seconds every read goes to git.
+      fx.git(repo, ['remote', 'set-url', 'origin', 'https://github.com/example/renamed.git']);
+      for (let i = 0; i < 2; i++) {
+        expect((await core.readRemoteConfig?.(at))?.remotes.map((r) => r.url)).toEqual([
+          'https://github.com/example/renamed.git',
+        ]);
+      }
+      expect(count(spawns.take(), 'config')).toBe(2);
+      await sleep(RACY_WAIT_MS);
+      await core.readRemoteConfig?.(at);
+      await core.readRemoteConfig?.(at);
+      expect(count(spawns.take(), 'config')).toBe(1);
+    } finally {
+      await core.dispose();
+    }
+  });
+
+  it('never reuses a remote config read when config includes other files', async () => {
+    const repo = fx.repo('remote-include', { files: { 'a.txt': 'a\n' } });
+    const include = path.join(fx.root, 'remote-include.inc');
+    writeFileSync(include, '[remote "origin"]\n\turl = https://github.com/example/one.git\n');
+    fx.git(repo, ['config', 'include.path', include]);
+    await sleep(RACY_WAIT_MS);
+    const spawns = spawnLog('remote-include');
+    const core = createGitCore(fx.coreOptions({ gitBinary: spawns.wrapper }));
+    try {
+      const { project } = await core.resolveProject(repo);
+      const at = { id: project.id, commonDir: project.commonDir };
+      spawns.take();
+      expect((await core.readRemoteConfig?.(at))?.remotes.map((r) => r.url)).toEqual([
+        'https://github.com/example/one.git',
+      ]);
+      // Only the included file changes; the repository's own config file does not.
+      writeFileSync(include, '[remote "origin"]\n\turl = https://github.com/example/two.git\n');
+      expect((await core.readRemoteConfig?.(at))?.remotes.map((r) => r.url)).toEqual([
+        'https://github.com/example/two.git',
+      ]);
+      expect(count(spawns.take(), 'config')).toBe(2);
+    } finally {
+      await core.dispose();
+    }
+  });
+
+  it('worktrees that refresh together share one config scan while the config is racy', async () => {
+    const repo = fx.repo('racy-share', { files: { 'a.txt': 'a\n' } });
+    const linked = [1, 2].map((n) => path.join(fx.root, `racy-share-wt${n}`));
+    for (const [i, dir] of linked.entries()) {
+      fx.git(repo, ['worktree', 'add', '-q', '-b', `agent/${i}`, dir]);
+    }
+    const spawns = spawnLog('racy-share');
+    const core = createGitCore(fx.coreOptions({ gitBinary: spawns.wrapper }));
+    try {
+      const { worktrees } = await core.resolveProject(repo);
+      const wts = worktrees.map((w) => ({
+        projectId: w.projectId,
+        worktreeId: w.id,
+        path: w.path,
+      }));
+      expect(wts).toHaveLength(3);
+      await Promise.all(wts.map((wt) => core.getSummary(wt)));
+      // `git remote add` just before the daemon looks: the repository config is two seconds young.
+      fx.git(repo, ['remote', 'add', 'origin', 'https://github.com/example/app.git']);
+      spawns.take();
+      await Promise.all(wts.map((wt) => core.getSummary(wt)));
+      // One read for the three (was one per worktree): each summary asked before it started.
+      expect(count(spawns.take(), 'config')).toBe(1);
+      // Still racy: a later operation does not reuse it.
+      await core.getSummary(wts[0] as WorktreeLocator);
+      expect(count(spawns.take(), 'config')).toBe(1);
+    } finally {
+      await core.dispose();
+    }
+  });
+});
