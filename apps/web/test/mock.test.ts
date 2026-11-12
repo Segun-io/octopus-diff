@@ -7,9 +7,10 @@ import {
   type ServerEvent,
   ServerEventSchema,
 } from '@octopus-diff/contracts';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { MockBackend } from '../mock/backend.ts';
-import { createMockFetch } from '../mock/router.ts';
+import { createMockFetch, sideOf } from '../mock/router.ts';
+import { forgeSimFromEnv } from '../mock/server.ts';
 
 function clientFor(backend: MockBackend, token?: string): ApiClient {
   // The contract client validates every response with the zod schemas (validate: true).
@@ -345,6 +346,120 @@ describe('mock backend implements the contract', () => {
     backend.now = () => Date.now() + 11 * 60 * 1000;
     await expect(api.undoReview({ undoToken: t.undoToken ?? '' })).rejects.toMatchObject({
       code: 'not_found',
+    });
+  });
+});
+
+describe('mock knobs for slow and held-back forges (#11)', () => {
+  it('tells which side answers a route slowly', () => {
+    expect(sideOf('/api/forges/worktrees/w/request', 'GET')).toBe('forge');
+    expect(sideOf('/api/forges/worktrees/w/request/conversation', 'GET')).toBe('forge');
+    expect(sideOf('/api/forges/projects/p/repository', 'GET')).toBe('forge');
+    expect(sideOf('/api/forges/refresh', 'POST')).toBe('forge');
+    // Reads of the daemon's own cache are local, like everything git.
+    expect(sideOf('/api/forges', 'GET')).toBe('local');
+    expect(sideOf('/api/projects', 'GET')).toBe('local');
+    expect(sideOf('/api/worktrees/w/diff', 'GET')).toBe('local');
+  });
+
+  it('calls the gate with the side before answering, and waits for it', async () => {
+    const backend = new MockBackend({ dataset: 'demo' });
+    const seen: string[] = [];
+    let release = () => {};
+    const held = new Promise<void>((r) => {
+      release = r;
+    });
+    const fetch = createMockFetch(backend, {
+      gate: async ({ path, side }) => {
+        seen.push(`${side} ${path}`);
+        if (side === 'forge') await held;
+      },
+    });
+    const api = createApiClient({ baseUrl: 'http://mock.local', fetch });
+    await api.listProjects();
+    const refresh = api.refreshForges({});
+    let done = false;
+    void refresh.then(() => {
+      done = true;
+    });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(done).toBe(false);
+    release();
+    await refresh;
+    expect(seen).toEqual(['local /api/projects', 'forge /api/forges/refresh']);
+  });
+
+  it('delays only the chosen side', async () => {
+    vi.useFakeTimers();
+    try {
+      const backend = new MockBackend({ dataset: 'demo' });
+      const fetch = createMockFetch(backend, { forgeLatencyMs: 1000 });
+      const api = createApiClient({ baseUrl: 'http://mock.local', fetch });
+      await api.listProjects(); // local: no delay
+      await api.getForges(); // the daemon's cache: no delay
+      let done = false;
+      const request = api.refreshForges({}).then(() => {
+        done = true;
+      });
+      await vi.advanceTimersByTimeAsync(999);
+      expect(done).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await request;
+      expect(done).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('reports pending lookups, a held-back budget and a failed fetch, contract-valid', async () => {
+    const backend = new MockBackend({ dataset: 'demo' });
+    const api = clientFor(backend);
+    const plain = await api.getForges();
+    expect(plain.projects.every((p) => p.status === 'ok' || p.status === 'idle')).toBe(true);
+    expect(plain.budgets?.[0]?.state).toBe('ok');
+
+    backend.setForgeSim({ pending: true });
+    const pending = await api.getForges();
+    expect(pending.projects.every((p) => p.status === 'pending' && p.fetchedAt === null)).toBe(
+      true,
+    );
+
+    backend.setForgeSim({ budget: 'backoff', fetchedAgoMs: 180_000 });
+    const held = await api.getForges();
+    expect(held.budgets?.[0]).toMatchObject({ state: 'backoff' });
+    expect(held.budgets?.[0]?.resumeAt).not.toBeNull();
+    const age = Date.parse(held.generatedAt) - Date.parse(held.projects[0]?.fetchedAt ?? '');
+    expect(age).toBe(180_000);
+
+    backend.setForgeSim({ error: 'boom' });
+    const failed = await api.getForges();
+    expect(failed.projects.some((p) => p.status === 'error' && p.message === 'boom')).toBe(true);
+    // The last good requests are kept (docs/FORGES.md 3b).
+    expect(failed.projects.some((p) => p.worktrees.length > 0)).toBe(true);
+  });
+
+  it('changes the state through the control endpoint and tells clients', async () => {
+    const backend = new MockBackend({ dataset: 'demo' });
+    const events: ServerEvent[] = [];
+    backend.subscribe((e) => events.push(e));
+    const fetch = createMockFetch(backend);
+    await fetch('/api/__mock/forge-sim?pending=1&budget=low&error=x&fetchedAgoMs=5000', {
+      method: 'POST',
+    });
+    expect(events.some((e) => e.type === 'forge.updated')).toBe(true);
+    const api = createApiClient({ baseUrl: 'http://mock.local', fetch });
+    expect((await api.getForges()).budgets?.[0]?.state).toBe('low');
+    await fetch('/api/__mock/forge-sim', { method: 'POST' }); // no parameters: reset
+    expect((await api.getForges()).budgets?.[0]?.state).toBe('ok');
+  });
+
+  it('reads MOCK_FORGE_SIM', () => {
+    expect(forgeSimFromEnv(undefined)).toEqual({});
+    expect(forgeSimFromEnv('pending')).toEqual({ pending: true });
+    expect(forgeSimFromEnv('backoff,error')).toMatchObject({
+      budget: 'backoff',
+      fetchedAgoMs: 180_000,
+      error: expect.any(String),
     });
   });
 });
