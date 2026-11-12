@@ -2,6 +2,7 @@ import {
   type ChangeRequest,
   type ChecksState,
   changeRequestNoun,
+  type ForgeBudgetState,
   type ForgesResponse,
   type MergeState,
   type ProjectForgeState,
@@ -156,6 +157,29 @@ export function indexForges(
     for (const worktree of project.worktrees) map.set(worktree.worktreeId, { project, worktree });
   }
   return map;
+}
+
+/**
+ * The rate-limit line of one host (Settings → Forges, DECISIONS #197): what the daemon used in the
+ * last hour and, when it holds lookups back, why and until when. `warn` is true when automatic
+ * lookups are not running normally.
+ */
+export function budgetLine(
+  budget: ForgeBudgetState,
+  clock: (iso: string) => string = (iso) =>
+    new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+): { text: string; warn: boolean } {
+  const unit = budget.kind === 'github' ? 'points' : 'requests';
+  const used = `${budget.spentLastHour.toLocaleString('en-US')} ${unit} used in the last hour`;
+  if (budget.state === 'ok') {
+    const left =
+      budget.remaining !== null
+        ? `, ${budget.remaining.toLocaleString('en-US')} left in ${budget.host}'s window`
+        : '';
+    return { text: `${used}${left}`, warn: false };
+  }
+  const until = budget.resumeAt ? ` Resumes about ${clock(budget.resumeAt)}.` : '';
+  return { text: `${used}. ${budget.message ?? ''}${until}`.replace(/\s+/g, ' '), warn: true };
 }
 
 /** One line for a project's forge status in Settings and tooltips. */

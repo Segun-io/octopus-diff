@@ -110,4 +110,33 @@ describe('forge contracts', () => {
     };
     expect(ForgesResponseSchema.parse(response)).toEqual(response);
   });
+
+  it('carries the rate-limit budget per host, and older daemons simply omit it (#8)', () => {
+    const base = {
+      enabled: true,
+      clis: [],
+      projects: [],
+      generatedAt: '2026-11-11T10:00:00.000Z',
+    };
+    expect(ForgesResponseSchema.parse(base).budgets).toBeUndefined();
+    const budgets = [
+      {
+        host: 'github.com',
+        kind: 'github',
+        state: 'backoff',
+        spentLastHour: 812,
+        backgroundLimit: 1500,
+        hourlyLimit: 4000,
+        remaining: 0,
+        resetAt: '2026-11-11T10:40:00.000Z',
+        resumeAt: '2026-11-11T10:40:00.000Z',
+        message: 'GitHub rate limit reached.',
+      },
+    ];
+    expect(ForgesResponseSchema.parse({ ...base, budgets }).budgets).toEqual(budgets);
+    expect(
+      ForgesResponseSchema.safeParse({ ...base, budgets: [{ ...budgets[0], state: 'nope' }] })
+        .success,
+    ).toBe(false);
+  });
 });

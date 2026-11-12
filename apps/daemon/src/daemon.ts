@@ -19,7 +19,7 @@ import type { Hono } from 'hono';
 import { createApp } from './app.js';
 import { DaemonCore } from './core.js';
 import { EventHub } from './events.js';
-import { type ForgeClientLike, ForgeService } from './forges.js';
+import { type ForgeClientLike, ForgeService, type ForgeServiceOptions } from './forges.js';
 import { createLogger } from './logger.js';
 import { ensurePrivateDir, resolveDirs } from './paths.js';
 import { RepositoryInfoService } from './repositories.js';
@@ -62,14 +62,23 @@ export interface DaemonInternals {
   /** Forge integration: replace the gh/glab client (tests), or `false` to not start it. */
   forges?:
     | false
-    | {
-        client?: ForgeClientLike;
-        pollMs?: number;
-        debounceMs?: number;
-        minRefetchMs?: number;
-        followUpMs?: readonly number[];
-        readSshConfig?: () => Promise<string | null>;
-      };
+    | (Pick<
+        ForgeServiceOptions,
+        | 'pollMs'
+        | 'idlePollMs'
+        | 'hotPollMs'
+        | 'attentionMs'
+        | 'focusStaleMs'
+        | 'checkAgainSkipMs'
+        | 'checkAgainMaxPoints'
+        | 'budgetLimits'
+        | 'maxCacheEntries'
+        | 'cacheMaxAgeMs'
+        | 'debounceMs'
+        | 'minRefetchMs'
+        | 'followUpMs'
+        | 'readSshConfig'
+      > & { client?: ForgeClientLike });
 }
 
 export interface DaemonOptions extends StartDaemonOptions {
@@ -175,8 +184,12 @@ export const startDaemon = (async (options: DaemonOptions = {}): Promise<Daemon>
 
   // The forge service is built after the core (it needs it); git changes reach it through this.
   let forgeGitChanged: ((projectId: string) => void) | undefined;
+  let forgeFocused:
+    | ((visible: boolean, projectId: string | null, overview: boolean) => void)
+    | undefined;
   const core = new DaemonCore({
     onGitChange: (projectId) => forgeGitChanged?.(projectId),
+    onFocus: (visible, projectId, overview) => forgeFocused?.(visible, projectId, overview),
     gitCore,
     store,
     hub,
@@ -222,6 +235,9 @@ export const startDaemon = (async (options: DaemonOptions = {}): Promise<Daemon>
         });
 
   forgeGitChanged = forges ? (projectId) => forges.gitChanged(projectId) : undefined;
+  forgeFocused = forges
+    ? (visible, projectId, overview) => forges.focusChanged(visible, projectId, overview)
+    : undefined;
 
   const repositories = new RepositoryInfoService({
     core,

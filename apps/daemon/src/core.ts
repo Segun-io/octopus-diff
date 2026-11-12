@@ -93,6 +93,14 @@ export interface CoreOptions {
    * push configuration changes, which the state hash does not cover.
    */
   onGitChange?: (projectId: string) => void;
+  /**
+   * Called on every `PUT /api/focus`: `visible` is the client's word (`FocusRequest.visible`), or for
+   * older clients false when nothing is focused; `projectId` is the project of the focused worktree
+   * or the open Overview
+   * (`overview`: the project's Overview itself is open).
+   * The forge service paces its polling by it (DECISIONS #197).
+   */
+  onFocus?: (visible: boolean, projectId: string | null, overview: boolean) => void;
 }
 
 interface WorktreeEntry {
@@ -230,6 +238,9 @@ export class DaemonCore {
   readonly #hub: EventHub;
   readonly #log: Logger;
   readonly #onGitChange: ((projectId: string) => void) | undefined;
+  readonly #onFocus:
+    | ((visible: boolean, projectId: string | null, overview: boolean) => void)
+    | undefined;
   readonly #version: string;
   readonly #startedAt: Date;
   readonly #now: () => Date;
@@ -275,6 +286,7 @@ export class DaemonCore {
     this.#hub = options.hub;
     this.#log = options.logger;
     this.#onGitChange = options.onGitChange;
+    this.#onFocus = options.onFocus;
     this.#version = options.version;
     this.#startedAt = options.startedAt;
     this.#now = options.now ?? (() => new Date());
@@ -1108,7 +1120,7 @@ export class DaemonCore {
    * The focused worktree (watch priority) and the project the user has open: a focused worktree
    * opens its project, and so does `projectId` (its Overview). Opening computes review states.
    */
-  setFocus(worktreeId: string | null, projectId: string | null = null): void {
+  setFocus(worktreeId: string | null, projectId: string | null = null, visible?: boolean): void {
     this.#watcher.setFocus(worktreeId);
     let project: ProjectEntry | undefined;
     if (worktreeId !== null) {
@@ -1121,6 +1133,12 @@ export class DaemonCore {
     }
     project ??= projectId === null ? undefined : this.#projects.get(projectId);
     if (project) this.#openProject(project);
+    // `visible` is the client's own word; older clients are inferred (nothing selected = hidden).
+    this.#onFocus?.(
+      visible ?? (worktreeId !== null || projectId !== null),
+      project?.row.id ?? null,
+      projectId !== null,
+    );
   }
 
   // --- files, diffs, commits -------------------------------------------------------------------

@@ -230,3 +230,56 @@ describe('forge details from batch data (hover card, Overview column)', () => {
     expect(table.textContent).toContain('review required');
   });
 });
+
+describe('rate-limit budget line (#8)', () => {
+  const base = {
+    host: 'github.com',
+    kind: 'github' as const,
+    spentLastHour: 1234,
+    backgroundLimit: 1500,
+    hourlyLimit: 4000,
+    remaining: 3200,
+    resetAt: null,
+    resumeAt: null,
+    message: null,
+  };
+
+  it('says what was used, and why and until when lookups are held back', async () => {
+    const { budgetLine } = await import('../src/lib/forge.ts');
+    expect(budgetLine({ ...base, state: 'ok' })).toEqual({
+      text: "1,234 points used in the last hour, 3,200 left in github.com's window",
+      warn: false,
+    });
+    const clock = () => '14:32';
+    const held = budgetLine(
+      {
+        ...base,
+        state: 'backoff',
+        remaining: null,
+        resumeAt: '2026-11-11T14:32:00.000Z',
+        message: 'github.com refused a request because its rate limit is used up.',
+      },
+      clock,
+    );
+    expect(held.warn).toBe(true);
+    expect(held.text).toContain('1,234 points used');
+    expect(held.text).toContain('rate limit is used up');
+    expect(held.text).toContain('Resumes about 14:32.');
+    expect(budgetLine({ ...base, kind: 'gitlab', state: 'ok', remaining: null }).text).toBe(
+      '1,234 requests used in the last hour',
+    );
+  });
+
+  it('is shown in Settings → Forges', async () => {
+    setup();
+    fireEvent.click(await screen.findByTestId(TEST_IDS.settingsOpenButton));
+    const dialog = await screen.findByTestId(TEST_IDS.settingsDialog);
+    const section = within(dialog)
+      .getAllByTestId(TEST_IDS.settingsSection)
+      .find((s) => s.dataset.section === 'forges');
+    if (!section) throw new Error('no forges section');
+    fireEvent.click(section);
+    expect(await within(dialog).findByText(/214 points used in the last hour/)).toBeTruthy();
+    expect(within(dialog).getByText('Rate limit')).toBeTruthy();
+  });
+});

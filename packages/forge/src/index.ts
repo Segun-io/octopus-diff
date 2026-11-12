@@ -21,8 +21,16 @@ export {
   ForgeFetchError,
   type ForgeQueryCost,
   type ForgeTarget,
+  isRateLimitMessage,
   loginHint,
 } from './client.js';
+export {
+  estimateQueryPoints,
+  type ForgeQueryKind,
+  GITHUB_SINGLE_QUERY_REQUESTS,
+  githubBatchRequests,
+  githubPointsForRequests,
+} from './cost.js';
 export {
   capBytes,
   dedupeChecks,

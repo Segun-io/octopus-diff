@@ -385,7 +385,7 @@ export function createApp(deps: AppDeps): Hono {
 
   route('setFocus', async (c) => {
     const request = parseWith(FocusRequestSchema, await readJson(c), 'request body');
-    core.setFocus(request.worktreeId, request.projectId ?? null);
+    core.setFocus(request.worktreeId, request.projectId ?? null, request.visible);
     const body: OkResponse = { ok: true };
     return c.json(body);
   });
@@ -448,7 +448,7 @@ export function createApp(deps: AppDeps): Hono {
         text.trim() === '' ? {} : await jsonFrom(c, text),
         'request body',
       );
-      await forges.refresh(request.projectIds, { force: true });
+      await forges.checkAgain(request.projectIds);
       const body: ForgesResponse = await forges.response();
       return c.json(body);
     });

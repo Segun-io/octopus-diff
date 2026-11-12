@@ -259,11 +259,40 @@ export const ProjectForgeStateSchema = z.object({
 });
 export type ProjectForgeState = z.infer<typeof ProjectForgeStateSchema>;
 
+/**
+ * How much of a forge host's rate limit the daemon has used (DECISIONS #197). Points are GitHub's
+ * GraphQL points (5 000 per hour per user, shared with every other tool using the same sign-in);
+ * for GitLab a request counts as one. `ok` = fetching normally; `busy` = the daemon holds back
+ * background lookups to stay under its own hourly ceiling; `low` = the forge reports few points
+ * left, only requests the user asked for run; `backoff` = the forge refused, nothing runs until
+ * `resumeAt`.
+ */
+export const ForgeBudgetStateSchema = z.object({
+  host: z.string().min(1).max(253),
+  kind: ForgeKindSchema,
+  state: z.enum(['ok', 'busy', 'low', 'backoff']),
+  /** Points (requests for GitLab) the daemon spent on this host in the last hour. */
+  spentLastHour: z.number().int().min(0),
+  /** Where background lookups stop for the hour, and the ceiling for requests the user asked for. */
+  backgroundLimit: z.number().int().min(0),
+  hourlyLimit: z.number().int().min(0),
+  /** Points the forge last reported as left in its window (GitHub), when known. */
+  remaining: z.number().int().min(0).nullable(),
+  /** When the forge's window resets, when it said. */
+  resetAt: TimestampSchema.nullable(),
+  /** When lookups resume, for `backoff` and `low`. */
+  resumeAt: TimestampSchema.nullable(),
+  message: z.string().nullable(),
+});
+export type ForgeBudgetState = z.infer<typeof ForgeBudgetStateSchema>;
+
 /** `GET /api/forges` and `POST /api/forges/refresh`. */
 export const ForgesResponseSchema = z.object({
   enabled: z.boolean(),
   clis: z.array(ForgeCliStatusSchema),
   projects: z.array(ProjectForgeStateSchema),
+  /** Rate-limit use per host the daemon has queried; absent from older daemons. */
+  budgets: z.array(ForgeBudgetStateSchema).optional(),
   generatedAt: TimestampSchema,
 });
 export type ForgesResponse = z.infer<typeof ForgesResponseSchema>;

@@ -23,7 +23,8 @@ import {
 
 export const GITHUB_MAX_BRANCHES_PER_QUERY = 20;
 /** Requests per branch: an open one and recent merged/closed ones, newest first. */
-const PER_BRANCH = 5;
+export const GITHUB_REQUESTS_PER_BRANCH = 5;
+const PER_BRANCH = GITHUB_REQUESTS_PER_BRANCH;
 
 /**
  * `full` adds `mergeStateStatus`, which old GitHub Enterprise Server versions lack; `basic` drops
@@ -53,7 +54,7 @@ export function buildGithubQuery(count: number, variant: GithubQueryVariant = 'f
     );
   }
   const body = variant === 'full' ? `${PR_FIELDS} mergeStateStatus` : PR_FIELDS;
-  return `query OctopusDiffPullRequests(${vars.join(', ')}) { rateLimit { cost remaining } repository(owner: $owner, name: $name) { ${fields.join(' ')} } } fragment pr on PullRequest { ${body} }`;
+  return `query OctopusDiffPullRequests(${vars.join(', ')}) { rateLimit { cost remaining resetAt } repository(owner: $owner, name: $name) { ${fields.join(' ')} } } fragment pr on PullRequest { ${body} }`;
 }
 
 const PASSED_RUNS = new Set(['SUCCESS', 'NEUTRAL', 'SKIPPED']);

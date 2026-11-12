@@ -34,8 +34,11 @@ import {
 } from '@octopus-diff/contracts';
 import {
   type BranchHead,
+  estimateQueryPoints,
   ForgeCli,
   ForgeClient,
+  type ForgeQueryKind,
+  isRateLimitMessage,
   loginHint,
   parseRemoteUrl,
   parseSshConfigAliases,
@@ -44,6 +47,7 @@ import {
   resolveProjectForge,
 } from '@octopus-diff/forge';
 import { ApiError } from './errors.js';
+import { type BudgetLimits, ForgeBudget, type ForgePriority } from './forge-budget.js';
 
 /**
  * Forge integration service (docs/FORGES.md): which forge repository each project's pull/merge
@@ -53,9 +57,38 @@ import { ApiError } from './errors.js';
  * remote on a host costs one `git config` read and never starts a forge CLI (so fixture repos and
  * offline setups spawn no `gh`/`glab` at all); projects with only the default branch checked out
  * are not queried; each queried project is one GraphQL request per refresh, at most every
- * `FORGE_MIN_REFETCH_MS` unless forced, and polled every `FORGE_POLL_INTERVAL_MS`. Only hosts a
- * CLI reports as signed in are ever queried.
+ * `FORGE_MIN_REFETCH_MS` unless forced, and polled every `FORGE_POLL_INTERVAL_MS` while a browser
+ * is looking (every 10 minutes when none is, stretched further for big fleets). Only hosts a CLI
+ * reports as signed in are ever queried. Every query is admitted by the `ForgeBudget` (DECISIONS
+ * #197): per-priority hourly ceilings under GitHub's 5 000 points, and a backoff when the forge
+ * refuses.
  */
+
+/** Polling targets, in points per hour, for the fleet poll (the user's other tools need the rest). */
+const POLL_TARGET_ATTENTIVE = 1000;
+const POLL_TARGET_IDLE = 300;
+const POLL_MAX_MS = 30 * 60_000;
+/** A fresh daemon counts a browser as looking for this long before the first focus report. */
+const STARTUP_ATTENTION_MS = 6 * 60_000;
+const HOUR_MS = 3_600_000;
+/** While a project's Overview is in view its repository information is at most this old. */
+const REPOSITORY_HOT_TTL_MS = 2 * 60_000;
+
+/** Why a lookup did not run: the budget said no. Shown as the entry's "last loaded data" note. */
+class ForgeBudgetError extends Error {}
+
+interface RefreshOptions {
+  force?: boolean;
+  onlyIfBranchesChanged?: boolean;
+  /** Which hourly ceiling applies; default: forced = interactive, event-driven = event, else background. */
+  priority?: ForgePriority;
+  /** Unforced: how old the last fetch must be to fetch again (default `minRefetchMs`). */
+  minAgeMs?: number;
+  /** Even when forced, leave a project whose batch is younger than this alone. */
+  skipFresherThanMs?: number;
+  /** A per-call allowance of points shared by all projects of the call (Check again). */
+  allowance?: { left: number };
+}
 
 /** A forge repository a single-object query is about. */
 export type ForgeTargetLike = Pick<ProjectForge, 'kind' | 'host' | 'repository' | 'webUrl'>;
@@ -124,6 +157,8 @@ interface Entry<T> {
   inflight: Promise<void> | null;
   /** The in-flight fetch was forced (a later forced call can share it). */
   inflightForced: boolean;
+  /** Last time a request asked for it (eviction). */
+  lastAccess: number;
 }
 
 function emptyEntry<T>(): Entry<T> {
@@ -137,6 +172,7 @@ function emptyEntry<T>(): Entry<T> {
     fingerprint: '',
     inflight: null,
     inflightForced: false,
+    lastAccess: 0,
   };
 }
 
@@ -156,7 +192,26 @@ export interface ForgeServiceOptions {
   cwd?: string;
   /** `~/.ssh/config` text; default reads the file (null when absent). */
   readSshConfig?: () => Promise<string | null>;
+  /** Poll interval while a browser is looking (default `FORGE_POLL_INTERVAL_MS`, 2 min). */
   pollMs?: number;
+  /** Poll interval when no browser has reported being visible for `attentionMs` (default 10 min). */
+  idlePollMs?: number;
+  /** Interval of the extra poll of the project in view (default 60 s). */
+  hotPollMs?: number;
+  /** How long after the last focus report a browser counts as looking (default 30 min). */
+  attentionMs?: number;
+  /** A project coming into view is looked up again when its batch is older than this (30 s). */
+  focusStaleMs?: number;
+  /** "Check again" leaves a project fetched less than this long ago alone (default 5 s: a double click). */
+  checkAgainSkipMs?: number;
+  /** Points one "Check again" may spend (default 150); the poll catches up with the rest. */
+  checkAgainMaxPoints?: number;
+  /** Rate-limit ceilings (default `DEFAULT_BUDGET_LIMITS`). */
+  budgetLimits?: Partial<BudgetLimits>;
+  /** Detail / conversation / repository entries kept per kind (default 64, least recently used out). */
+  maxCacheEntries?: number;
+  /** Entries nobody asked for in this long are dropped (default 1 hour). */
+  cacheMaxAgeMs?: number;
   minRefetchMs?: number;
   /** How long CLI probes are reused (default 10 min). */
   cliTtlMs?: number;
@@ -181,6 +236,8 @@ interface ProjectCache {
   fetchedKey: string;
   /** The candidates' branch configuration (upstream, push remote) at the last look; a push changes it. */
   pushKey: string | null;
+  /** Local branches whose push configuration changed and that are still waiting for a request. */
+  followBranches: Set<string>;
   config: GitRemoteConfig | null;
   /** Local branch -> where it is pushed. */
   heads: Map<string, BranchHead>;
@@ -220,6 +277,21 @@ function pushKeyOf(config: GitRemoteConfig, candidates: readonly Candidate[]): s
   ]);
 }
 
+/** Local branches whose upstream or push configuration differs between two `pushKeyOf` results. */
+function pushedBranchesOf(before: string, after: string): string[] {
+  try {
+    const [oldDefault, oldBranches] = JSON.parse(before) as [unknown, Array<[string, unknown]>];
+    const [newDefault, newBranches] = JSON.parse(after) as [unknown, Array<[string, unknown]>];
+    const old = new Map(oldBranches.map(([name, value]) => [name, JSON.stringify(value)]));
+    const everything = JSON.stringify(oldDefault) !== JSON.stringify(newDefault);
+    return newBranches
+      .filter(([name, value]) => everything || (old.get(name) ?? 'null') !== JSON.stringify(value))
+      .map(([name]) => name);
+  } catch {
+    return [];
+  }
+}
+
 /** Which requests the batch knows (number and state): the repository list depends on it. */
 function requestsSignature(cache: ProjectCache): string {
   const parts: string[] = [];
@@ -238,6 +310,7 @@ function emptyCache(): ProjectCache {
     lastFetch: 0,
     fetchedKey: '',
     pushKey: null,
+    followBranches: new Set(),
     config: null,
     heads: new Map(),
     requests: new Map(),
@@ -256,7 +329,9 @@ async function defaultReadSshConfig(): Promise<string | null> {
 }
 
 export class ForgeService {
-  readonly #o: Required<Omit<ForgeServiceOptions, 'client' | 'cwd' | 'readSshConfig' | 'now'>> & {
+  readonly #o: Required<
+    Omit<ForgeServiceOptions, 'client' | 'cwd' | 'readSshConfig' | 'now' | 'budgetLimits'>
+  > & {
     client: ForgeClientLike;
     readSshConfig: () => Promise<string | null>;
     now: () => Date;
@@ -269,12 +344,29 @@ export class ForgeService {
   #aliasesAt = 0;
   #settingsKey: string;
   #timer: NodeJS.Timeout | null = null;
+  #hotTimer: NodeJS.Timeout | null = null;
+  readonly #budget: ForgeBudget;
+  #budgetKey = '';
+  /** A browser reported being visible until this time (ms); 0 = it reported being hidden. */
+  #attentionUntil = 0;
+  /** The project the user is looking at, from the focus reports. */
+  #hot: string | null = null;
+  /** The project's Overview (not just one of its worktrees) is what is in view. */
+  #hotOverview = false;
+  #rounding = false;
+  /** The wait before the next fleet poll as last scheduled (base interval or stretched). */
+  #pollDelay = 0;
+  #lastRoundAt = 0;
   readonly #debounce = new Map<string, NodeJS.Timeout>();
   readonly #followUps = new Map<string, NodeJS.Timeout[]>();
   #unsubscribe: (() => void) | null = null;
   #closed = false;
 
   constructor(options: ForgeServiceOptions) {
+    this.#budget = new ForgeBudget({
+      now: () => (options.now ?? (() => new Date()))().getTime(),
+      ...(options.budgetLimits ? { limits: options.budgetLimits } : {}),
+    });
     this.#o = {
       core: options.core,
       gitCore: options.gitCore,
@@ -282,9 +374,24 @@ export class ForgeService {
       hub: options.hub,
       logger: options.logger,
       client:
-        options.client ?? new ForgeClient(new ForgeCli(options.cwd ? { cwd: options.cwd } : {})),
+        options.client ??
+        new ForgeClient(new ForgeCli(options.cwd ? { cwd: options.cwd } : {}), {
+          // What the forge itself says is left (GitHub: `rateLimit { cost remaining resetAt }`).
+          onCost: (cost) => {
+            this.#budget.observe(cost.kind, cost.host, cost);
+            this.#announceBudget();
+          },
+        }),
       readSshConfig: options.readSshConfig ?? defaultReadSshConfig,
       pollMs: options.pollMs ?? FORGE_POLL_INTERVAL_MS,
+      idlePollMs: options.idlePollMs ?? 10 * 60_000,
+      hotPollMs: options.hotPollMs ?? 60_000,
+      attentionMs: options.attentionMs ?? 30 * 60_000,
+      focusStaleMs: options.focusStaleMs ?? 30_000,
+      checkAgainSkipMs: options.checkAgainSkipMs ?? 5000,
+      checkAgainMaxPoints: options.checkAgainMaxPoints ?? 150,
+      maxCacheEntries: options.maxCacheEntries ?? 64,
+      cacheMaxAgeMs: options.cacheMaxAgeMs ?? HOUR_MS,
       minRefetchMs: options.minRefetchMs ?? FORGE_MIN_REFETCH_MS,
       cliTtlMs: options.cliTtlMs ?? 10 * 60_000,
       debounceMs: options.debounceMs ?? 1500,
@@ -305,21 +412,139 @@ export class ForgeService {
   /** Subscribes to registry/settings events and starts the poll. The first refresh runs now. */
   start(): void {
     this.#unsubscribe = this.#o.hub.on((event) => this.#onEvent(event));
-    this.#timer = setInterval(() => {
-      void this.refresh().catch((error) => {
-        if (!this.#closed) this.#o.logger.warn('forge poll failed', { error });
-      });
-    }, this.#o.pollMs);
+    // The daemon is usually started with a browser (it reports within seconds of loading): count
+    // it as looking for a few minutes, then only while it keeps reporting.
+    this.#attentionUntil = this.#now() + Math.min(this.#o.attentionMs, STARTUP_ATTENTION_MS);
+    void this.#pollRound();
+    this.#hotTimer = setInterval(() => this.#hotTick(), this.#o.hotPollMs);
+    this.#hotTimer.unref();
+  }
+
+  #now(): number {
+    return this.#o.now().getTime();
+  }
+
+  /** Is a browser looking (it reported a visible tab recently)? */
+  #attentive(): boolean {
+    return this.#now() < this.#attentionUntil;
+  }
+
+  /** How long the fleet poll waits now: faster while someone looks, slower when nobody does. */
+  #pollBase(): number {
+    return this.#attentive() ? this.#o.pollMs : this.#o.idlePollMs;
+  }
+
+  /**
+   * One fleet poll, then the next one is scheduled: at the base interval, or later when this
+   * round was so big that the base interval would spend more than the polling target per hour
+   * (100 repositories at 1 point and a 2-minute interval would be 3 000 points an hour).
+   */
+  async #pollRound(): Promise<void> {
+    if (this.#closed || this.#rounding) return;
+    this.#rounding = true;
+    if (this.#timer) clearTimeout(this.#timer);
+    const before = this.#budget.totalSpent;
+    try {
+      this.#lastRoundAt = this.#now();
+      await this.refresh();
+      this.#sweepCaches();
+    } catch (error) {
+      if (!this.#closed) this.#o.logger.warn('forge poll failed', { error });
+    } finally {
+      this.#rounding = false;
+    }
+    if (this.#closed) return;
+    const base = this.#pollBase();
+    const target = this.#attentive() ? POLL_TARGET_ATTENTIVE : POLL_TARGET_IDLE;
+    const stretched = ((this.#budget.totalSpent - before) / target) * HOUR_MS;
+    const delay = Math.min(Math.max(base, stretched), Math.max(base, POLL_MAX_MS));
+    this.#pollDelay = delay;
+    this.#timer = setTimeout(() => void this.#pollRound(), delay);
     this.#timer.unref();
-    void this.refresh().catch((error) => {
-      if (!this.#closed) this.#o.logger.warn('forge refresh failed', { error });
-    });
+  }
+
+  /** The project in view is looked up on its own at a shorter interval while someone looks. */
+  #hotTick(): void {
+    const hot = this.#hot;
+    if (this.#closed || hot === null || !this.#attentive() || !this.enabled) return;
+    void this.refresh([hot], {
+      minAgeMs: Math.max(this.#o.hotPollMs / 2, this.#o.minRefetchMs),
+      // A timer, not a person: it spends the background share only (and nothing once that is used).
+      priority: 'background',
+    }).catch(() => {});
+    if (this.#hotOverview) void this.#revalidateRepository(hot).catch(() => {});
+  }
+
+  /**
+   * The open project's Overview lists the forge's newest open requests, including those of branches
+   * no worktree has checked out, which no batch ever asks about. While its Overview is in view and
+   * its repository information is older than `REPOSITORY_HOT_TTL_MS`, load it again in the
+   * background (1 point) and tell the UI when it changed (stale-while-revalidate).
+   */
+  async #revalidateRepository(projectId: string): Promise<void> {
+    const prefix = `${projectId}\u0000`;
+    const known = [...this.#repositories].some(
+      ([key, entry]) => key.startsWith(prefix) && entry.value !== null && entry.inflight === null,
+    );
+    if (!known) return;
+    const before = JSON.stringify(
+      [...this.#repositories].find(([key]) => key.startsWith(prefix))?.[1].value,
+    );
+    await this.repository(projectId, { ttlMs: REPOSITORY_HOT_TTL_MS, priority: 'background' });
+    const after = JSON.stringify(
+      [...this.#repositories].find(([key]) => key.startsWith(prefix))?.[1].value,
+    );
+    if (before !== after) this.#o.hub.emit({ type: 'forge.updated', projectIds: [projectId] });
+  }
+
+  /**
+   * The browser's focus report (`PUT /api/focus`). Hidden: no one is looking, polling slows down.
+   * Visible: someone is, so a project that comes into view is looked up when its data is older
+   * than `focusStaleMs`, and the fleet poll runs now when it has been waiting longer than a
+   * normal interval (coming back after a break). This is the cheap answer to "a request created
+   * on the forge's web page": nothing reaches the network until a person looks.
+   */
+  focusChanged(visible: boolean, projectId: string | null, overview = false): void {
+    if (this.#closed) return;
+    if (!visible) {
+      this.#attentionUntil = 0;
+      this.#hot = null;
+      this.#hotOverview = false;
+      return;
+    }
+    const wasAttentive = this.#attentive();
+    const previous = this.#hot;
+    this.#attentionUntil = this.#now() + this.#o.attentionMs;
+    this.#hot = projectId;
+    this.#hotOverview = overview;
+    if (!this.enabled) return;
+    if (!wasAttentive && this.#now() - this.#lastRoundAt >= this.#o.pollMs) {
+      void this.#pollRound();
+    }
+    if (projectId !== null && (projectId !== previous || !wasAttentive)) {
+      void this.refresh([projectId], {
+        minAgeMs: this.#o.focusStaleMs,
+        priority: 'event',
+      }).catch(() => {});
+    }
+  }
+
+  /** What a budget change looks like to the UI: send `forge.updated` when a host's state moves. */
+  #announceBudget(): void {
+    const key = JSON.stringify(this.#budget.snapshot().map((b) => [b.host, b.state]));
+    if (key === this.#budgetKey) return;
+    const first = this.#budgetKey === '';
+    this.#budgetKey = key;
+    // A budget appearing as `ok` is not news.
+    if (first && this.#budget.snapshot().every((b) => b.state === 'ok')) return;
+    this.#o.hub.emit({ type: 'forge.updated', projectIds: [] });
   }
 
   async close(): Promise<void> {
     this.#closed = true;
     this.#unsubscribe?.();
-    if (this.#timer) clearInterval(this.#timer);
+    if (this.#timer) clearTimeout(this.#timer);
+    if (this.#hotTimer) clearInterval(this.#hotTimer);
     for (const t of this.#debounce.values()) clearTimeout(t);
     this.#debounce.clear();
     for (const timers of this.#followUps.values()) for (const t of timers) clearTimeout(t);
@@ -379,13 +604,44 @@ export class ForgeService {
     this.#debounce.set(projectId, timer);
   }
 
+  /**
+   * Does a branch that was just pushed still have no request? (The follow-ups stop once it has
+   * one, whichever lookup found it.)
+   */
+  #stillWaiting(projectId: string): boolean {
+    const cache = this.#projects.get(projectId);
+    if (!cache?.forge) return false;
+    let waiting = false;
+    for (const branch of [...cache.followBranches]) {
+      const head = cache.heads.get(branch);
+      if (!head) {
+        cache.followBranches.delete(branch); // the branch is gone
+        continue;
+      }
+      if (
+        pickChangeRequest(
+          cache.requests.get(head.headBranch) ?? [],
+          head,
+          cache.forge.repository,
+        ) === null
+      ) {
+        waiting = true;
+      } else {
+        cache.followBranches.delete(branch); // found: no more lookups for it
+      }
+    }
+    return waiting;
+  }
+
   /** Looks the project up again later (forced: the 15 s spacing must not swallow it). */
   #followUp(projectId: string): void {
     if (this.#closed) return;
     for (const t of this.#followUps.get(projectId) ?? []) clearTimeout(t);
     const timers = this.#o.followUpMs.map((ms) => {
       const timer = setTimeout(() => {
-        void this.refresh([projectId], { force: true }).catch(() => {});
+        // Found in the meantime (by the poll, a refresh): the rest of the points are saved.
+        if (!this.#stillWaiting(projectId)) return;
+        void this.refresh([projectId], { force: true, priority: 'event' }).catch(() => {});
       }, ms);
       timer.unref();
       return timer;
@@ -428,10 +684,7 @@ export class ForgeService {
    * Refreshes the listed projects (default: all). `force` re-probes stale CLIs and ignores the
    * per-project rate limit; `onlyIfBranchesChanged` skips projects whose branch set is unchanged.
    */
-  async refresh(
-    projectIds?: readonly string[],
-    options: { force?: boolean; onlyIfBranchesChanged?: boolean } = {},
-  ): Promise<void> {
+  async refresh(projectIds?: readonly string[], options: RefreshOptions = {}): Promise<void> {
     if (this.#closed) return;
     const items = await this.#o.core.listProjects();
     const wanted = projectIds ? new Set(projectIds) : null;
@@ -447,10 +700,7 @@ export class ForgeService {
     await Promise.all(workers);
   }
 
-  #refreshProject(
-    item: ProjectListItem,
-    options: { force?: boolean; onlyIfBranchesChanged?: boolean },
-  ): Promise<void> {
+  #refreshProject(item: ProjectListItem, options: RefreshOptions): Promise<void> {
     const id = item.project.id;
     let cache = this.#projects.get(id);
     if (!cache) {
@@ -492,7 +742,7 @@ export class ForgeService {
   async #doRefresh(
     item: ProjectListItem,
     cache: ProjectCache,
-    options: { force?: boolean; onlyIfBranchesChanged?: boolean },
+    options: RefreshOptions,
   ): Promise<void> {
     const projectId = item.project.id;
     const before = this.#snapshot(cache);
@@ -519,7 +769,8 @@ export class ForgeService {
 
     if (options.onlyIfBranchesChanged && cache.status !== 'pending') {
       const known = [...cache.heads.keys()].sort().join('\n');
-      const fresh = this.#o.now().getTime() - cache.lastFetch < this.#o.pollMs;
+      // An edit never makes a project older than the poll would have left it be fetched again.
+      const fresh = this.#now() - cache.lastFetch < Math.max(this.#pollBase(), this.#pollDelay);
       // A pushed branch can have a new request even though the branch set is the same.
       if (
         known === branchKeyLocal &&
@@ -589,7 +840,12 @@ export class ForgeService {
       candidates.map((c) => [c.branch, resolveBranchHead(c.branch, config, forge, sshAliases)]),
     );
     const pushKey = pushKeyOf(config, candidates);
-    const pushed = cache.pushKey !== null && cache.pushKey !== pushKey;
+    // Only a changed upstream or push destination is a push; a new worktree on a new branch is not.
+    const pushedBranches =
+      cache.pushKey !== null && cache.pushKey !== pushKey
+        ? pushedBranchesOf(cache.pushKey, pushKey)
+        : [];
+    const pushed = pushedBranches.length > 0;
     cache.pushKey = pushKey;
     if (candidates.length === 0) {
       set('idle', null);
@@ -607,34 +863,59 @@ export class ForgeService {
 
     const heads = [...new Set([...cache.heads.values()].map((h) => h.headBranch))].sort();
     const key = heads.join('\n');
-    const now = this.#o.now().getTime();
+    const now = this.#now();
+    const unchanged = key === cache.fetchedKey;
     if (
       !options.force &&
       !pushed &&
-      key === cache.fetchedKey &&
-      now - cache.lastFetch < this.#o.minRefetchMs
+      unchanged &&
+      now - cache.lastFetch < (options.minAgeMs ?? this.#o.minRefetchMs)
     ) {
       return finish();
     }
+    if (
+      options.skipFresherThanMs !== undefined &&
+      cache.status === 'ok' &&
+      unchanged &&
+      now - cache.lastFetch < options.skipFresherThanMs
+    ) {
+      return finish();
+    }
+    const points = estimateQueryPoints(forge.kind, 'batch', heads.length);
+    if (options.allowance && options.allowance.left < points) return finish();
+    const priority =
+      options.priority ??
+      (options.force ? 'interactive' : options.onlyIfBranchesChanged ? 'event' : 'background');
+    const verdict = this.#budget.decide(forge.kind, forge.host, priority, points);
+    if (!verdict.ok) {
+      this.#o.logger.debug('forge fetch held back', { projectId, reason: verdict.reason });
+      // Nothing loaded yet: say why. Otherwise the last good data stays as it is.
+      if (cache.status === 'pending') set('pending', verdict.message);
+      return finish();
+    }
+    if (options.allowance) options.allowance.left -= points;
     if (cache.status !== 'ok' && cache.status !== 'error') set('pending', null);
     cache.lastFetch = now;
+    this.#budget.spend(forge.kind, forge.host, points);
     try {
       const fetched = await this.#o.client.fetchChangeRequests(forge, heads);
+      this.#budget.succeeded(forge.kind, forge.host);
       cache.requests = fetched;
       cache.fetchedKey = key;
       cache.fetchedAt = this.#o.now().toISOString();
       set('ok', null);
       if (pushed) {
-        const waiting = [...cache.heads.values()].some(
-          (head) =>
-            pickChangeRequest(fetched.get(head.headBranch) ?? [], head, forge.repository) === null,
-        );
-        if (waiting) this.#followUp(projectId);
+        // Branches still waiting for a request from an earlier push stay on the list.
+        cache.followBranches = new Set([...cache.followBranches, ...pushedBranches]);
+        if (this.#stillWaiting(projectId)) this.#followUp(projectId);
       }
     } catch (error) {
-      set('error', error instanceof Error ? error.message : String(error));
+      const message = error instanceof Error ? error.message : String(error);
+      if (isRateLimitMessage(message)) this.#budget.rateLimited(forge.kind, forge.host);
+      set('error', message);
       this.#o.logger.debug('forge fetch failed', { projectId, error });
     }
+    this.#announceBudget();
     return finish();
   }
 
@@ -760,6 +1041,59 @@ export class ForgeService {
     return entry.inflight;
   }
 
+  /**
+   * Admits one single-object query (detail, conversation, repository) against the budget. These
+   * run because someone opened or refreshed something, so they use the user's ceiling (a timer, such
+   * as the open Overview's reload, passes `background` and gets only the background share); a refusal
+   * surfaces as the entry's error, with the last good data kept.
+   */
+  async #guarded<T>(
+    forge: ForgeTargetLike,
+    kind: ForgeQueryKind,
+    run: () => Promise<T>,
+    priority: ForgePriority = 'interactive',
+  ): Promise<T> {
+    const points = estimateQueryPoints(forge.kind, kind);
+    const verdict = this.#budget.decide(forge.kind, forge.host, priority, points);
+    if (!verdict.ok) throw new ForgeBudgetError(verdict.message);
+    this.#budget.spend(forge.kind, forge.host, points);
+    try {
+      const value = await run();
+      this.#budget.succeeded(forge.kind, forge.host);
+      return value;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (isRateLimitMessage(message)) this.#budget.rateLimited(forge.kind, forge.host);
+      throw error;
+    } finally {
+      this.#announceBudget();
+    }
+  }
+
+  /** Marks an entry as used and keeps the map to `maxCacheEntries` (least recently used out). */
+  #touch<T>(map: Map<string, Entry<T>>, entry: Entry<T>): void {
+    entry.lastAccess = this.#now();
+    if (map.size <= this.#o.maxCacheEntries) return;
+    const idle = [...map].filter(([, e]) => e.inflight === null && e !== entry);
+    idle.sort(([, a], [, b]) => a.lastAccess - b.lastAccess);
+    for (const [key] of idle) {
+      if (map.size <= this.#o.maxCacheEntries) break;
+      map.delete(key);
+    }
+  }
+
+  /** Drops entries nobody asked for in `cacheMaxAgeMs` (a long-running daemon keeps no old request). */
+  #sweepCaches(): void {
+    const limit = this.#now() - this.#o.cacheMaxAgeMs;
+    for (const map of [this.#details, this.#conversations, this.#repositories] as Array<
+      Map<string, Entry<unknown>>
+    >) {
+      for (const [key, entry] of map) {
+        if (entry.inflight === null && entry.lastAccess < limit) map.delete(key);
+      }
+    }
+  }
+
   #requestKey(forge: ProjectForge, number: number): string {
     return `${forge.kind}\u0000${forge.host}\u0000${forge.repository}\u0000${number}`;
   }
@@ -799,12 +1133,13 @@ export class ForgeService {
       entry = emptyEntry();
       this.#details.set(key, entry);
     }
+    this.#touch(this.#details, entry);
     await this.#load(
       entry,
       this.#ttlFor(changeRequest),
       fingerprintOf(changeRequest),
       options.force ?? false,
-      () => fetchDetail(forge, changeRequest.number),
+      () => this.#guarded(forge, 'detail', () => fetchDetail(forge, changeRequest.number)),
     );
     if (entry.value === null) {
       return {
@@ -857,10 +1192,11 @@ export class ForgeService {
       entry = emptyEntry();
       this.#conversations.set(key, entry);
     }
+    this.#touch(this.#conversations, entry);
     // The conversation does not change with CI: only the request's update time and head count.
     const fingerprint = `${changeRequest.updatedAt ?? ''}|${changeRequest.headSha ?? ''}`;
     await this.#load(entry, this.#ttlFor(changeRequest), fingerprint, options.force ?? false, () =>
-      fetchConversation(forge, changeRequest.number),
+      this.#guarded(forge, 'conversation', () => fetchConversation(forge, changeRequest.number)),
     );
     if (entry.value === null) {
       return {
@@ -878,6 +1214,19 @@ export class ForgeService {
       conversation: entry.value,
       fetchedAt: entry.fetchedIso,
     } satisfies ChangeRequestConversationResponse;
+  }
+
+  /**
+   * Settings "Check again" (`POST /api/forges/refresh`): re-probe the CLIs and refetch every
+   * project, but a project fetched in the last `checkAgainSkipMs` (5 s) is left alone (a double click costs
+   * nothing) and one call spends at most `checkAgainMaxPoints`; the poll catches up with the rest.
+   */
+  async checkAgain(projectIds?: readonly string[]): Promise<void> {
+    await this.refresh(projectIds, {
+      force: true,
+      skipFresherThanMs: this.#o.checkAgainSkipMs,
+      allowance: { left: this.#o.checkAgainMaxPoints },
+    });
   }
 
   /**
@@ -905,7 +1254,7 @@ export class ForgeService {
    */
   async repository(
     projectId: string,
-    options: { force?: boolean } = {},
+    options: { force?: boolean; ttlMs?: number; priority?: ForgePriority } = {},
   ): Promise<RepositoryForgeResponse> {
     const items = await this.#o.core.listProjects();
     const item = items.find((i) => i.project.id === projectId);
@@ -953,14 +1302,15 @@ export class ForgeService {
       entry = emptyEntry();
       this.#repositories.set(key, entry);
     }
+    this.#touch(this.#repositories, entry);
     // The batch's set of requests is part of the key: a request it just discovered (or one that
     // was merged) makes the cached list of open requests wrong long before its 10 minutes.
     await this.#load(
       entry,
-      FORGE_REPOSITORY_TTL_MS,
+      options.ttlMs ?? FORGE_REPOSITORY_TTL_MS,
       requestsSignature(cache),
       options.force ?? false,
-      () => fetchRepository(forge),
+      () => this.#guarded(forge, 'repository', () => fetchRepository(forge), options.priority),
     );
     if (entry.value === null) {
       return empty('error', entry.error ?? 'Not loaded yet.', forge);
@@ -1049,10 +1399,12 @@ export class ForgeService {
         fetchedAt: cache.fetchedAt,
       });
     }
+    const budgets = enabled ? this.#budget.snapshot() : [];
     return {
       enabled,
       clis: FORGE_KINDS.map((k) => this.#clis.get(k)).filter((c): c is ForgeCliStatus => !!c),
       projects,
+      ...(budgets.length > 0 ? { budgets } : {}),
       generatedAt: this.#o.now().toISOString(),
     };
   }

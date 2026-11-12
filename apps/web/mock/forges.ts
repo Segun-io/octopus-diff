@@ -141,6 +141,20 @@ export function mockForges(
       },
     ],
     projects: states,
+    budgets: [
+      {
+        host: 'github.com',
+        kind: 'github',
+        state: 'ok',
+        spentLastHour: 214,
+        backgroundLimit: 1500,
+        hourlyLimit: 4000,
+        remaining: 4786,
+        resetAt: null,
+        resumeAt: null,
+        message: null,
+      },
+    ],
     generatedAt,
   };
 }

@@ -348,6 +348,12 @@ export type ReviewResponse = z.infer<typeof ReviewResponseSchema>;
 export const FocusRequestSchema = z.object({
   worktreeId: IdSchema.nullable(),
   projectId: IdSchema.nullable().optional(),
+  /**
+   * Whether the tab is visible. Absent (older clients): inferred from the other fields, as before
+   * (nothing selected means hidden). A visible Inbox or folder Overview selects nothing but is
+   * still looked at, so newer clients say so; the forge polling pace depends on it (DECISIONS #197).
+   */
+  visible: z.boolean().optional(),
 });
 export type FocusRequest = z.infer<typeof FocusRequestSchema>;
 

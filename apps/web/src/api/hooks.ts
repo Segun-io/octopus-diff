@@ -145,6 +145,9 @@ export function useReviewMutation() {
   });
 }
 
+/** Re-send the focus while the tab stays visible (the daemon forgets a silent browser). */
+export const FOCUS_KEEPALIVE_MS = 5 * 60_000;
+
 /**
  * Tells the daemon which worktree is focused (null when the tab is hidden) and which project is
  * open (`projectId`: its Overview). An open project gets its review states computed (#10).
@@ -158,15 +161,16 @@ export function useFocusReporting(worktreeId: string | null, projectId: string |
       const hidden = typeof document !== 'undefined' && document.visibilityState === 'hidden';
       const next = hidden ? null : worktreeId;
       const nextProject = hidden ? null : projectId;
-      const key = `${next ?? ''}\u0000${nextProject ?? ''}`;
+      // A visible tab with nothing selected (the Inbox, a folder Overview) is not a hidden tab.
+      const key = `${hidden ? 'h' : 'v'}\u0000${next ?? ''}\u0000${nextProject ?? ''}`;
       if (key === last.current) return;
       if (timer !== undefined) clearTimeout(timer);
       timer = setTimeout(() => {
         last.current = key;
         const request =
           nextProject === null
-            ? { worktreeId: next }
-            : { worktreeId: next, projectId: nextProject };
+            ? { worktreeId: next, visible: !hidden }
+            : { worktreeId: next, projectId: nextProject, visible: !hidden };
         api.setFocus(request).catch(() => {
           last.current = undefined;
         });
@@ -174,8 +178,16 @@ export function useFocusReporting(worktreeId: string | null, projectId: string |
     };
     report();
     document.addEventListener('visibilitychange', report);
+    // The daemon treats a browser as looking for 30 minutes after its last report and paces its
+    // forge polling by it (DECISIONS #197): say so again now and then while the tab is visible.
+    const beat = setInterval(() => {
+      if (document.visibilityState === 'hidden') return;
+      last.current = undefined;
+      report();
+    }, FOCUS_KEEPALIVE_MS);
     return () => {
       if (timer !== undefined) clearTimeout(timer);
+      clearInterval(beat);
       document.removeEventListener('visibilitychange', report);
     };
   }, [api, worktreeId, projectId]);

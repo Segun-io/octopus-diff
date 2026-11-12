@@ -140,7 +140,15 @@ describe('forge service (fake git-core, fake gh/glab)', () => {
       fake,
       stateDir: await tempDir(),
       projects: [alpha.mainPath, beta.mainPath, gamma.mainPath],
-      internal: { forges: { client: forge, debounceMs: 20, readSshConfig: async () => null } },
+      internal: {
+        forges: {
+          client: forge,
+          checkAgainSkipMs: 0,
+          focusStaleMs: 0,
+          debounceMs: 20,
+          readSshConfig: async () => null,
+        },
+      },
     });
     api = client(daemon);
   });
@@ -199,6 +207,30 @@ describe('forge service (fake git-core, fake gh/glab)', () => {
     expect(count()).toBe(before + 1);
   });
 
+  it('PUT /api/focus brings the project in view up to date, and hiding the tab does not (#8)', async () => {
+    await eventually(async () => (await state(alpha))?.status === 'ok');
+    const count = () => forge.fetches.filter((f) => f.forge.repository === 'org/alpha').length;
+    const before = count();
+    await api.setFocus({ worktreeId: null });
+    await new Promise((r) => setTimeout(r, 100));
+    expect(count()).toBe(before);
+    await api.setFocus({ worktreeId: alpha.worktrees[1]?.id ?? null });
+    await eventually(() => count() === before + 1);
+  });
+
+  it('reports the rate-limit budget per host in GET /api/forges (#8)', async () => {
+    await eventually(async () => (await state(alpha))?.status === 'ok');
+    const body: ForgesResponse = ForgesResponseSchema.parse(await api.getForges());
+    expect(body.budgets?.find((b) => b.host === 'github.com')).toMatchObject({
+      kind: 'github',
+      state: 'ok',
+      spentLastHour: expect.any(Number),
+      backgroundLimit: 1500,
+      hourlyLimit: 4000,
+    });
+    expect(body.budgets?.find((b) => b.host === 'github.com')?.spentLastHour).toBeGreaterThan(0);
+  });
+
   it('reports signed-out CLIs, fetch errors and the disabled setting, with forge.updated events', async () => {
     await eventually(async () => (await state(alpha))?.status === 'ok');
     const events = recordEvents(daemon);
@@ -249,7 +281,7 @@ describe('forge service without remotes', () => {
       fake,
       stateDir: await tempDir(),
       projects: [repo.mainPath],
-      internal: { forges: { client: forge, debounceMs: 20 } },
+      internal: { forges: { client: forge, checkAgainSkipMs: 0, debounceMs: 20 } },
     });
     const api = client(daemon);
     await eventually(async () => {
