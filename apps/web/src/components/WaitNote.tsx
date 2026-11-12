@@ -98,7 +98,7 @@ export function FloatPill({
 }) {
   return (
     <span
-      className={`od-overlay od-fade-in pointer-events-auto max-w-full min-w-0 rounded-md px-2 py-1 text-[11px] text-muted ${className}`}
+      className={`od-overlay od-fade-in pointer-events-auto block max-w-full min-w-0 rounded-md px-2 py-1 text-[11px] text-muted ${className}`}
     >
       {children}
     </span>
@@ -135,9 +135,9 @@ export function StaleNote({
       aria-live="polite"
       data-testid={STALE_NOTE_TEST_ID}
       title={title}
-      className={`inline-flex min-w-0 items-center gap-1.5 text-[11px] text-muted ${className}`}
+      className={`flex min-w-0 max-w-full items-center gap-1.5 text-[11px] text-muted ${className}`}
     >
-      <span className="min-w-0 truncate">
+      <span className="min-w-0 flex-1">
         {reason ? `${reason}. ` : ''}
         {staleText(updatedAt, now)}
         {children}
