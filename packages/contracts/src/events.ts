@@ -99,6 +99,17 @@ export const ReviewBookmarkEventSchema = z.object({
 });
 
 /**
+ * Review states of the project's worktrees became available (#10). The daemon computes a
+ * worktree's review state on demand (its project was opened through `PUT /api/focus`, a request
+ * needed it, or the worktree changed after startup), not for every repository at startup, so
+ * summaries start without `review`. Clients refetch projects. Batched: one per burst.
+ */
+export const ReviewReadyEventSchema = z.object({
+  type: z.literal('review.ready'),
+  projectId: IdSchema,
+});
+
+/**
  * Settings or a review-policy override changed. Clients that did not make the change refetch
  * `GET /api/settings`, projects and the inbox (effective policies may have moved). Sent to every
  * client including the caller (compare `revision` with the response you already applied), and only
@@ -130,6 +141,7 @@ export const ServerEventSchema = z.discriminatedUnion('type', [
   ReviewChangedEventSchema,
   ReviewBulkEventSchema,
   ReviewBookmarkEventSchema,
+  ReviewReadyEventSchema,
   SettingsChangedEventSchema,
   ForgeUpdatedEventSchema,
 ]);
@@ -149,6 +161,7 @@ export const SERVER_EVENT_TYPES = [
   'review.changed',
   'review.bulk',
   'review.bookmark',
+  'review.ready',
   'settings.changed',
   'forge.updated',
 ] as const satisfies readonly ServerEventType[];

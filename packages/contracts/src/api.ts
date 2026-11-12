@@ -324,7 +324,15 @@ export type ReviewResponse = z.infer<typeof ReviewResponseSchema>;
  * Tells the daemon which worktree the UI is looking at, so it can poll that one more often
  * (30 s focused vs 5 min for the rest). Null when nothing is focused or the tab is hidden.
  */
-export const FocusRequestSchema = z.object({ worktreeId: IdSchema.nullable() });
+/**
+ * `PUT /api/focus`: the worktree the user looks at (watch priority, null when the tab is hidden)
+ * and, optionally, the project they have open (its Overview, or the focused worktree's project).
+ * An open project gets its worktrees' review states computed (#10; `review.ready` follows).
+ */
+export const FocusRequestSchema = z.object({
+  worktreeId: IdSchema.nullable(),
+  projectId: IdSchema.nullable().optional(),
+});
 export type FocusRequest = z.infer<typeof FocusRequestSchema>;
 
 export { OkResponseSchema };

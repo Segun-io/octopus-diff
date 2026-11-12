@@ -2096,3 +2096,15 @@ and repeat validation against its exact dependency set.
      from their cache themselves; the web client needed no change. Cost: gzip1 + hash +
      response copy measured at under 50 ms per 10 MB in `http-cache.test.ts` (best of 7 against the same route
      without the middleware).
+
+## Startup once, review state on demand (session, 2026-11-11; roadmap #10, step 04)
+
+Numbers start at #180 so they do not collide with the parallel #29 session (#172+); renumber at merge if needed.
+
+180. **Contracts (additive): `review.ready` and `FocusRequest.projectId`.** The daemon no longer computes every
+     worktree's review state at startup (#25 decision 2, below), so a summary's optional `review` now also means
+     "not computed yet", not only "older daemon" (doc comment on `WorktreeSummarySchema.review` updated; no field
+     changed shape). New SSE event `review.ready { projectId }`: the first review states of a project's worktrees
+     landed (batched, one per burst); clients refetch projects only, not the inbox. `PUT /api/focus` takes an
+     optional `projectId` (nullable): the project the user has open (its Overview); a focused worktree opens its
+     own project without it. Older clients that send only `worktreeId` keep working.
