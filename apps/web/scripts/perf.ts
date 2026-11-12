@@ -23,6 +23,9 @@
  * `[data-testid=scope-select]`'s options and a selected first file; if the UI changes those, the
  * load wait (step 1) times out with the page state in the message.
  * Fix history: 2026-11-11 (#26) the default scope became "To review" and the old wait never ended;
+ * 2026-11-12 (#51) a live edit stopped refetching the projects list and the inbox: it fetches the
+ * changed inbox rows only (one request); that fetch now drives the refresh indicator (it goes
+ * through React Query), and the request check asserts the new shape instead of "projects + files";
  * 2026-11-12 (#68) the script needed `MOCK_DATASET=large` without saying so (the first file of a
  * demo worktree can be missing, so `J` never matched), and the live-refresh number was quantised
  * by Playwright's polling (see docs/reports/web-perf-script.md).
@@ -313,6 +316,8 @@ async function measure(base: string) {
     const t5 = await now();
     const refreshTimes: number[] = [];
     const refreshRequests: number[] = [];
+    /** The API paths each refresh requested (#51: the inbox's changed rows only, no projects). */
+    const refreshUrls: string[][] = [];
     for (let i = 0; i < ITER.refreshes; i++) {
       const requestsBefore = apiRequests.length;
       // Wrapped like every other wait: a stuck refresh prints the scope, the current worktree, the
@@ -347,9 +352,9 @@ async function measure(base: string) {
         }),
       );
       refreshTimes.push(elapsed);
-      refreshRequests.push(
-        apiRequests.slice(requestsBefore).filter((r) => !r.url.includes('/__mock/')).length,
-      );
+      const made = apiRequests.slice(requestsBefore).filter((r) => !r.url.includes('/__mock/'));
+      refreshRequests.push(made.length);
+      refreshUrls.push(made.map((r) => r.url));
     }
     const refreshLongTasks = await longTasksSince(t5);
     const memory = await page
@@ -378,9 +383,17 @@ async function measure(base: string) {
       `${visited.size} of ${ITER.switches} presses`,
     );
     check(
-      'a refresh fetches (projects + files)',
-      refreshRequests.every((n) => n >= 2),
-      `requests per refresh: ${refreshRequests.join(', ')}`,
+      // Since #51 a live edit in the Inbox fetches the changed worktree's rows
+      // (`/api/inbox?worktreeIds=`) and never the projects list (the event carries the row).
+      'a refresh fetches the changed inbox rows only (no /api/projects, #51)',
+      refreshUrls.every(
+        (urls) =>
+          urls.some((u) => u.includes('/api/inbox?') && u.includes('worktreeIds=')) &&
+          !urls.some((u) => new URL(u).pathname === '/api/projects'),
+      ),
+      `requests per refresh: ${refreshRequests.join(', ')}; ${refreshUrls
+        .map((urls) => urls.map((u) => new URL(u).pathname).join(' + ') || 'none')
+        .join(' | ')}`,
     );
 
     const summary = {

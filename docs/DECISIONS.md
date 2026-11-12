@@ -3271,3 +3271,15 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      1.5 s, a 100 ms wait). The early answer has no review; the event has it with a higher `rev`; `review.ready`
      still goes out. Mutation-checked: without `servedEarly`, without a moving `rev`, and with `rev` moving on every
      read (which also breaks the ETag-stable check).
+271. **Web: the inbox delta fetch drives the refresh indicator.** The context bar's indicator is `useIsFetching() > 0`
+     (React Query fetches). The delta inbox fetch called `api.inbox` directly, so a live edit seen from the Inbox (one
+     request since #51, no projects or full-inbox refetch) never showed "Refreshing…". CI's
+     `perf:smoke` failed on it: "refresh indicator stuck in idle", reproduced locally on that build. What a user
+     should see is the refresh, so the fetch now goes through `queryClient.fetchQuery` under its own key
+     (`queryKeys.inboxDelta`: `['inbox-delta', scope, ids, batch]`, outside `['inbox']` so no inbox invalidation or
+     lookup matches it; `gcTime: 0`, `retry: false`). Tests: `event-deltas.test.ts` (`isFetching` while the delta is in
+     flight, no leftover query) and `app.test.tsx` (the App's indicator goes `refreshing` then `idle` on a live edit
+     in the Inbox, mock latency 40 ms). Both fail with a direct call. `apps/web/scripts/perf.ts`: its request check
+     ("a refresh fetches (projects + files)", ≥ 2 requests) described the old behaviour. It now checks that each
+     refresh asks `/api/inbox?worktreeIds=` and never `/api/projects`, and still prints the requests and paths per
+     refresh (1 / 1 / 1 locally). It judges no timing, as before.

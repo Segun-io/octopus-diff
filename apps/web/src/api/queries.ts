@@ -49,6 +49,12 @@ export const queryKeys = {
   dirs: (path: string) => ['dirs', path] as const,
   inboxAll: () => ['inbox'] as const,
   inbox: (scope: DiffScope) => ['inbox', scopeKey(scope)] as const,
+  /**
+   * One `worktree.changed` delta fetch of inbox rows (#51): not under `['inbox']`, so inbox
+   * invalidations and lookups never see it; one key per batch, removed when it settles.
+   */
+  inboxDelta: (scope: DiffScope, worktreeIds: readonly string[], batch: number) =>
+    ['inbox-delta', scopeKey(scope), worktreeIds.join(','), batch] as const,
   filesAll: (worktreeId: string) => ['files', worktreeId] as const,
   files: (worktreeId: string, scope: DiffScope) => ['files', worktreeId, scopeKey(scope)] as const,
   diffAll: (worktreeId: string) => ['diff', worktreeId] as const,

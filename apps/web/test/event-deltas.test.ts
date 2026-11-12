@@ -191,6 +191,27 @@ describe('worktree.changed with a delta (#51)', () => {
     );
   });
 
+  it('the inbox delta fetch counts as a refresh (the indicator follows useIsFetching)', async () => {
+    const t = setup();
+    t.projectsOnScreen();
+    t.inboxOnScreen(WORKING);
+    await t.settle();
+    const [a] = t.dirty;
+    if (!a) throw new Error('fixture');
+    const held = t.gate.hold('worktreeIds=');
+    const flushed = t.edit(a.worktree.id, 'edit');
+    await held.started;
+    // In flight: the refresh indicator (`useIsFetching() > 0`) says "Refreshing…".
+    expect(t.qc.isFetching()).toBeGreaterThan(0);
+    held.release();
+    await flushed;
+    await t.settle();
+    expect(t.qc.isFetching()).toBe(0);
+    // The one-off delta query does not stay in the cache (removed on React Query's gc timer).
+    await new Promise((r) => setTimeout(r, 20));
+    expect(t.qc.getQueryCache().findAll({ queryKey: ['inbox-delta'] })).toEqual([]);
+  });
+
   it('a worktree that became clean leaves the inbox; one that became dirty joins it', async () => {
     const t = setup();
     t.projectsOnScreen();

@@ -306,7 +306,16 @@ async function applyInboxDelta(
       if (query.state.fetchStatus === 'fetching') await query.promise?.catch(() => undefined);
       const before = query.state.data as InboxResponse | undefined;
       if (!before) return;
-      const response = await api.inbox({ scope: before.scope, worktreeIds });
+      // Through React Query (its own key, dropped once done) so the refresh indicator
+      // (`useIsFetching`) shows this fetch like any live refresh: since #51 it is often the only
+      // request an edit causes, and a user watching the Inbox should see it.
+      const response = await queryClient.fetchQuery({
+        queryKey: queryKeys.inboxDelta(before.scope, worktreeIds, seq),
+        queryFn: () => api.inbox({ scope: before.scope, worktreeIds }),
+        staleTime: 0,
+        gcTime: 0,
+        retry: false,
+      });
       const key = JSON.stringify(query.queryKey);
       const fresh = worktreeIds.filter((id) => (seqs.applied.get(`${key}\u0000${id}`) ?? 0) < seq);
       if (fresh.length === 0) return;

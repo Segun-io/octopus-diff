@@ -45,9 +45,15 @@ interface Harness {
   requests: string[];
 }
 
-function setup(dataset: MockDataset = 'demo', opts: { token?: string } = {}): Harness {
+function setup(
+  dataset: MockDataset = 'demo',
+  opts: { token?: string; latencyMs?: number } = {},
+): Harness {
   const backend = new MockBackend({ dataset });
-  const mockFetch = createMockFetch(backend, opts.token ? { token: opts.token } : {});
+  const mockFetch = createMockFetch(backend, {
+    ...(opts.token ? { token: opts.token } : {}),
+    ...(opts.latencyMs ? { latencyMs: opts.latencyMs } : {}),
+  });
   const requests: string[] = [];
   const api = createApiClient({
     baseUrl: 'http://mock.local',
@@ -658,6 +664,32 @@ describe('live updates', () => {
     expect(after.filter((r) => r.includes('/diff'))).toEqual([]);
     expect(viewerPath()).toBe('src/auth/session.ts');
     expect(viewer().getAttribute('data-patch-hash')).toBe(hash);
+  });
+
+  it('a live edit in the Inbox shows the refresh indicator, though it refetches no list (#51)', async () => {
+    // A network round trip takes time; an instant mock answer would settle within one render.
+    const { backend, requests } = setup('demo', { latencyMs: 40 });
+    await ready();
+    const indicator = screen.getByTestId(TEST_IDS.refreshIndicator);
+    await waitFor(() => expect(indicator.getAttribute('data-state')).toBe('idle'));
+    const states: string[] = [];
+    const observer = new MutationObserver(() => {
+      states.push(indicator.getAttribute('data-state') ?? '');
+    });
+    observer.observe(indicator, { attributes: true, attributeFilter: ['data-state'] });
+    const worktreeId = screen
+      .getAllByTestId(TEST_IDS.worktreeItem)
+      .find((el) => el.dataset.branch === 'fix/cache')?.dataset.worktreeId;
+    const before = requests.length;
+    act(() => {
+      backend.mutate(worktreeId, 'edit', 'src/lib/cache.ts');
+    });
+    await waitFor(() => expect(states).toContain('refreshing'));
+    await waitFor(() => expect(indicator.getAttribute('data-state')).toBe('idle'));
+    observer.disconnect();
+    const after = requests.slice(before);
+    expect(after.filter((r) => r.includes('worktreeIds='))).toHaveLength(1);
+    expect(after.filter((r) => r.includes('/api/projects'))).toEqual([]);
   });
 
   it('a reverted open file hands the selection to its neighbor', async () => {
