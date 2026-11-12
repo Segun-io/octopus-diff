@@ -79,7 +79,11 @@ export const SummarySnapshotSchema = z.object({
   entries: z.array(SummarySnapshotEntrySchema),
   /** Changed paths in the worktree (entries that were cut off included). */
   total: z.number().int().nonnegative(),
-  /** `total` exceeded `maxEntries`; `entries` holds the first `maxEntries`. */
+  /**
+   * `total` exceeded `maxEntries`; `entries` holds the first `maxEntries`. Untracked files omitted
+   * above git-core's cap (`untrackedOmitted`, #43) are in `total` but are never entries and do not
+   * set it: it says that the entry cap cut listed paths off.
+   */
   truncated: z.boolean(),
   /**
    * A hash of every changed path's state (status codes, object ids, content signatures, counts),
