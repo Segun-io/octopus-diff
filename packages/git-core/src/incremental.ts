@@ -477,10 +477,14 @@ const caseProbe = new Map<string, Promise<boolean>>();
  * Does the worktree's filesystem fold case (macOS, Windows, a WSL `/mnt` drive, ciopfs)? Then
  * a watcher may name a file differently from the index, and literal pathspecs (which git
  * matches byte for byte, `core.ignorecase` or not) would miss it: no incremental refresh there.
- * macOS also normalises Unicode, so it never takes one either.
+ * macOS also normalises Unicode, so it never takes one either. `OCTOPUS_DIFF_TEST_FOLDS_CASE=1`
+ * makes every worktree count as folding (tests emulate macOS with it).
  */
 export function foldsCase(root: string): Promise<boolean> {
   if (process.platform === 'darwin' || process.platform === 'win32') return Promise.resolve(true);
+  // Tests only: behave as on a folding filesystem (macOS CI) on any machine. It can only turn
+  // incremental refreshes off, never on.
+  if (process.env.OCTOPUS_DIFF_TEST_FOLDS_CASE === '1') return Promise.resolve(true);
   let probe = caseProbe.get(root);
   if (!probe) {
     probe = (async () => {
