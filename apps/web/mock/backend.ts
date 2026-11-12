@@ -1121,13 +1121,19 @@ export class MockBackend {
     return { ok: true, restored };
   }
 
-  inbox(scope: DiffScope, onlyUnreviewed: boolean): InboxResponse {
+  inbox(
+    scope: DiffScope,
+    onlyUnreviewed: boolean,
+    projectIds?: readonly string[],
+  ): InboxResponse {
     if (scope.kind === 'commit') {
       throw new MockApiError(400, 'bad_request', 'commit scope is not supported by the inbox');
     }
     const entries: InboxResponse['entries'] = [];
     const map = reviewOverrideMap([...this.overrides.values()]);
+    const only = projectIds ? new Set(projectIds) : null;
     for (const mp of this.projects) {
+      if (only && !only.has(mp.project.id)) continue;
       for (const mw of mp.worktrees) {
         if (mw.error || mw.worktree.missing) continue;
         const review = this.policyOf(mp, mw, map);

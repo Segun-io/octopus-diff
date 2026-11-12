@@ -6,7 +6,13 @@ import type {
 } from '@octopus-diff/contracts';
 import { createContext, type ReactNode, useContext, useMemo } from 'react';
 import { useForgeIndex } from '../api/forges.ts';
-import { inboxScopeFor, useFilesQuery, useInboxQuery, useProjectsQuery } from '../api/queries.ts';
+import {
+  inboxScopeFor,
+  isPartialInbox,
+  useFilesQuery,
+  useInboxQuery,
+  useProjectsQuery,
+} from '../api/queries.ts';
 import { useScanRootsQuery } from '../api/settings.ts';
 import { fileRefKey } from '../lib/fileRef.ts';
 import {
@@ -189,8 +195,10 @@ function useBuildAppModel(): AppModel {
     return out;
   }, [sidebar, inboxEntries]);
 
+  // While its batches are still landing (#10) the Inbox shows less than an "all" request covers.
   const inboxUnfiltered =
     view.kind === 'inbox' &&
+    !isPartialInbox(inboxData) &&
     !hasSidebarFilters(filters) &&
     showsReviewed &&
     groups.length === inboxEntries.length;
