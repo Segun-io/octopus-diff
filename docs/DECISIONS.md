@@ -3838,7 +3838,8 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      the list plus `summaryState` (the summary state it was built from, or null when git-core listed the worktree as
      it is now) and, for such a list, the `untrackedOmitted` it applied. Optional, so test doubles and older
      implementations need nothing; `listChangedFiles` is unchanged. See #341.
-341. **A list is labelled with the state git-core listed (Greptile on PR #95; amends #339).** #339 retried once and then
+341. **A list is labelled with the state git-core listed (Greptile on PR #95; amends #339).** (Amended by #343: an
+     overtaken inbox row is sent marked, not left out.) #339 retried once and then
      returned the list with the summary it had asked for. But a refresh can overtake the retry too: git-core then
      finds the requested `summaryState` is no longer its latest, lists the worktree as it is now, and a move across
      the cap left an omission notice beside listed files, or none beside a capped list. Now `#gitFilesAt` asks
