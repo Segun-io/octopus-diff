@@ -54,7 +54,7 @@ export function buildGithubQuery(count: number, variant: GithubQueryVariant = 'f
     );
   }
   const body = variant === 'full' ? `${PR_FIELDS} mergeStateStatus` : PR_FIELDS;
-  return `query OctopusDiffPullRequests(${vars.join(', ')}) { rateLimit { cost remaining } repository(owner: $owner, name: $name) { ${fields.join(' ')} } } fragment pr on PullRequest { ${body} }`;
+  return `query OctopusDiffPullRequests(${vars.join(', ')}) { rateLimit { cost remaining resetAt } repository(owner: $owner, name: $name) { ${fields.join(' ')} } } fragment pr on PullRequest { ${body} }`;
 }
 
 const PASSED_RUNS = new Set(['SUCCESS', 'NEUTRAL', 'SKIPPED']);

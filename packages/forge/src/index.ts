@@ -21,6 +21,7 @@ export {
   ForgeFetchError,
   type ForgeQueryCost,
   type ForgeTarget,
+  isRateLimitMessage,
   loginHint,
 } from './client.js';
 export {

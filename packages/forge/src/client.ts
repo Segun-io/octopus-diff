@@ -40,7 +40,7 @@ import {
   normaliseGitlabDetail,
   normaliseGitlabRepository,
 } from './gitlab-details.js';
-import { asNumber, asRecord, parseJsonObject } from './json.js';
+import { asNumber, asRecord, asString, parseJsonObject } from './json.js';
 
 /** The forge repository a single-object query is about. */
 export type ForgeTarget = Pick<ProjectForge, 'kind' | 'host' | 'repository' | 'webUrl'>;
@@ -67,11 +67,27 @@ export function loginHint(kind: ForgeKind, host: string): string {
 /** A failed fetch, with a short message that is safe to show (no tokens, no control chars). */
 export class ForgeFetchError extends Error {
   readonly notFound: boolean;
-  constructor(message: string, options?: { cause?: unknown; notFound?: boolean }) {
+  /**
+   * The forge refused because a rate limit is used up (GitHub primary or secondary limit, GitLab
+   * HTTP 429). The CLIs expose no response headers within the read-only allowlist, so this is
+   * recognised from the message (`gh: API rate limit exceeded ... (HTTP 403)`, a GraphQL
+   * `RATE_LIMITED` error, `HTTP 429`).
+   */
+  readonly rateLimited: boolean;
+  constructor(
+    message: string,
+    options?: { cause?: unknown; notFound?: boolean; rateLimited?: boolean },
+  ) {
     super(message, options);
     this.name = 'ForgeFetchError';
     this.notFound = options?.notFound ?? false;
+    this.rateLimited = options?.rateLimited ?? isRateLimitMessage(message);
   }
+}
+
+/** A forge's own words for "slow down": the primary or secondary limit, or a 429. */
+export function isRateLimitMessage(text: string): boolean {
+  return /rate limit|RATE_LIMITED|abuse detection|too many requests|HTTP 429/i.test(text);
 }
 
 function shortMessage(text: string): string {
@@ -79,7 +95,7 @@ function shortMessage(text: string): string {
   return line.replace(/^(gh|glab):\s*/, '');
 }
 
-/** GitHub's `rateLimit { cost remaining }` of one query (every GitHub query asks for it). */
+/** GitHub's `rateLimit { cost remaining resetAt }` of one query (every GitHub query asks for it). */
 export interface ForgeQueryCost {
   kind: ForgeKind;
   host: string;
@@ -87,6 +103,8 @@ export interface ForgeQueryCost {
   operation: string;
   cost: number;
   remaining: number | null;
+  /** When the hourly window resets (ISO time), when the response said. */
+  resetAt: string | null;
 }
 
 export interface ForgeClientOptions {
@@ -95,15 +113,34 @@ export interface ForgeClientOptions {
   onCost?: (cost: ForgeQueryCost) => void;
 }
 
+/** How long a host that rejected the full queries is asked with the basic ones straight away. */
+const BASIC_MEMO_MS = 60 * 60_000;
+
 export class ForgeClient {
   readonly #cli: ForgeCli;
   readonly #now: () => Date;
   readonly #onCost: ((cost: ForgeQueryCost) => void) | undefined;
+  /** `kind host query` -> time until which the basic variant is used (the full one was rejected). */
+  readonly #basicUntil = new Map<string, number>();
 
   constructor(cli: ForgeCli, options: ForgeClientOptions = {}) {
     this.#cli = cli;
     this.#now = options.now ?? (() => new Date());
     this.#onCost = options.onCost;
+  }
+
+  /**
+   * The query variant to start with for a host. A GitHub Enterprise Server or self-managed GitLab
+   * that rejected the full fields would otherwise be asked twice on every refresh (the rejected
+   * query, then the basic one): a process spawn and a round trip wasted each time.
+   */
+  #variant<V extends 'full' | 'basic'>(kind: ForgeKind, host: string, query: string): V {
+    const until = this.#basicUntil.get(`${kind} ${host} ${query}`);
+    return (until !== undefined && this.#now().getTime() < until ? 'basic' : 'full') as V;
+  }
+
+  #rememberBasic(kind: ForgeKind, host: string, query: string): void {
+    this.#basicUntil.set(`${kind} ${host} ${query}`, this.#now().getTime() + BASIC_MEMO_MS);
   }
 
   /** `--version` and `auth status` (both always run; neither prints a token). */
@@ -186,8 +223,8 @@ export class ForgeClient {
       const batch = unique.slice(i, i + max);
       const parsed =
         forge.kind === 'github'
-          ? await this.#githubBatch(forge, batch, 'full')
-          : await this.#gitlabBatch(forge, batch, 'full');
+          ? await this.#githubBatch(forge, batch, this.#variant(forge.kind, forge.host, 'batch'))
+          : await this.#gitlabBatch(forge, batch, this.#variant(forge.kind, forge.host, 'batch'));
       for (const [branch, list] of parsed.byBranch) result.set(branch, list);
     }
     return result;
@@ -231,12 +268,15 @@ export class ForgeClient {
           this.#ownerName(forge),
         );
         const errors = graphqlErrors(raw.json);
-        if (variant === 'full' && isUnknownFieldError(errors)) return run('basic');
+        if (variant === 'full' && isUnknownFieldError(errors)) {
+          this.#rememberBasic('github', forge.host, 'detail');
+          return run('basic');
+        }
         const pr = asRecord(asRecord(asRecord(raw.json?.data)?.repository)?.pullRequest);
         if (this.#checkSingle(raw, pr, what, true)) return null;
         return normaliseGithubDetail(pr);
       };
-      return run('full');
+      return run(this.#variant('github', forge.host, 'detail'));
     }
     return this.#gitlabSingle(
       forge,
@@ -333,17 +373,21 @@ export class ForgeClient {
     what: string,
     nullable = false,
   ): Promise<T> {
+    const query = /^query (\w+)/.exec(build('full'))?.[1] ?? 'single';
     const run = async (variant: GitlabQueryVariant): Promise<T> => {
       const raw = await this.#query('gitlab', forge.host, build(variant), fields);
       const errors = graphqlErrors(raw.json);
-      if (variant === 'full' && isUnknownFieldError(errors)) return run('basic');
+      if (variant === 'full' && isUnknownFieldError(errors)) {
+        this.#rememberBasic('gitlab', forge.host, query);
+        return run('basic');
+      }
       const node = pick(asRecord(raw.json?.data));
       if (this.#checkSingle(raw, node, what, nullable)) return null as T;
       const result = node === null ? null : normalise(node);
       if (result === null) throw new ForgeFetchError(`${what} returned no usable data.`);
       return result;
     };
-    return run('full');
+    return run(this.#variant('gitlab', forge.host, query));
   }
 
   async #query(
@@ -372,6 +416,7 @@ export class ForgeClient {
         operation: /^query (\w+)/.exec(query)?.[1] ?? 'query',
         cost,
         remaining: asNumber(rate?.remaining),
+        resetAt: asString(rate?.resetAt),
       });
     }
     return { json, stderr: stripControl(result.stderr), exitCode: result.exitCode };
@@ -409,6 +454,7 @@ export class ForgeClient {
     ]);
     const parsed = parseGithubResponse(raw.json, branches);
     if (variant === 'full' && isUnknownFieldError(parsed.errors)) {
+      this.#rememberBasic('github', forge.host, 'batch');
       return this.#githubBatch(forge, branches, 'basic');
     }
     this.#check(parsed, raw, `GitHub repository ${forge.repository}`);
@@ -428,6 +474,7 @@ export class ForgeClient {
     );
     const parsed = parseGitlabResponse(raw.json, branches);
     if (variant === 'full' && isUnknownFieldError(parsed.errors)) {
+      this.#rememberBasic('gitlab', forge.host, 'batch');
       return this.#gitlabBatch(forge, branches, 'basic');
     }
     this.#check(parsed, raw, `GitLab project ${forge.repository}`);

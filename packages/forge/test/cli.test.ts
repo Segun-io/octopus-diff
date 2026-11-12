@@ -9,6 +9,7 @@ import {
   ForgeCli,
   ForgeCliError,
   ForgeClient,
+  ForgeFetchError,
   forgeEnv,
 } from '../src/index.js';
 
@@ -247,6 +248,35 @@ process.exit(2);
       .map((c) => c.args[5]?.includes('detailedMergeStatus'));
     expect(queries).toEqual([true, false]);
     expect(calls().at(-1)?.env.GITLAB_HOST).toBe('gitlab.com');
+  });
+
+  it('asks a host that rejected the full fields with the basic query straight away (#8)', async () => {
+    const c = client('unknown-field');
+    const forge = { kind: 'gitlab', host: 'gitlab.com', repository: 'g/p' } as const;
+    const sent = () =>
+      calls()
+        .filter((c) => c.name === 'glab' && c.args[0] === 'api')
+        .map((c) => c.args[5]?.includes('detailedMergeStatus'));
+    const before = sent().length;
+    await c.fetchChangeRequests(forge, ['feat/x']);
+    await c.fetchChangeRequests(forge, ['feat/x']);
+    // First refresh: full (rejected) then basic. Second refresh: basic only.
+    expect(sent().slice(before)).toEqual([true, false, false]);
+  });
+
+  it('flags rate-limit refusals so callers can back off', () => {
+    for (const message of [
+      'API rate limit exceeded for user ID 1. (HTTP 403)',
+      'API rate limit already exceeded for user ID 1.',
+      'You have exceeded a secondary rate limit. Please wait a few minutes',
+      'HTTP 429: Too Many Requests',
+      'RATE_LIMITED',
+    ]) {
+      expect(new ForgeFetchError(message).rateLimited, message).toBe(true);
+    }
+    for (const message of ['HTTP 502: Bad Gateway', 'Could not resolve to a Repository']) {
+      expect(new ForgeFetchError(message).rateLimited, message).toBe(false);
+    }
   });
 
   it('surfaces errors and timeouts as ForgeFetchError', async () => {

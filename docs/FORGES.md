@@ -115,7 +115,7 @@ Each is one GraphQL query through the same runner and allowlist, fetched only wh
 | Repository facts + 20 newest open requests | `OctopusDiffRepository` / `OctopusDiffProject` | when the project Overview opens; "Refresh" | 10 min; also dropped when the batch's set of requests (number, state) changes | 1 pt |
 | Local repository facts | git only (`for-each-ref`, `log -1`, `rev-list --left-right --count`, the remote config read) | Overview mount (project and folder) | 30 s, dropped on any event naming the project | 0 |
 
-Every GitHub query asks for `rateLimit { cost remaining }`; the opt-in live test asserts `cost <= 1`. GitHub PR
+Every GitHub query asks for `rateLimit { cost remaining resetAt }`; the opt-in live test asserts `cost <= 1`. GitHub PR
 numbers are inlined in the query text (`pullRequest(number: 42)`): `gh api graphql --raw-field` cannot pass an
 `Int!` and `-F` stays banned. GitLab's `iid` is a `String!` variable. Errors keep the last good data (shown with a
 "Showing the last loaded data" note); a request that no longer exists answers `no-request`. A `basic` variant of
