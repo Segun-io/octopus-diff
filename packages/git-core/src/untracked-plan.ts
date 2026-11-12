@@ -220,9 +220,15 @@ function escapeIgnore(text: string): string {
  * paths' directories (UTF-8, `/`-separated). Without it, every line is the exact directory.
  */
 export interface IgnoreContext {
-  /** Listed untracked files (keys without a trailing `/`). */
+  /**
+   * Listed untracked entries; a directory entry (a nested repository) ends in `/`, so a pattern
+   * matches it by its own name too, as git does (Greptile on PR #91).
+   */
   listed: readonly string[];
-  /** Every directory that holds a tracked file, and every directory name among them. */
+  /**
+   * Every directory that holds a tracked file or is a tracked repository (a gitlink), and every
+   * directory name among them.
+   */
   trackedDirs: ReadonlySet<string>;
   trackedNames: ReadonlySet<string>;
 }

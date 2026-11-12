@@ -156,6 +156,29 @@ describe('planUntracked (#43)', () => {
     expect(ignoreLineFor('a/node_modules', ctx(['a/src.ts']))).toBe('node_modules/');
   });
 
+  // Greptile on PR #91: a listed directory entry (a nested repository, `dir/`) is a directory the
+  // pattern matches by its own name, not only through its parents.
+  it('treats listed directory entries as directories', () => {
+    const none = (listed: string[]) => ({
+      listed,
+      trackedDirs: new Set<string>(),
+      trackedNames: new Set<string>(),
+    });
+    const table: Array<[string, string[], string]> = [
+      ['b/node_modules', ['a/node_modules/'], '/b/node_modules/'],
+      ['b/node_modules', ['a/node_modules/inner/'], '/b/node_modules/'],
+      ['b/node_modules', ['a/node_modules_x/'], 'node_modules/'],
+      // A file named node_modules is not a directory: `node_modules/` does not match it.
+      ['b/node_modules', ['a/node_modules'], 'node_modules/'],
+      ['tools/build/cache', ['tools/build/'], '/tools/build/cache/'],
+      ['tools/build/cache', ['tools/build2/'], '/tools/build/'],
+      ['x/dist/a', ['x/dist/'], '/x/dist/a/'],
+    ];
+    for (const [dir, listed, line] of table) {
+      expect(ignoreLineFor(dir, none(listed)), `${dir} with ${listed}`).toBe(line);
+    }
+  });
+
   // PR #91 P2-4 (SEC-05): bidi, zero-width and other format characters make no line to copy.
   it('makes no line for names with bidi, zero-width or format characters', () => {
     for (const name of [
@@ -398,12 +421,30 @@ describe('summaries and lists above the cap (#43)', () => {
     files: Record<string, string>,
     untracked: Record<string, number>,
     loose: string[],
+    trackedRepos: string[] = [],
   ): Promise<Map<string, string | null>> {
     const repo = fx.repo(name, { files });
+    /** A repository of its own at `rel` (git shows it as one entry, `rel/`). */
+    const nested = (rel: string) => {
+      const dir = path.join(repo, rel);
+      mkdirSync(dir, { recursive: true });
+      fx.git(dir, ['init', '-q']);
+      fx.write(path.join(dir, 'inner.txt'), 'inner\n');
+      fx.commitAll(dir, 'inner');
+    };
+    for (const rel of trackedRepos) {
+      nested(rel);
+      fx.git(repo, ['add', '--', rel]);
+      fx.git(repo, ['commit', '-q', '-m', `track ${rel}`]);
+    }
     for (const [dir, n] of Object.entries(untracked)) {
       for (const i of range(n)) fx.write(path.join(repo, dir, `f${i}.txt`), `${i}\n`);
     }
-    for (const rel of loose) fx.write(path.join(repo, rel), 'listed\n');
+    // A trailing `/`: a listed nested repository.
+    for (const rel of loose) {
+      if (rel.endsWith('/')) nested(rel.slice(0, -1));
+      else fx.write(path.join(repo, rel), 'listed\n');
+    }
     const wt = locator(repo);
     const capped = createGitCore(fx.coreOptions({ maxListedUntracked: 5 }));
     try {
@@ -411,9 +452,10 @@ describe('summaries and lists above the cap (#43)', () => {
       if (!omission) throw new Error('expected an omission');
       const lines = omission.directories.map((d) => d.ignoreLine);
       expect(lines.every((line) => line !== null)).toBe(true);
+      // Directory entries (nested repositories) keep their `/`, as check-ignore needs it.
       const listed = (await listFiles(capped, wt, { kind: 'working' }))
         .filter((f) => f.status === 'untracked')
-        .map((f) => f.path);
+        .map((f) => (f.newMode === '160000' ? `${f.path}/` : f.path));
       expect(listed.sort()).toEqual([...loose].sort());
       const tracked = fx.git(repo, ['ls-files']).split('\n').filter(Boolean);
       const excludes = path.join(fx.root, `${name}.excludes`);
@@ -477,6 +519,33 @@ describe('summaries and lists above the cap (#43)', () => {
         ['app/src.ts'],
       ),
     ).toEqual(new Map([['app/node_modules', '/app/node_modules/']]));
+    // Greptile on PR #91: a listed nested repository named node_modules is itself a directory the
+    // broad line would ignore (not only directories above it).
+    expect(
+      await checkIgnore('check-ignore-nested', { 'a.txt': 'a\n' }, { 'b/node_modules/x': 12 }, [
+        'a/node_modules/',
+        'src.ts',
+      ]),
+    ).toEqual(new Map([['b/node_modules', '/b/node_modules/']]));
+    // A tracked repository (gitlink) named node_modules counts as a tracked directory too.
+    expect(
+      await checkIgnore(
+        'check-ignore-gitlink',
+        { 'a.txt': 'a\n' },
+        { 'b/node_modules/x': 12 },
+        ['src.ts'],
+        ['vendor/node_modules'],
+      ),
+    ).toEqual(new Map([['b/node_modules', '/b/node_modules/']]));
+    // Names with spaces and pattern characters, broad when nothing else is called that.
+    expect(
+      await checkIgnore(
+        'check-ignore-special',
+        { 'a.txt': 'a\n' },
+        { 'my app/node_modules/x[1]': 12 },
+        ['my app/src #1.ts', 'out [v2]/keep.txt'],
+      ),
+    ).toEqual(new Map([['my app/node_modules', 'node_modules/']]));
   });
 
   it('an omitted directory named with bidi characters has no line', async () => {

@@ -813,10 +813,16 @@ async function ignoreContext(
   let scan = trackedDirScans.get(index);
   if (scan === undefined || scan === null || scan.signature !== signature) {
     try {
-      const out = await deps.ctx.git(repo, ['ls-files', '-z']);
+      // `--stage` for the modes: a gitlink (a tracked repository) is a directory itself, which a
+      // `name/` or `/path/` line matches by its own name (Greptile on PR #91).
+      const out = await deps.ctx.git(repo, ['ls-files', '-z', '--stage']);
       const dirs = new Set<string>();
       const names = new Set<string>();
-      for (const file of bstrToUtf8(bstrFromBuffer(out.stdout)).split('\u0000')) {
+      for (const record of bstrToUtf8(bstrFromBuffer(out.stdout)).split('\u0000')) {
+        const tab = record.indexOf('\t');
+        if (tab < 0) continue;
+        const gitlink = record.startsWith('160000 ');
+        const file = gitlink ? `${record.slice(tab + 1)}/` : record.slice(tab + 1);
         for (let slash = file.indexOf('/'); slash >= 0; slash = file.indexOf('/', slash + 1)) {
           dirs.add(file.slice(0, slash));
           names.add(file.slice(file.lastIndexOf('/', slash - 1) + 1, slash));
@@ -1190,7 +1196,10 @@ async function finish(
               ? await ignoreContext(
                   deps,
                   repo,
-                  untrackedInfos.map((info) => info.key),
+                  // A nested repository is a directory entry: keep its `/` (Greptile on PR #91).
+                  untrackedInfos.map((info) =>
+                    info.kind === 'directory' ? `${info.key}/` : info.key,
+                  ),
                 )
               : null,
             omittedDuplicates,
