@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { realpathSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -96,7 +96,11 @@ interface Started {
   subscribed: string[];
 }
 
-async function start(fx: Fixture): Promise<Started> {
+async function start(
+  fx: Fixture,
+  watch: { pollFocusedMs?: number; pollIdleMs?: number } = {},
+  options: { defaultHost?: boolean } = {},
+): Promise<Started> {
   const real = createGitCore({ env: fx.env });
   const summaries = new Map<string, number>();
   const gitCore: GitCore = new Proxy(real, {
@@ -118,13 +122,17 @@ async function start(fx: Fixture): Promise<Started> {
     stateDir: await tempDir(),
     logLevel: process.env.OCTOPUS_DIFF_TEST_LOGS ? 'debug' : 'silent',
     gitCore,
-    watch: { debounceMs: 150 },
-    internal: {
-      subscribe: async (dir, fn, opts) => {
-        subscribed.push(dir);
-        return parcelWatcher.subscribe(dir, fn, opts);
-      },
-    },
+    watch: { debounceMs: 150, ...watch },
+    // `defaultHost`: no `subscribe` seam, so the daemon uses the production watch host (a child
+    // process whose `unsubscribe` returns after sending a message, not after parcel finished).
+    internal: options.defaultHost
+      ? {}
+      : {
+          subscribe: async (dir, fn, opts) => {
+            subscribed.push(dir);
+            return parcelWatcher.subscribe(dir, fn, opts);
+          },
+        },
   });
   onCleanup(async () => {
     await daemon.close();
@@ -297,6 +305,186 @@ describe.skipIf(!GIT_CORE_IMPLEMENTED)(
       await sleep(300);
       expect(daemon.core.watcher.isWatched(hashId(victim))).toBe(false);
       expect(subscribed).not.toContain(victim);
+    });
+  },
+);
+
+/**
+ * Issue #36 (DECISIONS #213): thousands of files created inside a fresh `<name>/pkg/deep`. The
+ * writer is a separate process (a shell loop of builtin writes), like the agent or installer that
+ * produced the report. The fallback polls are an hour away, so only the watcher can notice.
+ */
+describe.skipIf(!GIT_CORE_IMPLEMENTED)(
+  'a large new subtree is announced (issue #36)',
+  { timeout: 90_000 },
+  () => {
+    // Creates the directories at once, waits `delay` ms, then writes `count` files in batches of
+    // 50, 20 ms apart (a shell loop finishes 2000 files in 40 ms, before the first refresh looks,
+    // which is no burst).
+    const WRITER = `
+      const fs = require('node:fs');
+      const [dir, count, delay] = [process.argv[1], Number(process.argv[2]), Number(process.argv[3])];
+      fs.mkdirSync(dir, { recursive: true });
+      let i = 0;
+      const tick = () => {
+        for (let n = 0; n < 50 && i < count; n++, i++) fs.writeFileSync(dir + '/f' + i + '.txt', String(i));
+        if (i < count) setTimeout(tick, 20);
+      };
+      setTimeout(tick, delay);
+    `;
+    const writer = (cwd: string, dir: string, count: number, delay: number) => {
+      const child = spawn(process.execPath, ['-e', WRITER, dir, String(count), String(delay)], {
+        cwd,
+        stdio: 'ignore',
+      });
+      return new Promise<void>((resolve, reject) => {
+        child.on('error', reject);
+        child.on('exit', (code) => (code === 0 ? resolve() : reject(new Error(`exit ${code}`))));
+      });
+    };
+
+    it.each([
+      ['vendor-x/pkg/deep', 2000, 0],
+      ['vendor-x/pkg/deep', 2000, 500],
+      ['build/pkg/deep', 2000, 500],
+      ['lib-x/a/b/c/d/e/f/g', 500, 500],
+    ])('%s with %i files, written %i ms after the directories', async (dir, count, delay) => {
+      const fx = await makeFixture();
+      const repo = await makeRepo(fx, 'alpha', { 'a.txt': 'one\n' });
+      const { daemon, events } = await start(fx, {
+        pollFocusedMs: 3_600_000,
+        pollIdleMs: 3_600_000,
+      });
+      const api = client(daemon);
+      await api.addProject({ path: repo });
+      const id = hashId(repo);
+      await eventually(() => daemon.core.watcher.isWatched(id), 5000);
+      await sleep(500);
+
+      const mark = events.events.length;
+      const done = writer(repo, dir, count, delay);
+      // With the directories empty, the first refresh sees nothing to announce: the first
+      // `worktree.changed` has to come from a file written inside the new subtree.
+      await changedAfter(events, mark, id, 20_000);
+      // The file list is cached by state hash, so it reaches `count` only if the watcher keeps
+      // reporting the writes (the fallback polls are an hour away).
+      const listed = async () =>
+        (await api.listFiles(id)).files.filter((f) => f.path.startsWith(`${dir}/`)).length;
+      await eventually(async () => (await listed()) === count, 30_000, 100);
+      await done;
+    });
+
+    // The size of the issue's profiling run; slow (the writer alone takes ~12 s), so opt-in:
+    // OCTOPUS_DIFF_WATCH_30K=1 pnpm --filter @octopus-diff/daemon exec vitest run test/watch.real-git.test.ts
+    it.skipIf(!process.env.OCTOPUS_DIFF_WATCH_30K)(
+      '30000 files in vendor-big/pkg/deep are announced and listed',
+      { timeout: 180_000 },
+      async () => {
+        const fx = await makeFixture();
+        const repo = await makeRepo(fx, 'alpha', { 'a.txt': 'one\n' });
+        const { daemon, events } = await start(fx, {
+          pollFocusedMs: 3_600_000,
+          pollIdleMs: 3_600_000,
+        });
+        const api = client(daemon);
+        await api.addProject({ path: repo });
+        const id = hashId(repo);
+        await eventually(() => daemon.core.watcher.isWatched(id), 5000);
+        await sleep(500);
+        const mark = events.events.length;
+        const t0 = Date.now();
+        const done = writer(repo, 'vendor-big/pkg/deep', 30_000, 500);
+        await changedAfter(events, mark, id, 60_000);
+        const firstMs = Date.now() - t0;
+        const listed = async () =>
+          (await api.listFiles(id)).files.filter((f) => f.path.startsWith('vendor-big/')).length;
+        await eventually(async () => (await listed()) === 30_000, 120_000, 250);
+        console.info(
+          `30k: first worktree.changed after ${firstMs} ms, all listed after ${Date.now() - t0} ms`,
+        );
+        await done;
+      },
+    );
+
+    // The seam tests above hand parcel's subscription back directly, so releasing it waits for parcel
+    // to finish. In production the watch host's `unsubscribe` returns after sending a message and
+    // the child starts the cleanup without waiting before it accepts the next subscribe: the fix
+    // releases the old subscription before crawling again, so that is the path to prove (PR #75).
+    it('through the default watch host: later writes below a new subtree are announced', async (ctx) => {
+      const fx = await makeFixture();
+      const repo = await makeRepo(fx, 'alpha', { 'a.txt': 'one\n' });
+      const { daemon, events } = await start(
+        fx,
+        { pollFocusedMs: 3_600_000, pollIdleMs: 3_600_000 },
+        { defaultHost: true },
+      );
+      const api = client(daemon);
+      await api.addProject({ path: repo });
+      const id = hashId(repo);
+      await eventually(() => daemon.core.watcher.isWatched(id), 10_000);
+      // The production host can fall back to polling on a machine where it cannot start.
+      if ((await api.health()).watcher.mode !== 'native') ctx.skip();
+      await sleep(500);
+
+      await writer(repo, 'vendor-h/pkg/deep', 300, 500);
+      const listed = async () =>
+        (await api.listFiles(id)).files.filter((f) => f.path.startsWith('vendor-h/')).length;
+      await eventually(async () => (await listed()) === 300, 30_000, 100);
+      // The tree was re-subscribed through the host: an edit after that is live. Keep editing
+      // until it is announced (an edit made before the re-subscribe is caught by the refresh
+      // that follows it instead).
+      const target = path.join(repo, 'vendor-h', 'pkg', 'deep', 'f0.txt');
+      let n = 0;
+      const mark = events.events.length;
+      await eventually(
+        async () => {
+          await writeFile(target, `edit ${n++}\n`);
+          return events.events
+            .slice(mark)
+            .some((e) => e.type === 'worktree.changed' && e.worktreeId === id);
+        },
+        20_000,
+        300,
+      );
+    });
+
+    it('a later edit inside the new subtree is announced too', async () => {
+      const fx = await makeFixture();
+      const repo = await makeRepo(fx, 'alpha', { 'a.txt': 'one\n' });
+      const { daemon, events } = await start(fx, {
+        pollFocusedMs: 3_600_000,
+        pollIdleMs: 3_600_000,
+      });
+      const api = client(daemon);
+      await api.addProject({ path: repo });
+      const id = hashId(repo);
+      await eventually(() => daemon.core.watcher.isWatched(id), 5000);
+      await sleep(500);
+
+      await writer(repo, 'vendor-y/pkg/deep', 20, 0);
+      await eventually(
+        async () =>
+          (await api.listFiles(id)).files.filter((f) => f.path.startsWith('vendor-y/')).length ===
+          20,
+        20_000,
+        100,
+      );
+      // The tree is re-subscribed shortly after the writer finished; an edit after that is live.
+      // Keep editing until it is announced: an edit made before the re-subscribe is not seen
+      // by the stream, and the refresh that follows the re-subscribe catches it instead.
+      const target = path.join(repo, 'vendor-y', 'pkg', 'deep', 'f0.txt');
+      let n = 0;
+      const mark = events.events.length;
+      await eventually(
+        async () => {
+          await writeFile(target, `edit ${n++}\n`);
+          return events.events
+            .slice(mark)
+            .some((e) => e.type === 'worktree.changed' && e.worktreeId === id);
+        },
+        20_000,
+        300,
+      );
     });
   },
 );
