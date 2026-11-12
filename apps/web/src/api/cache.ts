@@ -6,6 +6,7 @@ import type {
   ApiClient,
   ChangedFile,
   DiffResponse,
+  DiffScope,
   FilesResponse,
   InboxEntry,
   InboxResponse,
@@ -231,6 +232,37 @@ export const INBOX_PATCH_MAX_WORKTREES = 8;
 const patchSeq = new WeakMap<QueryClient, { next: number; applied: Map<string, number> }>();
 
 /**
+ * The worktree's file list in `scope` for an inbox patch, through the `files` query itself so it
+ * is one request per edit (#27): the same query is usually active in the file pane and the scope
+ * select and is refetched by the invalidation of `['files', worktreeId]` in the same flush. A
+ * fetch already in flight is joined (`fetchQuery` shares it); a result that is current for
+ * `stateHash` and not invalidated is reused; only otherwise is the list fetched.
+ */
+async function filesForPatch(
+  queryClient: QueryClient,
+  api: ApiClient,
+  worktreeId: string,
+  scope: DiffScope,
+  stateHash: string,
+): Promise<FilesResponse> {
+  const queryKey = queryKeys.files(worktreeId, scope);
+  const state = queryClient.getQueryState<FilesResponse>(queryKey);
+  if (
+    state?.data &&
+    state.fetchStatus === 'idle' &&
+    !state.isInvalidated &&
+    state.data.stateHash === stateHash
+  ) {
+    return state.data;
+  }
+  return queryClient.fetchQuery({
+    queryKey,
+    queryFn: () => api.listFiles(worktreeId, { scope }),
+    staleTime: 0,
+  });
+}
+
+/**
  * Replaces the inbox entries of `worktreeIds` in every active inbox query, using
  * `GET /worktrees/:id/files` and the (already refetched) projects list, instead of refetching
  * the whole inbox (1.5 MB for 30 worktrees x 200 files). Builds exactly what `/api/inbox`
@@ -270,9 +302,8 @@ async function patchInbox(
         if (!loc) throw new Error(`unknown worktree ${id}`);
         if (!loc.summary || loc.worktree.bare || loc.worktree.missing)
           return { id, loc, files: null };
-        const response = await api.listFiles(id, { scope });
+        const response = await filesForPatch(queryClient, api, id, scope, loc.summary.stateHash);
         if (response.stateHash !== loc.summary.stateHash) throw new Error('state moved on');
-        queryClient.setQueryData(queryKeys.files(id, scope), response);
         return { id, loc, files: response.files };
       }),
     );

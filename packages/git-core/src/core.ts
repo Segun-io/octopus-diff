@@ -12,6 +12,7 @@ import {
   type WatchTargets,
   type WorktreeLocator,
 } from '@octopus-diff/contracts';
+import { readBranchBase } from './branch-base.js';
 import { GitContext } from './context.js';
 import { createAttributeCache, type DiffDeps, getFileDiff, listChangedFiles } from './diff.js';
 import { detectDefaultBranch, listWorktrees, resolveProject, scan } from './discovery.js';
@@ -200,6 +201,7 @@ export const createGitCore: CreateGitCore = (options: GitCoreOptions = {}): GitC
       await ctx.ensureSupported();
       return readRepositoryInfo(ctx, project, infoOptions);
     }),
+    readBranchBase: guard((project, baseOptions) => readBranchBase(ctx, project, baseOptions)),
     readReviewRange: guard((worktree, rangeOptions) =>
       readReviewRange(reviewDeps, worktree, rangeOptions),
     ),

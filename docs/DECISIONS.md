@@ -2017,3 +2017,57 @@ and repeat validation against its exact dependency set.
      mock has nothing to review, so the viewer stayed `empty`: the script now selects the Uncommitted scope first.
      (g) pnpm 12 forwards a literal `--` to scripts, which `parseArgs` rejects: the bench drops it, and the docs
      show the command without it. Baselines: `docs/bench/results*.md` (a static copy of the #24 numbers is in each).
+## Cache the branch-scope inbox and files (session, 2026-11-11; roadmap #27)
+
+166. **Branch scopes are cached by "state changed", not recomputed per request.** The toolbar default is "All on
+     branch" (`scope=branch&working=1`), and `isCacheableScope()` excluded every `branch` scope, so each load and
+     each edit re-listed every dirty worktree: 6 git spawns per worktree, 540 spawns / ~650–700 ms at 30 × 3, and
+     two 706 KB `files` fetches per edit. Measured with `e2e/bench/inbox-cache.ts` (spawn-traced daemon, 30 × 3):
+     repeat `inbox?scope=branch&working=1` 540 → **0 spawns, ~13 ms**; after an edit or a commit 540 → 6 spawns
+     (the one worktree); after the default branch moved 540 → 18 (that project's three worktrees).
+     The file-list cache (`#filesCache`, single-flight `#filesInflight`) key is now exactly
+     `(worktree, scope, stateHash, base)`: `stateHash` covers HEAD, the index and the working tree; `base` is
+     `<ref>=<oid>` of what a branch scope diffs against (the scope's `base`, else the project's default branch).
+     Nothing else can change that list, so nothing else is in the key. `commit` scopes stay immutable, `review`
+     without a base stays resolved first. A branch scope whose base cannot be read (a git-core without
+     `readBranchBase`, no default branch known) is not cached, exactly as before.
+167. **`GitCore.readBranchBase` (additive contract, `contracts:` commit) reads the base from the ref files.** It
+     returns `{ name, ref, oid }` for `options.base` or `options.defaultBranch` with the same candidate order as
+     `resolveRefName` (heads, remotes, tags). Loose refs and `packed-refs` are plain files, so a repeat call spawns
+     nothing (`packed-refs` text is cached by stat signature). Whatever it cannot read with certainty (a symbolic
+     ref such as `origin/HEAD`, a reftable repository, malformed content) falls back to the same `for-each-ref`
+     lookup the scope itself uses, so it never disagrees with `planScope`. It takes the project (common dir), so it
+     needs neither a worktree nor git's repository cache (5 min TTL: after it, a `repo()` call would spawn).
+     Read-only: files are read under the common git dir, with names that passed `RefNameSchema` and no `.`/`..`
+     segment. Issue #30 (integration base including the remote default ref) changes what `planScope` measures
+     against: it must change `readBranchBase` and the daemon's `DEFAULT_BASE_SCOPE` in step, or the key stops
+     being exact.
+168. **The exposed `stateHash` also covers the default branch's commit.** A default-branch move (merging a branch
+     into it elsewhere, a fetch moving `origin/main`) changes the merge base of every worktree of the project
+     without touching the worktree's own `git status`; with an upstream set even `ahead/behind` does not move. The
+     refs change already marks every worktree of the project dirty (watcher), so the summary now folds
+     `<ref>=<oid>` into `stateHash` (`withBase` in `apps/daemon/src/core.ts`, one more fs read per refresh, no
+     spawn). Equal hashes keep meaning "nothing to refetch" for branch scopes, `worktree.changed` fires, and the
+     web's "same hash, skip" shortcut stays correct. The review state key (`#reviewOf`) uses the same hash, so
+     the fallback range after a history rewrite follows the default branch too. Without a readable base the hash
+     is git-core's, unchanged. The inbox and `/files` also read the base fresh on every call, so a default-branch
+     move is never served from cache even in the window before the watcher notices (covered by a test with the
+     watcher off).
+169. **Single-flight at the inbox level.** Identical overlapping `GET /api/inbox` requests share one run. The
+     in-flight key is a hash of everything the run reads: scope, `onlyUnreviewed`, each project's base, and for
+     every candidate its state hash, review version, effective policy and project facts. A request that arrives
+     after any of those moved starts its own run, so a joiner is never served older data. Only in-flight runs are
+     shared; the finished inbox is not cached (a repeat is ~13 ms at 30 × 3, the budget is 60 ms). Forced refresh
+     (`refreshWorktree`) and every project-level change keep dropping the per-worktree file lists
+     (`#invalidateWorktreeFiles` / `#invalidateFiles`), so #12's "refresh must really refetch" holds for the git
+     side; the forge caches are #12's.
+170. **Web: one `files` request per edit.** After `worktree.changed` the cache patched the inbox through
+     `api.listFiles` + `setQueryData` and, in the same flush, invalidated `['files', id]`, which refetched the same
+     list for the open file pane (and the scope select, which shares its query key): two identical requests. The
+     patch now goes through the `files` query (`filesForPatch` in `apps/web/src/api/cache.ts`): it reuses a result
+     that is current for the summary's `stateHash` and not invalidated, joins a fetch already in flight
+     (`fetchQuery` shares it), and only otherwise fetches. A different scope (the sidebar's `working` inbox) is a
+     different request by design. The unit test fails with two requests without the change.
+     The first load's duplicate inbox requests the issue mentions do not occur in the production build (one
+     `inbox?scope=branch`, one `inbox?scope=working`, measured); the two requests are what #10 (paint without
+     waiting for the inbox) is about, not a dedupe bug.

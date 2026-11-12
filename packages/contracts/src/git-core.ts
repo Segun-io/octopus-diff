@@ -111,8 +111,31 @@ export interface GitCore {
    */
   rangePatchId?(worktree: WorktreeLocator, from: string, to: string): Promise<string | null>;
 
+  /**
+   * What a `branch` scope diffs against, for cache keys (#27): the base ref (`options.base`, else
+   * the default branch) and the commit it points at. Read without spawning git where possible
+   * (loose ref or `packed-refs`); a git process only for symbolic refs and reftable repositories.
+   * Null when the ref does not exist or no default branch is known. For the same worktree state,
+   * an equal result means the same branch-scope file list. Optional (test doubles, older
+   * implementations): callers then do not cache branch scopes.
+   */
+  readBranchBase?(
+    project: ProjectLocator,
+    options?: ScopeOptions & { base?: string },
+  ): Promise<BranchBase | null>;
+
   /** Kills in-flight git processes and rejects queued work. */
   dispose(): Promise<void>;
+}
+
+/** The ref a branch scope is measured against (see `GitCore.readBranchBase`). */
+export interface BranchBase {
+  /** Display name, e.g. `main` or `origin/main`. */
+  name: string;
+  /** Full ref name, e.g. `refs/heads/main`. */
+  ref: string;
+  /** The commit (or tag object) the ref points to. */
+  oid: string;
 }
 
 export interface ReviewRangeOptions extends ScopeOptions {

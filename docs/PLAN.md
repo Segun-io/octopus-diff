@@ -233,7 +233,7 @@ Worktree  { id, projectId, path, branch|null, headSha, detached, isMain, locked,
 WorktreeSummary {
   worktreeId, branch|null, upstream|null, ahead, behind,
   counts: { staged, unstaged, untracked, conflicted }, additions, deletions,
-  stateHash,            // changes whenever any file or its patch changes
+  stateHash,            // changes whenever any file or its patch changes (or the default branch moves)
   updatedAt
 }
 DiffScope =
@@ -312,7 +312,9 @@ All git access goes through **one runner** in `packages/git-core`:
 - Leading-edge refresh (DECISIONS `review/perf` P3): a quiet worktree refreshes on its first event; later
   events in the window use the trailing debounce below.
 - Debounce 150–300 ms per worktree, coalesce bursts, then recompute the summary; emit `worktree.changed`
-  only if `stateHash` changed. Fallback poll (30 s focused / 5 min others) in case watchers miss events.
+  only if `stateHash` changed. `stateHash` covers git's state of the worktree and the default branch's
+  commit (DECISIONS #168): a branch scope's diff follows both. File lists (every scope, `branch` included) are cached
+  by `(worktree, scope, stateHash, base commit)` and single-flight (DECISIONS #166–#169). Fallback poll (30 s focused / 5 min others) in case watchers miss events.
 - Must degrade gracefully on inotify limits (WSL, big trees): log a clear warning and fall back to polling.
 - A subscription that reports an error is dropped (never unsubscribed) and re-made with a backoff; polling covers
   the gap (DECISIONS #131).
