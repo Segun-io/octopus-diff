@@ -41,14 +41,15 @@ Run from the repo root on this machine (Node 26):
 - `pnpm lint`: pass (credits up to date; no dependency changed, `pnpm credits` not needed). One `info` from the daemon
   test file `apps/daemon/test/file-origins.real-git.test.ts` (another session's, not touched).
 - `pnpm typecheck`: pass (all packages incl. `e2e`).
-- `pnpm --filter @octopus-diff/web test`: **30 files, 427 tests pass** (before: 30 files / 416 tests).
+- `pnpm --filter @octopus-diff/web test`: **30 files, 423 tests pass** (before this work: 30 files / 416 tests).
 - `pnpm build`: pass.
 - `pnpm test:e2e` (full, `workers: 1`): first run 101 passed, 1 failed (`15-ui-status-flow` "a commit keeps the work out
-  of the shelf", a real race, below); after the fix see the final line of this section.
+  of the shelf", a real race, below); after the fix, final run **102 passed, 0 failed** (3.2 min).
 - `pnpm --filter @octopus-diff/web perf:smoke`: all checks ok, 0 page errors (landing list 5200 px, 1 file group, `J` 7 of 7,
   one `/api/inbox` request per refresh and never `/api/projects`). Full `perf` run also ok; baseline rewritten.
-- CI-only steps (`.github/workflows/ci.yml`): `pnpm test` also runs `scripts/` tests; the CLI smoke
-  (`node apps/cli/dist/index.js --version` / `doctor`) and `pack:tarball`: see "Final run" below.
+- CI-only steps (`.github/workflows/ci.yml`): `pnpm test:scripts` 34 passed; the CLI smoke (`node apps/cli/dist/index.js
+  --version` -> `0.0.0`, `doctor` -> 0 problems, 1 warning); the package job (`pack:tarball`) and the other packages'
+  vitest suites are untouched by this change and were not re-run.
 
 ### Mutation checks (each applied, the named tests failed, then reverted)
 
