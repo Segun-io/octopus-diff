@@ -202,7 +202,7 @@ export function ForgeRepositoryFacts({ projectId }: { projectId: string }) {
           className="od-btn ml-auto"
           disabled={refresh.isPending}
           onClick={() => refresh.mutate()}
-          title="Ask the forge again (at most every 15 s)"
+          title="Ask the forge again"
         >
           Refresh
         </button>

@@ -88,8 +88,19 @@ Measured: 1 GitHub rate-limit point per repository per refresh.
   If a self-managed GitLab rejects unknown fields, the query is retried with a basic field set.
 - Only branches checked out in worktrees are asked about, never the default branch (forks reuse `main`).
 - When: on daemon start; 1.5 s after a worktree/project is added, removed or updated or a branch
-  changes; every 2 minutes; on "Check again" (`POST /api/forges/refresh`). At most once per 15 s per
-  project unless forced. A failed fetch keeps the last good data and reports `error`.
+  changes; every 2 minutes; on "Check again" (`POST /api/forges/refresh`); on the Request tab's
+  "Refresh". At most once per 15 s per project unless forced or pushed (below). A failed fetch keeps the
+  last good data and reports `error`.
+- **A new request is picked up** by the 2-minute poll at the latest. Faster, from local signals: when a
+  worktree event shows that a branch's upstream or push configuration changed (`git push -u`, which
+  `gh pr create` runs first) the project is looked up at once, bypassing the 15 s spacing; and if that
+  lookup finds no request for the pushed branch, it is looked up again 30 s and 90 s later (forced, 2
+  extra points), because the request is usually created just after the push. A request created from
+  another machine or the forge's web page has no local signal and waits for the poll.
+- **Forced means forced.** "Check again", the Request tab's "Refresh" and the Overview's "Refresh" never
+  serve a cache and are not spaced: a lookup already running that was not forced is awaited and a new one
+  follows (its answer may predate the click). The 15 s spacing is only for the unforced retries after a
+  failure (DECISIONS #195).
 
 ### 3b. Detail, conversation and repository queries
 
@@ -101,7 +112,7 @@ Each is one GraphQL query through the same runner and allowlist, fetched only wh
 | Request detail: summary, reviewers, labels, 100 checks, newest 100 commits, first 100 files | `OctopusDiffPullRequestDetail` / `OctopusDiffMergeRequestDetail` | when the Request tab opens | 60 s while open, 10 min when merged/closed; in-flight dedupe; key includes the batch's `updatedAt`, head and CI state | 1 pt |
 | Checks live refresh | the same detail query | every 45 s, only while a check runs, the tab is shown, the browser tab is visible and the user gave input in the last 20 min | same | 1 pt per 45 s per open tab |
 | Conversation: 50 comments, 50 reviews, 50 threads × 10 comments (GitLab: 50 discussions × 10 notes) | `OctopusDiffPullRequestConversation` / `OctopusDiffMergeRequestConversation` | when the Summary's Conversation or the Timeline is shown | 60 s / 10 min | 1 pt |
-| Repository facts + 20 newest open requests | `OctopusDiffRepository` / `OctopusDiffProject` | when the project Overview opens; "Refresh" (15 s spacing) | 10 min | 1 pt |
+| Repository facts + 20 newest open requests | `OctopusDiffRepository` / `OctopusDiffProject` | when the project Overview opens; "Refresh" | 10 min; also dropped when the batch's set of requests (number, state) changes | 1 pt |
 | Local repository facts | git only (`for-each-ref`, `log -1`, `rev-list --left-right --count`, the remote config read) | Overview mount (project and folder) | 30 s, dropped on any event naming the project | 0 |
 
 Every GitHub query asks for `rateLimit { cost remaining }`; the opt-in live test asserts `cost <= 1`. GitHub PR
@@ -190,7 +201,7 @@ The read-only guarantee (PLAN §5.5) is extended to the forge CLIs, in `packages
   pending`, `stale`), `checkList` (+ `checksTruncated`), `commits` (+ `commitsTotal`), `files` (+ `filesTotal`).
 - `GET /api/forges/worktrees/:worktreeId/request/conversation` → `ChangeRequestConversationResponse` (comments,
   reviews, threads, totals, `truncated`; comment bodies capped at 20 KiB, minimised comments dropped).
-- `POST /api/forges/worktrees/:worktreeId/request/refresh` → refetches detail and conversation (15 s spacing).
+- `POST /api/forges/worktrees/:worktreeId/request/refresh` → forces the project's batch, then detail and conversation (3 points, no spacing); the web then refetches `['forge-request', id]` and `['forges']`.
 - `GET /api/forges/projects/:projectId/repository` and `POST …/repository/refresh` → `RepositoryForgeResponse {
   projectId, status (ProjectForgeStatus), message, forge, repository: ForgeRepositoryInfo | null, fetchedAt }`.
 - `GET /api/repositories?projectIds=a,b,c` (max 200) → `{ repositories: [{ projectId, info: GitRepositoryInfo |

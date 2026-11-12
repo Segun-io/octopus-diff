@@ -2253,3 +2253,25 @@ needed.
 
 194. **Bench: the startup-spawn budget is enforced.** `startupSpawns` is no longer in `TRACKED`
      (`e2e/bench/bench.ts`); `docs/bench/README.md` says so. The warm-reload entry is left to #10.
+
+## Stale forge data after refresh and PR creation (session, 2026-11-11; roadmap #12, step 06)
+
+(Next free number was #195; other sessions use #188-#194.)
+
+195. **Refresh means a fresh fetch, and a new request is looked for when its branch is pushed.** Causes found:
+     (1) `#load` skipped even a forced detail/conversation/repository refresh when the entry's last attempt was
+     under 15 s old, and answered with the cached data (the UI finished "loading" and showed the old version);
+     (2) the Request tab's refresh left the project's batch alone, so the chip, the header's state and the matched
+     request, and the cache fingerprint all stayed old until the next 2-minute poll; (3) a forced call during a
+     running non-forced fetch shared that fetch, whose answer could predate the click; (4) the daemon's repository
+     cache (10 min) was keyed by nothing, so a request the batch had just discovered (or a merge) did not reach the
+     Overview's open-requests list; (5) the only signals for a new request were the 2-minute poll and branch-set
+     changes: a push (upstream/push config change) on an unchanged branch set was ignored, and a request created
+     seconds after the push was never looked for. Fixes: a forced `#load` ignores the spacing and is never served
+     from a non-forced in-flight fetch (it waits and fetches again; two forced calls share one); the spacing now
+     only applies to unforced retries after an error or a missing object, not to a changed fingerprint;
+     `refreshRequest` forces the project's batch first (3 points per refresh, was 2); the repository entry's
+     fingerprint is the batch's `number:state` set; a changed branch configuration of a candidate worktree
+     (`pushKey`) refetches at once and, if the pushed branch has no request, again after 30 s and 90 s
+     (`followUpMs`, forced). Web: `useRefreshChangeRequest` also invalidates `['forges']`. Deliberately not
+     changed (belongs to #8): stale times, the 2-minute poll, the 15 s project spacing, window-focus refetching.
