@@ -115,14 +115,14 @@ describe('adaptive polling', () => {
     expect(visible.client.batch.queries).toBeGreaterThanOrEqual(2 * 28);
   });
 
-  it('a browser that stops reporting is treated as gone after attentionMs', async () => {
+  it('a daemon nobody reports to counts a browser as looking for its first minutes only', async () => {
     const { service, client } = build(1, 1, options);
     service.start();
     await advance(20 * 60_000);
     await service.close();
-    // Looking for the first 10 minutes (about 10 rounds), then every 10 minutes (about 1).
-    expect(client.batch.queries).toBeGreaterThanOrEqual(9);
-    expect(client.batch.queries).toBeLessThanOrEqual(14);
+    // Counted as looking for the first 6 minutes (7 rounds), then every 10 minutes (1 more).
+    expect(client.batch.queries).toBeGreaterThanOrEqual(7);
+    expect(client.batch.queries).toBeLessThanOrEqual(10);
   });
 
   it('a big fleet stretches the interval so polling stays near its points target', async () => {
