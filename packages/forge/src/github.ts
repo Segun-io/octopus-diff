@@ -23,7 +23,8 @@ import {
 
 export const GITHUB_MAX_BRANCHES_PER_QUERY = 20;
 /** Requests per branch: an open one and recent merged/closed ones, newest first. */
-const PER_BRANCH = 5;
+export const GITHUB_REQUESTS_PER_BRANCH = 5;
+const PER_BRANCH = GITHUB_REQUESTS_PER_BRANCH;
 
 /**
  * `full` adds `mergeStateStatus`, which old GitHub Enterprise Server versions lack; `basic` drops
