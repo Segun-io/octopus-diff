@@ -3399,12 +3399,23 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      (#51 review). But the projects list is refreshed by other fetches too, so it can get the new hash before the event
      arrives, and then nothing refetched the open worktree's file list: it stayed on the old state, "Review all" sent
      that list's hash and the daemon (correctly) answered "changed meanwhile", with no way out but a reload. Fix at the
-     source (`api/cache.ts`): that shortcut now applies only when no cached file list of the worktree is built for another
-     state (`fileListBehind`; the commit scope is exempt). Also in the app (`model.listBehind`: the open worktree's row hash
-     differs from its file list's hash): while the list is catching up (the ~hundreds of ms between the event and the
-     refetch) the "Review N shown" button is pending (`data-pending="true"`, `aria-disabled`, title says why) and
-     `Shift+R` / a click mark nothing and say "This worktree just changed and its list is refreshing. Try again in a
-     moment." instead of sending a stale plan. No automatic retry: the stale check exists so that nobody marks a diff
-     they have not seen; the click is simply not accepted until the list on screen is current. The spec waits for that
+     source (`api/cache.ts`): that shortcut now applies only when no *observed* file list of the worktree is behind the
+     event (`fileListBehind`: another hash, or a request in flight, the first one included). Lists nobody observes do not
+     count (the earlier "the commit scope is exempt" branch was dead: `listFiles` returns the summary hash in every scope;
+     an unobserved list refetches when it is observed, and the self-heal below covers a stale one shown from cache). A
+     list whose *first* request is in flight has no data, so `invalidateQueries` would join that request instead of
+     replacing it (react-query cancels a refetch only over existing data): `invalidateFileLists` cancels such a request
+     first, so its answer for an older state cannot land. In the app (`model.listBehind`: the open worktree's row hash
+     differs from its file list's hash, any scope): while the list catches up the "Review N shown" button is pending
+     (`data-pending="true"`, `aria-disabled`, `data-list-state`) and `Shift+R`, a click and the sidebar's "Mark all
+     reviewed / unreviewed" for a request that includes the open worktree (`commands.listBehind`, one helper; the
+     every-worktree palette bulk uses the review data's own hashes, #280) mark nothing and say "This worktree just changed
+     and its list is refreshing. Try again in a moment.". A list behind with nothing in flight **heals itself**: the model
+     refetches it once per (row hash, list hash) pair, so it cannot stay stuck behind a row nobody will move again. If that
+     refetch ends with the list still behind (a failed request, or a daemon answering an older state) the state is
+     `failed`: the button's title says "Could not refresh this worktree's file list. Click to retry.", and a click or
+     `Shift+R` says "Could not refresh this worktree's file list. Retrying now." and refetches; it never claims a refresh
+     that is not happening. No automatic retry of the marking itself: the stale check exists so that nobody marks a diff
+     they have not seen. The spec waits for that
      condition (`data-pending` gone) instead of the refresh indicator. Result: 20 of 20 without load, 20 of 20 with load,
      twice each (before the fix: 17-18 of 20 and 14 of 20).

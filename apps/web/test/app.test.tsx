@@ -1,5 +1,11 @@
 // @vitest-environment jsdom
-import { createApiClient, type ServerEvent, TEST_IDS } from '@octopus-diff/contracts';
+import {
+  createApiClient,
+  type FilesResponse,
+  type ServerEvent,
+  TEST_IDS,
+} from '@octopus-diff/contracts';
+import type { QueryClient } from '@tanstack/react-query';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -7,7 +13,7 @@ import { MockBackend, type MockDataset } from '../mock/backend.ts';
 import { createMockFetch } from '../mock/router.ts';
 import { App } from '../src/App.tsx';
 import type { EventSourceLike } from '../src/api/hooks.ts';
-import { createQueryClient } from '../src/api/queries.ts';
+import { createQueryClient, queryKeys } from '../src/api/queries.ts';
 import { scopeForPref } from '../src/state/prefs.ts';
 import { actions, createUiStore, type UiState, type UiStore } from '../src/state/ui.tsx';
 
@@ -49,6 +55,9 @@ interface Harness {
   inboxGate: { held: boolean; hold: () => void; release: () => void };
   /** Holds the GETs of a worktree's file list. */
   filesGate: { held: boolean; hold: () => void; release: () => void };
+  /** The query client of the app, and a switch that makes file list requests fail with a 503. */
+  qc: QueryClient;
+  filesFail: { on: boolean; old: boolean };
 }
 
 function setup(
@@ -88,6 +97,7 @@ function setup(
     };
     return gate;
   };
+  const filesFail = { on: false, old: false };
   const inboxGate = makeGate((url) => url.includes('/api/inbox'));
   const filesGate = makeGate((url) => /\/api\/worktrees\/[^/]+\/files/.test(url));
   const api = createApiClient({
@@ -102,9 +112,25 @@ function setup(
           await gate.wait();
         }
       }
+      if (filesFail.on && (init?.method ?? 'GET') === 'GET' && filesGate.matches(String(input))) {
+        return new Response(JSON.stringify({ error: { code: 'internal', message: 'boom' } }), {
+          status: 503,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (filesFail.old && (init?.method ?? 'GET') === 'GET' && filesGate.matches(String(input))) {
+        // A daemon that keeps answering an older state than its row says.
+        const response = await mockFetch(input, init);
+        const body = await response.json();
+        return new Response(JSON.stringify({ ...body, stateHash: 'an-older-state' }), {
+          status: response.status,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
       return mockFetch(input, init);
     },
   });
+  const qc = createQueryClient();
   // The Settled shelf is closed by default; these tests read settled rows, so open it.
   // An older (non status-flow) mock has no To review range: the tests use Uncommitted, which the
   // app used to fall back to for such daemons before #10 made To review always available.
@@ -123,15 +149,18 @@ function setup(
     queueMicrotask(() => es.onopen?.(new Event('open')));
     return es;
   };
-  render(
-    <App
-      api={api}
-      queryClient={createQueryClient()}
-      uiStore={store}
-      eventSourceFactory={factory}
-    />,
-  );
-  return { backend, store, user: userEvent.setup(), requests, inboxGate, filesGate, bulkBodies };
+  render(<App api={api} queryClient={qc} uiStore={store} eventSourceFactory={factory} />);
+  return {
+    backend,
+    store,
+    user: userEvent.setup(),
+    requests,
+    inboxGate,
+    filesGate,
+    bulkBodies,
+    qc,
+    filesFail,
+  };
 }
 
 const app = () => screen.getByTestId(TEST_IDS.app);
@@ -804,6 +833,111 @@ describe('Review all waits for the open worktree list to catch up with its row',
       .find((w) => w.worktree.id === h.id)?.summary;
     expect(h.bulkBodies[0]?.expectedStateHashes[h.id]).toBe(summary?.stateHash);
     expect(screen.getByTestId(TEST_IDS.bulkReviewToast).textContent).not.toContain('meanwhile');
+  });
+});
+
+describe('a file list that is behind its row heals, or says honestly that it cannot (PR #86 review)', () => {
+  /** Puts the open worktree's cached file list on an older state, with nothing in flight. */
+  async function listGoesBehind(h: Harness) {
+    await ready();
+    const id = currentWorktree() as string;
+    const key = queryKeys.files(id, { kind: 'working' });
+    const current = h.qc.getQueryData<FilesResponse>(key);
+    if (!current) throw new Error('no file list');
+    act(() => {
+      h.qc.setQueryData(key, { ...current, stateHash: 'an-older-state' });
+    });
+    return { id, key, current };
+  }
+
+  it('a list behind its row with nothing in flight is refetched once, and the button comes back', async () => {
+    const h = setup();
+    const { id, key, current } = await listGoesBehind(h);
+    // Nothing else would ever refresh it (no event, no focus refetch): the app does.
+    await waitFor(() =>
+      expect(h.qc.getQueryData<FilesResponse>(key)?.stateHash).toBe(current.stateHash),
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId(TEST_IDS.markAllButton).dataset.pending).toBeUndefined(),
+    );
+    expect(id).toBeTruthy();
+  });
+
+  it('the self-heal asks once per pair of hashes, not in a loop', async () => {
+    // A little latency, so a request is visibly in flight (a loop would show as repeated requests).
+    const h = setup('demo', { latencyMs: 30 });
+    await ready();
+    // Every answer is for the older state: the list stays behind whatever the app asks.
+    h.filesFail.old = true;
+    await listGoesBehind(h);
+    const filesGets = () => h.requests.filter((r) => /\/files/.test(r)).length;
+    await waitFor(() =>
+      expect(screen.getByTestId(TEST_IDS.markAllButton).dataset.listState).toBe('failed'),
+    );
+    const settled = filesGets();
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    expect(filesGets()).toBe(settled);
+  });
+
+  it('when the refetch fails the button says so, a click retries, and it recovers', async () => {
+    const h = setup();
+    h.qc.setDefaultOptions({ queries: { ...h.qc.getDefaultOptions().queries, retry: false } });
+    await ready();
+    h.filesFail.on = true;
+    await listGoesBehind(h);
+    const button = screen.getByTestId(TEST_IDS.markAllButton);
+    await waitFor(() => expect(button.dataset.listState).toBe('failed'));
+    expect(button.getAttribute('title')).toContain('Could not refresh');
+    // Not "refreshing": nothing is in flight. A click retries (still failing) and says so.
+    const before = h.requests.filter((r) => /\/files/.test(r)).length;
+    fireEvent.click(button);
+    expect(screen.getByTestId('notice').textContent).toContain('Could not refresh');
+    expect(screen.getByTestId('notice').textContent).not.toContain('is refreshing');
+    await waitFor(() =>
+      expect(h.requests.filter((r) => /\/files/.test(r)).length).toBeGreaterThan(before),
+    );
+    expect(h.bulkBodies).toHaveLength(0);
+    // The daemon is back: the next retry heals it.
+    h.filesFail.on = false;
+    await waitFor(() => expect(button.dataset.listState).toBe('failed'));
+    fireEvent.click(button);
+    await waitFor(() => expect(button.dataset.pending).toBeUndefined());
+  });
+
+  it('the sidebar menu "Mark all reviewed" waits for a list that is behind, like the button', async () => {
+    const h = setup();
+    await ready();
+    const id = currentWorktree() as string;
+    h.filesGate.hold();
+    act(() => {
+      h.backend.mutate(id, 'edit', viewerPath() ?? undefined);
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId(TEST_IDS.markAllButton).dataset.pending).toBe('true'),
+    );
+    h.store.setState({ confirmBulk: false });
+    fireEvent.contextMenu(
+      screen
+        .getAllByTestId(TEST_IDS.worktreeItem)
+        .find((el) => el.dataset.worktreeId === id) as HTMLElement,
+    );
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Mark all reviewed' }));
+    // The open worktree's old list would send its old hash: nothing is sent, and it says why.
+    expect(h.bulkBodies).toHaveLength(0);
+    expect(screen.getByTestId('notice').textContent).toContain('refreshing');
+    // Once the list is current the same menu item works.
+    h.filesGate.release();
+    await waitFor(() =>
+      expect(screen.getByTestId(TEST_IDS.markAllButton).dataset.pending).toBeUndefined(),
+    );
+    fireEvent.contextMenu(
+      screen
+        .getAllByTestId(TEST_IDS.worktreeItem)
+        .find((el) => el.dataset.worktreeId === id) as HTMLElement,
+    );
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Mark all reviewed' }));
+    await screen.findByTestId(TEST_IDS.bulkReviewToast);
+    expect(h.bulkBodies).toHaveLength(1);
   });
 });
 

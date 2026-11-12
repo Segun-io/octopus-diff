@@ -4,7 +4,7 @@ import type {
   InboxEntry,
   WorktreeForge,
 } from '@octopus-diff/contracts';
-import { createContext, type ReactNode, useContext, useMemo } from 'react';
+import { createContext, type ReactNode, useContext, useEffect, useMemo, useRef } from 'react';
 import { useForgeIndex } from '../api/forges.ts';
 import { isPartialInbox, useFilesQuery, useInboxQuery, useProjectsQuery } from '../api/queries.ts';
 import { useScanRootsQuery } from '../api/settings.ts';
@@ -102,6 +102,12 @@ export interface AppModel {
    * says. "Review all" waits (it would send the old list's hash and the daemon would skip it).
    */
   listBehind: boolean;
+  /**
+   * What the open list is doing about it: `refreshing` (a request is in flight, or about to be)
+   * or `failed` (the refetch for this pair of states ended and the list is still behind: a failed
+   * request, or a daemon that answers an older state). Null when the list is current.
+   */
+  listState: 'refreshing' | 'failed' | null;
   /**
    * The worktrees of the list the sidebar shows (the filters apply): the one predicate of what a
    * pane can show, used by the pane, `n`, `J`/`K`, the landing and the bulk plans (DECISIONS #281).
@@ -260,14 +266,37 @@ function useBuildAppModel(): AppModel {
   }, [inboxEntries]);
 
   const openRow = view.kind === 'worktree' ? sidebar.byId.get(view.worktreeId) : undefined;
-  // Not for the commit scope (its lists are immutable) or a row with no summary or an error.
+  // Not for a row with no summary or an error.
   const listBehind =
-    scope.kind !== 'commit' &&
     filesData !== undefined &&
     filesData.worktreeId === openRow?.worktree.id &&
     openRow.summary !== null &&
     openRow.error === null &&
     filesData.stateHash !== openRow.summary.stateHash;
+
+  // A list behind its row with nothing in flight is refetched, once per pair of states, so it can
+  // never stay stuck behind a row nobody will move again. A refetch that ends with the list still
+  // behind is `failed`: the button says so instead of claiming a refresh.
+  const listBehindKey = listBehind
+    ? `${openRow?.summary?.stateHash}|${filesData?.stateHash}`
+    : null;
+  const healedKey = useRef<string | null>(null);
+  const refetchFiles = files.refetch;
+  const filesFetching = files.isFetching;
+  useEffect(() => {
+    if (listBehindKey === null) {
+      healedKey.current = null;
+      return;
+    }
+    if (filesFetching || healedKey.current === listBehindKey) return;
+    healedKey.current = listBehindKey;
+    void refetchFiles();
+  }, [listBehindKey, filesFetching, refetchFiles]);
+  const listState: AppModel['listState'] = !listBehind
+    ? null
+    : filesFetching || healedKey.current !== listBehindKey
+      ? 'refreshing'
+      : 'failed';
 
   const listedIds = useMemo<ReadonlySet<string>>(() => new Set(sidebar.order), [sidebar.order]);
   const viewListed = view.kind !== 'worktree' || listedIds.has(view.worktreeId);
@@ -371,6 +400,7 @@ function useBuildAppModel(): AppModel {
     inboxStateHashes,
     viewListed,
     listBehind,
+    listState,
     listedIds,
     allUnfiltered,
     viewPolicy,

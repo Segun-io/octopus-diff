@@ -168,15 +168,39 @@ export function emptyEffects(): EventEffects {
   };
 }
 
-/** A cached file list of the worktree (not the commit scope's) was built for another state. */
+/**
+ * A file list someone is looking at may be behind `stateHash`: it holds another state, or a
+ * request is in flight (the first one included: its answer may be for an older state, and an
+ * invalidation cancels and refetches it). Lists nobody observes do not count: they refetch when
+ * they are observed (and the app refetches a list behind its row, `useBuildAppModel`).
+ */
 function fileListBehind(queryClient: QueryClient, worktreeId: string, stateHash: string): boolean {
   return queryClient
     .getQueryCache()
     .findAll({ queryKey: queryKeys.filesAll(worktreeId) })
     .some((query) => {
+      if (query.getObserversCount() === 0) return false;
+      if (query.state.fetchStatus === 'fetching') return true;
       const data = query.state.data as FilesResponse | undefined;
-      return data !== undefined && data.stateHash !== stateHash && data.stateHash !== 'immutable';
+      return data !== undefined && data.stateHash !== stateHash;
     });
+}
+
+/**
+ * Marks a worktree's file lists stale and refetches the ones on screen. A list whose *first*
+ * request is still in flight has no data, so `invalidateQueries` would join that request instead
+ * of replacing it (react-query only cancels a refetch over existing data): its answer may be for
+ * an older state, so such a request is cancelled first.
+ */
+async function invalidateFileLists(queryClient: QueryClient, worktreeId: string): Promise<void> {
+  for (const query of queryClient
+    .getQueryCache()
+    .findAll({ queryKey: queryKeys.filesAll(worktreeId) })) {
+    if (query.state.fetchStatus === 'fetching' && query.state.data === undefined) {
+      await queryClient.cancelQueries({ queryKey: query.queryKey, exact: true });
+    }
+  }
+  await queryClient.invalidateQueries({ queryKey: queryKeys.filesAll(worktreeId) });
 }
 
 /**
@@ -198,7 +222,7 @@ export function collectEventEffects(
       // The feed moves with the state, but the projects list may already hold the new hash (any
       // refetch refreshes it), so this is decided before the hash check below.
       if (event.activitySeq !== undefined) effects.activity.add(event.worktreeId);
-      // ...unless a file list on screen is still an older state: the row being current says
+      // ...unless a file list on screen is still an older state (or on its way): the row being current says
       // nothing about it (another fetch of the projects list can land before the event), so the
       // event must still refetch it, or "Review all" would act on a list the daemon has moved past.
       if (
@@ -446,10 +470,7 @@ async function refreshDeltaLists(
       later.push(query);
     }
   }
-  await Promise.all([
-    queryClient.invalidateQueries({ queryKey: queryKeys.filesAll(id) }),
-    inboxDone.catch(() => undefined),
-  ]);
+  await Promise.all([invalidateFileLists(queryClient, id), inboxDone.catch(() => undefined)]);
   const stateHash = cachedStateHash(queryClient, id);
   for (const query of later) {
     const data = query.state.data as DiffQueryData | undefined;
@@ -534,7 +555,7 @@ export async function flushEffects(
     tasks.push(queryClient.invalidateQueries({ queryKey: queryKeys.activity(id) }));
   }
   for (const id of effects.worktrees) {
-    tasks.push(queryClient.invalidateQueries({ queryKey: queryKeys.filesAll(id) }));
+    tasks.push(invalidateFileLists(queryClient, id));
     tasks.push(queryClient.invalidateQueries({ queryKey: queryKeys.diffAll(id) }));
     tasks.push(queryClient.invalidateQueries({ queryKey: queryKeys.commits(id) }));
   }

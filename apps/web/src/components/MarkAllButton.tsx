@@ -12,7 +12,8 @@ import { CheckIcon } from './bits.tsx';
 export function MarkAllButton({ compact = false }: { compact?: boolean }) {
   const support = useSettingsSupport();
   const commands = useCommandsContext();
-  const behind = useAppModel().listBehind;
+  const model = useAppModel();
+  const behind = model.listBehind;
   if (support !== 'ready') return null;
   const plan = commands.currentPlan(true);
   const disabled = plan.count === 0 || behind;
@@ -25,12 +26,13 @@ export function MarkAllButton({ compact = false }: { compact?: boolean }) {
       data-count={String(plan.count)}
       aria-disabled={disabled}
       data-pending={behind ? 'true' : undefined}
+      data-list-state={model.listState ?? undefined}
       onClick={() => {
         if (behind)
           commands.markAll(true); // says why nothing happens
         else if (!disabled) commands.markAll(true);
       }}
-      title={`${behind ? 'The list is refreshing. ' : ''}${label} (⇧ R). Every worktree, a project or a folder: the command palette and the Overviews.`}
+      title={`${behind ? (model.listState === 'failed' ? "Could not refresh this worktree's file list. Click to retry. " : 'The list is refreshing. ') : ''}${label} (⇧ R). Every worktree, a project or a folder: the command palette and the Overviews.`}
       className={`od-btn shrink-0 ${disabled ? '' : 'hover:border-add hover:bg-add-soft'}`}
     >
       <CheckIcon />

@@ -41,7 +41,7 @@ Run from the repo root on this machine (Node 26):
 - `pnpm lint`: pass (credits up to date; no dependency changed, `pnpm credits` not needed). One `info` from the daemon
   test file `apps/daemon/test/file-origins.real-git.test.ts` (another session's, not touched).
 - `pnpm typecheck`: pass (all packages incl. `e2e`).
-- `pnpm --filter @octopus-diff/web test`: **30 files, 440 tests pass (after the PR #86 follow-ups; 423 before them)** (before this work: 30 files / 416 tests).
+- `pnpm --filter @octopus-diff/web test`: **30 files, 446 tests pass (after the PR #86 follow-ups; 423 before them)** (before this work: 30 files / 416 tests).
 - `pnpm build`: pass.
 - `pnpm test:e2e` (full, `workers: 1`): first run 101 passed, 1 failed (`15-ui-status-flow` "a commit keeps the work out
   of the shelf", a real race, below); after the fix, final run **102 passed, 0 failed** (3.2 min; re-run after the PR #86 follow-up: 102 passed).
@@ -188,3 +188,22 @@ nothing when the list is current), `app.test.tsx` "Review all waits for the open
 (the file list held while the worktree changes: button pending, click and `Shift+R` send nothing and say why, then it
 sends the fresh list's hash). Mutation checks: no `fileListBehind` (1 fail), `listBehind` false (1), `markAll` unguarded
 (1), button not disabled while pending (1).
+
+## Review follow-up 6 (independent review of follow-up 5: one P2, three P3)
+
+- **P2, a first list request in flight** (`cache.ts`): `fileListBehind` now counts an observed list with a request in
+  flight; and because react-query only cancels a refetch over existing data, `invalidateFileLists` cancels a first request
+  (no data yet) before invalidating, so its older answer cannot land. The app **self-heals**: a list behind its row with
+  nothing in flight is refetched once per (row hash, list hash) pair (`useBuildAppModel`).
+- **P3, a failed refetch** (`model.listState`): `refreshing` while a request is in flight, `failed` when the refetch for
+  this pair ended with the list still behind; the button's title and the notice then say "Could not refresh this worktree's
+  file list", a click or `Shift+R` retries. Never "refreshing" when nothing is.
+- **P3, the dead commit-scope exemption** (`cache.ts`, `model.tsx`): removed (`listFiles` returns the summary hash in every
+  scope); only observed lists count, so an unobserved list no longer sends every same-hash event down the delta path.
+  DECISIONS #282 rewritten.
+- **P3, the sidebar's "Mark all reviewed / unreviewed"** (`commands.markAllFor`): same guard as the button and `Shift+R`
+  (one helper, `commands.listBehind`) when the request includes the open worktree.
+Tests (all failing first): `cache.test.ts` (first request in flight, unobserved list), `app.test.tsx` (self-heal; no
+loop; failed state, retry and recovery; sidebar menu waits). Mutation checks: fetching not counted (1), no cancel of the
+first request (1), unobserved lists counted (1), no self-heal (3), no `failed` state (2), `markAllFor` unguarded (1),
+self-heal without the once-per-pair guard (1, with 30 ms latency so a request is visibly in flight).

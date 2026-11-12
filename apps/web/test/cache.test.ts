@@ -149,6 +149,12 @@ describe('SSE → cache invalidation', () => {
     const { backend, qc, a, file } = seeded();
     const filesKey = queryKeys.files(a.worktree.id, { kind: 'working' });
     const before = qc.getQueryData<FilesResponse>(filesKey);
+    // The open file list: someone observes it.
+    const observer = new QueryObserver(qc, {
+      queryKey: filesKey,
+      queryFn: () => Promise.resolve(backend.listFiles(a.worktree.id, { kind: 'working' })),
+    });
+    const unsubscribe = observer.subscribe(() => undefined);
     const events: ServerEvent[] = [];
     backend.subscribe((e) => events.push(e));
     backend.mutate(a.worktree.id, 'edit', file.path);
@@ -166,7 +172,9 @@ describe('SSE → cache invalidation', () => {
     const effects = collectEventEffects(qc, event, emptyEffects(), { reconnect: false });
     await flushEffects(qc, effects, api);
     // The file list on screen is the old state: it must be refetched, not left because the row is current.
-    expect(qc.getQueryState(filesKey)?.isInvalidated).toBe(true);
+    await vi.waitFor(() => expect(qc.getQueryState(filesKey)?.fetchStatus).toBe('idle'));
+    expect(qc.getQueryData<FilesResponse>(filesKey)?.stateHash).toBe(event.stateHash);
+    unsubscribe();
   });
 
   it('an event whose hash the projects list and the file lists already hold refetches nothing', async () => {
@@ -188,6 +196,68 @@ describe('SSE → cache invalidation', () => {
       api,
     );
     expect(qc.getQueryState(filesKey)?.isInvalidated).toBe(false);
+  });
+
+  it('a first file list request still in flight when the same-hash event arrives is refetched, not left on its older answer', async () => {
+    const backend = new MockBackend({ dataset: 'demo' });
+    const qc = new QueryClient({
+      defaultOptions: { queries: { staleTime: Number.POSITIVE_INFINITY, retry: false } },
+    });
+    qc.setQueryData(queryKeys.projects(), backend.listProjects());
+    const entry = backend.inbox({ kind: 'working' }, false).entries[0];
+    if (!entry) throw new Error('no entry');
+    const id = entry.worktree.id;
+    const key = queryKeys.files(id, { kind: 'working' });
+    const old = backend.listFiles(id, { kind: 'working' });
+    let land: (value: FilesResponse) => void = () => undefined;
+    let first = true;
+    const observer = new QueryObserver(qc, {
+      queryKey: key,
+      queryFn: () => {
+        if (first) {
+          first = false;
+          return new Promise<FilesResponse>((resolve) => {
+            land = resolve;
+          });
+        }
+        return Promise.resolve(backend.listFiles(id, { kind: 'working' }));
+      },
+    });
+    const unsubscribe = observer.subscribe(() => undefined);
+    const events: ServerEvent[] = [];
+    backend.subscribe((e) => events.push(e));
+    const file = entry.files[0]?.path;
+    backend.mutate(id, 'edit', file);
+    const event = events.find((e) => e.type === 'worktree.changed' && e.worktreeId === id);
+    if (!event || event.type !== 'worktree.changed') throw new Error('no event');
+    // A projects answer brings the new state before the event does: same-hash shortcut territory.
+    qc.setQueryData(queryKeys.projects(), backend.listProjects());
+    const api = createApiClient({ baseUrl: 'http://mock.local', fetch: createMockFetch(backend) });
+    await flushEffects(
+      qc,
+      collectEventEffects(qc, event, emptyEffects(), { reconnect: false }),
+      api,
+    );
+    land(old); // the answer of the first request, built for the state before the edit
+    await vi.waitFor(() => expect(qc.getQueryState(key)?.fetchStatus).toBe('idle'));
+    expect(qc.getQueryData<FilesResponse>(key)?.stateHash).toBe(event.stateHash);
+    unsubscribe();
+  });
+
+  it('a file list nobody observes does not hold the same-hash shortcut back', async () => {
+    const { backend, qc, a, file } = seeded();
+    const events: ServerEvent[] = [];
+    backend.subscribe((e) => events.push(e));
+    backend.mutate(a.worktree.id, 'edit', file.path);
+    const event = events.find(
+      (e) => e.type === 'worktree.changed' && e.worktreeId === a.worktree.id,
+    );
+    if (!event || event.type !== 'worktree.changed') throw new Error('no event');
+    qc.setQueryData(queryKeys.projects(), backend.listProjects());
+    // The seeded file list is cached on an older state, with no observer: it refetches when observed.
+    const effects = collectEventEffects(qc, event, emptyEffects(), { reconnect: false });
+    expect(effects.deltas.has(a.worktree.id)).toBe(false);
+    expect(effects.worktrees.has(a.worktree.id)).toBe(false);
   });
 
   it("an older daemon's event (no delta) refetches the whole inbox; no client-side reconstruction (#51)", async () => {

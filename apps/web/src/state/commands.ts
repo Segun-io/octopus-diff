@@ -125,6 +125,26 @@ export function useCommands(model: AppModel, resolvedTheme: 'light' | 'dark'): C
       }
       return true;
     };
+    /**
+     * The open worktree's list is behind its row (it would send an older state's hash and the
+     * daemon would skip it): says why, retries a refetch that failed, and returns true. Only for
+     * a request that includes the open worktree (`ids` absent: the open worktree's own).
+     */
+    const listBehind = (ids?: readonly string[]): boolean => {
+      const m = latest.current.model;
+      if (!m.listBehind || m.view.kind !== 'worktree') return false;
+      if (ids && !ids.includes(m.view.worktreeId)) return false;
+      if (m.listState === 'failed') {
+        actions.notice(store, "Could not refresh this worktree's file list. Retrying now.");
+        void queryClient.refetchQueries({ queryKey: queryKeys.files(m.view.worktreeId, m.scope) });
+      } else {
+        actions.notice(
+          store,
+          'This worktree just changed and its list is refreshing. Try again in a moment.',
+        );
+      }
+      return true;
+    };
     const plan = (reviewed: boolean, every = false): BulkPlan => {
       const m = latest.current.model;
       // The hashes come from the same snapshot as the files and counts: the review data's rows for
@@ -368,19 +388,14 @@ export function useCommands(model: AppModel, resolvedTheme: 'light' | 'dark'): C
         void queryClient.invalidateQueries({ queryKey: ['diff'] });
       },
       markAll(reviewed) {
-        if (latest.current.model.listBehind) {
-          actions.notice(
-            store,
-            'This worktree just changed and its list is refreshing. Try again in a moment.',
-          );
-          return;
-        }
+        if (listBehind()) return;
         runPlan(plan(reviewed), reviewed);
       },
       markEvery(reviewed) {
         runPlan(plan(reviewed, true), reviewed);
       },
       markAllFor(target, reviewed, worktreeIds) {
+        if (listBehind(worktreeIds)) return;
         const m = latest.current.model;
         runPlan(planBulkForTarget(target, m.scope, reviewed, m.stateHashes, worktreeIds), reviewed);
       },
