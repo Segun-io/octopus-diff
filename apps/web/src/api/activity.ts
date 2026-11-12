@@ -19,13 +19,13 @@ export function useActivityQuery(worktreeId: string | null) {
     // Events decide when it is stale (invalidation); a remount asks again, which is one small
     // incremental request.
     staleTime: 0,
-    queryFn: async (): Promise<ActivityFeed> => {
+    queryFn: async ({ signal }): Promise<ActivityFeed> => {
       const id = worktreeId ?? '';
       const key = queryKeys.activity(id);
       // Read the held feed when the request is made, not when the query was created: an event may
       // have moved the cursor since.
       const prev = queryClient.getQueryData<ActivityFeed>(key);
-      const res = await api.getActivity(id, activityCursor(prev));
+      const res = await api.getActivity(id, { ...activityCursor(prev), signal });
       // Another fetch may have landed while this one was in flight: merge into the latest.
       return mergeActivity(queryClient.getQueryData<ActivityFeed>(key) ?? prev, res);
     },
@@ -40,6 +40,7 @@ export function useBlobQuery(worktreeId: string, oid: string | null) {
     enabled: oid !== null,
     // A blob never changes; its absence (404: it left the feed, or was pruned) is not retried.
     staleTime: Number.POSITIVE_INFINITY,
-    queryFn: async (): Promise<BlobRead> => (await api.getBlob(worktreeId, oid ?? '')).blob,
+    queryFn: async ({ signal }): Promise<BlobRead> =>
+      (await api.getBlob(worktreeId, oid ?? '', { signal })).blob,
   });
 }
