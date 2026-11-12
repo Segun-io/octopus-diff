@@ -419,8 +419,8 @@ export async function getSummary(
 
   // The signatures computed above for the stateHash and activityAt: no new lstat, no new git.
   const signatureByKey = new Map<string, string>();
-  stagedOnlyKeys.forEach((key, i) => signatureByKey.set(key, stagedSigs[i] as string));
-  dirtyKeys.forEach((key, i) => signatureByKey.set(key, signatures[i] as string));
+  for (const [i, key] of stagedOnlyKeys.entries()) signatureByKey.set(key, stagedSigs[i] as string);
+  for (const [i, key] of dirtyKeys.entries()) signatureByKey.set(key, signatures[i] as string);
   return {
     ...summary,
     snapshot: buildSnapshot({

@@ -296,8 +296,8 @@ describe('getSummary snapshot', () => {
 
   it('keeps a 30k-untracked worktree bounded', async () => {
     const dir = fx.repo('snap-many', { files: { 'a.txt': 'a\n' } });
-    for (let i = 0; i < 30; i += 1) {
-      for (let j = 0; j < 100; j += 1) {
+    for (let i = 0; i < 100; i += 1) {
+      for (let j = 0; j < 300; j += 1) {
         mkdirSync(path.join(dir, `d${i}`), { recursive: true });
         writeFileSync(path.join(dir, `d${i}`, `f${j}.txt`), '');
       }
@@ -305,7 +305,7 @@ describe('getSummary snapshot', () => {
     fx.write(path.join(dir, 'a.txt'), 'changed\n');
     const many = locator(dir, path.join(dir, '.git'));
     const summary = await core.getSummary(many, { snapshot: true });
-    expect(summary.snapshot?.total).toBe(3001);
+    expect(summary.snapshot?.total).toBe(30_001);
     expect(summary.snapshot?.entries).toHaveLength(2000);
     expect(summary.snapshot?.truncated).toBe(true);
     // The tracked change is never cut off by the untracked flood.

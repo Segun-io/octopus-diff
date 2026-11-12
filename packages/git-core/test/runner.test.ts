@@ -83,6 +83,10 @@ describe('subcommand allowlist', () => {
       ['rev-parse', '--git-dir', '--git-common-dir'],
       ['log', '-z', '--format=%H', 'HEAD', '--'],
       ['cat-file', '-t', 'HEAD'],
+      // The live feed's blob read (#37): type, size, then the content of a full oid.
+      ['cat-file', '-t', 'a'.repeat(40)],
+      ['cat-file', '-s', 'a'.repeat(40)],
+      ['cat-file', 'blob', 'a'.repeat(40)],
       ['check-attr', '-z', '--stdin', 'diff'],
       ['check-attr', 'diff', 'text', '--', 'a.txt', '--source=x'],
     ]) {

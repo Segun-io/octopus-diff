@@ -2626,3 +2626,38 @@ Numbers: #209 and up (other sessions may also have used #209; renumber at merge)
      and not the null id (the existing `CommitShaSchema` takes 4-64 digits and abbreviations, which a blob read
      must not). Constants: `SNAPSHOT_MAX_ENTRIES_DEFAULT` 2000 / `_LIMIT` 20000, `BLOB_MAX_BYTES_DEFAULT` 1 MiB /
      `_LIMIT` 16 MiB. No error code added: bad id or a non-blob is `invalid_argument`, an unknown id `not_found`.
+210. **The snapshot is a reshaping of what `getSummary` already holds (`packages/git-core/src/snapshot.ts`).** It reads
+     the parsed status entries, the numstat map, the lstat signatures (`dirtySignature` for tracked paths with
+     worktree changes, the `lstatSignature` that feeds `activityAt` for fully staged ones, `statSig` for untracked
+     files) and the untracked inspection, so it spawns nothing and stats nothing (asserted in
+     `test/live-snapshot.test.ts` by logging every git process: the list of subcommands is identical with and without
+     the option). Without the option the summary object is the one it always was (no `snapshot` key, not even
+     `undefined`; `stateHash` is the same either way). Shape and limits: tracked entries first (`git status` order),
+     then untracked in path order, cut at `maxEntries` (default 2000, 1..20000, else `invalid_argument`) so a
+     30000-untracked worktree yields 2000 entries, `total` 30001 and `truncated: true` while its tracked changes are
+     never pushed out by the flood. Only the first `cap` entries are built. `xy` is the two status letters (`??` for
+     untracked); `hH` / `hI` are the status v2 ids with the all-zero id turned into null; for an unmerged path `hH` is
+     the stage-2 ("ours") blob and `hI` null (there is no single index blob). `added` / `deleted` are the numstat
+     counts against HEAD (staged and unstaged together, like the summary's own totals), null for binary files, for
+     files git could not read (F7 degradation) and for entries numstat has no line for; untracked files carry the line
+     count of the inspection (`deleted` 0), null when binary or not read (over `maxUntrackedFiles`). A rename carries
+     `oldPath` (and `oldRawPath` for a non-UTF-8 name). Bare repositories get an empty snapshot. **Known limit, for
+     #38 to document:** `hI` of a `.D` file is the *index* blob, i.e. the last staged or committed content. Unstaged
+     edits the agent made before deleting the file were only ever on disk, so they are not recoverable from git, the
+     same as deleted untracked files (decision 8 of #25: those are not kept either).
+211. **`readBlob`: two git processes, a third only for an oversized blob, no allowlist change.** `cat-file -t <oid>` must
+     print `blob` (anything else is `invalid_argument` after that one process, the content is never read), then `cat-file
+     blob <oid>` runs with the runner's `maxOutputBytes` set to the cap (default 1 MiB, at most 16 MiB), which kills the
+     process once the cap is exceeded; only then `cat-file -s <oid>` supplies the real size for the `too_large` result.
+     So a normal read is 2 processes, an oversized one 3, and git never sends more than about one cap's worth of data.
+     Validation is the contract's `BlobReadOptionsSchema` (full lowercase 40/64 hex id, not the null id), checked before
+     any process starts, so an abbreviation, `HEAD`, `HEAD:path`, an option or an uppercase id never reaches git.
+     `cat-file`, `-t`, `-s` and `blob` were already allowed (`ALLOWED_SUBCOMMANDS`); nothing was added, and the runner's
+     rules still apply: no stdin (so no `--batch`), `--filters` and `--textconv` stay forbidden (and a filter/textconv
+     driver in the repository config is never run: tested with marker scripts), `GIT_OPTIONAL_LOCKS=0`, argv arrays. A
+     missing object (stderr `could not get object info`) is `not_found`. Binary uses git's own heuristic (a NUL in the
+     first 8000 bytes) and returns no bytes; text is UTF-8 decoded with replacement characters. Untracked files have no
+     object id in `git status`, and the hash of one is not in the object database (tested: `not_found`), so their
+     content cannot be read from here. A deleted tracked file's id stays readable after a commit or `reset --hard`
+     until `git gc` prunes it (tested before and after a commit and a hard reset, and for a file that was staged and
+     then unstaged: an unreferenced loose object).
