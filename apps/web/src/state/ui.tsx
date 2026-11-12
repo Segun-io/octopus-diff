@@ -88,6 +88,11 @@ export interface UiState extends Prefs {
    * list to All on branch); null while the toggle is off or the scope was changed another way.
    */
   branchToggleFrom: DiffScope | null;
+  /**
+   * The worktrees of the list the sidebar shows (the app keeps it in step with the model;
+   * `null` until the projects have loaded): what `actions.setView` checks a picked worktree against.
+   */
+  listed: ReadonlySet<string> | null;
   helpOpen: boolean;
   addProjectOpen: boolean;
   settingsOpen: boolean;
@@ -134,6 +139,7 @@ export const DEFAULT_UI_STATE: UiState = {
   followLatest: false,
   originOpen: [],
   branchToggleFrom: null,
+  listed: null,
   helpOpen: false,
   addProjectOpen: false,
   settingsOpen: false,
@@ -229,7 +235,32 @@ export const actions = {
       current.tab
         ? { ...view, tab: current.tab }
         : view;
-    store.setState({ view: next, scope });
+    // The one place of "a worktree the filters hide is made visible by naming it" (DECISIONS #281):
+    // whatever picks a worktree (the palette, an Overview row, a link), even the one already open,
+    // clears the filters that leave it out. The pane shows only listed worktrees.
+    const hidden =
+      view.kind === 'worktree' &&
+      state.listed !== null &&
+      !state.listed.has(view.worktreeId) &&
+      (state.filterFolders.length > 0 ||
+        state.filterProjects.length > 0 ||
+        state.filterWorktrees.length > 0 ||
+        state.onlyDirty ||
+        state.onlyUnreviewed);
+    store.setState({
+      view: next,
+      scope,
+      ...(hidden
+        ? {
+            filterFolders: [],
+            filterProjects: [],
+            filterWorktrees: [],
+            onlyDirty: false,
+            onlyUnreviewed: false,
+            notice: { id: ++noticeId, text: 'Filters cleared to show that worktree.' },
+          }
+        : {}),
+    });
   },
   setFileOptions(store: UiStore, key: string, options: FileViewOptions) {
     store.setState((s) => ({ fileOptions: { ...s.fileOptions, [key]: options } }));

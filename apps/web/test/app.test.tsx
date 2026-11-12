@@ -896,6 +896,32 @@ describe('every navigation targets a worktree the pane can show (#281)', () => {
     await waitFor(() => expect(screen.getAllByTestId(TEST_IDS.fileGroup)).toHaveLength(1));
   });
 
+  it('picking the already open worktree in the palette clears the filters that hide it', async () => {
+    const h = setup();
+    await ready();
+    fireEvent.click(rowOf('feat/auth'));
+    await waitFor(() => expect(viewerPath()).toBe('assets/logo.png'));
+    const auth = idOf('feat/auth');
+    await pick(h.user, 'fix/cache');
+    await waitFor(() => expect(screen.getAllByTestId(TEST_IDS.worktreeItem)).toHaveLength(1));
+    expect((await screen.findByTestId('no-worktree')).dataset.reason).toBe('hidden');
+    // The open worktree is the one picked again: its id does not change, the filters still go.
+    await press(h.user, '{Control>}k{/Control}');
+    const palette = await screen.findByTestId(TEST_IDS.commandPalette);
+    await h.user.type(within(palette).getByTestId(TEST_IDS.commandPaletteInput), 'feat/auth');
+    fireEvent.click(
+      within(palette)
+        .getAllByTestId(TEST_IDS.commandPaletteItem)
+        .find((i) => i.dataset.id === `go:worktree:${auth}`) as HTMLElement,
+    );
+    await waitFor(() => expect(screen.queryByTestId('no-worktree')).toBeNull());
+    expect(currentWorktree()).toBe(auth);
+    expect(listed().length).toBeGreaterThan(1);
+    expect(h.store.getState().filterWorktrees).toEqual([]);
+    expect(noticeText()).toContain('Filters cleared');
+    await waitFor(() => expect(viewerPath()).toBe('assets/logo.png'));
+  });
+
   it('the landing opens a listed worktree, not a remembered one the filters hide', async () => {
     const cache = idOf('fix/cache');
     setup('demo', {
