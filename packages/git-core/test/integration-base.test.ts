@@ -175,10 +175,25 @@ describe('stale local main (fetch + merge origin/main into the feature branch)',
     const loose = await c.readBranchBase?.(project, { defaultBranch: 'main' });
     fx.git(s.work, ['pack-refs', '--all', '--prune']);
     expect(await c.readBranchBase?.(project, { defaultBranch: 'main' })).toEqual(loose);
-    // A symbolic `refs/remotes/origin/main` sends the lookup to git; same commit, same answer.
-    fx.git(s.work, ['symbolic-ref', 'refs/remotes/origin/alias', 'refs/remotes/origin/main']);
+    // `refs/remotes/origin/main` itself becomes symbolic, pointing at a separate plain ref: the ref
+    // files cannot answer, so the lookup goes to git. Same commit, same answer.
+    const remoteOid = loose?.remote?.oid ?? '';
+    expect(remoteOid).not.toBe('');
+    fx.git(s.work, ['update-ref', 'refs/remotes/origin/real-main', remoteOid]);
+    fx.git(s.work, ['symbolic-ref', 'refs/remotes/origin/main', 'refs/remotes/origin/real-main']);
+    expect(
+      fx.git(s.work, ['symbolic-ref', '-q', 'refs/remotes/origin/main']).trim(),
+      'the fixture really made it symbolic',
+    ).toBe('refs/remotes/origin/real-main');
     expect((await c.readBranchBase?.(project, { defaultBranch: 'main' }))?.remote?.oid).toBe(
-      loose?.remote?.oid,
+      remoteOid,
+    );
+    // And it follows the symbolic ref when its target moves (a stale answer would keep `remoteOid`).
+    const localOid = fx.git(s.work, ['rev-parse', 'HEAD']).trim();
+    expect(localOid).not.toBe(remoteOid);
+    fx.git(s.work, ['update-ref', 'refs/remotes/origin/real-main', localOid]);
+    expect((await c.readBranchBase?.(project, { defaultBranch: 'main' }))?.remote?.oid).toBe(
+      localOid,
     );
     await c.dispose();
   });

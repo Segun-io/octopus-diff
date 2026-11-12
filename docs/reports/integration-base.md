@@ -94,3 +94,7 @@ None added or removed.
 - DECISIONS #196 vs the parallel session's #195: independent paragraphs, append order only.
 - For #32: `integrationBase(ctx, repo, head, base, remote)` and `resolveTip(...)` in
   `packages/git-core/src/integration-base.ts`; `remoteTrackingOf` finds the remote ref.
+
+## PR review round 1 (Greptile on #61)
+
+- **The symbolic-ref test never reached the fallback** (valid): it made `refs/remotes/origin/alias` symbolic, but the lookup reads `refs/remotes/origin/main`, which stayed packed. The test now makes `refs/remotes/origin/main` itself symbolic, pointing at a separate plain ref, asserts the fixture really did that, checks the answer equals the packed one, and then moves the target and checks the answer follows it. Mutation check: letting a non-oid loose file fall through to the packed value (a broken fallback) fails the test.
