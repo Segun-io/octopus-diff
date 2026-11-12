@@ -131,6 +131,21 @@ function waitEntry(
 const live = (api: ApiClient, id: string) =>
   eventually(async () => (await api.getActivity(id)).live, 20_000, 50);
 
+/**
+ * The feed is live and file events reach the worktree (`watch.mode` is `native`). The baseline can
+ * exist before the watcher's subscription is up (on a slow runner by several seconds); a file
+ * written in that gap raises no event and would wait for the next poll.
+ */
+const watched = (api: ApiClient, id: string) =>
+  eventually(
+    async () => {
+      const feed = await api.getActivity(id);
+      return feed.live && feed.watch.mode === 'native';
+    },
+    20_000,
+    50,
+  );
+
 /** The git subcommand of a logged argv (after the global options and `-c` pairs). */
 function subcommand(line: string): string | undefined {
   const words = line.split(' ');
@@ -160,7 +175,7 @@ describe('live activity feed (real git, #38)', { timeout: 90_000 }, () => {
     const { api } = s;
     const events = recordEvents(s.daemon);
     await events.opened;
-    await live(api, id);
+    await watched(api, id);
     // The baseline produced nothing.
     expect((await api.getActivity(id)).entries).toEqual([]);
     expect((await api.getActivity(id)).watch.mode).toBe('native');
@@ -244,8 +259,8 @@ describe('live activity feed (real git, #38)', { timeout: 90_000 }, () => {
     const otherId = hashId(other);
     const s = await start(fx, { projects: [dir, other] });
     const { api, daemon } = s;
-    await live(api, id);
-    await live(api, otherId);
+    await watched(api, id);
+    await watched(api, otherId);
     await rm(path.join(dir, DELETED_NAME));
     const del = await waitEntry(api, id, (e) => e.kind === 'deleted');
     const oid = del.oid as string;
@@ -365,7 +380,7 @@ describe('live activity feed (real git, #38)', { timeout: 90_000 }, () => {
     const dir = await repo(fx);
     const id = hashId(dir);
     const s = await start(fx, { projects: [dir] });
-    await live(s.api, id);
+    await watched(s.api, id);
     await writeFile(path.join(dir, SCRATCH_NAME), `${SECRET}-untracked\n`);
     await waitEntry(s.api, id, (e) => e.path === SCRATCH_NAME);
     await rm(path.join(dir, DELETED_NAME));
@@ -381,7 +396,7 @@ describe('live activity feed (real git, #38)', { timeout: 90_000 }, () => {
     }
     // A new daemon on the same state dir: a fresh baseline, no entries.
     const again = await start(fx, { projects: [dir], stateDir: s.stateDir });
-    await live(again.api, id);
+    await watched(again.api, id);
     const feed = await again.api.getActivity(id);
     expect(feed.entries).toEqual([]);
     // The previous run's seq is from another run: dropped, start over.
@@ -402,7 +417,7 @@ describe('live activity feed (real git, #38)', { timeout: 90_000 }, () => {
     });
     const s = await start(fx, { projects: [dir], holdCommits: gate });
     const id = hashId(feature);
-    await live(s.api, id);
+    await watched(s.api, id);
 
     // A commit moves HEAD: the refresh asks for the commit list and waits for it (the gate).
     await writeFile(path.join(feature, 'new.txt'), 'n\n');
@@ -432,7 +447,7 @@ describe('live activity feed (real git, #38)', { timeout: 90_000 }, () => {
       10_000,
       50,
     );
-    await live(s.api, id);
+    await watched(s.api, id);
     await sleep(700);
     // A fresh baseline records nothing; the old snapshot would show the move between the two HEADs.
     expect((await s.api.getActivity(id)).entries).toEqual([]);
