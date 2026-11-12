@@ -114,7 +114,8 @@ async function rangeCommits(
   if (!FULL_SHA.test(base) || !FULL_SHA.test(head) || maxCommits > RANGE_MEMO_MAX_COMMITS) {
     return compute();
   }
-  const key = `range\u0000${repo.commonDir}\u0000${base}\u0000${head}\u0000${maxCommits}`;
+  const stamp = await ctx.historyStamp(repo);
+  const key = `range\u0000${repo.commonDir}\u0000${stamp}\u0000${base}\u0000${head}\u0000${maxCommits}`;
   const range = (await ctx.memo(key, compute)) as {
     commits: ReviewRangeCommit[];
     truncated: boolean;

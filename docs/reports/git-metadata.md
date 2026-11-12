@@ -137,3 +137,12 @@ None added or removed (`pnpm credits` not needed; `pnpm credits:check` runs in `
 ## Combined with #10 (stacked, measured after the rebase)
 
 `pnpm --filter @octopus-diff/e2e bench` on this branch stacked on `perf/startup-once` (#10), 30 x 3, exit 0, `docs/bench/results.*` regenerated: startup git spawns **415 for 90 worktrees (4.6 per worktree, budget <= 8 PASS)**, which meets the "under 450" target that the branch alone (626) did not; all summaries ready 862 ms (target ~1.0 s), cold paint 152 ms, warm reload 71 ms, edit -> SSE p95 20 ms, idle CPU 0.23 %. `pnpm check` exit 0 on the stack (git-core 200, daemon 222, web 248 tests).
+
+## PR review round 1 (Greptile on #58)
+
+Both findings were valid (`packages/git-core/src/commits.ts`, `context.ts`, `review.ts`; DECISIONS #193 extended):
+
+- **Fetched history left wrong diffs.** Parents, merge-base, ancestry, ahead/behind counts and review ranges were cached by commit ids alone, but a shallow clone's view of those can change when history arrives (`fetch --unshallow`: a boundary commit is shown against the empty tree, then against its real parent). Their cache keys now include `GitContext.historyStamp` (the `mtime:size` of `<commonDir>/shallow` and `info/grafts`: two `stat` calls, no git process). Regression test: an unshallowed clone shows only the commit's own change afterwards.
+- **Short ids skipped ambiguity checks.** An abbreviated id was cached as if permanent. Only full object ids are cached now; an abbreviation is resolved by git on every call and a fetch that makes it ambiguous is reported. Regression test: two commits with the same four-digit prefix (found by search, reproducible), the second arriving after the first was used.
+
+Both tests fail without the change. Known remaining gap: `refs/replace/` changes are still not seen until a restart (DECISIONS #192).

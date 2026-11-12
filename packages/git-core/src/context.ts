@@ -229,6 +229,22 @@ export class GitContext {
   }
 
   /**
+   * Where a repository's visible history can change without any commit changing: the shallow
+   * boundary (`shallow`, rewritten by `fetch --unshallow` / `--deepen`) and grafts. Facts that
+   * depend on parents or reachability (parents, merge-base, ancestry, counts, review ranges)
+   * carry this stamp in their cache key, so they are recomputed when it changes. Two `stat` calls,
+   * no git process. (`refs/replace/` is not covered: it needs a ref listing; see DECISIONS #192.)
+   */
+  async historyStamp(repo: RepoInfo): Promise<string> {
+    const stamp = (file: string): Promise<string> =>
+      stat(path.join(repo.commonDir, file)).then(
+        (info) => `${info.mtimeMs}:${info.size}`,
+        () => '-',
+      );
+    return (await Promise.all([stamp('shallow'), stamp(path.join('info', 'grafts'))])).join('|');
+  }
+
+  /**
    * A cached result that can never change for `key` (see `immutable`), computed once and
    * single-flight. `compute` returning `undefined` means "unknown": nothing is stored.
    */

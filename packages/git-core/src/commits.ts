@@ -6,10 +6,27 @@ import { OID } from './ref-files.js';
  * Facts about commits, shared by every worktree of a repository (#29). Objects are immutable, so
  * a result for given commit ids never changes: they are cached by `(commonDir, ids)` in
  * `GitContext.memo`. Only positive results are stored (a commit missing today may arrive with a
- * fetch). Every git call still goes through the runner and its allowlist.
+ * fetch). What a shallow clone shows of the history is not immutable: facts that depend on
+ * parents or reachability also carry `GitContext.historyStamp` in their key. Every git call still
+ * goes through the runner and its allowlist.
  */
 
 const NUL = '\u0000';
+
+/**
+ * Only full object ids are cached: an abbreviation (`CommitShaSchema` accepts four characters) is
+ * resolved by git on every call, because a fetch can make it ambiguous, and git must then say so.
+ * Results are cached under the full ids that came out of it.
+ */
+const full = (...ids: string[]): boolean => ids.every((id) => OID.test(id));
+
+/** `memo` when the key is made of full ids, a plain call otherwise. */
+const memoIf = <T>(
+  ctx: GitContext,
+  cacheable: boolean,
+  key: string,
+  compute: () => Promise<T | undefined>,
+): Promise<T | undefined> => (cacheable ? ctx.memo(key, compute) : compute());
 
 export interface AheadBehind {
   ahead: number;
@@ -24,8 +41,9 @@ export async function mergeBase(
   b: string,
 ): Promise<string | null> {
   if (a === b && OID.test(a)) return a;
-  const key = `merge-base${NUL}${repo.commonDir}${NUL}${a}${NUL}${b}`;
-  const sha = await ctx.memo(key, async () => {
+  const stamp = await ctx.historyStamp(repo);
+  const key = `merge-base${NUL}${repo.commonDir}${NUL}${stamp}${NUL}${a}${NUL}${b}`;
+  const sha = await memoIf(ctx, full(a, b), key, async () => {
     const result = await ctx.git(repo, ['merge-base', '--end-of-options', a, b], {
       okExitCodes: [0, 1, 128],
     });
@@ -43,8 +61,9 @@ export async function isAncestor(
   head: string,
 ): Promise<boolean> {
   if (ancestor === head) return true;
-  const key = `is-ancestor${NUL}${repo.commonDir}${NUL}${ancestor}${NUL}${head}`;
-  const answer = await ctx.memo(key, async () => {
+  const stamp = await ctx.historyStamp(repo);
+  const key = `is-ancestor${NUL}${repo.commonDir}${NUL}${stamp}${NUL}${ancestor}${NUL}${head}`;
+  const answer = await memoIf(ctx, full(ancestor, head), key, async () => {
     const result = await ctx.git(
       repo,
       ['merge-base', '--is-ancestor', '--end-of-options', ancestor, head],
@@ -59,7 +78,7 @@ export async function isAncestor(
 /** Full id of the commit `sha` names (a full object id), memoized; `not_found` if none. */
 export async function verifyCommit(ctx: GitContext, repo: RepoInfo, sha: string): Promise<string> {
   const key = `commit${NUL}${repo.commonDir}${NUL}${sha}`;
-  const found = await ctx.memo(key, async () => {
+  const found = await memoIf(ctx, full(sha), key, async () => {
     const result = await ctx.git(
       repo,
       ['rev-parse', '--quiet', '--verify', '--end-of-options', `${sha}^{commit}`],
@@ -78,8 +97,9 @@ export async function commitParents(
   repo: RepoInfo,
   sha: string,
 ): Promise<string[]> {
-  const key = `parents${NUL}${repo.commonDir}${NUL}${sha}`;
-  const line = await ctx.memo(key, async () => {
+  const stamp = await ctx.historyStamp(repo);
+  const key = `parents${NUL}${repo.commonDir}${NUL}${stamp}${NUL}${sha}`;
+  const line = await memoIf(ctx, full(sha), key, async () => {
     try {
       const result = await ctx.git(repo, [
         'rev-list',
@@ -99,8 +119,8 @@ export async function commitParents(
   return line ? line.split(' ') : [];
 }
 
-const abKey = (repo: RepoInfo, head: string, base: string): string =>
-  `ahead-behind${NUL}${repo.commonDir}${NUL}${head}${NUL}${base}`;
+const abKey = (repo: RepoInfo, stamp: string, head: string, base: string): string =>
+  `ahead-behind${NUL}${repo.commonDir}${NUL}${stamp}${NUL}${head}${NUL}${base}`;
 
 /** Patterns `for-each-ref` takes literally: plain branch refs (no glob characters). */
 const BRANCH_PATTERN = /^refs\/heads\/[^*?[\\\s]+$/;
@@ -121,16 +141,17 @@ export async function aheadBehind(
   base: string,
   branchRef: string | null,
 ): Promise<AheadBehind | null> {
-  const key = abKey(repo, head, base);
+  const stamp = await ctx.historyStamp(repo);
+  const key = abKey(repo, stamp, head, base);
   const hit = ctx.recall<AheadBehind>(key);
   if (hit) return hit;
   const version = await ctx.version();
   if (version.features.forEachRefAheadBehind === true && OID.test(base)) {
-    await batchAheadBehind(ctx, repo, base, branchRef);
+    await batchAheadBehind(ctx, repo, stamp, base, branchRef);
     const batched = ctx.recall<AheadBehind>(key);
     if (batched) return batched;
   }
-  const counted = await ctx.memo(key, async () => {
+  const counted = await memoIf(ctx, full(head, base), key, async () => {
     const result = await ctx.git(
       repo,
       ['rev-list', '--left-right', '--count', `${head}...${base}`, '--'],
@@ -146,6 +167,7 @@ export async function aheadBehind(
 async function batchAheadBehind(
   ctx: GitContext,
   repo: RepoInfo,
+  stamp: string,
   base: string,
   branchRef: string | null,
 ): Promise<void> {
@@ -154,7 +176,7 @@ async function batchAheadBehind(
     running = new Map();
     batches.set(ctx, running);
   }
-  const runKey = `${repo.commonDir}${NUL}${base}`;
+  const runKey = `${repo.commonDir}${NUL}${stamp}${NUL}${base}`;
   const inFlight = running.get(runKey);
   if (inFlight) {
     await inFlight;
@@ -176,7 +198,10 @@ async function batchAheadBehind(
         const [oid = '', counts = ''] = line.split(NUL);
         const match = /^(\d+) (\d+)$/.exec(counts.trim());
         if (!OID.test(oid) || !match) continue;
-        ctx.remember(abKey(repo, oid, base), { ahead: Number(match[1]), behind: Number(match[2]) });
+        ctx.remember(abKey(repo, stamp, oid, base), {
+          ahead: Number(match[1]),
+          behind: Number(match[2]),
+        });
       }
     } catch (error) {
       // A base git cannot read, or an old git that slipped past the version gate: rev-list

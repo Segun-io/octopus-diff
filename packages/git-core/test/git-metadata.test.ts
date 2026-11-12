@@ -20,7 +20,7 @@ import path from 'node:path';
 import type { GitCore, ProjectLocator, WorktreeLocator } from '@octopus-diff/contracts';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createGitCore } from '../src/index.js';
-import { locator } from './helpers/core.js';
+import { listFiles, locator } from './helpers/core.js';
 import { createFixture, type Fixture } from './helpers/fixture.js';
 
 let fx: Fixture;
@@ -414,6 +414,85 @@ describe('reftable repositories', () => {
       expect(range?.base).toBe(gitText(dir, ['rev-parse', 'main']));
       const base = await core.readBranchBase?.(project, { defaultBranch: 'main' });
       expect(base?.oid).toBe(gitText(dir, ['rev-parse', 'main']));
+    } finally {
+      await core.dispose();
+    }
+  });
+});
+
+describe('cached history facts follow the repository (PR #58 review)', () => {
+  it('a fetch --unshallow is seen: a boundary commit gets its parent back', async () => {
+    const source = fx.repo('deep-source', { files: { 'a.txt': 'a\n' } });
+    fx.write(path.join(source, 'b.txt'), 'b\n');
+    fx.commitAll(source, 'second');
+    fx.write(path.join(source, 'c.txt'), 'c\n');
+    const tip = fx.commitAll(source, 'third');
+    const clone = path.join(fx.root, 'deep-clone');
+    fx.git(fx.root, ['clone', '-q', '--depth', '1', `file://${source}`, clone]);
+    const core = createGitCore(fx.coreOptions());
+    try {
+      const { project } = await core.resolveProject(clone);
+      const wt = locator(clone, project.commonDir);
+      const sha = gitText(clone, ['rev-parse', 'HEAD']);
+      expect(sha).toBe(gitText(source, ['rev-parse', 'HEAD']));
+      // The boundary commit has no parent here, so it is shown against the empty tree.
+      const shallow = await listFiles(core, wt, { kind: 'commit', sha });
+      expect(shallow.map((f) => f.path).sort()).toEqual(['a.txt', 'b.txt', 'c.txt']);
+      // Same repository, same commit, after the history arrived: only its own change.
+      fx.git(clone, ['fetch', '-q', '--unshallow']);
+      const full = await listFiles(core, wt, { kind: 'commit', sha });
+      expect(full.map((f) => f.path)).toEqual(['c.txt']);
+      expect(tip).toBe(sha);
+    } finally {
+      await core.dispose();
+    }
+  });
+
+  it('an abbreviated id is resolved by git on every call (a fetch can make it ambiguous)', async () => {
+    const env = {
+      ...process.env,
+      ...fx.env,
+      GIT_AUTHOR_NAME: 'T',
+      GIT_AUTHOR_EMAIL: 't@example.com',
+      GIT_AUTHOR_DATE: '2026-01-01T00:00:00Z',
+      GIT_COMMITTER_NAME: 'T',
+      GIT_COMMITTER_EMAIL: 't@example.com',
+      GIT_COMMITTER_DATE: '2026-01-01T00:00:00Z',
+    };
+    const emptyTree = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
+    const commitTree = (dir: string, i: number): string =>
+      (
+        spawnSync('git', ['commit-tree', emptyTree, '-m', `c${i}`], {
+          cwd: dir,
+          env,
+          encoding: 'utf8',
+        }).stdout ?? ''
+      ).trim();
+    // Find two commits that share their first four hex digits (about 300 tries): the commits are
+    // reproducible, so the test repository can be given one of them first and the other later.
+    const scratch = fx.repo('collide-scratch', { empty: true });
+    const seen = new Map<string, number>();
+    let pair: [number, number] | null = null;
+    for (let i = 0; i < 4000 && !pair; i++) {
+      const prefix = commitTree(scratch, i).slice(0, 4);
+      const earlier = seen.get(prefix);
+      if (earlier !== undefined) pair = [earlier, i];
+      else seen.set(prefix, i);
+    }
+    if (!pair) throw new Error('no four-digit collision found');
+    const repo = fx.repo('collide', { empty: true });
+    const first = commitTree(repo, pair[0]);
+    const prefix = first.slice(0, 4);
+    const core = createGitCore(fx.coreOptions());
+    try {
+      const { project } = await core.resolveProject(repo);
+      const wt = locator(repo, project.commonDir);
+      // Unique so far: the short id names the commit (a root commit, shown against the empty tree).
+      expect(await listFiles(core, wt, { kind: 'commit', sha: prefix })).toEqual([]);
+      // A second object with the same prefix arrives (a fetch): git must now refuse the short id.
+      const second = commitTree(repo, pair[1]);
+      expect(second.slice(0, 4)).toBe(prefix);
+      await expect(listFiles(core, wt, { kind: 'commit', sha: prefix })).rejects.toThrow();
     } finally {
       await core.dispose();
     }

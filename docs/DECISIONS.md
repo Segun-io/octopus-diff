@@ -2242,5 +2242,14 @@ needed.
      honours `refs/replace/` (the runner does not set `GIT_NO_REPLACE_OBJECTS`), so adding a replace ref could
      change a merge base for the same ids; such entries would stay until the daemon restarts. A missing object
      in a branch scope's merge base is now reported as `not_found` ("no merge base") instead of `git_failed`.
+     **PR #58 review (two findings, both valid):** (a) what a shallow clone shows of the history is not
+     immutable, so the facts that depend on parents or reachability (parents, merge-base, ancestry,
+     counts, review ranges) now carry `GitContext.historyStamp` in their key: the `mtime:size` of
+     `<commonDir>/shallow` and `info/grafts`, two `stat` calls and no git process, so a `fetch --unshallow` or
+     `--deepen` is seen by the next call (`verifyCommit` stays unstamped: an object that exists keeps existing).
+     (b) Only full object ids are cached; an abbreviation (`CommitShaSchema` accepts four characters) goes to git
+     on every call, because a fetch can make it ambiguous and git must then refuse it. Regression tests in
+     `git-metadata.test.ts` (an unshallowed clone; a four-digit prefix that becomes ambiguous) fail without the change.
+
 194. **Bench: the startup-spawn budget is enforced.** `startupSpawns` is no longer in `TRACKED`
      (`e2e/bench/bench.ts`); `docs/bench/README.md` says so. The warm-reload entry is left to #10.
