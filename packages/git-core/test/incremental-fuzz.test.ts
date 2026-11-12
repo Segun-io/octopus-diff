@@ -299,6 +299,15 @@ const OPS: Array<[number, Op]> = [
   [
     1,
     (fx, repo, r) => {
+      // HEAD moves, the index stays: only the status header tells.
+      const branch = pick(r, ['main', 'side']);
+      git(fx, repo, ['symbolic-ref', 'HEAD', `refs/heads/${branch}`]);
+      return { name: `git symbolic-ref HEAD ${branch}`, touched: [pick(r, PATHS)] };
+    },
+  ],
+  [
+    1,
+    (fx, repo, r) => {
       if (r() < 0.5) git(fx, repo, ['stash', 'push', '-q', '-u']);
       else git(fx, repo, ['stash', 'pop', '-q']);
       return { name: 'git stash', touched: PATHS.slice(0, 3) };
