@@ -28,6 +28,7 @@ import { hashParts, PATCH_HASH_LENGTH, PatchHasher, STATE_HASH_LENGTH } from './
 import { imageComparison } from './images.js';
 import {
   changedSince,
+  keysInRegion,
   Region,
   readStamp,
   regionOfKeys,
@@ -801,7 +802,10 @@ export interface ListEntry {
   /** HEAD commit of that summary. */
   headSha: string | null;
   readContent: boolean;
+  /** Sorted by key. */
   rows: ListRow[];
+  /** `rows`' keys, in the same order (binary search). */
+  keys: string[];
 }
 export type ListCache = LruCache<string, ListEntry>;
 
@@ -858,6 +862,19 @@ function untrackedRows(infos: readonly UntrackedInfo[]): ListRow[] {
 
 function sortRows(rows: ListRow[]): ListRow[] {
   return rows.sort((a, b) => compareBstr(a.key, b.key));
+}
+
+/** Two key-sorted row lists merged (a stable merge: `a` first on equal keys). */
+function mergeRows(a: readonly ListRow[], b: readonly ListRow[]): ListRow[] {
+  if (b.length === 0) return [...a];
+  const out: ListRow[] = [];
+  let j = 0;
+  for (const row of a) {
+    while (j < b.length && (b[j] as ListRow).key < row.key) out.push(b[j++] as ListRow);
+    out.push(row);
+  }
+  while (j < b.length) out.push(b[j++] as ListRow);
+  return out;
 }
 
 function listKeyOf(repo: RepoInfo, plan: ScopePlan): string {
@@ -988,9 +1005,12 @@ async function listFromSummary(
       if (!region.has(row.key) || (row.oldKey !== null && !region.has(row.oldKey))) return null;
     }
   }
+  // Rows of a list with tens of thousands of untracked files: the region's ones found by binary
+  // search, the rest kept in order.
+  const inRegion = update ? new Set(keysInRegion(cached.keys, region)) : new Set<string>();
   const kept = update
     ? cached.rows.filter(
-        (row) => !region.has(row.key) && (row.oldKey === null || !region.has(row.oldKey)),
+        (row) => !inRegion.has(row.key) && (row.oldKey === null || !region.has(row.oldKey)),
       )
     : [];
   const trackedKeys = new Set<string>();
@@ -1002,11 +1022,17 @@ async function listFromSummary(
     : new Map<string, DiffAttribute>();
   const inspect = inspectOptions(ctx, repo, index.untracked.length, attributes);
   if (update && inspect.readContent !== cached.readContent) return null;
-  const keys = plan.includeUntracked
-    ? untrackedKeys(index, trackedKeys).filter((raw) => !update || region.has(raw))
-    : [];
+  // An update re-inspects the region's untracked files only (binary search, no scan of all).
+  const keys = !plan.includeUntracked
+    ? []
+    : update
+      ? keysInRegion(track.untrackedOrder, region).filter((raw) => {
+          const key = raw.endsWith('/') ? raw.slice(0, -1) : raw;
+          return !trackedKeys.has(key);
+        })
+      : untrackedKeys(index, trackedKeys);
   const infos = await inspectUntracked(repo.cwd, keys, deps.untrackedCache, inspect);
-  const rows = sortRows([...kept, ...fresh, ...untrackedRows(infos)]);
+  const rows = mergeRows(kept, sortRows([...fresh, ...untrackedRows(infos)]));
   if (update) listRefreshCounts.incremental++;
   else listRefreshCounts.seeded++;
   const latest = deps.lists.get(key);
@@ -1016,6 +1042,7 @@ async function listFromSummary(
       headSha,
       readContent: inspect.readContent,
       rows,
+      keys: rows.map((row) => row.key),
     });
   }
   return rows.map((row) => row.file);
@@ -1109,7 +1136,13 @@ export async function listChangedFiles(
     const previous = deps.lists.get(key);
     const version = track?.version ?? -1;
     if (!previous || previous.version <= version) {
-      deps.lists.set(key, { version, headSha: track?.branch.oid ?? null, readContent, rows });
+      deps.lists.set(key, {
+        version,
+        headSha: track?.branch.oid ?? null,
+        readContent,
+        rows,
+        keys: rows.map((row) => row.key),
+      });
     }
   }
   return rows.map((row) => row.file);

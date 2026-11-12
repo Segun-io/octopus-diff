@@ -87,6 +87,8 @@ export interface SummaryTrack {
   tracked: Map<string, StatusEntry>;
   /** Untracked status entries by path (a nested repository keeps its trailing `/`). */
   untracked: Map<string, StatusEntry>;
+  /** The keys of `untracked`, sorted (`compareBstr`): region lookups by binary search. */
+  untrackedOrder: string[];
   /** numstat records by destination path, in git's order within a path. */
   numstat: Map<string, NumstatRecord[]>;
   /** numstat was degraded (unreadable files, F7): the next refresh is full. */
@@ -193,6 +195,58 @@ export function regionFor(track: SummaryTrack, keys: Iterable<string>): Region |
     if (bytes > PATHSPEC_BYTES) return null;
   }
   return new Region([...specs].sort(compareBstr));
+}
+
+/** First index in `sorted` whose key is not below `key`. */
+function lowerBound(sorted: readonly string[], key: string): number {
+  let lo = 0;
+  let hi = sorted.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if ((sorted[mid] as string) < key) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
+
+/**
+ * The keys of a sorted list that a region matches (`Region.has`), unique and sorted, found by binary search per
+ * pathspec instead of a scan: what an incremental refresh of a worktree with tens of thousands
+ * of untracked files must not pay for every key.
+ */
+export function keysInRegion(sorted: readonly string[], region: Region): string[] {
+  const out = new Set<string>();
+  for (const spec of region.specs) {
+    for (const exact of [spec, `${spec}/`]) {
+      const at = lowerBound(sorted, exact);
+      if (sorted[at] === exact) out.add(exact);
+    }
+    const prefix = `${spec}/`;
+    for (let i = lowerBound(sorted, prefix); i < sorted.length; i++) {
+      const key = sorted[i] as string;
+      if (!key.startsWith(prefix)) break;
+      if (key !== prefix) out.add(key);
+    }
+  }
+  // Nested pathspecs (`dir` and `dir/x`) find a key twice: unique, in order.
+  return [...out].sort(compareBstr);
+}
+
+/** `sorted` without `removed`, with `added` (sorted, disjoint from what is left) merged in. */
+export function mergeSorted(
+  sorted: readonly string[],
+  removed: ReadonlySet<string>,
+  added: readonly string[],
+): string[] {
+  const out: string[] = [];
+  let j = 0;
+  for (const key of sorted) {
+    if (removed.has(key)) continue;
+    while (j < added.length && (added[j] as string) < key) out.push(added[j++] as string);
+    out.push(key);
+  }
+  while (j < added.length) out.push(added[j++] as string);
+  return out;
 }
 
 /** Literal pathspecs for a set of keys, or null when they cannot be passed (see `regionFor`). */
@@ -411,13 +465,16 @@ function recordsOf(track: SummaryTrack, key: string): string {
   return parts.join('\u0000');
 }
 
-function keysOf(track: SummaryTrack): Set<string> {
+/** Keys with records; untracked ones only when `withUntracked` (else the caller names them). */
+function keysOf(track: SummaryTrack, withUntracked: boolean): Set<string> {
   const keys = new Set<string>();
   for (const [key, entry] of track.tracked) {
     keys.add(key);
     if (entry.kind === 'renamed') keys.add(entry.origPath);
   }
-  for (const key of track.untracked.keys()) keys.add(key.endsWith('/') ? key.slice(0, -1) : key);
+  if (withUntracked) {
+    for (const key of track.untracked.keys()) keys.add(key.endsWith('/') ? key.slice(0, -1) : key);
+  }
   for (const key of track.numstat.keys()) keys.add(key);
   for (const records of track.numstat.values()) {
     for (const record of records) if (record.srcPath) keys.add(record.srcPath);
@@ -431,14 +488,19 @@ function keysOf(track: SummaryTrack): Set<string> {
  * or null when something global changed that can alter any file's patch: HEAD, the config or
  * attribute files, the operation in progress, a degraded numstat, an attributes file.
  */
-export function changedKeys(previous: SummaryTrack, next: SummaryTrack): Set<string> | null {
+export function changedKeys(
+  previous: SummaryTrack,
+  next: SummaryTrack,
+  untrackedCandidates: Iterable<string> | null = null,
+): Set<string> | null {
   if (previous.branch.oid !== next.branch.oid) return null;
   if (previous.stamp.config !== next.stamp.config) return null;
   if (previous.degraded || next.degraded) return null;
   if (previous.readContent !== next.readContent) return null;
   const out = new Set<string>();
-  const all = keysOf(previous);
-  for (const key of keysOf(next)) all.add(key);
+  const all = keysOf(previous, untrackedCandidates === null);
+  for (const key of keysOf(next, untrackedCandidates === null)) all.add(key);
+  for (const raw of untrackedCandidates ?? []) all.add(raw.endsWith('/') ? raw.slice(0, -1) : raw);
   for (const key of all) {
     if (recordsOf(previous, key) === recordsOf(next, key)) continue;
     if (path.posix.basename(key) === '.gitattributes') return null;
@@ -462,10 +524,11 @@ export function changedKeys(previous: SummaryTrack, next: SummaryTrack): Set<str
 export function nextJournal(
   previous: SummaryTrack | undefined,
   next: SummaryTrack,
+  untrackedCandidates: Iterable<string> | null = null,
 ): SummaryTrack['journal'] {
   if (!previous) return [{ version: next.version, paths: null }];
   const journal = previous.journal.slice(-(MAX_JOURNAL - 1));
-  journal.push({ version: next.version, paths: changedKeys(previous, next) });
+  journal.push({ version: next.version, paths: changedKeys(previous, next, untrackedCandidates) });
   return journal;
 }
 

@@ -27,6 +27,8 @@ import { hashParts, STATE_HASH_LENGTH } from './hash.js';
 import {
   checkHint,
   foldsCase,
+  keysInRegion,
+  mergeSorted,
   type NumstatRecord,
   nextJournal,
   type Region,
@@ -149,6 +151,17 @@ function sigMtimeMs(sig: string): number | null {
   return Number(BigInt(field) / 1_000_000n);
 }
 
+/** `sigMtimeMs` of an untracked file's inspection, once per inspection (they are reused). */
+const infoMtimes = new WeakMap<UntrackedInfo, number | null>();
+function infoMtimeMs(info: UntrackedInfo): number | null {
+  let ms = infoMtimes.get(info);
+  if (ms === undefined) {
+    ms = sigMtimeMs(info.statSig);
+    infoMtimes.set(info, ms);
+  }
+  return ms;
+}
+
 /**
  * When HEAD last moved in this worktree: the mtime of its reflog (`<gitDir>/logs/HEAD`, appended
  * on every commit, checkout, reset, merge or pull). Without a reflog (disabled, bare repos), the
@@ -231,6 +244,13 @@ interface Collected {
   branch: StatusBranch;
   tracked: Map<string, StatusEntry>;
   untracked: Map<string, StatusEntry>;
+  /** Keys of `untracked`, sorted. */
+  untrackedOrder: string[];
+  /**
+   * Incremental: untracked keys the refresh recomputed (removed from the last state, or listed by
+   * the limited status). Every other untracked key keeps its record. Null for a full refresh.
+   */
+  untrackedTouched: Set<string> | null;
   /** Relevant numstat records by destination path (see `relevantRecords`). */
   numstat: Map<string, NumstatRecord[]>;
   unreadable: Set<string>;
@@ -319,6 +339,8 @@ async function collectFull(
     branch: status.branch,
     tracked,
     untracked,
+    untrackedOrder: [...untracked.keys()].sort(compareBstr),
+    untrackedTouched: null,
     numstat,
     unreadable,
     statusOnly,
@@ -377,6 +399,39 @@ async function collectIncremental(
   if (region.size === 0) return 'empty-hint';
   const pathspecs = region.specs.map(bstrToUtf8);
 
+  // numstat runs alongside the status unless the hint names only known untracked files and the
+  // region holds nothing tracked (a new file being written); otherwise after it, when needed.
+  // Its commit is the last state's HEAD, which the status header then confirms.
+  type Numstat = { ok: true; output: string } | { ok: false };
+  const runNumstat = (): Promise<Numstat> =>
+    ctx
+      .git(repo, [
+        'diff',
+        ...DIFF_PINS,
+        '--numstat',
+        '-z',
+        previous.branch.oid ?? repo.emptyTree,
+        '--',
+        ...pathspecs,
+      ])
+      .then(
+        (run): Numstat => ({ ok: true, output: bstrFromBuffer(run.stdout) }),
+        (error: unknown): Numstat => {
+          // An unreadable file (F7) and its fallbacks are the full refresh's business.
+          if (isGitCoreError(error, 'git_failed')) return { ok: false };
+          throw error;
+        },
+      );
+  let likelyTracked = check.keys.some((key) => !previous.untracked.has(key));
+  for (const entry of previous.tracked.values()) {
+    if (likelyTracked) break;
+    likelyTracked =
+      region.has(entry.path) || (entry.kind === 'renamed' && region.has(entry.origPath));
+  }
+  const early = likelyTracked ? runNumstat() : null;
+  // Settled by whoever awaits it below; an early return must not leave a rejection unhandled.
+  early?.catch(() => {});
+
   const result = await ctx.git(repo, [...STATUS_ARGS, '--', ...pathspecs]);
   let status: ReturnType<typeof parseStatusV2>;
   try {
@@ -392,10 +447,11 @@ async function collectIncremental(
     if (region.has(key) || (entry.kind === 'renamed' && region.has(entry.origPath))) continue;
     tracked.set(key, entry);
   }
-  const untracked = new Map<string, StatusEntry>();
-  for (const [key, entry] of previous.untracked) {
-    if (!region.has(key)) untracked.set(key, entry);
-  }
+  // Tens of thousands of untracked files: found by binary search, not by a scan per refresh.
+  const untracked = new Map(previous.untracked);
+  const removed = new Set(keysInRegion(previous.untrackedOrder, region));
+  for (const key of removed) untracked.delete(key);
+  const listed: string[] = [];
   let regionTracked = false;
   for (const entry of status.entries) {
     if (entry.kind === 'ignored') continue;
@@ -404,6 +460,7 @@ async function collectIncremental(
     if (entry.kind === 'renamed' && !region.has(entry.origPath)) return 'outside-region';
     if (entry.kind === 'untracked') {
       if (entry.path.endsWith('/')) return 'nested-repository';
+      if (!untracked.has(entry.path)) listed.push(entry.path);
       untracked.set(entry.path, entry);
     } else {
       if (tracked.has(entry.path)) return 'outside-region';
@@ -419,23 +476,9 @@ async function collectIncremental(
     numstat.set(key, records);
   }
   if (regionTracked) {
-    let output: string;
-    try {
-      const run = await ctx.git(repo, [
-        'diff',
-        ...DIFF_PINS,
-        '--numstat',
-        '-z',
-        status.branch.oid ?? repo.emptyTree,
-        '--',
-        ...pathspecs,
-      ]);
-      output = bstrFromBuffer(run.stdout);
-    } catch (error) {
-      // An unreadable file (F7) and its fallbacks are the full refresh's business.
-      if (isGitCoreError(error, 'git_failed')) return 'numstat-failed';
-      throw error;
-    }
+    const run = await (early ?? runNumstat());
+    if (!run.ok) return 'numstat-failed';
+    const output = run.output;
     try {
       if (!relevantRecords(output, statusPathsOf(tracked), numstat, region)) {
         return 'outside-region';
@@ -445,6 +488,7 @@ async function collectIncremental(
       throw error;
     }
   }
+  listed.sort(compareBstr);
   return {
     mode: 'incremental',
     stamp,
@@ -452,6 +496,8 @@ async function collectIncremental(
     branch: status.branch,
     tracked,
     untracked,
+    untrackedOrder: mergeSorted(previous.untrackedOrder, removed, listed),
+    untrackedTouched: new Set([...removed, ...listed]),
     numstat,
     unreadable: new Set(),
     statusOnly: false,
@@ -560,7 +606,7 @@ async function finish(
   const changed = [...c.tracked.values()].filter((entry) => entry.kind !== 'unmerged');
   const unmerged = [...c.tracked.values()].filter((entry) => entry.kind === 'unmerged');
   const trackedEntries = [...changed.sort(byPath), ...unmerged.sort(byPath)];
-  const untrackedEntries = [...c.untracked.values()].sort(byPath);
+  const untrackedEntries = c.untrackedOrder.map((key) => c.untracked.get(key) as StatusEntry);
   const entries: StatusEntry[] = [...trackedEntries, ...untrackedEntries];
 
   let staged = 0;
@@ -640,13 +686,14 @@ async function finish(
   const untrackedPromise = readDiffAttributes(deps, repo, untrackedRaw, entries).then(
     async (attributes) => {
       const inspect = inspectOptions(ctx, repo, untrackedRaw.length, attributes);
+      const touched = c.untrackedTouched;
       const reuse =
-        region !== null && previous !== undefined && previous.readContent === inspect.readContent;
+        touched !== null && previous !== undefined && previous.readContent === inspect.readContent;
       const fresh: string[] = [];
       const kept = new Map<string, UntrackedInfo>();
       for (const raw of untrackedRaw) {
         const key = raw.endsWith('/') ? raw.slice(0, -1) : raw;
-        const old = reuse && !region.has(raw) ? previous.untrackedInfos.get(key) : undefined;
+        const old = reuse && !touched.has(raw) ? previous.untrackedInfos.get(key) : undefined;
         if (old && old.attribute === (attributes.get(key) ?? '')) kept.set(raw, old.info);
         else fresh.push(raw);
       }
@@ -654,7 +701,7 @@ async function finish(
       const byRaw = new Map<string, UntrackedInfo>();
       for (const [i, raw] of fresh.entries()) byRaw.set(raw, inspected[i] as UntrackedInfo);
       const infos = untrackedRaw.map((raw) => (kept.get(raw) ?? byRaw.get(raw)) as UntrackedInfo);
-      return { attributes, infos, readContent: inspect.readContent };
+      return { attributes, infos, readContent: inspect.readContent, fresh: reuse ? fresh : null };
     },
   );
   const [aheadBehind, inProgress, signatures, untracked, headMs, stagedSigs] = await Promise.all([
@@ -742,7 +789,7 @@ async function finish(
     activityAt: activityAt(headMs.ms, [
       ...signatures.map(sigMtimeMs),
       ...stagedSigs.map(sigMtimeMs),
-      ...untrackedInfos.map((info) => sigMtimeMs(info.statSig)),
+      ...untrackedInfos.map(infoMtimeMs),
     ]),
   };
 
@@ -762,6 +809,7 @@ async function finish(
     branch,
     tracked: c.tracked,
     untracked: c.untracked,
+    untrackedOrder: c.untrackedOrder,
     numstat: c.numstat,
     degraded: c.statusOnly || c.unreadable.size > 0,
     untrackedInfos: infosByKey,
@@ -772,7 +820,12 @@ async function finish(
     fullAt: c.mode === 'full' ? Date.now() : (previous?.fullAt ?? Date.now()),
     journal: [],
   };
-  track.journal = nextJournal(previous, track);
+  // Incremental: untracked records changed only where the refresh recomputed them.
+  track.journal = nextJournal(
+    previous,
+    track,
+    c.untrackedTouched && untracked.fresh ? [...c.untrackedTouched, ...untracked.fresh] : null,
+  );
   if (snapshotLimit === null) return { result: summary, track };
   return {
     result: {

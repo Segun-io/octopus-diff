@@ -87,7 +87,8 @@ describe('incremental summary: spawns per edit', () => {
       appendFileSync(path.join(repo, 'a.txt'), 'edit 2\n');
       const got = await core.getSummary(wt, { snapshot: true, changedPaths: ['a.txt'] });
       expect(got.refresh).toEqual({ mode: 'incremental', reason: null, pathspecs: 1 });
-      expect(spawns.map((a) => a[0])).toEqual(['status', 'diff']);
+      // Both at once (numstat does not wait for the status).
+      expect(spawns.map((a) => a[0]).sort()).toEqual(['diff', 'status']);
       for (const args of spawns) expect(args.slice(args.indexOf('--'))).toEqual(['--', 'a.txt']);
       expect(got.stateHash).not.toBe(first.stateHash);
       await expectSameAsFull(core, repo, got);
@@ -96,17 +97,26 @@ describe('incremental summary: spawns per edit', () => {
     }
   });
 
-  it('a new untracked file: one status, no numstat', async () => {
+  it('an untracked file: one status (a new one: status and numstat, both limited)', async () => {
     const repo = dirtyRepo('spawns-new');
     const { core, spawns } = recording();
     try {
       const wt = locator(repo);
       await core.getSummary(wt);
       spawns.length = 0;
+      appendFileSync(path.join(repo, 'new.txt'), 'more\n');
+      const edited = await core.getSummary(wt, { snapshot: true, changedPaths: ['new.txt'] });
+      expect(edited.refresh?.mode).toBe('incremental');
+      expect(spawns.map((a) => a[0])).toEqual(['status']);
+      await expectSameAsFull(core, repo, edited);
+      // A path the last state does not know may be a clean tracked file: numstat runs too.
+      spawns.length = 0;
       fx.write(path.join(repo, 'another.txt'), 'one\ntwo\n');
       const got = await core.getSummary(wt, { snapshot: true, changedPaths: ['another.txt'] });
       expect(got.refresh?.mode).toBe('incremental');
-      expect(spawns.map((a) => a[0])).toEqual(['status']);
+      expect(spawns.map((a) => a[0]).sort()).toEqual(['diff', 'status']);
+      for (const args of spawns)
+        expect(args.slice(args.indexOf('--'))).toEqual(['--', 'another.txt']);
       await expectSameAsFull(core, repo, got);
     } finally {
       await core.dispose();
@@ -410,6 +420,17 @@ describe('incremental summary: missed events', () => {
       await expectSameAsFull(core, repo, got);
     } finally {
       await core.dispose();
+    }
+  });
+});
+
+describe('keysInRegion', () => {
+  it('finds what Region.has matches, once each, in order (nested pathspecs too)', async () => {
+    const { keysInRegion } = await import('../src/incremental.js');
+    const sorted = ['a', 'a b', 'a-x', 'a/', 'a/b', 'a/b/c', 'ab', 'b', 'dir/x', 'dir/y/z'].sort();
+    for (const specs of [['a'], ['a', 'a/b'], ['dir', 'dir/y'], ['b', 'zzz'], ['a b'], []]) {
+      const region = new Region(specs);
+      expect(keysInRegion(sorted, region)).toEqual(sorted.filter((k) => region.has(k)));
     }
   });
 });
