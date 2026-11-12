@@ -10,7 +10,8 @@
  * `status` is over twice its fastest sibling's (and its untracked files do not explain it) is flagged
  * as a probable stale index.
  *
- * It never writes to a repository:
+ * It never writes to a repository (the `--json` file may not be inside any profiled repository, any of its
+ * linked worktrees or any git directory, symlinks resolved):
  * - every git process goes through git-core's runner (the same subcommand allowlist as the app,
  *   `--no-optional-locks`, no pager, no external diff or textconv);
  * - `.git/index` (size, mtime, inode) is read before and after and reported, so "index untouched"
@@ -25,11 +26,16 @@
  *   --max N      stop after N repositories (default 40)
  */
 import { existsSync } from 'node:fs';
-import { readdir, stat, writeFile } from 'node:fs/promises';
+import { lstat, readdir, readlink, realpath, stat, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { basename, join, resolve, sep } from 'node:path';
+import { basename, dirname, join, resolve, sep } from 'node:path';
 import { parseArgs } from 'node:util';
-import { GitRunner, parseWorktreeList } from '@octopus-diff/git-core';
+import {
+  GitRunner,
+  parseRawNumstat,
+  parseStatusV2,
+  parseWorktreeList,
+} from '@octopus-diff/git-core';
 
 const { values: args, positionals } = parseArgs({
   args: process.argv.slice(2).filter((a) => a !== '--'),
@@ -57,9 +63,30 @@ const MAX = Math.max(1, Number(args.max));
 const SKIP_DIRS = new Set(['node_modules', '.git', '.cache', '.pnpm-store', 'target', 'dist']);
 
 const git = new GitRunner({ concurrency: 1, timeoutMs: 300_000 });
-const log = (m: string) => process.stderr.write(`[real] ${m}\n`);
+const log = (m: string) => process.stderr.write(`[real] ${sanitize(m)}\n`);
 
 const expand = (p: string) => resolve(p.startsWith('~') ? join(homedir(), p.slice(1)) : p);
+
+/** Every path whose contents the profiler must never overwrite (worktrees, git dirs, common dirs). */
+const protectedRoots = new Set<string>();
+
+/**
+ * With `--redact` nothing that names a path or a branch may leave the process: logs, the table and the
+ * JSON all go through this. Known paths turn into repo-N / worktree-M; any other absolute path
+ * (inside an error message, say) becomes `<path>`.
+ */
+const labels = new Map<string, string>();
+function sanitize(text: string): string {
+  if (!args.redact) return text;
+  let out = text;
+  for (const [path, label] of [...labels].sort((a, b) => b[0].length - a[0].length)) {
+    out = out.split(path).join(label);
+  }
+  return out
+    .split(homedir())
+    .join('~')
+    .replace(/(^|[\s'"(=])(?:\/[^\s:'"`,;()]+)+/g, '$1<path>');
+}
 
 async function findRepos(root: string, depth: number, out: string[]): Promise<void> {
   if (out.length >= MAX * 4) return;
@@ -106,6 +133,19 @@ const count = (buffer: Buffer) => {
   return n;
 };
 
+/** Reads a config value the way the user's own git does: the pins the runner passes with -c (scope `command`) are ignored. */
+async function configValue(cwd: string, key: string): Promise<string | null> {
+  const text = await out(cwd, ['config', '--show-scope', '--get-all', key]);
+  if (!text) return null;
+  const values = text
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => line.split('\t'))
+    .filter(([scope]) => scope !== 'command')
+    .map(([, ...value]) => value.join('\t').trim());
+  return values.length ? (values[values.length - 1] ?? null) : null;
+}
+
 async function indexStamp(gitDir: string | null) {
   if (!gitDir) return null;
   const s = await stat(join(gitDir, 'index')).catch(() => null);
@@ -141,6 +181,8 @@ const CONFIG_KEYS = [
 
 async function profileWorktree(path: string, isMain: boolean, branch: string | null) {
   const gitDir = (await out(path, ['rev-parse', '--absolute-git-dir']))?.trim() ?? null;
+  protectedRoots.add(path);
+  if (gitDir) protectedRoots.add(gitDir);
   const before = await indexStamp(gitDir);
   const profile: WorktreeProfile = {
     path,
@@ -163,9 +205,22 @@ async function profileWorktree(path: string, isMain: boolean, branch: string | n
   const ls = await timed(path, ['ls-files', '-z']);
   profile.lsFilesMs = ls.ms;
   profile.trackedFiles = ls.failed ? null : count(ls.stdout);
-  const status = await timed(path, ['status', '--porcelain=v2', '-z', '--branch'], REPEAT);
+  // The runner pins status.showUntrackedFiles=all, so the mode is chosen explicitly on the command line:
+  // `normal` is what a plain `git status` does by default, `all` lists every untracked file.
+  const status = await timed(
+    path,
+    ['status', '--porcelain=v2', '-z', '--branch', '--untracked-files=normal'],
+    REPEAT,
+  );
   profile.statusMs = status.ms;
-  profile.statusEntries = status.failed ? null : count(status.stdout);
+  let parseError: string | null = null;
+  try {
+    profile.statusEntries = status.failed
+      ? null
+      : parseStatusV2(status.stdout.toString('utf8')).entries.length;
+  } catch (error) {
+    parseError = error instanceof Error ? error.message : String(error);
+  }
   const statusAll = await timed(
     path,
     ['status', '--porcelain=v2', '-z', '--branch', '--untracked-files=all'],
@@ -173,27 +228,39 @@ async function profileWorktree(path: string, isMain: boolean, branch: string | n
   );
   profile.statusAllMs = statusAll.ms;
   if (!statusAll.failed) {
-    let untracked = 0;
-    for (const record of statusAll.stdout.toString('utf8').split('\0')) {
-      if (record.startsWith('? ')) untracked++;
+    try {
+      profile.untrackedFiles = parseStatusV2(statusAll.stdout.toString('utf8')).entries.filter(
+        (entry) => entry.kind === 'untracked',
+      ).length;
+    } catch (error) {
+      parseError ??= error instanceof Error ? error.message : String(error);
     }
-    profile.untrackedFiles = untracked;
   }
-  const diff = await timed(path, ['diff', '--numstat', '-z', 'HEAD']);
+  const diff = await timed(path, ['diff', '--raw', '--numstat', '-z', 'HEAD']);
   profile.diffNumstatMs = diff.ms;
-  profile.diffFiles = diff.failed ? null : count(diff.stdout);
-  profile.error = ls.failed ?? status.failed ?? statusAll.failed ?? null;
+  try {
+    profile.diffFiles = diff.failed
+      ? null
+      : parseRawNumstat(diff.stdout.toString('utf8')).raw.length;
+  } catch (error) {
+    parseError ??= error instanceof Error ? error.message : String(error);
+  }
+  profile.error = sanitizeError(
+    ls.failed ?? status.failed ?? statusAll.failed ?? diff.failed ?? parseError ?? null,
+  );
   if (profile.statusMs !== null && profile.trackedFiles) {
     profile.statusMsPer10kTracked =
       Math.round((profile.statusMs / (profile.trackedFiles / 10_000)) * 10) / 10;
   }
   for (const key of CONFIG_KEYS) {
-    profile.config[key] = (await out(path, ['config', '--get', key]))?.trim() || null;
+    profile.config[key] = await configValue(path, key);
   }
   const after = await indexStamp(gitDir);
   profile.indexUntouched = before === null ? null : before === after;
   return profile;
 }
+
+const sanitizeError = (text: string | null) => (text === null ? null : sanitize(text));
 
 interface RepoProfile {
   path: string;
@@ -218,6 +285,31 @@ function flagStale(repo: RepoProfile) {
   }
 }
 
+/**
+ * The path a file would really be written to. Symlinks are followed even when they dangle (a link to
+ * a file that does not exist yet still creates it at the link's target), and the deepest existing
+ * ancestor is resolved with `realpath`.
+ */
+async function realTarget(path: string): Promise<string> {
+  let current = resolve(path);
+  for (let hops = 0; hops < 40; hops++) {
+    const info = await lstat(current).catch(() => null);
+    if (!info?.isSymbolicLink()) break;
+    current = resolve(dirname(current), await readlink(current));
+  }
+  const rest: string[] = [];
+  for (;;) {
+    try {
+      return join(await realpath(current), ...rest.reverse());
+    } catch {
+      const parent = dirname(current);
+      if (parent === current) return current;
+      rest.push(basename(current));
+      current = parent;
+    }
+  }
+}
+
 async function main() {
   const candidates: string[] = positionals.map(expand);
   for (const root of args['scan-root'] ?? []) {
@@ -228,7 +320,7 @@ async function main() {
   for (const candidate of candidates) {
     if (repos.length >= MAX) break;
     if (!existsSync(candidate)) {
-      log(`skip ${candidate}: not found`);
+      log(`skip ${args.redact ? 'a path' : candidate}: not found`);
       continue;
     }
     const common = (
@@ -236,11 +328,18 @@ async function main() {
     )?.trim();
     if (!common || seen.has(common)) continue;
     seen.add(common);
+    const ri = repos.length;
+    labels.set(candidate, `repo-${ri + 1}`);
+    labels.set(common, `repo-${ri + 1}`);
+    protectedRoots.add(common);
     const list = await out(candidate, ['worktree', 'list', '--porcelain', '-z']);
     const records = list ? parseWorktreeList(list, true) : [];
     const worktrees = records.filter((r) => !r.bare);
     if (worktrees.length === 0)
       worktrees.push({ path: candidate, branch: null } as (typeof records)[number]);
+    for (const [wi, w] of worktrees.entries()) {
+      if (!labels.has(w.path)) labels.set(w.path, `repo-${ri + 1}/worktree-${wi + 1}`);
+    }
     log(`${candidate}: ${worktrees.length} worktree(s)`);
     const profiled: WorktreeProfile[] = [];
     for (const [index, w] of worktrees.entries()) {
@@ -252,12 +351,21 @@ async function main() {
     flagStale(repo);
     repos.push(repo);
   }
+  // The output file must not land inside anything that was profiled: not a repository, not a linked
+  // worktree elsewhere on disk, not a git directory. Symlinks are resolved on both sides.
+  let jsonTarget: string | null = null;
   if (args.json) {
-    const target = resolve(args.json);
-    const inside = [...seen]
-      .map((c) => c.replace(/\/\.git\/?$/, ''))
-      .find((root) => target === root || target.startsWith(root + sep));
-    if (inside) throw new Error(`--json must not be inside a profiled repository (${inside})`);
+    jsonTarget = await realTarget(args.json);
+    for (const root of protectedRoots) {
+      for (const candidate of [root, root.replace(/\/\.git\/?$/, '')]) {
+        const real = await realpath(candidate).catch(() => candidate);
+        if (jsonTarget === real || jsonTarget.startsWith(real + sep)) {
+          throw new Error(
+            `--json must not be inside a profiled repository, worktree or git directory (${real})`,
+          );
+        }
+      }
+    }
   }
   const redact = args.redact;
   const nameOf = (repo: RepoProfile, ri: number) => (redact ? `repo-${ri + 1}` : repo.path);
@@ -278,7 +386,7 @@ async function main() {
         w.probableStaleIndex ? 'probable stale index' : '',
         w.config['core.untrackedCache'] === 'true' ? '' : 'no untrackedCache',
         w.config['core.fsmonitor'] && w.config['core.fsmonitor'] !== 'false' ? 'fsmonitor' : '',
-        w.error ? `error: ${w.error.slice(0, 60)}` : '',
+        w.error ? `error: ${sanitize(w.error).slice(0, 60)}` : '',
       ].filter(Boolean);
       lines.push(
         `| ${nameOf(repo, ri)} / ${wtName(w, wi)} | ${fmt(w.trackedFiles)} | ${fmt(w.lsFilesMs, ' ms')} | ${fmt(w.statusMs, ' ms')} | ${fmt(w.statusAllMs, ' ms')} | ${fmt(w.untrackedFiles)} | ${fmt(w.diffNumstatMs, ' ms')} | ${fmt(w.statusMsPer10kTracked, ' ms')} | ${flags.join(', ')} |`,
@@ -298,21 +406,21 @@ async function main() {
           ...r,
           path: nameOf(r, ri),
           commonDir: nameOf(r, ri),
-          worktrees: r.worktrees.map((w, wi) => ({ ...w, path: wtName(w, wi) })),
+          worktrees: r.worktrees.map((w, wi) => ({ ...w, path: wtName(w, wi), branch: null })),
         }))
       : repos;
     await writeFile(
-      resolve(args.json),
+      jsonTarget ?? resolve(args.json),
       `${JSON.stringify({ generatedAt: new Date().toISOString(), repos: payload }, null, 2)}\n`,
     );
-    log(`wrote ${resolve(args.json)}`);
+    log(args.redact ? 'wrote the JSON file' : `wrote ${jsonTarget}`);
   }
   await git.dispose();
 }
 
 main().catch((error: unknown) => {
   process.stderr.write(
-    `[real] FAILED: ${error instanceof Error ? error.message : String(error)}\n`,
+    `[real] FAILED: ${sanitize(error instanceof Error ? error.message : String(error))}\n`,
   );
   process.exitCode = 1;
 });

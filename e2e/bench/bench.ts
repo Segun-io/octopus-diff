@@ -131,6 +131,8 @@ interface ChildDaemon {
   authUrl: string;
   token: string;
   spawnFile: string;
+  /** '+' per git child started, '-' per child gone: its balance is how many are running. */
+  activeFile: string;
 }
 
 /** What the bench runs against, whichever layout generated it. */
@@ -195,6 +197,8 @@ async function spawnDaemon(setup: BenchSetup, stateBase: string): Promise<ChildD
   const token = randomBytes(24).toString('hex');
   const spawnFile = join(setup.root, 'spawns.jsonl');
   await writeFile(spawnFile, '');
+  const activeFile = join(setup.root, 'spawns.active');
+  await writeFile(activeFile, '');
   const options = {
     host: '127.0.0.1',
     port: 0,
@@ -220,6 +224,7 @@ async function spawnDaemon(setup: BenchSetup, stateBase: string): Promise<ChildD
         ...process.env,
         OCTOPUS_BENCH_DAEMON_OPTIONS: JSON.stringify(options),
         OCTOPUS_SPAWN_TRACE: spawnFile,
+        OCTOPUS_SPAWN_ACTIVE: activeFile,
       },
       stdio: ['ignore', 'pipe', 'inherit'],
     },
@@ -240,7 +245,7 @@ async function spawnDaemon(setup: BenchSetup, stateBase: string): Promise<ChildD
       `daemon failed to start: ${message.error}${/placeholder/i.test(message.error ?? '') ? ' (merge WS2 and run `pnpm build`)' : ''}`,
     );
   }
-  return { child, url: message.url, authUrl: message.authUrl, token, spawnFile };
+  return { child, url: message.url, authUrl: message.authUrl, token, spawnFile, activeFile };
 }
 
 async function stopChild(child: ChildProcess) {
@@ -378,14 +383,27 @@ function scopePath(path: string, scope: DiffScope): string {
   return `${path}?${appendScopeParams(new URLSearchParams(), scope)}`;
 }
 
-/** Waits until the spawn trace has not grown for `quietMs` (at most `maxMs`). */
-async function settled(traceFile: string, quietMs = 1000, maxMs = 60_000): Promise<void> {
+/**
+ * Waits until no git child is running and the spawn trace has not grown for `quietMs` (at most
+ * `maxMs`). A slow command produces no trace growth while it runs (the trace is written when a child
+ * closes), so the running count from `activeFile` is what keeps the next edit from starting behind
+ * the previous one's work.
+ */
+async function settled(
+  traceFile: string,
+  activeFile: string,
+  quietMs = 1000,
+  maxMs = 60_000,
+): Promise<void> {
   const deadline = Date.now() + maxMs;
   let size = -1;
   let since = Date.now();
   while (Date.now() < deadline) {
     const next = (await readFile(traceFile).catch(() => Buffer.alloc(0))).length;
-    if (next !== size) {
+    const marks = await readFile(activeFile, 'utf8').catch(() => '');
+    let running = 0;
+    for (const mark of marks) running += mark === '+' ? 1 : -1;
+    if (next !== size || running > 0) {
       size = next;
       since = Date.now();
     } else if (Date.now() - since >= quietMs) return;
@@ -547,8 +565,8 @@ async function main() {
         `refresh ${i + 1}/${iterations} (${sample.role}): SSE ${sample.sseMs ?? 'timeout'} ms, UI ${sample.uiMs ?? (page ? 'timeout' : 'n/a')} ms`,
       );
       // Let the work this edit caused (the UI refetches too) finish, so the next sample does not
-      // queue behind it: no git spawn for 1 s.
-      await settled(daemon.spawnFile, 1000, EDIT_WAIT_MS);
+      // queue behind it: no git child running and none finished for 1 s.
+      await settled(daemon.spawnFile, daemon.activeFile, 1000, EDIT_WAIT_MS);
       sample.window[1] = Date.now();
     }
     sub.close();

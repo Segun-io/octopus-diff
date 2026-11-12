@@ -12,6 +12,8 @@ import { syncBuiltinESMExports } from 'node:module';
 const file = process.env.OCTOPUS_SPAWN_TRACE;
 if (file) {
   const fd = openSync(file, 'a');
+  const activeFile = process.env.OCTOPUS_SPAWN_ACTIVE;
+  const activeFd = activeFile ? openSync(activeFile, 'a') : null;
   const original = childProcess.spawn;
   const now = () => performance.timeOrigin + performance.now();
   childProcess.spawn = function tracedSpawn(command, args, options) {
@@ -32,6 +34,19 @@ if (file) {
       .filter((a) => !['--no-ext-diff', '--no-textconv', '--no-color'].includes(a))
       .slice(0, 6);
     const cwd = options && typeof options === 'object' ? options.cwd : undefined;
+    // $OCTOPUS_SPAWN_ACTIVE: one '+' when a child starts and one '-' when it is gone, so a reader can tell
+    // how many children are still running (the trace above only grows when one finishes).
+    if (activeFd !== null) {
+      writeSync(activeFd, '+');
+      let ended = false;
+      const end = () => {
+        if (ended) return;
+        ended = true;
+        writeSync(activeFd, '-');
+      };
+      child.once('close', end);
+      child.once('error', end);
+    }
     child.once('close', (code) => {
       const t1 = now();
       writeSync(

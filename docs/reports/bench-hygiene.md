@@ -79,3 +79,16 @@ change to `CREDITS.md` or the credits JSON (workspace package).
 - When #27 lands, delete `warmReload` from `TRACKED` in `e2e/bench/bench.ts`; when #10/#29 land, `startupSpawns`; then
   regenerate `docs/bench/results*.md`.
 - pnpm 12 forwards `--` to scripts; the bench tolerates it. Commands in older reports with `-- --repos …` still work for it.
+
+## PR review round 1 (Greptile on #54)
+
+All six findings were valid and are fixed (`e2e/bench/real-repos.ts`, `bench.ts`, `spawn-trace.mjs`):
+
+- **`--json` could overwrite a file in a linked worktree.** The output path is now checked against every profiled worktree, git directory and common dir, with symlinks resolved on both sides (a dangling symlink is followed to where the write would really land).
+- **`--redact` leaked paths** through stderr logs, error messages and the JSON. Every channel goes through one sanitiser (known paths become `repo-N` / `repo-N/worktree-M`, any other absolute path becomes `<path>`, branch names are dropped from the redacted JSON).
+- **Config probes read the runner's pins.** `core.fsmonitor` and friends are now read with `config --show-scope --get-all` and the `command` scope (the runner's `-c` pins) is ignored, so the report shows what the user's own git sees. The default `status` now passes `--untracked-files=normal` explicitly (the runner pins `all`), so the two status columns differ as labelled.
+- **Wrong counts.** Status and diff records are counted with git-core's `parseStatusV2` / `parseRawNumstat` (a rename is one file, branch headers are not entries).
+- **Diff errors vanished.** `diff.failed` is part of `error` (an empty repo now reports the `HEAD` failure).
+- **Edit samples could overlap.** `settled` now also waits until no git child is running (`OCTOPUS_SPAWN_ACTIVE` in `spawn-trace.mjs` records a `+` at spawn and a `-` at exit), not only for a quiet trace.
+
+Verified on scratch repos (a main worktree with `core.fsmonitor=true`, a linked worktree elsewhere with a rename and an untracked directory, an empty repo, a missing path): `--json` into the linked worktree and through a dangling symlink into it are both refused; stdout, stderr and the redacted JSON contain none of the temp paths; the rename counts as one diff file; `fsmonitor` reads `true`; the empty repo reports the `HEAD` error. `pnpm --filter @octopus-diff/e2e bench` (30 x 3, 4 iterations) still exits 0 with the same tracked budgets failing. No automated test covers `real-repos.ts` (it is a script with top-level argument parsing); this manual check is its evidence.
