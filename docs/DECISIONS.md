@@ -2112,3 +2112,51 @@ Numbers start at #180 so they do not collide with the parallel #29 session (#172
      `INBOX_PROJECTS_MAX` = 200, unknown ids ignored; absent = every project, as before). The web fills the inbox in
      project batches after the first paint (#10) instead of waiting for one answer covering all of them.
      `InboxParams.projectIds` in the client.
+182. **Why every summary ran twice at startup, and the fix.** Not two `getSummary` calls: one per worktree (probe with a
+     counting git-core at 30 × 3: 90 `getSummary`). The second `status` + `diff` came from the review state (status
+     flow v2), which `#computeSummary` computed right after each summary, before announcing it: `#computeReview`
+     lists the To review scope (`listChangedFiles`: `status` + `diff` again) and reads the review range (`rev-parse`,
+     `symbolic-ref`, `merge-base`, `rev-list`). Now `#computeSummary` computes the review state only when it is
+     *wanted* (`#reviewWanted`): the project was opened in this session, the worktree already has one (something
+     asked for it: the To review inbox or files, a refresh, a bookmark move), or the worktree changed after its first
+     summary (`firstHash`, live work). `listProjects` waits only for wanted review states. No change to the
+     `GitCore` interface or to git-core.
+183. **Default state at startup (#25 decision 2, accepted): no inherited review state.** At startup no worktree has a
+     review state, so the sidebar shows worktrees with uncommitted changes under their project (new web stage
+     `changed`: the file and line counts, no to-review pill, nothing counted in the title/favicon) and clean ones in
+     the shelf (`clean`). Opening a project computes its worktrees' review states in the background and sends
+     `review.ready`; the rows then show their real stage (To review with a count, or Reviewed in the shelf). "Opening"
+     = `PUT /api/focus` naming a worktree of the project (selecting it, or a file of it in the Inbox) or the project
+     (its Overview, the new optional `projectId`). It holds for the daemon's lifetime (not persisted). Fixed default,
+     no startup setting. Kept on purpose: (a) a worktree that changes after startup gets its review state, so
+     acceptance 13 holds in projects nobody opened (an agent's commit shows `N commits`, not a clean row in the
+     shelf); (b) the To review scope's inbox still computes every worktree's state, because that view is the user
+     asking for exactly that. (c) First-sight bookmarks of worktrees that start at HEAD (the default branch,
+     detached) are stored from the first summary's HEAD (no git process, `#seedBookmark`), so commits made between
+     startup and opening the project still count as new; other branches start at the merge base with the default
+     branch, which their own commits do not move, so they are still set when the state is first computed.
+     The filter "only unreviewed" keeps rows whose state is not computed yet but that have changes.
+184. **First paint = `/api/projects`.** `data-ready` in `App.tsx` no longer waits for the inbox. The sidebar no longer
+     fetches the Uncommitted inbox as its fallback status source for daemons without `summary.review` (one fewer
+     inbox request on every load; DECISIONS #170 measured two): it reads the summaries only. With that gone the
+     "older daemon" detection in `ScopeSelect` had to go too: it reset the To review scope to Uncommitted when no
+     summary carried `review`, which is now every cold start. The web app always ships with its daemon, so To review
+     is always offered. The mock backend's non-status-flow mode now sends the review counts the removed fallback
+     derived (unreviewed uncommitted files, no commits), and its tests use the scope they were effectively on
+     (Uncommitted); `reviewOnDemand` mimics #183.
+185. **The inbox fills in project batches.** On the first load of a scope the web asks `/api/inbox?projectIds=` in
+     about 12 batches (at most 4 in flight: the SSE stream holds one of the browser's 6 connections; projects with
+     changes first, then by name) through TanStack Query's `experimental_streamedQuery`, and shows each batch as it
+     lands. Per project rather than per worktree: no new streaming transport, the ETag/gzip and single-flight paths
+     stay as they are, and the git work is bounded by git-core's global limit either way. A refetch is one request and
+     replaces the data when it is in (`refetchMode: 'replace'`), so batching buys nothing there. The batch list comes
+     from the projects query (joining its request in flight, so a project added a moment ago is not left out). Bulk
+     "all" in the Inbox waits until every batch is in (`isPartialInbox`), since an `all` request covers more than a
+     partly filled list shows.
+186. **Bench: the warm-reload budget is enforced.** #27 brought it to about 130 ms (< 300 ms), so its `TRACKED` entry
+     is gone. The startup-spawns budget stays tracked (#29 owns it).
+187. **No background precompute.** The issue allows a low-priority precompute while a client is connected. Not done:
+     after #182 startup is the summaries only, the first paint no longer waits for anything else, and precomputing
+     review states would undo #183. Precomputing the default scope's file lists would make the first Inbox load
+     faster but competes with interactive requests for git-core's four slots, which has no priority queue; adding
+     one is a git-core change (#29's area). Left for later if the measured fill time warrants it.
