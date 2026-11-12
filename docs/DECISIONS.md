@@ -3859,3 +3859,7 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      taking the fallback's omission from the current summary (the tests release their gates once the daemon has caught
      up, where both are the same); caching a list of another state (the next attempt overwrites that cache entry
      before anything reads it).
+342. **Contract (additive): `InboxEntry.listing?: 'overtaken'`** (Greptile P1 on PR #95): a row whose files the daemon
+     could not list for any summary (every attempt overtaken by refreshes) is sent with its latest summary, `files: []`
+     and this marker instead of being left out, which a client could not tell from "no changes". Older clients strip
+     the field and show the worktree with no files until their next fetch. See #343.
