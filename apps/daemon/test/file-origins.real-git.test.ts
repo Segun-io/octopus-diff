@@ -493,6 +493,29 @@ describe.skipIf(!GIT_CORE_IMPLEMENTED)(
       });
     });
 
+    it('watcher off: the labels follow a fetch on the next request (the default-branch commits are in the key)', async () => {
+      const s = await remote();
+      const { api } = await startCounting(s.fx, { watch: false });
+      await api.addProject({ path: s.repo });
+      commit(s.fx, s.feature, { 'fix.txt': 'fixed\n', 'own.txt': 'own\n' });
+      await review(api, s.featureId);
+      for (const scope of [REVIEW, BRANCH_ALL]) {
+        expect(labels((await api.listFiles(s.featureId, { scope })).files)).toEqual({
+          'fix.txt': 'own',
+          'own.txt': 'own',
+        });
+      }
+      push(s, { 'fix.txt': 'fixed\n' });
+      s.fx.git(s.repo, 'fetch', '-q', 'origin');
+      // No summary refresh happened (no watcher): only the fresh default-branch refs can tell.
+      for (const scope of [REVIEW, BRANCH_ALL]) {
+        const files = (await api.listFiles(s.featureId, { scope })).files;
+        expect(labels(files)).toEqual({ 'fix.txt': 'base:same-as-base', 'own.txt': 'own' });
+        const inbox = await api.inbox({ scope });
+        expect(labels(inboxFiles(inbox, s.featureId))).toEqual(labels(files));
+      }
+    });
+
     it('costs: nothing at startup, a repeat is 0 spawns and 0 calls, a fetch fan-out stays bounded', async () => {
       const s = await remote();
       const extra: string[] = [];
