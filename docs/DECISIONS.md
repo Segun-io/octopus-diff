@@ -2962,3 +2962,10 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      `GitCoreError` code `aborted` (already in `GIT_CORE_ERROR_CODES`, already mapped by the daemon), so no new
      error code was needed. `BlobReadOptionsSchema` (zod) is untouched: the signal is not data and never crosses
      the wire; `readBlob`'s parameter type is the schema's type intersected with `CallOptions`.
+234. **contracts: `RequestParams { signal? }` on the API client's GET calls (additive).** The web cannot abort a
+     superseded request without it: the client builds each `fetch` itself. `ScopeParams` (so `inbox`, `listFiles`,
+     `getDiff`) now extends `RequestParams`, and `listCommits`, `getActivity`, `getBlob` take `… & RequestParams`.
+     The signal goes to `fetch` (only when given: a call without one passes exactly the `RequestInit` it passed
+     before) and never into the query string. An aborted request rejects with the existing `ApiClientError` code
+     `aborted` (it was already in `ApiClientErrorCode`, used by `subscribe`), not `network`; an already-aborted
+     signal rejects without fetching. Nothing renamed or removed.

@@ -42,6 +42,52 @@ describe('buildPath', () => {
 });
 
 describe('createApiClient', () => {
+  it('passes a request signal to fetch and reports a cancelled request as aborted (#44)', async () => {
+    const files = { worktreeId: id, scope: { kind: 'working' }, stateHash: 's', files: [] };
+    const { calls, fetch } = fakeFetch(() => json(files));
+    const client = createApiClient({ fetch, validate: false });
+    const controller = new AbortController();
+    await client.listFiles(id, { signal: controller.signal });
+    expect(calls[0]?.init?.signal).toBe(controller.signal);
+    await client.getDiff(id, { path: 'a.txt', signal: controller.signal });
+    expect(calls[1]?.init?.signal).toBe(controller.signal);
+    expect(new URL(`http://x${calls[1]?.url}`).searchParams.has('signal')).toBe(false);
+    // Without one, no signal key at all (fetch sees exactly what it saw before).
+    await client.listFiles(id);
+    expect(calls[2]?.init && 'signal' in calls[2].init).toBe(false);
+
+    // A fetch that the signal aborts rejects with `aborted`, not `network`.
+    const hanging = createApiClient({
+      fetch: (_url, init) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () =>
+            reject(new DOMException('The operation was aborted.', 'AbortError')),
+          );
+        }),
+    });
+    const pending = new AbortController();
+    const call = hanging.listFiles(id, { signal: pending.signal }).catch((e: unknown) => e);
+    pending.abort();
+    const error = await call;
+    expect(error).toBeInstanceOf(ApiClientError);
+    expect((error as ApiClientError).code).toBe('aborted');
+    // Already aborted: no fetch at all.
+    const before = calls.length;
+    const early = await client
+      .listFiles(id, { signal: AbortSignal.abort() })
+      .catch((e: unknown) => e);
+    expect((early as ApiClientError).code).toBe('aborted');
+    expect(calls.length).toBe(before);
+    // A plain network failure is still `network`.
+    const broken = createApiClient({
+      fetch: () => Promise.reject(new TypeError('fetch failed')),
+    });
+    const failed = await broken
+      .listFiles(id, { signal: new AbortController().signal })
+      .catch((e: unknown) => e);
+    expect((failed as ApiClientError).code).toBe('network');
+  });
+
   it('sends bearer tokens and encodes scope queries', async () => {
     const { calls, fetch } = fakeFetch(() =>
       json({ worktreeId: id, scope: { kind: 'branch', base: 'main' }, stateHash: 's', files: [] }),

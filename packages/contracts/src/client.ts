@@ -112,7 +112,16 @@ export interface ApiClientOptions {
   headers?: Record<string, string>;
 }
 
-export interface ScopeParams {
+/**
+ * Per-request options (#44). `signal` is passed to `fetch`: aborting it cancels the request (the
+ * daemon then stops the git work it started for it) and the call rejects with an
+ * `ApiClientError` of code `aborted`.
+ */
+export interface RequestParams {
+  signal?: AbortSignal;
+}
+
+export interface ScopeParams extends RequestParams {
   scope?: DiffScope;
 }
 
@@ -162,7 +171,10 @@ export interface ApiClient {
   inbox(params?: InboxParams): Promise<InboxResponse>;
   listFiles(worktreeId: string, params?: ScopeParams): Promise<FilesResponse>;
   getDiff(worktreeId: string, params: DiffParams): Promise<DiffResponse>;
-  listCommits(worktreeId: string, params?: { limit?: number }): Promise<CommitsResponse>;
+  listCommits(
+    worktreeId: string,
+    params?: { limit?: number } & RequestParams,
+  ): Promise<CommitsResponse>;
   refreshWorktree(worktreeId: string): Promise<RefreshResponse>;
   setReview(body: ReviewRequest): Promise<ReviewResponse>;
   setFocus(body: FocusRequest): Promise<OkResponse>;
@@ -193,10 +205,14 @@ export interface ApiClient {
   /** Live view (#38): the worktree's activity feed after `after` (default 0: all of it). */
   getActivity(
     worktreeId: string,
-    params?: { after?: number; run?: string },
+    params?: { after?: number; run?: string } & RequestParams,
   ): Promise<ActivityResponse>;
   /** Live view (#38): a blob of the worktree's feed (a deleted file's `oid`). */
-  getBlob(worktreeId: string, oid: string, params?: { maxBytes?: number }): Promise<BlobResponse>;
+  getBlob(
+    worktreeId: string,
+    oid: string,
+    params?: { maxBytes?: number } & RequestParams,
+  ): Promise<BlobResponse>;
   /** Absolute or same-origin URL of the SSE stream. */
   eventsUrl(): string;
   /** Subscribes via fetch streaming with the bearer token (browsers and Node). */
@@ -225,9 +241,14 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
     schema: S,
     method: string,
     path: string,
-    init: { query?: URLSearchParams; body?: unknown } = {},
+    init: { query?: URLSearchParams; body?: unknown; signal?: AbortSignal } = {},
   ): Promise<z.output<S>> {
+    const { signal } = init;
+    const aborted = (error?: unknown) =>
+      new ApiClientError('aborted', `request cancelled: ${method} ${path}`, 0, error);
+    if (signal?.aborted) throw aborted();
     let response: Response;
+    let text: string;
     try {
       response = await doFetch(url(path, init.query), {
         method,
@@ -236,11 +257,23 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
           init.body === undefined ? undefined : { 'content-type': 'application/json' },
         ),
         ...(init.body === undefined ? {} : { body: JSON.stringify(init.body) }),
+        ...(signal ? { signal } : {}),
       });
     } catch (error) {
+      if (signal?.aborted) throw aborted(error);
       throw new ApiClientError('network', `request failed: ${method} ${path}`, 0, error);
     }
-    const text = await response.text();
+    try {
+      text = await response.text();
+    } catch (error) {
+      if (signal?.aborted) throw aborted(error);
+      throw new ApiClientError(
+        'network',
+        `reading the response failed: ${method} ${path}`,
+        0,
+        error,
+      );
+    }
     let json: unknown;
     try {
       json = text === '' ? undefined : JSON.parse(text);
@@ -383,11 +416,15 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
       const query = scopeQuery(params.scope);
       if (params.onlyUnreviewed) query.set('onlyUnreviewed', 'true');
       if (params.projectIds?.length) query.set('projectIds', params.projectIds.join(','));
-      return request(InboxResponseSchema, 'GET', ROUTES.inbox.path, { query });
+      return request(InboxResponseSchema, 'GET', ROUTES.inbox.path, {
+        query,
+        signal: params.signal,
+      });
     },
     listFiles: (worktreeId, params = {}) =>
       request(FilesResponseSchema, 'GET', p(ROUTES.listFiles, { worktreeId }), {
         query: scopeQuery(params.scope),
+        signal: params.signal,
       }),
     getDiff: (worktreeId, params) => {
       const query = scopeQuery(params.scope);
@@ -396,13 +433,17 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
       if (params.ignoreWhitespace) query.set('ignoreWhitespace', 'true');
       if (params.context !== undefined) query.set('context', String(params.context));
       if (params.full) query.set('full', 'true');
-      return request(DiffResponseSchema, 'GET', p(ROUTES.getDiff, { worktreeId }), { query });
+      return request(DiffResponseSchema, 'GET', p(ROUTES.getDiff, { worktreeId }), {
+        query,
+        signal: params.signal,
+      });
     },
     listCommits: (worktreeId, params = {}) => {
       const query = new URLSearchParams();
       if (params.limit !== undefined) query.set('limit', String(params.limit));
       return request(CommitsResponseSchema, 'GET', p(ROUTES.listCommits, { worktreeId }), {
         query,
+        signal: params.signal,
       });
     },
     refreshWorktree: (worktreeId) =>
@@ -461,12 +502,16 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
       if (params.run !== undefined) query.set('run', params.run);
       return request(ActivityResponseSchema, 'GET', p(ROUTES.getActivity, { worktreeId }), {
         query,
+        signal: params.signal,
       });
     },
     getBlob: (worktreeId, oid, params = {}) => {
       const query = new URLSearchParams();
       if (params.maxBytes !== undefined) query.set('maxBytes', String(params.maxBytes));
-      return request(BlobResponseSchema, 'GET', p(ROUTES.getBlob, { worktreeId, oid }), { query });
+      return request(BlobResponseSchema, 'GET', p(ROUTES.getBlob, { worktreeId, oid }), {
+        query,
+        signal: params.signal,
+      });
     },
     eventsUrl: () => url(ROUTES.events.path),
     subscribe,
