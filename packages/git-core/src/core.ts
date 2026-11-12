@@ -10,6 +10,7 @@ import {
   type GitCoreOptions,
   isGitCoreError,
   noopLogger,
+  UNTRACKED_LISTED_DEFAULT,
   type WatchTargets,
   type WorktreeLocator,
 } from '@octopus-diff/contracts';
@@ -138,6 +139,11 @@ export const createGitCore: CreateGitCore = (options: GitCoreOptions = {}): GitC
       options.maxUntrackedFiles === undefined
         ? DEFAULTS.maxUntrackedFiles
         : Math.max(0, Math.floor(options.maxUntrackedFiles)),
+    maxListedUntracked: positiveInt(
+      options.maxListedUntracked,
+      UNTRACKED_LISTED_DEFAULT,
+      'maxListedUntracked',
+    ),
     logger: options.logger ?? noopLogger,
     bigFileThreshold: 0,
   };

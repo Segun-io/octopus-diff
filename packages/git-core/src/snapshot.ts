@@ -57,6 +57,11 @@ export interface SnapshotInput {
   /** The summary's inspection of the untracked files, in path order. */
   untracked: readonly UntrackedInfo[];
   cap: number;
+  /**
+   * Untracked files above the cap (#43): never entries; counted in `total`, their paths hashed
+   * into `contentHash`. `plan`: the omission plan's id. Null when nothing was omitted.
+   */
+  omitted?: { plan: string; keys: readonly string[] } | null;
 }
 
 function paths(key: string): Pick<SummarySnapshotEntry, 'path' | 'rawPath'> {
@@ -75,7 +80,9 @@ export function buildSnapshot(input: SnapshotInput): SummarySnapshot {
   const trackedKeys = new Set<string>();
   for (const entry of tracked) trackedKeys.add(entry.path);
   const untracked = input.untracked.filter((info) => !trackedKeys.has(info.key));
-  const total = tracked.length + untracked.length;
+  const omitted = input.omitted ?? null;
+  const listed = tracked.length + untracked.length;
+  const total = listed + (omitted?.keys.length ?? 0);
   const entries: SummarySnapshotEntry[] = [];
 
   for (const entry of tracked) {
@@ -126,8 +133,12 @@ export function buildSnapshot(input: SnapshotInput): SummarySnapshot {
   return {
     entries,
     total,
-    truncated: total > entries.length,
+    // The cap cut listed paths off; omitted files are not entries by design.
+    truncated: listed > entries.length,
     contentHash: contentHash(tracked, untracked, input),
+    ...(omitted !== null && omitted.keys.length > 0
+      ? { untrackedOmitted: omitted.keys.length, omittedPlan: omitted.plan }
+      : {}),
   };
 }
 
@@ -166,6 +177,14 @@ function contentHash(
     part(info.key);
     part(info.statSig);
     part(info.lines);
+  }
+  // Omitted untracked files (#43): only their paths are known. Nothing is added below the cap, so
+  // those hashes are unchanged.
+  const omitted = input.omitted;
+  if (omitted && omitted.keys.length > 0) {
+    part('omitted');
+    part(omitted.plan);
+    for (const key of omitted.keys) part(key);
   }
   return hash.digest('hex').slice(0, 32);
 }

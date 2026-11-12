@@ -58,6 +58,7 @@ import {
   type UntrackedInfo,
   writeUntrackedPatch,
 } from './untracked.js';
+import { isOmitted, listedKeys, planUntracked, type UntrackedPlan } from './untracked-plan.js';
 
 // ---------------------------------------------------------------------------------------------
 // Status
@@ -566,11 +567,16 @@ function unreadableIdentity(plan: ScopePlan, entry: StatusEntry, statSig: string
 }
 
 /** Untracked paths in the scope: sorted, de-duplicated against tracked entries. */
-function untrackedKeys(index: StatusIndex, trackedKeys: ReadonlySet<string>): string[] {
+/** Untracked raw keys to list: not a tracked row, not omitted (#43). */
+function untrackedKeys(
+  index: StatusIndex,
+  trackedKeys: ReadonlySet<string>,
+  omits: UntrackedPlan | null = null,
+): string[] {
   const keys: string[] = [];
   for (const raw of index.untracked) {
     const key = raw.endsWith('/') ? raw.slice(0, -1) : raw;
-    if (!trackedKeys.has(key)) keys.push(raw);
+    if (!trackedKeys.has(key) && !isOmitted(omits, raw)) keys.push(raw);
   }
   return keys.sort(compareBstr);
 }
@@ -783,6 +789,23 @@ export async function readDiffAttributes(
   return new Map(keys.map((key) => [key, verdicts.get(key) ?? 'unspecified']));
 }
 
+/**
+ * `readDiffAttributes` for the untracked files a summary or list inspects. Below the cap (no plan)
+ * exactly as before. Above it only the listed ones are looked up, and none at all while contents
+ * are not read (more than `maxUntrackedFiles` untracked files, counted on all of them).
+ */
+export function untrackedAttributes(
+  deps: DiffDeps,
+  repo: RepoInfo,
+  allRaw: readonly string[],
+  plan: UntrackedPlan | null,
+  entries: readonly StatusEntry[],
+): Promise<Map<string, DiffAttribute>> {
+  if (plan === null) return readDiffAttributes(deps, repo, allRaw, entries);
+  if (allRaw.length > deps.ctx.settings.maxUntrackedFiles) return Promise.resolve(new Map());
+  return readDiffAttributes(deps, repo, listedKeys(plan, allRaw), entries);
+}
+
 // ---------------------------------------------------------------------------------------------
 // listChangedFiles
 // ---------------------------------------------------------------------------------------------
@@ -821,6 +844,8 @@ export interface ListEntry {
   late: Map<string, string>;
   /** A full list: it read everything, so after a blind summary it is computed again. */
   lateAll: boolean;
+  /** `UntrackedPlan.id` of the untracked files it leaves out (#43); null: none omitted. */
+  untrackedPlan: string | null;
 }
 export type ListCache = LruCache<string, ListEntry>;
 
@@ -1051,7 +1076,13 @@ async function listFromSummary(
   const listed = deps.lists.get(key);
   const cached = listed && listed.version >= 0 && listed.headSha === headSha ? listed : undefined;
   const since = cached ? changedSince(track, cached.version) : null;
-  const update = cached !== undefined && since !== null && !(since.blind && cached.lateAll);
+  const planId = track.untrackedPlan?.id ?? null;
+  const update =
+    cached !== undefined &&
+    since !== null &&
+    !(since.blind && cached.lateAll) &&
+    // Another set of untracked files listed (#43): seeded again.
+    cached.untrackedPlan === planId;
   const changed = since?.paths ?? new Set<string>();
   // After a full summary, the files this list read that moved since it read them.
   const moved: string[] = [];
@@ -1131,8 +1162,10 @@ async function listFromSummary(
   for (const row of [...kept, ...fresh]) {
     if (row.file.status !== 'untracked') trackedKeys.add(row.key);
   }
+  // Above the cap the summary's plan says which untracked files are listed (#43).
+  const omits = track.untrackedPlan;
   const attributes = plan.includeUntracked
-    ? await readDiffAttributes(deps, repo, index.untracked, status.entries)
+    ? await untrackedAttributes(deps, repo, index.untracked, omits, status.entries)
     : new Map<string, DiffAttribute>();
   const inspect = inspectOptions(ctx, repo, index.untracked.length, attributes);
   if (update && inspect.readContent !== cached.readContent) return null;
@@ -1142,9 +1175,9 @@ async function listFromSummary(
     : update
       ? keysInRegion(track.untrackedOrder, region).filter((raw) => {
           const key = raw.endsWith('/') ? raw.slice(0, -1) : raw;
-          return !trackedKeys.has(key);
+          return !trackedKeys.has(key) && !isOmitted(omits, raw);
         })
-      : untrackedKeys(index, trackedKeys);
+      : untrackedKeys(index, trackedKeys, omits);
   // The summary inspected every untracked file with these same options (count, verdicts): its
   // inspections are the list's, without an lstat each (30k untracked files: about a second).
   const reuse = track.readContent === inspect.readContent;
@@ -1192,6 +1225,7 @@ async function listFromSummary(
         committed,
         late,
         lateAll: false,
+        untrackedPlan: planId,
       });
     }
   }
@@ -1225,13 +1259,23 @@ export async function listChangedFiles(
   const track = incremental ? deps.tracks.get(repo.cwd) : undefined;
 
   const statusPromise = plan.statusBased ? readStatus(ctx, repo) : Promise.resolve(null);
-  const attributesPromise = statusPromise.then((snapshot) => {
+  // The same omission plan a summary of this status computes (#43): it depends on the paths only.
+  const omitsPromise = statusPromise.then((snapshot) =>
+    !plan.includeUntracked || !snapshot
+      ? null
+      : planUntracked(
+          snapshot.entries.filter((entry) => entry.kind === 'untracked').map((e) => e.path),
+          ctx.settings.maxListedUntracked,
+        ),
+  );
+  const attributesPromise = Promise.all([statusPromise, omitsPromise]).then(([snapshot, omits]) => {
     if (!plan.includeUntracked || !snapshot) return new Map<string, DiffAttribute>();
     const untracked = snapshot.entries.filter((entry) => entry.kind === 'untracked');
-    return readDiffAttributes(
+    return untrackedAttributes(
       deps,
       repo,
       untracked.map((entry) => entry.path),
+      omits,
       snapshot.entries,
     );
   });
@@ -1254,10 +1298,11 @@ export async function listChangedFiles(
       return runScopeDiff(ctx, repo, plan, { head: true, patch: true, pathspecs });
     },
   );
-  const [run, status, attributes] = await Promise.all([
+  const [run, status, attributes, omits] = await Promise.all([
     runPromise,
     statusPromise,
     attributesPromise,
+    omitsPromise,
   ]);
   const index = status ? indexStatus(status) : null;
   const rows = await trackedRows(ctx, repo, plan, run, index);
@@ -1273,7 +1318,7 @@ export async function listChangedFiles(
 
   let readContent = false;
   if (plan.includeUntracked && index) {
-    const keys = untrackedKeys(index, trackedKeys);
+    const keys = untrackedKeys(index, trackedKeys, omits);
     const inspect = inspectOptions(ctx, repo, index.untracked.length, attributes);
     readContent = inspect.readContent;
     const infos = await inspectUntracked(repo.cwd, keys, deps.untrackedCache, inspect);
@@ -1301,6 +1346,7 @@ export async function listChangedFiles(
           committed,
           late: new Map(),
           lateAll: true,
+          untrackedPlan: omits?.id ?? null,
         });
       }
     }

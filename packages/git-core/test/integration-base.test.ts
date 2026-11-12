@@ -343,6 +343,7 @@ describe('N and TIP', () => {
         maxOutputBytes: 64 * 1024 * 1024,
         maxPatchBytes: 1024 * 1024,
         maxUntrackedFiles: 2000,
+        maxListedUntracked: 2000,
         bigFileThreshold: 50 * 1024 * 1024,
         logger: noopLogger,
       },

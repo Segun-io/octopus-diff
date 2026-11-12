@@ -62,7 +62,7 @@ import {
   type OriginLabel,
   snapshotState,
 } from './activity.js';
-import type { BulkWorktree, ReviewSource } from './bulk-review.js';
+import { type BulkWorktree, listsUntracked, type ReviewSource } from './bulk-review.js';
 import { Coalescer, settleWithin } from './coalesce.js';
 import { ApiError, type ApiErrorInfo, isShutdownError, notFound, toApiError } from './errors.js';
 import type { EventHub } from './events.js';
@@ -1917,6 +1917,8 @@ export class DaemonCore {
     const want: Want = { signal, priority: 'interactive' };
     await raceSignal(this.#ensureSummary(entry), signal);
     const stateHash = this.#summaryOrThrow(entry);
+    // The summary of that stateHash says which untracked files no list holds (#43).
+    const omitted = entry.summary?.untrackedOmitted;
     const resolved = await raceSignal(this.#resolveScope(project, entry, scope), signal);
     const files = await this.#labeledFiles(project, entry, resolved.scope, want);
     return {
@@ -1924,6 +1926,7 @@ export class DaemonCore {
       scope: resolved.scope,
       stateHash,
       files: this.#attachReviewedFor(project.row.id, resolved.scope, files, resolved.review),
+      ...(omitted && listsUntracked(resolved.scope) ? { untrackedOmitted: omitted } : {}),
     };
   }
 

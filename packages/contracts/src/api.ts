@@ -20,6 +20,7 @@ import {
   SCAN_DEPTH_DEFAULT,
   ScanDepthSchema,
   ScanRootSchema,
+  UntrackedOmissionSchema,
   WorktreeSummarySchema,
 } from './domain.js';
 import {
@@ -289,6 +290,14 @@ export const FilesResponseSchema = z.object({
   /** The worktree summary's stateHash at the time the list was computed. */
   stateHash: z.string().min(1),
   files: z.array(ChangedFileSchema),
+  /**
+   * Untracked files of this worktree that the list leaves out (#43): the summary's
+   * `untrackedOmitted` for the `stateHash` above, present only when the scope lists untracked files
+   * (working, review, branch with `includeWorking`) and some were omitted. Show a placeholder
+   * ("N untracked files not listed") and the `.gitignore` suggestion; the files cannot be opened
+   * from the list or marked reviewed. Absent from older daemons.
+   */
+  untrackedOmitted: UntrackedOmissionSchema.optional(),
 });
 export type FilesResponse = z.infer<typeof FilesResponseSchema>;
 

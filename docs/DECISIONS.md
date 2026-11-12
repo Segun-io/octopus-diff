@@ -3622,3 +3622,194 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      unsigned path is committed-clean (dirty ones are not signed); above the cap the list is served, counted
      `uncached`, and the next request seeds again. Mutations killed.
 
+
+## Untracked-heavy worktrees (session, 2026-11-12; roadmap #43, step 25)
+
+305. **Contract (additive): untracked files above a cap are counted, not inspected or listed.**
+     `GitCoreOptions.maxListedUntracked` (default `UNTRACKED_LISTED_DEFAULT` = 2000, the same number as
+     `maxUntrackedFiles`), `WorktreeSummary.untrackedOmitted?: UntrackedOmission` (`count`, `limit`, the
+     ten biggest omitted `directories` with their `count` and a copyable `ignoreLine`),
+     `FilesResponse.untrackedOmitted?` (the summary's, for scopes that list untracked files),
+     `SummarySnapshot.untrackedOmitted?` / `omittedPlan?` (the count, and an opaque identity of the
+     omitted set for the activity feed), `BulkReviewResponse.untrackedOmitted?` (files a bulk call could
+     not mark). All optional and absent when nothing is omitted, so every existing payload is unchanged
+     below the cap. Nothing is renamed or removed; `counts`, `changedFiles`, `additions` keep their
+     meaning (see #306).
+306. **What a summary says about omitted untracked files (#43).** (Amended by #325: directory counts dedupe too.) `counts.untracked` and `changedFiles` stay exact
+     (git status lists every file; a path that is also a tracked change counts once, as before). `additions` never
+     includes them: their line counts are unknown and are not invented (above 2000 untracked files they were already
+     0, `maxUntrackedFiles`). The state hash still hashes every untracked status line, so a file appearing or
+     disappearing moves it, but not the lstat signature of an omitted file: **what is lost** is that rewriting an
+     omitted file in place (same path, new content) gives no new state hash, no `worktree.changed` and no activity.
+     `activityAt` takes the mtimes of listed files only. Below the cap nothing changes: no new field, the same state
+     hash and snapshot `contentHash` bytes (tested against a core without the option).
+307. **Which files are omitted: a pure function of the untracked paths (`packages/git-core/src/untracked-plan.ts`).**
+     (Amended by #316: generated directories go first.) While more than the cap remain: from the root, step into the biggest child directory while that child alone holds
+     the excess (remaining - cap) and omit the deepest one reached; if no top-level directory holds the excess, omit
+     the biggest one when it holds at least a tenth of it, and repeat (at most 64 directories, a directory omitted
+     later absorbs the ones below it, ties to the smaller path). If still above the cap, keep the first `cap` paths in
+     path order and omit the rest. Directories first because the bulk is nearly always one tree (`node_modules`,
+     build output) and the files next to it are the user's real new work: in the bench's untracked-heavy worktree
+     `scratch/many` (30 000 files) is omitted and `scratch/gen` (400) stays listed. The plan depends only on the set
+     of paths and the cap, so the summary, every list built from the same status, a full and an incremental refresh
+     all omit the same files (fuzzed). Default cap `UNTRACKED_LISTED_DEFAULT` = 2000, the same as
+     `maxUntrackedFiles`: an untracked file row is about 250 bytes of JSON, so a list holds at most ~0.5 MB of them;
+     `GitCoreOptions.maxListedUntracked` changes it (tests use 1-20). The plan is reused while the set of untracked
+     paths is unchanged and recomputed (one pass over the paths' directories, a few ms for 30 000) otherwise.
+308. **Lists: a bounded set of rows plus a field, not a placeholder row.** Every list of a scope that holds untracked
+     files (working, review, branch with `includeWorking`) returns the listed untracked files only;
+     `FilesResponse.untrackedOmitted` (the summary's, for the response's `stateHash`) is the placeholder. A fake row
+     would break every consumer that counts, selects, navigates or bulk-marks rows, and #42's paging will add its
+     own cursor next to this field without touching it. Lists that follow the summary (`summaryState`) use the
+     state's plan; a list without one computes the same plan from its own status. A cached list is not updated
+     across a plan change: the journal entry of a summary whose plan changed is unknown (`null`) and every cached
+     list remembers the plan it was built with (`ListEntry.untrackedPlan`); either alone suffices (mutations removing
+     one survive; removing both is caught by the fuzz). An omitted file can still be diffed by path
+     (`getFileDiff`), byte for byte as before; it is only never listed.
+309. **Review and bulk review: omitted files are not reviewable, and that is said, not hidden.** (Amended by #320: the
+     row, the context bar and the bulk toast now say it.) They have no row and
+     no patchHash, so nothing can mark them; `review.unreviewedFiles` counts listed files only, so a worktree whose
+     listed files are reviewed reads as reviewed while the notice (and `counts.untracked`) still shows the omitted
+     ones: build output should not block a review, and the fix is a `.gitignore` line. A whole-worktree bulk call
+     ("Mark all", "Review all") answers `untrackedOmitted` with the number of files it could not mark (the scopes
+     that list untracked files only); a call with `paths` comes from a list, never names them, and a path that is
+     not listed marks nothing, as before (not counted). Nothing is marked or skipped silently.
+310. **Snapshot, activity feed and event deltas.** (Amended by #319: an index addition that leaves the snapshot while
+     files are omitted is a coarse entry.) The snapshot never holds omitted files as entries; `total` counts
+     them (they are changed paths), `untrackedOmitted` says how many, and `truncated` keeps its meaning of "the entry
+     cap cut listed paths off" (it can only differ from `total > entries.length` when files are omitted, a state that
+     did not exist before). `contentHash` covers their paths (not their contents). The feed compares snapshots with
+     different `omittedPlan`s coarsely (one `bulk` entry at most): without that, a directory crossing the cap would
+     show its listed files as deleted untracked files (test, mutation killed). With the same plan, a new omitted file
+     makes no entry (noise) and listed files are compared per file as usual: a worktree with 30 000 untracked files
+     used to have a truncated (always coarse) snapshot; now its own edits are reported per file. The activity ring's
+     caps are unchanged. Event deltas (`worktree.changed.paths`, 200 files) are built from the list, so they never
+     name an omitted file; the event's `summary` carries `untrackedOmitted`.
+311. **A full summary runs numstat alongside its status when that is likely needed (#43).** (Amended by #321: the
+     guess is HEAD from the ref files; by #323 and #324: its result is checked against the files, unproven paths are
+     diffed again after the status.) In a 100k-file worktree
+     `status` and `diff --numstat` each refresh the index (300-400 ms); in sequence they were 680 ms of git per
+     full summary, over the 600 ms target alone. Now numstat starts with the status at the last state's HEAD when the
+     kept state had tracked changes, or, on a first summary (no kept state), when the index is at least 4 MiB
+     (`summaryLimits.speculateIndexBytes`, about 30 000 files) with HEAD read from the ref files. The status header
+     confirms the HEAD; if it moved, numstat runs again at the new one (tested with a git wrapper); if the worktree is
+     clean after all, the run is waited for and discarded (wasted CPU, bounded to these cases). Unreadable files (F7)
+     still go through the old fallback. `incremental: false` keeps no state and speculates never: the kill switch
+     gives the old calls exactly.
+312. **Untracked cache and fsmonitor: nothing done on purpose.** We never set config (`core.untrackedCache`) and
+     never write the index; `core.fsmonitor=false` stays pinned (it runs programs from untrusted config). git
+     itself uses an untracked-cache extension the user's index already has (`core.untrackedCache` unset means
+     "keep"), read-only under `--no-optional-locks`, so such repositories benefit with no code of ours. We do not
+     detect or report the extension (it would mean parsing index extensions; `indexHasGitlinks` parses entries
+     only): a possible follow-up for the notice.
+313. **Web: one line under the file pane header** (amended by #317, #318 and #322: broader lines only when safe, no
+     line for format characters, each line next to its directory, neutral wording unless generated) (`apps/web/src/components/UntrackedOmittedNotice.tsx`): the count,
+     the cap, the three biggest omitted directories and their `.gitignore` lines with copy buttons (deduplicated:
+     two `node_modules` trees give one `node_modules/`). Ignore lines come from directory names only: `<name>/` for
+     dependency and cache directories (`node_modules`, `__pycache__`, `.venv`, ...), `/<path>/` anchored otherwise,
+     at the build-output component when there is one (`/packages/a/dist/`), gitignore-escaped, none for non-UTF-8 or
+     control characters. Nothing is ever written to the repository. The worktree row and context bar are untouched
+     (another session owns them); the summary carries the field for them.
+314. **Not done: the CLI config key.** `maxListedUntracked` is a `GitCoreOptions` and `StartDaemonOptions.git` field;
+     `~/.config/octopus-diff/config.json` (apps/cli, WS5) does not accept it yet (its schema is strict). A one-line
+     addition next to `maxUntrackedFiles` for the lead.
+
+### Untracked-heavy worktrees: review follow-up (PR #91, 2026-11-12)
+
+315. **Contract (additive): `UntrackedOmittedDirectory.generated?: boolean`** (PR #91 P2-2): true when the
+     directory's name, or an ancestor's, is a well-known dependency, cache or build-output name. The web may say
+     "build output or dependencies" only then; otherwise it words the notice neutrally. The `ignoreLine` doc now
+     says when a line is broader than the directory (#317) and when it is null (#318). Nothing renamed or removed.
+316. **The plan omits generated directories first (PR #91 P2-2; amends #307).** Size alone could omit a big new
+     source tree (2 500 files in `src/`) and list the build output next to it, then tell the user to ignore `/src/`.
+     Step 0 now omits directories with a dependency, cache or build-output name (the outermost of a path: the
+     `node_modules`, `dist`, `build`, `out`, `target`, `coverage`, `__pycache__`, `.venv`, ... lists of #313),
+     biggest first, while more than the cap remain; only then the size steps and the cut of #307. Still a pure
+     function of the set of untracked paths (plan id `untracked-plan-v2`); the capped fuzz has generated names at
+     several depths, an ordinary `src/build` folder and a bidi name. Trade-off: a folder named `build` or `out` that
+     holds real source is omitted whole when the worktree is above the cap; the notice names it with its count.
+317. **A broader ignore line only when it covers nothing else (PR #91 P2-3; amends #313).** The line is the exact
+     `/<omitted dir>/` unless the directory has a dependency or cache component (`<name>/` anywhere) or a
+     build-output ancestor (`/<path to it>/`), and that broader pattern covers no listed untracked file and no
+     tracked file. Tracked directories come from one `git ls-files -z` per index write (memoized by the index's stat
+     signature, process-wide; already allowlisted), run only when a reported directory could be broadened; if it
+     fails, lines are exact. The exact line may cover tracked files inside the omitted directory (git keeps tracking
+     them). Tested with `git check-ignore --no-index` on real repositories: each line ignores every file of its
+     directory and no listed one; a tracked file only under its own directory's exact line.
+318. **No line for names with format characters (PR #91 P2-4, SEC-05).** `ignoreLine` is null for a path with a
+     control, bidi, zero-width or any other `Cf` character, or a line or paragraph separator: escaping them for
+     display would break the pattern, copying them would paste invisible text. The web shows every omitted path and
+     line through `escapeSuspicious` and offers no copy button for a null or suspicious line.
+319. **Unstaging an omitted file is not a deletion (PR #91 P2-1; amends #310).** `git add` of a file inside an
+     omitted directory makes it an `A.` entry (an "added" activity, correct); `git reset` or `git rm --cached` makes
+     it untracked and omitted again, so it leaves the snapshot, and the plan id is the same: the feed read it as an
+     index addition gone without a commit, "deleted". While either snapshot has omitted files, such a vanish (no HEAD
+     blob, an index blob, not a deletion) is now one coarse `bulk` entry (`truncated`) next to the refresh's per-file
+     entries, never "deleted"; without omitted files nothing changes. Real-git test for both commands, unit tests.
+320. **Omitted files are visible where review is shown (PR #91 P2-5; amends #309).** The stage logic is unchanged
+     (`data-stage` stays `reviewed`, so specs and filters keep their meaning), but a reviewed row with omitted files
+     gets its own indicator kind, `notListed` (the tick with a dot, warn colour, label "reviewed, N untracked files
+     not listed"), and every row and the context bar with omitted files show `+N not listed`
+     (`NotListedMarker.tsx`, the title explains, the row's screen-reader sentence includes it). The bulk toast adds
+     "N untracked files are not listed and cannot be marked" from `BulkReviewResponse.untrackedOmitted` (summed over
+     the responses of one action).
+321. **A commit costs one numstat (PR #91 P3-1; amends #311; see #323 for the check that follows).** The speculative numstat of a full summary with a kept
+     state now uses HEAD as the ref files say (the kept state's when they cannot tell: reftable, odd refs), so after
+     a commit it runs at the new commit: one numstat, side by side. A commit that leaves the tree clean still costs
+     one discarded numstat. The status header check stays: a HEAD that moves during the status reruns it (tested
+     with a commit while a wrapper holds the status).
+322. **Notice wording (PR #91 P3-2; amends #313).** The headline says how many files are not listed and that they are
+     counted but cannot be opened or reviewed; then up to three directories, each with its own count and line (the
+     line next to the directory it ignores), "(dependencies or build output)" only for `generated` ones, and "and N
+     more" for the rest. A cut-only omission (no directory) says the last ones in path order were left out and
+     suggests no line.
+
+### Untracked-heavy worktrees: Greptile review (PR #91, 2026-11-12)
+
+323. **The early numstat is checked against the files (Greptile P1 on PR #91; amends #311 and #321).** Numstat and the
+     status run side by side, so they read each file at different moments: a file edited after numstat read it and
+     before the status did was dirty in the status with no (or old) numstat record, its counts vanished from
+     `changedFiles` / `additions` / `deletions`, and the kept signature already showed the edit, so incremental
+     refreshes of other files kept the wrong totals. Now, with a kept state: the paths the kept state signs are
+     lstat-signed before numstat starts, and every path the summary signs (worktree-dirty, fully staged, rename
+     sources) is signed again once both are done. A path is trusted when its signature did not move, or when its
+     ctime (for a missing path, its nearest existing directory's) is older than the summary's start minus
+     `summaryLimits.settleMs` (2 s: coarse ctime granularity, small clock steps; a later change would have moved
+     it); a gitlink never by ctime (a commit inside it leaves the directory alone). Unproven paths get one numstat
+     limited to them and every rename candidate, after the status, whose records replace the early ones inside that
+     region; where limited runs are not equivalent (conflicts, submodules or gitlinks, sparse checkouts, #287-#289;
+     the fuzz found the conflict case) or the region is too big, the whole numstat runs again after the status.
+     Measured on the 100k layout's untracked-heavy worktree: a full summary with nothing edited in the last 2 s
+     416-446 ms, with one file edited just before 423-430 ms (one numstat limited to it, about 10 ms; known paths are
+     then trusted by signature). Serial status then a limited numstat of the 300 changed paths would have cost about
+     200 ms more (pathspec matching over 100k entries), so the overlap stays. Limits: a filesystem whose ctime runs
+     ahead of this machine's clock by more than the margin (a network mount) could trust a changed file; the event of
+     that change still refreshes it.
+324. **The kept state never holds a signature newer than its reads (Greptile P1).** A full refresh with a kept state
+     records each signed path's signature right after the status (before the numstat whose records it keeps); if the
+     signature `finish` measures for the state hash differs, the file changed after those reads and the kept state
+     stores `unsettled` for it instead, so the next incremental refresh sees a moved signature and diffs it again,
+     even when its event was lost. The summary's own state hash and snapshot use the measured signature, so a full
+     and an incremental refresh still hash the same bytes. Tests (git wrapper holding numstat): an edit after the
+     early numstat and before the status; an edit during a numstat after the status; a submodule commit during the
+     status with the margin off; 8 rounds of edits while summaries run, each followed by an incremental refresh of
+     another file, all equal to a full summary.
+325. **Directory counts leave out what the total leaves out (Greptile P2 on PR #91; amends #306).** An omitted path that
+     is also a tracked change (`git rm --cached` of a file in an omitted directory) was left out of
+     `untrackedOmitted.count` but not of its directory's `count`, so the notice could say 25 files are not listed and
+     then 26 in `build/`. Directory counts drop the same paths before the biggest ones are picked; a directory left
+     with none is not reported. The capped fuzz checks after every step that directory counts never add up to more
+     than the total and that each equals the untracked rows an uncapped list has under it.
+326. **A broad ignore line never covers a listed nested repository or a tracked one (Greptile on PR #91; amends
+     #317).** The check whether `name/` or `/<path>/` covers listed or tracked entries looked at the directories
+     above each entry only, and listed nested repositories reached it without their trailing `/`: with omitted files
+     in `b/node_modules/` and a listed nested repository at `a/node_modules/`, the notice offered `node_modules/`,
+     which ignores both. Listed directory entries now keep their `/` (so the pattern matches them by their own name,
+     as git does), and the tracked scan reads modes (`ls-files -z --stage`, same subcommand) so a gitlink counts as a
+     directory too. Real-git `check-ignore --no-index` tests: the repro, a tracked repository named `node_modules`,
+     names with spaces and pattern characters; a unit table of directory entries.
+327. **The bench's per-role summary table uses the run's mode (Greptile on PR #91).** `summaryRoles` created its
+     git-core with the default settings, so a `--no-incremental` run reported incremental timings next to a daemon
+     with every refresh in full. It now takes the run's `incremental` setting, records the refresh mode of each edit
+     (shown in the table) and the heading says when the run was `--no-incremental`. Unit test in `e2e/support`
+     (both settings; on a case-folding filesystem both are full by design).

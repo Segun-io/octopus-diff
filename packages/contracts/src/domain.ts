@@ -140,6 +140,56 @@ export const WorktreeReviewSchema = z.object({
 });
 export type WorktreeReview = z.infer<typeof WorktreeReviewSchema>;
 
+/**
+ * Untracked files a worktree holds above git-core's cap (#43, `GitCoreOptions.maxListedUntracked`,
+ * default `UNTRACKED_LISTED_DEFAULT`): most of them are build output or dependencies that belong in
+ * a `.gitignore`. They are counted (`counts.untracked`, `changedFiles`) but not inspected (no lstat,
+ * no read: no line counts, no content signature) and not listed (no `ChangedFile` row, so no
+ * patchHash, no review mark). Which files are omitted depends only on the set of untracked paths
+ * git status reports: whole directories first (the deepest one that holds enough of the excess,
+ * biggest first), then, if still above the cap, the last paths in path order.
+ */
+export const UNTRACKED_LISTED_DEFAULT = 2000;
+/** Most directories `UntrackedOmission.directories` names. */
+export const UNTRACKED_OMITTED_DIRS_MAX = 10;
+
+export const UntrackedOmittedDirectorySchema = z.object({
+  /** Repo-relative directory path without a trailing `/` (UTF-8, lossy with `rawPath`). */
+  path: RepoPathSchema,
+  rawPath: RawPathSchema.optional(),
+  /** Untracked files omitted below it (all the untracked files it holds). */
+  count: Count,
+  /**
+   * A `.gitignore` line that would ignore it, for the user to copy (we never write to a
+   * repository): `/<path>/` anchored at the worktree root, or `<name>/` when a path component is a
+   * well-known dependency or cache directory (`node_modules`, `__pycache__`, ...), or
+   * `/<path to a build-output component>/`, but only when that broader line covers no listed
+   * untracked file and no tracked file. Null when the path cannot be written as one safe line (not
+   * UTF-8, control, bidi, zero-width or other format characters).
+   */
+  ignoreLine: z.string().min(1).nullable(),
+  /**
+   * Its name, or an ancestor's, is a well-known dependency, cache or build-output directory
+   * (`node_modules`, `dist`, `__pycache__`, ...): only then may a client call it build output or
+   * dependencies. Absent from older daemons (word it neutrally then).
+   */
+  generated: z.boolean().optional(),
+});
+export type UntrackedOmittedDirectory = z.infer<typeof UntrackedOmittedDirectorySchema>;
+
+export const UntrackedOmissionSchema = z.object({
+  /** Untracked files counted but not inspected or listed (> 0). */
+  count: Count,
+  /** The cap that applied: at most this many untracked files are listed. */
+  limit: Count,
+  /**
+   * The biggest omitted directories (at most `UNTRACKED_OMITTED_DIRS_MAX`), biggest first. Their
+   * counts may add up to less than `count`: more directories, or single files past the cap.
+   */
+  directories: z.array(UntrackedOmittedDirectorySchema).max(UNTRACKED_OMITTED_DIRS_MAX),
+});
+export type UntrackedOmission = z.infer<typeof UntrackedOmissionSchema>;
+
 /** Cheap per-worktree status, computed from `git status --porcelain=v2 -z --branch` + numstat. */
 export const WorktreeSummarySchema = z.object({
   worktreeId: IdSchema,
@@ -163,6 +213,14 @@ export const WorktreeSummarySchema = z.object({
   additions: Count,
   deletions: Count,
   inProgress: InProgressOperationSchema.nullable(),
+  /**
+   * Untracked files above git-core's cap that were counted but not inspected or listed (#43): still
+   * in `counts.untracked` and `changedFiles`, never in `additions` (unknown, not invented), never in
+   * a file list of any scope, never reviewable. Absent when nothing was omitted, and from older
+   * daemons. `stateHash` moves when one of them appears or disappears (git status lists it), not
+   * when an omitted file is rewritten in place (its stat signature is not read).
+   */
+  untrackedOmitted: UntrackedOmissionSchema.optional(),
   /**
    * Opaque hash that changes whenever HEAD, the branch, ahead/behind, any changed file, or any
    * file's patch changes. Equal hashes mean "nothing to refetch".

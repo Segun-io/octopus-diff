@@ -27,6 +27,7 @@ export function mergeResponses(list: BulkReviewResponse[]): BulkReviewResponse {
     out.worktrees += r.worktrees;
     out.skippedDisabled.push(...r.skippedDisabled);
     out.stale.push(...r.stale);
+    if (r.untrackedOmitted) out.untrackedOmitted = (out.untrackedOmitted ?? 0) + r.untrackedOmitted;
   }
   return out;
 }

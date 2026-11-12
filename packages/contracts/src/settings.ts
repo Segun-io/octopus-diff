@@ -260,6 +260,13 @@ export const BulkReviewResponseSchema = z.object({
   undoToken: z.string().min(1).nullable(),
   /** Bookmarks moved (`advanceBookmarks`); absent from older daemons. */
   bookmarks: z.number().int().min(0).optional(),
+  /**
+   * Untracked files of the acted-on worktrees that were neither marked nor counted because they are
+   * not listed (#43, `WorktreeSummary.untrackedOmitted`): they have no row and no patchHash, so they
+   * cannot be marked reviewed; ignore them or lower their number. Present (> 0) only when the scope
+   * lists untracked files and some were omitted; absent from older daemons.
+   */
+  untrackedOmitted: z.number().int().positive().optional(),
 });
 export type BulkReviewResponse = z.infer<typeof BulkReviewResponseSchema>;
 
