@@ -3,7 +3,11 @@ import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useStat
 import { fileRefKey, toFileRef } from '../lib/fileRef.ts';
 import {
   type FileGroup,
+  isBaseFile,
   type NavEntry,
+  type OriginStats,
+  type OriginView,
+  originTag,
   splitPath,
   type VisiblePredicate,
   worktreeLabel,
@@ -14,6 +18,7 @@ import { useUi, useUiStore } from '../state/ui.tsx';
 import { CheckIcon, LineCounts, StatusIcon, statusLabel, WarningIcon } from './bits.tsx';
 import { ContextMenu, type MenuItem, useContextMenu } from './ContextMenu.tsx';
 import { fileCopyItems, worktreeCopyItems } from './copyMenu.ts';
+import { ORIGIN_TEST_IDS, OriginGroupHeader } from './OriginGroupHeader.tsx';
 
 type ListMenuTarget = { kind: 'file'; entry: NavEntry } | { kind: 'group'; group: FileGroup };
 
@@ -31,7 +36,23 @@ interface LayoutGroup {
   top: number;
   height: number;
   headerHeight: number;
+  /** Listed files in order: own and mixed ones, then the "from main" ones while that group is open. */
   rows: NavEntry[];
+  /** Slot of the collapsible "from main" row (it follows the own rows), or -1 without one. */
+  noiseAt: number;
+  noise: OriginStats | null;
+  /** Slots of the group: its rows plus the "from main" row. */
+  slots: number;
+}
+
+/** The merge-noise wrapping of the list (absent: an older daemon, or a caller with no origins). */
+export interface FileListOrigin {
+  view: OriginView;
+  /** Own, mixed and base files per worktree, after the eye. */
+  stats: ReadonlyMap<string, OriginStats>;
+  /** The default-branch ref a worktree's base files came from. */
+  refs: ReadonlyMap<string, string>;
+  onToggle: (worktreeId: string) => void;
 }
 
 export interface FileListProps {
@@ -45,6 +66,7 @@ export interface FileListProps {
   grouped: boolean;
   onSelect: (entry: NavEntry) => void;
   emptyMessage: string;
+  origin?: FileListOrigin;
 }
 
 function rowId(key: string): string {
@@ -68,6 +90,7 @@ export function FileList({
   grouped,
   onSelect,
   emptyMessage,
+  origin,
 }: FileListProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [viewport, setViewport] = useState({ top: 0, height: 800 });
@@ -105,13 +128,23 @@ export function FileList({
     let top = 0;
     for (const group of groups) {
       const rows = byWorktree.get(group.worktree.id) ?? [];
+      // The wrapped group follows the own and mixed files (they come first in `rows`). It is there
+      // whenever the worktree has base files, open or not; the chip lists them without a header.
+      const stats = origin?.stats.get(group.worktree.id) ?? null;
+      const noise = origin && !origin.view.fromMainOnly && stats && stats.base > 0 ? stats : null;
+      let noiseAt = -1;
+      if (noise) {
+        noiseAt = 0;
+        while (noiseAt < rows.length && !isBaseFile(rows[noiseAt]?.file ?? {})) noiseAt++;
+      }
+      const slots = rows.length + (noise ? 1 : 0);
       const headerHeight = grouped ? HEADER_HEIGHT : 0;
-      const height = headerHeight + rows.length * ROW_HEIGHT;
-      out.push({ group, top, height, headerHeight, rows });
+      const height = headerHeight + slots * ROW_HEIGHT;
+      out.push({ group, top, height, headerHeight, rows, noiseAt, noise, slots });
       top += height;
     }
     return { groups: out, total: top };
-  }, [groups, entries, visible, grouped, ROW_HEIGHT, HEADER_HEIGHT]);
+  }, [groups, entries, visible, grouped, ROW_HEIGHT, HEADER_HEIGHT, origin]);
 
   // Track viewport (scroll + size), throttled to animation frames.
   useLayoutEffect(() => {
@@ -149,7 +182,8 @@ export function FileList({
       const index = g.rows.findIndex((r) => r.key === selectedKey);
       if (index === -1) continue;
       lastScrolledKey.current = selectedKey;
-      const rowTop = g.top + g.headerHeight + index * ROW_HEIGHT;
+      const slot = index + (g.noiseAt >= 0 && index >= g.noiseAt ? 1 : 0);
+      const rowTop = g.top + g.headerHeight + slot * ROW_HEIGHT;
       const headerTop = g.top;
       if (rowTop < el.scrollTop) {
         el.scrollTop = index === 0 ? headerTop : rowTop - ROW_HEIGHT;
@@ -201,9 +235,12 @@ export function FileList({
           if (inView) {
             const rowsTop = g.top + g.headerHeight;
             first = Math.max(0, Math.floor((windowTop - rowsTop) / ROW_HEIGHT));
-            last = Math.min(g.rows.length - 1, Math.ceil((windowBottom - rowsTop) / ROW_HEIGHT));
+            last = Math.min(g.slots - 1, Math.ceil((windowBottom - rowsTop) / ROW_HEIGHT));
           }
-          const rendered = last >= first ? g.rows.slice(first, last + 1) : [];
+          // Slots are rows, with the collapsible "from main" row (`noiseAt`) after the own ones.
+          const slotIndexes: number[] = [];
+          for (let slot = first; slot <= last; slot++) slotIndexes.push(slot);
+          const fromMainOnly = origin?.view.fromMainOnly ?? false;
           return (
             // biome-ignore lint/a11y/useSemanticElements: absolutely positioned virtualized group, not a form fieldset
             <div
@@ -225,21 +262,43 @@ export function FileList({
                   onMenu={onGroupMenu}
                   group={g.group}
                   shown={g.rows.length}
+                  fromMainOnly={fromMainOnly}
                   height={HEADER_HEIGHT}
                   reviewOff={disabled?.has(g.group.worktree.id) ?? false}
                 />
               )}
-              {rendered.map((entry, i) => (
-                <FileRow
-                  key={entry.key}
-                  entry={entry}
-                  top={g.headerHeight + (first + i) * ROW_HEIGHT}
-                  height={ROW_HEIGHT}
-                  selected={entry.key === selectedKey}
-                  onSelect={onSelect}
-                  onMenu={onFileMenu}
-                />
-              ))}
+              {slotIndexes.map((slot) => {
+                const top = g.headerHeight + slot * ROW_HEIGHT;
+                if (slot === g.noiseAt && g.noise && origin) {
+                  return (
+                    <OriginGroupHeader
+                      key="from-main"
+                      worktreeId={g.group.worktree.id}
+                      stats={g.noise}
+                      integrationRef={origin.refs.get(g.group.worktree.id) ?? 'main'}
+                      open={origin.view.expanded.has(g.group.worktree.id)}
+                      onToggle={origin.onToggle}
+                      className="absolute right-0 left-0"
+                      style={{ top, height: ROW_HEIGHT }}
+                    />
+                  );
+                }
+                const entry = g.rows[g.noiseAt >= 0 && slot > g.noiseAt ? slot - 1 : slot];
+                if (!entry) return null;
+                return (
+                  <FileRow
+                    key={entry.key}
+                    entry={entry}
+                    top={top}
+                    height={ROW_HEIGHT}
+                    selected={entry.key === selectedKey}
+                    // Wrapped files are dimmed once expanded; under the chip they are the list.
+                    dim={!fromMainOnly && isBaseFile(entry.file)}
+                    onSelect={onSelect}
+                    onMenu={onFileMenu}
+                  />
+                );
+              })}
             </div>
           );
         })}
@@ -266,18 +325,27 @@ export function FileList({
 const GroupHeader = memo(function GroupHeader({
   group,
   shown,
+  fromMainOnly,
   height,
   reviewOff,
   onMenu,
 }: {
   group: FileGroup;
   shown: number;
+  /** The chip is on: `shown` counts base files, and they are the count. */
+  fromMainOnly: boolean;
   height: number;
   reviewOff: boolean;
   onMenu: (event: React.MouseEvent, group: FileGroup) => void;
 }) {
-  const total = group.files.length;
-  const unreviewed = reviewOff ? 0 : group.files.reduce((n, f) => n + (f.reviewed ? 0 : 1), 0);
+  // Counts are own + mixed files: what came from the default branch is wrapped, not counted.
+  let total = 0;
+  let unreviewed = 0;
+  for (const f of group.files) {
+    if (isBaseFile(f)) continue;
+    total++;
+    if (!f.reviewed && !reviewOff) unreviewed++;
+  }
   return (
     // biome-ignore lint/a11y/noStaticElementInteractions: right-click shortcut; the palette has the same copy commands
     <div
@@ -294,9 +362,13 @@ const GroupHeader = memo(function GroupHeader({
         ) : unreviewed > 0 ? (
           <span>{unreviewed} unreviewed</span>
         ) : null}
-        <span>
-          {shown < total ? `${shown}/${total}` : total} {total === 1 ? 'file' : 'files'}
-        </span>
+        {fromMainOnly ? (
+          <span>{shown} from main</span>
+        ) : (
+          <span>
+            {shown < total ? `${shown}/${total}` : total} {total === 1 ? 'file' : 'files'}
+          </span>
+        )}
       </span>
     </div>
   );
@@ -312,6 +384,7 @@ const FileRow = memo(function FileRow({
   top,
   height,
   selected,
+  dim,
   onSelect,
   onMenu,
 }: {
@@ -319,6 +392,8 @@ const FileRow = memo(function FileRow({
   top: number;
   height: number;
   selected: boolean;
+  /** A file from the default branch in an expanded group. */
+  dim: boolean;
   onSelect: (entry: NavEntry) => void;
   onMenu: (event: React.MouseEvent, entry: NavEntry) => void;
 }) {
@@ -328,6 +403,7 @@ const FileRow = memo(function FileRow({
   const { dir, base } = splitPath(suspicious ? escapeSuspicious(file.path) : file.path);
   const rename = renameLabel(file);
   const key = fileRefKey(toFileRef(entry.worktreeId, file));
+  const tag = originTag(file);
   return (
     // Keyboard selection is handled by the listbox (j/k, arrows) via aria-activedescendant.
     // biome-ignore lint/a11y/useKeyWithClickEvents: keyboard handled by the parent listbox
@@ -341,16 +417,24 @@ const FileRow = memo(function FileRow({
       {...(file.oldPath ? { 'data-old-path': file.oldPath } : {})}
       data-status={file.status}
       data-reviewed={String(file.reviewed)}
+      {...(file.origin && file.origin !== 'own' ? { 'data-origin': file.origin } : {})}
+      {...(file.originVia ? { 'data-origin-via': file.originVia } : {})}
       data-suspicious={suspicious ? 'true' : undefined}
       data-worktree-id={entry.worktreeId}
       data-additions={file.additions === null ? '' : String(file.additions)}
       data-deletions={file.deletions === null ? '' : String(file.deletions)}
-      title={`${statusLabel(file.status)}: ${rename ?? file.path}${file.reviewed ? ' (reviewed)' : ''}`}
+      title={`${statusLabel(file.status)}: ${rename ?? file.path}${file.reviewed ? ' (reviewed)' : ''}${
+        file.origin === 'mixed'
+          ? ' (the default branch changed this file too; see "Only this branch\'s changes")'
+          : file.origin === 'base'
+            ? ' (came from the default branch)'
+            : ''
+      }`}
       onClick={() => onSelect(entry)}
       onContextMenu={(e) => onMenu(e, entry)}
       className={`absolute right-0 left-0 flex cursor-pointer items-center gap-1.5 px-2 text-xs ${
         selected ? 'bg-selected' : 'hover:bg-hover'
-      } ${file.reviewed ? 'opacity-60' : ''}`}
+      } ${file.reviewed || dim ? 'opacity-60' : ''}`}
       style={{ top, height }}
     >
       <StatusIcon status={file.status} />
@@ -378,6 +462,19 @@ const FileRow = memo(function FileRow({
           </>
         )}
       </span>
+      {tag && (
+        <span
+          data-testid={ORIGIN_TEST_IDS.tag}
+          className="od-chip shrink-0"
+          title={
+            file.origin === 'mixed'
+              ? 'The default branch changed this file too'
+              : 'Came from the default branch'
+          }
+        >
+          {tag}
+        </span>
+      )}
       {file.binary && <span className="text-[11px] text-faint">bin</span>}
       <LineCounts additions={file.additions} deletions={file.deletions} />
       <span className="w-3 shrink-0 text-add">

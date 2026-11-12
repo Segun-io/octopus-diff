@@ -127,6 +127,21 @@ export const COMMANDS: readonly CommandDef[] = [
     keys: ['h'],
     run: (c) => c.toggleShowReviewed(),
   },
+  {
+    id: 'toggleFromMain',
+    label: 'Show only files from the default branch (merge, rebase, update)',
+    group: 'review',
+    keys: ['m'],
+    run: (c) => c.toggleFromMain(),
+  },
+  {
+    id: 'toggleOriginGroup',
+    label: 'Expand / collapse the files from the default branch',
+    group: 'review',
+    keys: [],
+    run: (c) => c.toggleOriginGroup(),
+    paletteOnly: true,
+  },
   // diff
   {
     id: 'toggleDiffMode',

@@ -4,7 +4,7 @@
  * Pure, so it is unit-tested; `state/bulk.ts` executes the plan.
  */
 import type { BulkReviewRequest, DiffScope } from '@octopus-diff/contracts';
-import type { FileGroup, NavEntry, VisiblePredicate } from './model.ts';
+import { type FileGroup, isBaseFile, type NavEntry, type VisiblePredicate } from './model.ts';
 
 export interface BulkPlan {
   requests: BulkReviewRequest[];
@@ -48,6 +48,9 @@ export function planBulk(input: BulkPlanInput): BulkPlan {
   const byWorktree = new Map<string, NavEntry[]>();
   for (const e of entries) {
     if (!visible(e)) continue;
+    // Files from a merge, rebase or update of the default branch are never marked in bulk (the
+    // daemon skips them too, DECISIONS #204): the count says what the click changes.
+    if (isBaseFile(e.file)) continue;
     if (e.file.reviewed === reviewed) continue;
     if (disabled.has(e.worktreeId) && !input.includeDisabled) continue;
     const list = byWorktree.get(e.worktreeId);

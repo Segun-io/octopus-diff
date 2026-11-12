@@ -34,6 +34,10 @@ export interface Commands {
   toggleDiffMode(): void;
   toggleWhitespace(): void;
   toggleShowReviewed(): void;
+  /** The "From main" chip: list only the files a merge, rebase or update brought. */
+  toggleFromMain(): void;
+  /** Expands or collapses the "from main" group (the open worktree's, or every one in the Inbox). */
+  toggleOriginGroup(): void;
   toggleTheme(): void;
   toggleTreeLayout(): void;
   expandContext(): void;
@@ -87,7 +91,9 @@ export function useCommands(model: AppModel, resolvedTheme: 'light' | 'dark'): C
     };
     const goNextUnreviewed = (): boolean => {
       const m = latest.current.model;
-      const eligible = (e: NavEntry) => !m.disabledWorktrees.has(e.worktreeId);
+      // `n` skips the files of a collapsed "from main" group, like `j`/`k`.
+      const eligible = (e: NavEntry) =>
+        !m.disabledWorktrees.has(e.worktreeId) && m.originVisible(e);
       const target = nextUnreviewed(m.globalEntries, m.selectedKey, eligible);
       if (!target) return false;
       const ref = toFileRef(target.worktreeId, target.file);
@@ -209,6 +215,21 @@ export function useCommands(model: AppModel, resolvedTheme: 'light' | 'dark'): C
         // All on branch and To review have no eye (`eyeApplies`): nothing to toggle there.
         if (!eyeApplies(store.getState().scope.kind)) return;
         store.setState((s) => ({ showReviewed: !s.showReviewed }));
+      },
+      toggleFromMain() {
+        store.setState((s) => ({ fromMainOnly: !s.fromMainOnly }));
+      },
+      toggleOriginGroup() {
+        const m = latest.current.model;
+        const withBase = m.groups
+          .map((g) => g.worktree.id)
+          .filter((id) => (m.originStats.get(id)?.base ?? 0) > 0);
+        if (withBase.length === 0)
+          return actions.notice(store, 'No files from the default branch.');
+        const open = store.getState().originOpen;
+        // One open group closes them all; none open expands them all (the Inbox has many).
+        const expand = !withBase.some((id) => open.includes(id));
+        for (const id of withBase) actions.toggleOriginGroup(store, id, expand);
       },
       toggleTheme() {
         const mode = latest.current.resolvedTheme === 'dark' ? 'light' : 'dark';
@@ -427,6 +448,8 @@ export function useKeyboardShortcuts(commands: Commands, enabled: boolean) {
           return run(commands.toggleWhitespace);
         case 'h':
           return run(commands.toggleShowReviewed);
+        case 'm':
+          return run(commands.toggleFromMain);
         case 'e':
           return run(commands.expandContext);
         case 't':

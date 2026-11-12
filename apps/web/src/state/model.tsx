@@ -20,11 +20,18 @@ import {
   type FileGroup,
   flattenGroups,
   hasSidebarFilters,
+  isMixedFile,
   listsReviewed,
   type NavEntry,
+  type OriginStats,
+  type OriginView,
+  originStats,
+  originVisibleIf,
+  ownFirst,
   rowVisible,
   type SidebarFilters,
   type SidebarModel,
+  shortRef,
   sortFiles,
   sortFilesTreeOrder,
   sortInboxEntries,
@@ -50,7 +57,20 @@ export interface AppModel {
   entries: NavEntry[];
   /** Files across all worktrees for `n` (current scope; commit scope: current list only). */
   globalEntries: NavEntry[];
+  /** What `j`/`k` reach and the list shows: the eye and the "from main" view (wrapped group, chip). */
   visible: VisiblePredicate;
+  /** Only the origin part of `visible`; `n` honours it too (a collapsed group is skipped). */
+  originVisible: VisiblePredicate;
+  /** How the base files (merge noise) are treated right now. */
+  originView: OriginView;
+  /** Own, mixed and base files per worktree of the list, after the eye (`originStats`). */
+  originStats: ReadonlyMap<string, OriginStats>;
+  /** The default-branch ref a worktree's base files came from, for labels (`origin/main`). */
+  originRefs: ReadonlyMap<string, string>;
+  /** The chip: base files in the list, and the short ref it names (`main`). */
+  fromMain: { count: number; ref: string };
+  /** Mixed files in the list (the default branch changed them too): the toggle's reason. */
+  mixedCount: number;
   /** The list shows reviewed files (`listsReviewed`: All on branch always, To review never, else the eye). */
   showsReviewed: boolean;
   /** True when the current view's file data is loaded for the current scope. */
@@ -95,6 +115,12 @@ function useBuildAppModel(): AppModel {
   );
   const showReviewed = useUi((s) => s.showReviewed);
   const showsReviewed = listsReviewed(showReviewed, scope.kind);
+  const fromMainOnly = useUi((s) => s.fromMainOnly);
+  const originOpen = useUi((s) => s.originOpen);
+  const originView = useMemo<OriginView>(
+    () => ({ fromMainOnly, expanded: new Set(originOpen) }),
+    [fromMainOnly, originOpen],
+  );
   const selected = useUi((s) => s.selected);
   const pinned = useUi((s) => s.pinned);
   const settle = useUi((s) => s.settle);
@@ -131,7 +157,7 @@ function useBuildAppModel(): AppModel {
       map.set(entry.worktree.id, {
         project: entry.project,
         worktree: entry.worktree,
-        files: sortFiles(entry.files),
+        files: ownFirst(sortFiles(entry.files)),
       });
     }
     return map;
@@ -156,9 +182,12 @@ function useBuildAppModel(): AppModel {
     if (view.kind !== 'worktree') return [];
     const row = sidebar.byId.get(view.worktreeId);
     if (!row || !filesData) return [];
-    // F10: in the tree layout, j/k/n follow the tree's displayed order.
+    // F10: in the tree layout, j/k/n follow the tree's displayed order. The list puts the files
+    // that came from the default branch last (its collapsed group); the tree cannot host a group.
     const sorted =
-      fileListLayout === 'tree' ? sortFilesTreeOrder(filesData.files) : sortFiles(filesData.files);
+      fileListLayout === 'tree'
+        ? sortFilesTreeOrder(filesData.files)
+        : ownFirst(sortFiles(filesData.files));
     return [{ project: row.project, worktree: row.worktree, files: sorted }];
   }, [
     view,
@@ -201,6 +230,7 @@ function useBuildAppModel(): AppModel {
     !isPartialInbox(scope) &&
     !hasSidebarFilters(filters) &&
     showsReviewed &&
+    !fromMainOnly &&
     groups.length === inboxEntries.length;
 
   const viewPolicy =
@@ -224,7 +254,41 @@ function useBuildAppModel(): AppModel {
     return flattenGroups(all);
   }, [scope.kind, entries, inboxEntries, sortedInboxFiles, view, groups]);
 
-  const visible = useMemo(() => visibleIf(showsReviewed), [showsReviewed]);
+  const visible = useMemo(() => visibleIf(showsReviewed, originView), [showsReviewed, originView]);
+  const originVisible = useMemo(() => originVisibleIf(originView), [originView]);
+  const originStatsByWorktree = useMemo(
+    () => originStats(entries, visibleIf(showsReviewed)),
+    [entries, showsReviewed],
+  );
+  const originRefs = useMemo(() => {
+    const out = new Map<string, string>();
+    for (const g of groups) {
+      const id = g.worktree.id;
+      const ref =
+        sidebar.byId.get(id)?.summary?.review?.integrationRef ??
+        inboxEntries.find((e) => e.worktree.id === id)?.summary.review?.integrationRef ??
+        g.project.defaultBranch ??
+        'main';
+      out.set(id, ref);
+    }
+    return out;
+  }, [groups, sidebar, inboxEntries]);
+  const fromMain = useMemo(() => {
+    let count = 0;
+    const refs = new Set<string>();
+    for (const [id, stats] of originStatsByWorktree) {
+      if (stats.base === 0) continue;
+      count += stats.base;
+      refs.add(shortRef(originRefs.get(id) ?? 'main'));
+    }
+    const [only] = refs.size === 1 ? [...refs] : [];
+    return { count, ref: only ?? 'main' };
+  }, [originStatsByWorktree, originRefs]);
+  const mixedCount = useMemo(() => {
+    let n = 0;
+    for (const e of entries) if (isMixedFile(e.file)) n++;
+    return n;
+  }, [entries]);
 
   const viewReady =
     view.kind === 'inbox'
@@ -269,6 +333,12 @@ function useBuildAppModel(): AppModel {
     entries,
     globalEntries,
     visible,
+    originVisible,
+    originView,
+    originStats: originStatsByWorktree,
+    originRefs,
+    fromMain,
+    mixedCount,
     showsReviewed,
     viewReady,
     selectedKey,

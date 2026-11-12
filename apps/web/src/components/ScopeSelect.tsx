@@ -7,20 +7,27 @@ import {
 } from '@octopus-diff/contracts';
 import { useEffect } from 'react';
 import { useCommitsQuery, useFilesQuery } from '../api/queries.ts';
-import { listsReviewed } from '../lib/model.ts';
+import { isBaseFile, listsReviewed } from '../lib/model.ts';
 import { ALL_ON_BRANCH, SCOPE_LABELS } from '../lib/scopeLabels.ts';
 import { useAppModel } from '../state/model.tsx';
 import { useUi, useUiStore } from '../state/ui.tsx';
 import { CopyButton } from './CopyButton.tsx';
 import { COPY_TEST_IDS } from './copyMenu.ts';
 
-/** Files of a scope: all of them and, when a loaded list says so, the unreviewed ones. */
+/**
+ * Files of a scope: all of them and, when a loaded list says so, the unreviewed ones. Files that
+ * came from the default branch (`origin: 'base'`, wrapped in the list's "from main" group) are
+ * not counted: a count says what the branch's author or agent really changed.
+ */
 interface ScopeCount {
   total: number;
   unreviewed?: number;
 }
 
-function countFiles(files: readonly { reviewed: boolean }[]): ScopeCount {
+type CountedFile = { reviewed: boolean; origin?: 'own' | 'mixed' | 'base' | undefined };
+
+function countFiles(all: readonly CountedFile[]): ScopeCount {
+  const files = all.filter((f) => !isBaseFile(f));
   return { total: files.length, unreviewed: files.filter((f) => !f.reviewed).length };
 }
 
@@ -31,17 +38,19 @@ function countFiles(files: readonly { reviewed: boolean }[]): ScopeCount {
  */
 function scopeCounts(
   summary: WorktreeSummary | null | undefined,
-  branchFiles: readonly unknown[] | undefined,
-  current: { kind: ScopeKind; files: readonly { reviewed: boolean }[] } | undefined,
+  branchFiles: readonly CountedFile[] | undefined,
+  current: { kind: ScopeKind; files: readonly CountedFile[] } | undefined,
 ): Partial<Record<ScopeKind, ScopeCount>> {
   if (!summary) return {};
   const c = summary.counts;
   const out: Partial<Record<ScopeKind, ScopeCount>> = {
-    ...(summary.review ? { review: { total: summary.review.unreviewedFiles } } : {}),
+    ...(summary.review
+      ? { review: { total: summary.review.unreviewedOwnFiles ?? summary.review.unreviewedFiles } }
+      : {}),
     working: { total: summary.changedFiles },
     staged: { total: c.staged + c.conflicted },
     unstaged: { total: c.unstaged + c.untracked + c.conflicted },
-    ...(branchFiles !== undefined ? { branch: { total: branchFiles.length } } : {}),
+    ...(branchFiles !== undefined ? { branch: { total: countFiles(branchFiles).total } } : {}),
   };
   if (current && current.kind !== 'review' && current.kind !== 'commit') {
     out[current.kind] = countFiles(current.files);
