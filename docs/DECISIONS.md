@@ -2948,3 +2948,17 @@ Numbers: #229-#232 (after #225-#228; other open branches may use these numbers).
      `setWatch`, `restart`), the two routes, `counts.deleted` in every mock summary, and `MockBackend.mutate` actions
      `delete` (blob kept), `delete-untracked`, `commit` next to `edit | add | revert`; `POST
      /api/__mock/mutate?action=` and `/api/__mock/activity?mode=polling&pollMs=5000` / `?restart=1` drive them.
+
+## Priority lanes and request cancellation (session, 2026-11-12; roadmap #44, step 21)
+
+Numbers: #233-#239 (after #229-#232; other open branches may use these numbers). Report: `docs/reports/priority-lanes.md`.
+
+233. **contracts: `CallOptions` (`signal?`, `priority?`) on the per-request `GitCore` calls (additive).** New
+     `GitPriority = 'interactive' | 'background'` and `CallOptions { signal?: AbortSignal; priority?: GitPriority }`.
+     `ScopeOptions` now extends `CallOptions` (so `getSummary`, `listChangedFiles`, `getFileDiff`, `readFileOrigins`,
+     `readReviewRange`, `readBranchBase` accept both), and `listCommits` / `readBlob` take `… & CallOptions`. Both
+     fields are optional and new; nothing is renamed, removed or changes meaning, and a call without them behaves
+     exactly as before (lane `background`, never cancelled). An aborted call rejects with the existing
+     `GitCoreError` code `aborted` (already in `GIT_CORE_ERROR_CODES`, already mapped by the daemon), so no new
+     error code was needed. `BlobReadOptionsSchema` (zod) is untouched: the signal is not data and never crosses
+     the wire; `readBlob`'s parameter type is the schema's type intersected with `CallOptions`.
