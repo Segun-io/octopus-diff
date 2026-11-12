@@ -377,7 +377,9 @@ export async function readFileOrigins(
   if (committed.length > 0 && base !== null) {
     if (committed.some((f) => f.oldPath !== null))
       renames = await committedRenames(ctx, repo, base, head);
-    const m0 = await mergeBase(ctx, repo, base, n);
+    // `N` is an ancestor of HEAD, so `merge-base HEAD N` is `N` (the daemon passes HEAD as `O`
+    // for a list measured from `N`, the branch scope): no process.
+    const m0 = base === head ? n : await mergeBase(ctx, repo, base, n);
     const [a, b, c] = await Promise.all([
       changedPaths(ctx, repo, n, head),
       tip === n ? null : changedPaths(ctx, repo, tip, head),

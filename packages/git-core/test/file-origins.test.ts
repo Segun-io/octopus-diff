@@ -735,3 +735,46 @@ describe('readFileOrigins: spawn budget', () => {
     expect(subs.filter((sub) => sub !== 'config')).toEqual(['diff']);
   });
 });
+
+describe('readFileOrigins: O = HEAD (a list measured from N, the daemon branch scope, #33)', () => {
+  it('only "same as main" applies, and M0 costs no merge-base (merge-base HEAD N is N)', async () => {
+    const s = scenario({ 'shared.txt': lines(20) });
+    commit(s.work, { 'own.txt': 'own\n', 'shared.txt': lines(20).replace('line 2', 'own') });
+    upstream(s, { 'theirs.txt': 't\n', 'shared.txt': lines(20).replace('line 18', 'theirs') });
+    fetch(s);
+    merge(s.work, 'origin/main');
+    const picked = upstream(s, { 'picked.txt': 'p\n' });
+    fetch(s);
+    fx.git(s.work, ['cherry-pick', picked]);
+    const spawns = spawnLog('origins-head');
+    const core = createGitCore(fx.coreOptions({ gitBinary: spawns.wrapper }));
+    try {
+      const wt = locator(s.work);
+      const head = rev(s.work, 'HEAD');
+      const files = await core.listChangedFiles(wt, { kind: 'branch', includeWorking: true });
+      // The branch list starts at N (the merge of origin/main): main's own files are not in it.
+      expect(keys(files)).toEqual(['own.txt', 'picked.txt', 'shared.txt']);
+      spawns.take();
+      const result = await core.readFileOrigins?.(wt, { base: head, files });
+      const subs = spawns.take();
+      const origins: Origins = {};
+      for (const [key, info] of result?.origins ?? []) {
+        origins[key] = info.via ? `${info.origin}:${info.via}` : info.origin;
+      }
+      // `shared.txt` is mixed in the review list; measured from N its patch is this branch's own.
+      expect(origins).toEqual({
+        'own.txt': 'own',
+        'picked.txt': 'base:same-as-base',
+        'shared.txt': 'own',
+      });
+      // N came from the listing (memoized); TIP is one ancestry check; then the two name lists.
+      expect(subs.filter((sub) => sub === 'merge-base').length).toBeLessThanOrEqual(1);
+      expect(subs.filter((sub) => sub === 'diff-tree').length).toBe(2);
+      spawns.take();
+      await core.readFileOrigins?.(wt, { base: head, files });
+      expect(spawns.take()).toEqual([]);
+    } finally {
+      await core.dispose();
+    }
+  });
+});
