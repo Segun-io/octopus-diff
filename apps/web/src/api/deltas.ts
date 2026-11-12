@@ -5,8 +5,10 @@
  *
  * Races: events arrive in order on one stream, but a projects request that was in flight while a
  * row was applied answers with what the daemon had when it ran, and would put the older row back.
- * Applied rows are remembered for a while and win over an older row (`summary.updatedAt`) in any
- * projects answer (`keepNewerRows`, used by the projects query).
+ * Applied rows are remembered for a while and win over an older row in any projects answer
+ * (`keepNewerRows`, used by the projects query). Rows are ordered by the daemon's `rev` (#51
+ * review), which orders a row with a null summary (an error) too; `summary.updatedAt` is only the
+ * fallback for rows without one. Remembered rows are forgotten on a reconnect (`forgetRows`).
  */
 import type {
   ProjectsResponse,
@@ -36,6 +38,7 @@ export function rowOf(event: WorktreeDeltaEvent): WorktreeListItem {
     summary: event.summary,
     error: event.error ?? null,
     ...(event.review ? { review: event.review } : {}),
+    ...(event.rev !== undefined ? { rev: event.rev } : {}),
   };
 }
 
@@ -65,11 +68,42 @@ function time(summary: WorktreeSummary | null | undefined): number | null {
   return Number.isNaN(t) ? null : t;
 }
 
-/** `a` was computed strictly after `b` (both known). */
-function newer(a: WorktreeSummary | null | undefined, b: WorktreeSummary | null | undefined) {
-  const ta = time(a);
-  const tb = time(b);
+/**
+ * `a` describes a strictly later state of the worktree than `b`: by `rev` when both carry one
+ * (whatever the summaries are, null included), else by `summary.updatedAt` when both have a
+ * summary. Unknown order: false.
+ */
+export function newerRow(a: WorktreeListItem, b: WorktreeListItem): boolean {
+  if (a.rev !== undefined && b.rev !== undefined) return a.rev > b.rev;
+  const ta = time(a.summary);
+  const tb = time(b.summary);
   return ta !== null && tb !== null && ta > tb;
+}
+
+/**
+ * A row event whose `stateHash` equals the cached row's still brings something new when it is a
+ * later state (`rev`), e.g. the review state that landed after a projects answer already showed
+ * the summary. Without `rev`: when it has a review state the cached row lacks.
+ */
+export function bringsNews(event: WorktreeDeltaEvent, cached: WorktreeListItem): boolean {
+  const row = rowOf(event);
+  if (row.rev !== undefined && cached.rev !== undefined) return row.rev > cached.rev;
+  return row.summary?.review !== undefined && cached.summary?.review === undefined;
+}
+
+/** Forgets the remembered rows (a reconnect: the daemon may have restarted, its `rev` with it). */
+export function forgetRows(queryClient: QueryClient): void {
+  remembered.delete(queryClient);
+}
+
+/** The worktree's row in the cached projects list. */
+export function cachedRow(queryClient: QueryClient, worktreeId: string) {
+  const projects = queryClient.getQueryData<ProjectsResponse>(['projects']);
+  for (const item of projects?.projects ?? []) {
+    const row = item.worktrees.find((w) => w.worktree.id === worktreeId);
+    if (row) return row;
+  }
+  return undefined;
 }
 
 export type ApplyRowResult =
@@ -94,8 +128,8 @@ export function applyRow(
   const wi = project ? project.worktrees.findIndex((w) => w.worktree.id === event.worktreeId) : -1;
   const previous = project?.worktrees[wi];
   if (!project || !previous) return { kind: 'unknown' };
-  if (newer(previous.summary, event.summary)) return { kind: 'stale', previous };
   const row = rowOf(event);
+  if (newerRow(previous, row)) return { kind: 'stale', previous };
   const worktrees = project.worktrees.slice();
   worktrees[wi] = row;
   const projects = data.projects.slice();
@@ -124,7 +158,7 @@ export function keepNewerRows(
     project.worktrees.forEach((w, wi) => {
       const entry = memory.get(w.worktree.id);
       if (!entry || entry.projectId !== project.project.id) return;
-      if (!newer(entry.row.summary, w.summary)) return;
+      if (!newerRow(entry.row, w)) return;
       worktrees ??= project.worktrees.slice();
       worktrees[wi] = entry.row;
     });

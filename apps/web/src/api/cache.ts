@@ -18,7 +18,15 @@ import {
   type WorktreeListItem,
 } from '@octopus-diff/contracts';
 import type { Query, QueryClient } from '@tanstack/react-query';
-import { applyRow, cachedStateHash, isDeltaEvent, type WorktreeDeltaEvent } from './deltas.ts';
+import {
+  applyRow,
+  bringsNews,
+  cachedRow,
+  cachedStateHash,
+  forgetRows,
+  isDeltaEvent,
+  type WorktreeDeltaEvent,
+} from './deltas.ts';
 import { type DiffQueryData, queryKeys } from './queries.ts';
 
 export interface ReviewPatch {
@@ -136,6 +144,11 @@ export interface EventEffects {
    * lists and diffs are refetched only where they moved.
    */
   deltas: Map<string, WorktreeDeltaEvent>;
+  /**
+   * Of `deltas`, the worktrees whose latest event has the cached `stateHash` but a later row (#51
+   * review: e.g. its review state): only the row is applied, no list moved.
+   */
+  rowOnly: Set<string>;
   everything: boolean;
 }
 
@@ -150,6 +163,7 @@ export function emptyEffects(): EventEffects {
     forges: false,
     activity: new Set(),
     deltas: new Map(),
+    rowOnly: new Set(),
     everything: false,
   };
 }
@@ -173,10 +187,20 @@ export function collectEventEffects(
       // The feed moves with the state, but the projects list may already hold the new hash (any
       // refetch refreshes it), so this is decided before the hash check below.
       if (event.activitySeq !== undefined) effects.activity.add(event.worktreeId);
-      if (cachedStateHash(queryClient, event.worktreeId) === event.stateHash) break;
+      if (cachedStateHash(queryClient, event.worktreeId) === event.stateHash) {
+        // Same git state, but the row may be later (its review state landed after a projects
+        // answer already showed the summary, #51 review): apply the row, refetch nothing.
+        const row = cachedRow(queryClient, event.worktreeId);
+        if (isDeltaEvent(event) && row && bringsNews(event, row)) {
+          if (!effects.deltas.has(event.worktreeId)) effects.rowOnly.add(event.worktreeId);
+          effects.deltas.set(event.worktreeId, event);
+        }
+        break;
+      }
       if (isDeltaEvent(event)) {
         // Events arrive in order: the latest one per worktree is the one to apply.
         effects.deltas.set(event.worktreeId, event);
+        effects.rowOnly.delete(event.worktreeId);
         break;
       }
       // An older daemon: refetch what may have moved.
@@ -438,6 +462,8 @@ export async function flushEffects(
   api?: ApiClient,
 ): Promise<void> {
   if (effects.everything) {
+    // A reconnect: the daemon may have restarted (its `rev` counts again); everything refetches.
+    forgetRows(queryClient);
     await queryClient.invalidateQueries();
     return;
   }
@@ -454,6 +480,7 @@ export async function flushEffects(
       effects.inbox = true;
       continue;
     }
+    if (effects.rowOnly.has(id)) continue;
     deltas.push({ event, previous: applied.previous });
   }
   const tasks: Promise<unknown>[] = [];

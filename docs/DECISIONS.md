@@ -3244,3 +3244,30 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      with the start time in ms, so a restarted daemon normally starts above the old one. Clients still compare only
      within one run and forget remembered rows on a reconnect. Equal `rev` means the same state. It moves only when
      the row's state changes, so the projects ETag keeps matching while nothing changes.
+268. **Daemon: `rev` is stamped lazily per row.** `#row` (the one builder of `/api/projects` rows and of the event's
+     row) compares the entry's summary, error, review state and worktree objects with the ones it last stamped. If
+     any is another object, it takes the next value of a process-wide counter (seeded with `Date.now()`). Reads are
+     ordered, and the state an older read saw always has a lower `rev`. Two reads of an unchanged row give the same
+     `rev`, so the projects ETag is unaffected. The effective review policy is not in the stamp. A projects answer
+     after a policy change has the same `rev` as the last event's row, and an equal `rev` lets the answer win, so the
+     new policy shows.
+269. **Web: order by `rev`, forget on reconnect.** `newerRow` orders by `rev` when both rows have one, else by
+     `summary.updatedAt` (both non-null). `applyRow` drops an event that is not newer than the cached row.
+     `keepNewerRows` puts a remembered row back only over a strictly older answer. So an answer captured before an
+     error event cannot hide the error, and one captured before a recovery cannot bring the error back; failing-first
+     tests in `apps/web/test/deltas.test.ts` and `event-deltas.test.ts` cover both, against the mock with a held
+     projects answer. A reconnect's `hello` forgets the remembered rows before everything refetches: a restarted
+     daemon's counter starts again (normally above the old one, but nothing relies on it). The mock stamps `rev`
+     too (`setWorktreeError` announces errors and recoveries like the daemon; `legacyEvents` sends no `rev`).
+270. **A row event with the cached `stateHash` is applied when it is later (review P1).** `/api/projects` waits only
+     `initialSummaryWaitMs` for review states. A slow first review state lets an answer show the new summary
+     without `review`. The client then holds that `stateHash`, and the later review-bearing `worktree.changed` was
+     dropped by the equal-hash skip. Now a delta event with the cached hash is applied when `bringsNews` says so: a
+     higher `rev`, or, without `rev`, a review state the cached row lacks. Only the row is applied (`rowOnly`); no file
+     list, diff or inbox row is refetched, since the git state is the same. The daemon side keeps the held first
+     `review.ready` when a projects answer built the row while that review state was pending (`servedEarly`, set
+     in `#row` while `announcing` with no review yet), for a client that does not apply rows. Covered by
+     `event-deltas.real-git.test.ts` "a first review state slower than the projects wait" (a review range delayed
+     1.5 s, a 100 ms wait). The early answer has no review; the event has it with a higher `rev`; `review.ready`
+     still goes out. Mutation-checked: without `servedEarly`, without a moving `rev`, and with `rev` moving on every
+     read (which also breaks the ETag-stable check).

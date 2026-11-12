@@ -306,6 +306,42 @@ describe('worktree.changed with a delta (#51)', () => {
     expect(t.rowOf(a.worktree.id)?.summary?.stateHash).toBe(applied?.summary?.stateHash);
   });
 
+  it('an older projects answer does not hide an error, nor bring an error back after recovery (#51 review)', async () => {
+    const t = setup();
+    t.projectsOnScreen();
+    await t.settle();
+    const [a] = t.dirty;
+    if (!a) throw new Error('fixture');
+    const wid = a.worktree.id;
+    const deliverNext = async (fn: () => void) => {
+      const mark = t.events.length;
+      fn();
+      await t.deliver(t.events.slice(mark));
+    };
+
+    // A projects answer captured while the worktree was healthy lands after the error event.
+    let held = t.gate.hold('/api/projects');
+    let refetch = t.qc.invalidateQueries({ queryKey: queryKeys.projects() });
+    await held.started;
+    await deliverNext(() => t.backend.setWorktreeError(wid, 'git status timed out'));
+    expect(t.rowOf(wid)?.error?.code).toBe('timeout');
+    held.release();
+    await refetch;
+    expect(t.rowOf(wid)?.summary).toBeNull();
+    expect(t.rowOf(wid)?.error?.code).toBe('timeout');
+
+    // The reverse: an answer captured while it failed lands after the recovery event.
+    held = t.gate.hold('/api/projects');
+    refetch = t.qc.invalidateQueries({ queryKey: queryKeys.projects() });
+    await held.started;
+    await deliverNext(() => t.backend.setWorktreeError(wid, null));
+    expect(t.rowOf(wid)?.summary).not.toBeNull();
+    held.release();
+    await refetch;
+    expect(t.rowOf(wid)?.error).toBeNull();
+    expect(t.rowOf(wid)?.summary?.stateHash).toBe(t.backend.listFiles(wid, WORKING).stateHash);
+  });
+
   it('drops a row older than the cached one (events delivered out of order)', async () => {
     const t = setup();
     t.projectsOnScreen();

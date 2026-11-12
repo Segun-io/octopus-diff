@@ -165,6 +165,8 @@ interface MockWorktree {
   /** `WorktreeSummary.activityAt`: a stable stagger per worktree id, then the last simulated edit. */
   activityAt: string;
   revision: number;
+  /** `WorktreeListItem.rev` (#51 review): bumped whenever the mock changes the row's state. */
+  rowRev?: number;
   /** Status flow mock: the bookmark reached HEAD (the branch's commits are reviewed). */
   commitsReviewed?: boolean;
 }
@@ -994,7 +996,29 @@ export class MockBackend {
       summary: mw.error || mw.worktree.missing ? null : this.summary(mp, mw),
       error: mw.error ? { code: 'timeout', message: mw.error } : null,
       review: this.policyOf(mp, mw, map),
+      // An older daemon (`legacyEvents`) has no `rev` either.
+      ...(this.options.legacyEvents ? {} : { rev: mw.rowRev ?? 0 }),
     };
+  }
+
+  /** Last `rev` handed out, seeded like the daemon's (start time in ms). */
+  private revSeq = Date.now();
+
+  private bumpRow(mw: MockWorktree): void {
+    mw.rowRev = ++this.revSeq;
+  }
+
+  /**
+   * Makes a worktree's summary fail (`error`), or recover, and announces it the way the daemon does
+   * (#51 review): `stateHash` `error:timeout`, a row with a null summary and the error.
+   */
+  setWorktreeError(worktreeId: string, message: string | null): void {
+    const { mp, mw } = this.findWorktree(worktreeId);
+    mw.error = message;
+    mw.revision += 1;
+    mw.updatedAt = now();
+    this.bumpRow(mw);
+    this.emit(this.changedEvent(mp, mw));
   }
 
   /**
@@ -1009,7 +1033,7 @@ export class MockBackend {
       type: 'worktree.changed',
       projectId: mp.project.id,
       worktreeId: mw.worktree.id,
-      stateHash: summary.stateHash,
+      stateHash: mw.error ? 'error:timeout' : summary.stateHash,
       ...(activitySeq > 0 ? { activitySeq } : {}),
     };
     if (this.options.legacyEvents) return slim;
@@ -1741,6 +1765,7 @@ export class MockBackend {
     mw.revision += 1;
     mw.updatedAt = now();
     mw.activityAt = mw.updatedAt;
+    this.bumpRow(mw);
     this.emit(this.changedEvent(mp, mw));
     return { worktreeId: id, path, action: chosen };
   }
