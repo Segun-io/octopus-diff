@@ -425,14 +425,15 @@ function scopePath(path: string, scope: DiffScope): string {
  * Waits until no git child is running and the spawn trace has not grown for `quietMs` (at most
  * `maxMs`). A slow command produces no trace growth while it runs (the trace is written when a child
  * closes), so the running count from `activeFile` is what keeps the next edit from starting behind
- * the previous one's work.
+ * the previous one's work. Resolves true when it reached quiet, false when `maxMs` ran out first
+ * (the window is then not a measure of anything: callers must not publish it as one).
  */
 async function settled(
   traceFile: string,
   activeFile: string,
   quietMs = 1000,
   maxMs = 60_000,
-): Promise<void> {
+): Promise<boolean> {
   const deadline = Date.now() + maxMs;
   let size = -1;
   let since = Date.now();
@@ -444,9 +445,10 @@ async function settled(
     if (next !== size || running > 0) {
       size = next;
       since = Date.now();
-    } else if (Date.now() - since >= quietMs) return;
+    } else if (Date.now() - since >= quietMs) return true;
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
+  return false;
 }
 
 async function memory(pid: number) {
@@ -634,21 +636,25 @@ async function main() {
     // every label) is still running, so their windows count that work too. These start only when no
     // git process has run for a second, and each window stays open until the daemon is quiet again,
     // so it holds exactly what one reload costs.
-    let settledReloads: Array<{ ms: number; spawns: number }> | null = null;
+    let settledReloads: Array<{ ms: number; spawns: number | null }> | null = null;
     if (page) {
       await settled(daemon.spawnFile, daemon.activeFile, 1000, 60_000);
       settledReloads = [];
       for (let i = 0; i < 3; i++) {
         const from = Date.now();
         const reload = await firstPaint(page, daemon.url);
-        await settled(daemon.spawnFile, daemon.activeFile, 750, 30_000);
+        const quiet = await settled(daemon.spawnFile, daemon.activeFile, 750, 30_000);
         const to = Date.now();
         phases[`settledReload${i + 1}`] = [from, to];
-        const spawned = within(gitSpawns(await readSpawns(daemon.spawnFile)), from, to).length;
+        // Timed out: the trace only holds children that closed, so the window is not a count of
+        // what one reload costs. Unavailable, not a normal-looking number.
+        const spawned = quiet
+          ? within(gitSpawns(await readSpawns(daemon.spawnFile)), from, to).length
+          : null;
         settledReloads.push({ ms: Math.round(reload.ms), spawns: spawned });
       }
       log(
-        `settled warm reloads: ${settledReloads.map((r) => `${r.ms} ms / ${r.spawns} spawns`).join(', ')}`,
+        `settled warm reloads: ${settledReloads.map((r) => `${r.ms} ms / ${r.spawns ?? 'n/a (never quiet)'} spawns`).join(', ')}`,
       );
     }
 
@@ -932,11 +938,14 @@ async function main() {
             spawns: phaseSpawns,
             // Issue #74: reloads once the daemon is quiet (reported, not judged).
             settledReloads,
-            settledReloadSpawnsPerWorktree: settledReloads?.length
-              ? Math.round(
-                  (Math.max(...settledReloads.map((r) => r.spawns)) / worktreeCount) * 100,
-                ) / 100
-              : null,
+            // null when there is no sample or one never got quiet.
+            settledReloadSpawnsPerWorktree:
+              settledReloads?.length && settledReloads.every((r) => r.spawns !== null)
+                ? Math.round(
+                    (Math.max(...settledReloads.map((r) => r.spawns as number)) / worktreeCount) *
+                      100,
+                  ) / 100
+                : null,
           }
         : { skipped: uiProblem },
       idleCpu: idle,
@@ -1167,7 +1176,7 @@ Tracked budgets are known to fail until the issue they name lands: they are list
 |---|---|
 | Time to first paint (cold) | ${fp ? fmt(fp.coldMs) : 'skipped'} |
 | Time to first paint (warm reload; 3 samples) | ${fp ? `${fmt(fp.warmMs)} (${fp.warmSamplesMs.join(' / ')} ms)` : 'skipped'} |
-| Warm reload once the daemon is quiet: git spawns (per worktree, worst of 3; reported, not judged) | ${fp?.settledReloads?.length ? `${(fp.settledReloads as Array<{ spawns: number }>).map((x) => x.spawns).join(' / ')} (${fp.settledReloadSpawnsPerWorktree})` : 'n/a'} |
+| Warm reload once the daemon is quiet: git spawns (per worktree, worst of 3; reported, not judged) | ${fp?.settledReloads?.length ? `${(fp.settledReloads as Array<{ spawns: number | null }>).map((x) => x.spawns ?? 'n/a').join(' / ')} (${fp.settledReloadSpawnsPerWorktree ?? 'n/a'})` : 'n/a'} |
 | Idle CPU, daemon + git children (avg over ${Math.round(r.idleCpu.durationMs / 1000)} s / worst 1 s) | ${r.idleCpu.supported ? `${r.idleCpu.averagePercent.toFixed(2)} % / ${r.idleCpu.maxIntervalPercent.toFixed(2)} %` : 'n/a'} |
 | Refresh: write → SSE \`worktree.changed\` (p50 / p95 / max) | ${fmt(r.refresh.sse.p50)} / ${fmt(r.refresh.sse.p95)} / ${fmt(r.refresh.sse.max)} (${r.refresh.sse.count}/${r.refresh.iterations}) |
 | Refresh: write → UI sidebar update (p50 / p95 / max) | ${ui ? `${fmt(ui.p50)} / ${fmt(ui.p95)} / ${fmt(ui.max)} (${ui.count}/${r.refresh.iterations})` : 'skipped'} |

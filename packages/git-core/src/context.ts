@@ -429,12 +429,16 @@ export class GitContext {
     }
     const running = this.configReadRuns.get(key);
     if (running) {
+      // A joined read is used only when its output had no `include*` key: included files and
+      // `gitdir:` / `onbranch:` conditions are not in the key, so with them another worktree (or
+      // file) could resolve differently (a filter or fsmonitor enabled in one worktree only).
+      // Such a read is not shared: this operation reads for itself.
       if (running.spawnedAt === null || running.spawnedAt > askedAt) {
-        return ((await running.promise) as { value: T }).value;
-      }
-      if (!signature.racy) {
+        const shared = (await running.promise) as { value: T; includes: boolean };
+        if (!shared.includes) return shared.value;
+      } else if (!signature.racy) {
         // Started before this operation asked, but its signatures (taken before git read) are this
-        // operation's: nothing changed in between. Not with `include*` (files not in the key).
+        // operation's: nothing changed in between.
         const shared = (await running.promise) as { value: T; includes: boolean };
         if (!shared.includes) return shared.value;
       }

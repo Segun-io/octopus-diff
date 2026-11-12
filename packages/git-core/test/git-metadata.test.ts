@@ -336,6 +336,41 @@ describe('config scan reuse', () => {
     }
   });
 
+  it('worktrees refreshing together do not share a read when a condition includes a filter for one only', async () => {
+    const repo = fx.repo('cfg-cond', {
+      files: { 'x.txt': 'x\n', '.gitattributes': '* filter=cond\n' },
+    });
+    const linked = path.join(fx.root, 'cfg-cond-linked');
+    fx.git(repo, ['worktree', 'add', '-q', '-b', 'side', linked]);
+    const include = path.join(fx.root, 'cfg-cond.inc');
+    writeFileSync(include, `[filter "cond"]\n\tclean = ${script('cond')}\n`);
+    // Only the worktree on `side` includes the filter driver; both read the same config files.
+    fx.git(repo, ['config', 'includeIf.onbranch:side.path', include]);
+    fx.write(path.join(repo, 'x.txt'), 'main\n');
+    fx.write(path.join(linked, 'x.txt'), 'linked\n');
+    const core = createGitCore(fx.coreOptions());
+    try {
+      const { worktrees } = await core.resolveProject(repo);
+      const wts = worktrees.map((w) => ({
+        projectId: w.projectId,
+        worktreeId: w.id,
+        path: w.path,
+      }));
+      expect(wts).toHaveLength(2);
+      clearMarkers();
+      touch(path.join(repo, 'x.txt'));
+      touch(path.join(linked, 'x.txt'));
+      // All at once (and the config just written, so racy): a read joined across the two would be
+      // the main worktree's, which does not see the filter, and the linked worktree would run it.
+      await Promise.all(
+        wts.flatMap((wt) => [core.getSummary(wt), core.listChangedFiles(wt, { kind: 'working' })]),
+      );
+      expect(markerNames()).toEqual([]);
+    } finally {
+      await core.dispose();
+    }
+  });
+
   it('never reuses a scan when config includes other files', async () => {
     const repo = fx.repo('cfg-include', {
       files: { 'x.txt': 'x\n', '.gitattributes': '* filter=inc\n' },
