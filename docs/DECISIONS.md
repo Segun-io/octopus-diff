@@ -2411,3 +2411,6 @@ clock with a fake client (`apps/daemon/test/forge-fleet.test.ts`); nothing was m
      for free from REST `rate_limit`, a conditional-request change detector, tunable ceilings, coalescing the
      identical batches of clones of one repository, a budget notice outside Settings, a live run of the cost
      check (the opt-in live test now asserts the 1/13/14/20-branch costs).
+     PR #62 review (contracts, additive): `FocusRequest.visible?: boolean`. The focus report used "nothing
+     selected" as "tab hidden", so a visible Inbox or folder Overview (which selects no worktree) switched the
+     forge polling to its idle pace. Newer clients send `visible`; without it the old inference applies.

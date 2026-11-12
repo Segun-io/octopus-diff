@@ -6,6 +6,7 @@ import {
   DiffQuerySchema,
   DiffScopeSchema,
   FilesQuerySchema,
+  FocusRequestSchema,
   InboxQuerySchema,
   ProjectSchema,
   RefNameSchema,
@@ -242,5 +243,16 @@ describe('domain schemas', () => {
     };
     expect(ChangedFileSchema.parse(file)).toEqual(file);
     expect(ChangedFileSchema.safeParse({ ...file, status: 'weird' }).success).toBe(false);
+  });
+});
+
+describe('FocusRequestSchema', () => {
+  it('visible is optional (older clients) and must be a boolean', () => {
+    expect(FocusRequestSchema.parse({ worktreeId: null })).toEqual({ worktreeId: null });
+    expect(FocusRequestSchema.parse({ worktreeId: null, visible: true })).toEqual({
+      worktreeId: null,
+      visible: true,
+    });
+    expect(FocusRequestSchema.safeParse({ worktreeId: null, visible: 'yes' }).success).toBe(false);
   });
 });
