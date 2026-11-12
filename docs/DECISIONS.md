@@ -3283,3 +3283,66 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      ("a refresh fetches (projects + files)", ≥ 2 requests) described the old behaviour. It now checks that each
      refresh asks `/api/inbox?worktreeIds=` and never `/api/projects`, and still prints the requests and paths per
      refresh (1 / 1 / 1 locally). It judges no timing, as before.
+
+## The Inbox view is removed; the app lands on a worktree (session, 2026-11-12; roadmap #83, follow-up of #13)
+
+272. **Landing view = a worktree, not a list.** `View` loses `{ kind: 'inbox' }` and gains `{ kind: 'none' }` ("nothing
+     open yet", the store's initial value). `useLanding` (App) settles it as soon as `/api/projects` has landed:
+     the worktree that was open last (`lastWorktree`, #273) when it is still a row of the sidebar list, else the
+     **top row of the flat list** (pinned first, then latest activity: `sidebar.order[0]`). The same effect lands
+     again when the open worktree disappears (a removed project). While a row exists the pane stays blank for the
+     one frame in between. **No row** (every worktree is filtered out, the filters being the only way to get there
+     with projects present): the main pane is an empty state (`data-testid="no-worktree"`) that says what to do, with
+     **Clear filters** and **Add repositories…** (the existing folder picker dialog). **No project at all** is the
+     unchanged onboarding screen (`EmptyState` with the folder picker). Only a row of the *filtered* list counts for
+     the landing, so a filter set before the landing is respected. Supersedes the "kept" half of #242 (the Inbox view,
+     the landing view, `g i`, the palette's "Go to Inbox", `J`/`K` stepping to it, context bar `data-view=inbox` and
+     `data-count`).
+273. **`lastWorktree` pref (new).** Before this work nothing restored the open worktree: `view` was in memory only and
+     the URL carries no state, so a reload always showed the Inbox. The brief said the restore "stays"; there was none,
+     so the smallest honest version is a persisted device preference (`prefs.lastWorktree`, a worktree id, `''` =
+     none, normalised like the others: no version bump, ignored when it is not a string or longer than 256). The
+     open worktree is written to it (App effect), the store starts at `none`, and #272 picks it up. An id that is not
+     in the list any more falls back to the top row. The URL is not touched.
+274. **What the Inbox view gave, and where each part went.** (a) *Cross-worktree "to review" files list*: dropped as a
+     view. The same facts are one click or one key away: the unreviewed count on every row, the tab title and favicon
+     dot (`unreviewedTotal`, own files only), the worktree's own file list, and `n` ("next unreviewed file anywhere"),
+     which still crosses worktrees. (b) *The data*: the web still fetches the daemon's inbox rows
+     (`useInboxQuery`, `GET /api/inbox`, streamed in project batches, patched by `worktree.changed` deltas through
+     `GET /api/inbox?worktreeIds=`, #51) because `n`, the bulk "every worktree" plan, the bulk `expectedStateHashes`
+     and the "from main" refs read them; contracts and the daemon route are untouched. The model's `inbox` query field
+     and `inboxUnfiltered` are gone; `inboxEntries` stays as the review data. (c) *Per-worktree group headers in the
+     file list* (`GroupHeader`: name, unreviewed, `k/total files`), the diff header's worktree name, the context bar's
+     `Inbox  N worktrees  M files` and the Inbox's separate error banner: dropped with the view (the file list is one
+     worktree's: `FileList` loses `grouped`, `disabled`, `dimDisabled` and the group menu; the `file-group` container
+     stays, one per list). The "expanding the group does not change the file count in the Inbox group header" test
+     goes with the header; "Review N shown" keeps its own test for the same invariant.
+275. **Bulk review after the Inbox.** `Shift+R` and the button above the file list act on the open worktree (the
+     button's label is always `Review N shown`, `data-target=worktree`). Folder and project levels stay where #13/#242
+     put them: their Overviews (`Mark all reviewed` / `unreviewed`) and the row context menus. The Inbox's "everything"
+     is kept as two **palette commands**, `Review all worktrees in the list` (`markEveryVerified`) and `Mark all
+     worktrees in the list unreviewed` (`markEveryUnreviewed`; `Commands.markEvery`, `currentPlan(reviewed, every)`):
+     they act on every worktree the sidebar filters leave in the list (no filter, "show reviewed" on and the review
+     data complete: **one `all` request**, as before; otherwise one request per worktree with its paths), skip review-off
+     worktrees, respect the eye and the "from main" chip, ask for confirmation across several worktrees and are
+     undoable. The palette item says what it would mark (`30 files to mark reviewed`), which is also what the e2e reads.
+     `planBulk`'s `view: 'inbox' | 'worktree'` + `inboxUnfiltered` became one `allUnfiltered` flag; the model's
+     `allGroups` / `allEntries` are the groups the command covers.
+276. **Keys.** `g i` is unbound, and the `g` key is no longer swallowed (there is no chord left: `pendingG`,
+     `CHORD_TIMEOUT_MS` and the `goInbox` command are removed; `CommandDef.chord` stays as generic metadata). `J`/`K`
+     walk the list (`sidebar.order`) with no stop above the first row (`stepWorktree` no longer has the `null` Inbox
+     item); from an Overview either key opens the first row. `n` from an Overview or with nothing open opens the target
+     file's worktree (it used to do that only from a filtered Inbox).
+277. **`reviewOffDisplay` is removed** (pref, Settings → General "Worktrees with review off"): it only chose whether
+     the Inbox dimmed, hid or listed review-off worktrees. The sidebar shows review-off rows on their own terms
+     (`review off`, #244); the open worktree's own list was never affected. Old stored values are dropped by
+     `normalizePrefs`.
+278. **Tests and scripts.** Unit: new landing tests (`app.test.tsx`: top row, last worktree restored, unknown last
+     worktree, disappearing worktree, empty state with its two buttons, no Inbox anywhere, `n`/`J` from an Overview,
+     `g i` unbound), `ux.test.tsx` (the two palette bulk commands, with and without a sidebar filter, and `Shift+R` for
+     one worktree), `lib.test.ts`, `model.test.ts`, `prefs.test.ts`; older tests that assumed the Inbox now open a
+     worktree. e2e: `AppPage.selectInbox()` is replaced by `expectLanded()`, `openPaletteCommand`, `everyWorktreeCount`
+     and `runEveryWorktree`; every spec that used the Inbox is rewritten to the equivalent behaviour (list in
+     `docs/reports/web-no-inbox.md`). `apps/web/scripts/perf.ts` measures the landing worktree's 200-file list; its load
+     wait is the indicator going idle (the review data complete) and `J` starts at the landing row. `shots.ts` /
+     `browser-check.ts` / `screenshots.ts` name the first state `landing`, not `inbox`.

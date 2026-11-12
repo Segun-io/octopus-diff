@@ -38,6 +38,11 @@ async function commitAll(cwd: string, env: IsolatedGitEnv, message: string): Pro
 /** "Review all" (the toolbar button) in To review for one worktree, which moves its bookmark. */
 async function reviewAll(app: AppPage, worktreeId: string): Promise<void> {
   await app.selectWorktree(worktreeId);
+  // The worktree may already have been open (the app lands on the top row, #83) with a file list
+  // from before the commit: "Review all" sends that list's state hash and the daemon skips a
+  // worktree that moved on ("changed meanwhile"), as it should. Wait for the refresh the event
+  // started, so the list on screen is the one the button marks.
+  await expect(app.byTestId(TEST_IDS.refreshIndicator)).toHaveAttribute('data-state', 'idle');
   const button = app.byTestId(TEST_IDS.markAllButton);
   await expect(button).not.toHaveAttribute('data-count', '0');
   await button.click();
