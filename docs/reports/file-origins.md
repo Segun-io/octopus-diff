@@ -113,3 +113,7 @@ None added or removed (`pnpm credits:check` passes inside `pnpm lint`).
   `working` lists (pass their files; the working scope only hits rule 1).
 - `integrationRef` is the label; `n` is the base for the mixed-file toggle (#34: the file in the branch scope).
 - `baseFiles` = files with `origin === 'base'`; `unreviewedOwnFiles` = not reviewed and not base.
+
+## PR review round 1 (Greptile on #64)
+
+- **The fallback lost mixed rename origins** (valid). Without `files`, `listInputs` used `diff-tree --name-only --no-renames`, so a committed rename showed up as a deleted old name plus an added new name with `oldPath: null`; a branch that renamed `both.txt` and merged a change to `both.txt` from main reported `both-new.txt` as own, not mixed. The fallback now also reads the rename pairs (`diff-tree -r -z --raw --find-renames`, memoized by the commit ids like the name lists), lists a rename as one entry (new path with its `oldPath`) and drops the old name, like a review list. Cost: one more commit-to-commit read on the fallback path only (cached by commit ids; the daemon passes `files`, so its path is unchanged). Test: the existing rename scenario now also runs without `files` and must give the same answer (it failed before: the old names appeared as separate entries and `both-new.txt` came out own).

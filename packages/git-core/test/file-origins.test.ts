@@ -280,11 +280,16 @@ describe('readFileOrigins: committed history', () => {
     syncMain(s);
     merge(s.work, 'main');
     expect(readFileSync(path.join(s.work, 'both-new.txt'), 'utf8')).toContain('theirs');
-    expect((await classify(core, s.work, { bookmark: s.start })).origins).toEqual({
+    const expected = {
       'both-new.txt': 'mixed:merge',
       'mine-new.txt': 'own',
       'theirs-new.txt': 'base:merge',
-    });
+    };
+    expect((await classify(core, s.work, { bookmark: s.start })).origins).toEqual(expected);
+    // Without `files` the rename pairs come from git itself: the same answer (PR #64 review).
+    expect((await classify(core, s.work, { bookmark: s.start, withFiles: false })).origins).toEqual(
+      expected,
+    );
   });
 
   it("own work reverted after the bookmark stays own (HEAD has N's version, main never touched it)", async () => {

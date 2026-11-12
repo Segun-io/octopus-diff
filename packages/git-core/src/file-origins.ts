@@ -16,6 +16,7 @@ import type { GitContext, RepoInfo } from './context.js';
 import { readStatus } from './diff.js';
 import type { ResolvedRef } from './discovery.js';
 import { integrationBase, remoteTrackingOf, resolveTip } from './integration-base.js';
+import { parseRawNumstat } from './parse/diff-output.js';
 import { OID } from './ref-files.js';
 import {
   headRef,
@@ -113,6 +114,43 @@ export async function changedPaths(
   const stamp = await ctx.historyStamp(repo);
   const key = `names${NUL}${repo.commonDir}${NUL}${stamp}${NUL}${from}${NUL}${to}`;
   return (await ctx.memo(key, run)) ?? EMPTY;
+}
+
+/**
+ * The renames between two commits as `new path key -> old path key` (`diff-tree -r -z --raw
+ * --find-renames`, rename detection as in the review list), memoized by the commit ids like
+ * `changedPaths`. Used to list `base..HEAD` the way a review list does when the caller gave no files.
+ */
+async function committedRenames(
+  ctx: GitContext,
+  repo: RepoInfo,
+  from: string,
+  to: string,
+): Promise<ReadonlyMap<string, string>> {
+  if (from === to) return new Map();
+  const run = async (): Promise<ReadonlyMap<string, string>> => {
+    const result = await ctx.git(repo, [
+      'diff-tree',
+      '-r',
+      '-z',
+      '--raw',
+      '--find-renames',
+      '--no-commit-id',
+      '--end-of-options',
+      from,
+      to,
+      '--',
+    ]);
+    const renames = new Map<string, string>();
+    for (const entry of parseRawNumstat(bstrFromBuffer(result.stdout)).raw) {
+      if (entry.status === 'R') renames.set(keyOf(entry.path), keyOf(entry.srcPath));
+    }
+    return renames;
+  };
+  if (!OID.test(from) || !OID.test(to)) return run();
+  const stamp = await ctx.historyStamp(repo);
+  const key = `renames${NUL}${repo.commonDir}${NUL}${stamp}${NUL}${from}${NUL}${to}`;
+  return (await ctx.memo(key, run)) ?? new Map();
 }
 
 function parseNames(stdout: Buffer): ReadonlySet<string> {
@@ -213,8 +251,19 @@ async function listInputs(
     unstaged: false,
   };
   if (base !== null && head !== null) {
+    // A rename is one entry (new path, with its old path), not a deleted and an added file: the
+    // review list says so and the rules look at the old path too (a mixed rename).
+    const renames = await committedRenames(ctx, repo, base, head);
+    const sources = new Set(renames.values());
     for (const key of await changedPaths(ctx, repo, base, head)) {
-      byKey.set(key, { ...committed, path: key });
+      if (sources.has(key) && !renames.has(key)) continue; // the old name of a rename
+      const oldPath = renames.get(key) ?? null;
+      byKey.set(key, {
+        ...committed,
+        path: key,
+        oldPath,
+        status: oldPath === null ? committed.status : 'renamed',
+      });
     }
   }
   if (!repo.bare) {
