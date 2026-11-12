@@ -189,6 +189,8 @@ interface ProjectCache {
   inflight: Promise<void> | null;
   /** The in-flight batch fetch was forced (a later forced call shares it). */
   inflightForced: boolean;
+  /** The forge settings the in-flight fetch started under (it is shared only under the same ones). */
+  inflightSettings: string;
 }
 
 interface Candidate {
@@ -241,6 +243,7 @@ function emptyCache(): ProjectCache {
     requests: new Map(),
     inflight: null,
     inflightForced: false,
+    inflightSettings: '',
   };
 }
 
@@ -457,7 +460,14 @@ export class ForgeService {
     if (cache.inflight) {
       // A forced fetch already running is as fresh as a new one would be (two browser tabs
       // refreshing the same project cost one forge query, as for details in `#load`).
-      if (!options.force || cache.inflightForced) return cache.inflight;
+      // A settings change (a host override, the switch) queues its own forced refresh: sharing a
+      // batch that captured the previous settings would restore the old forge and requests.
+      if (
+        !options.force ||
+        (cache.inflightForced && cache.inflightSettings === JSON.stringify(this.#forgeSettings()))
+      ) {
+        return cache.inflight;
+      }
       // A forced refresh must see the forge as it is now, not a plain lookup that started earlier.
       return cache.inflight.then(() => this.#refreshProject(item, options));
     }
@@ -475,6 +485,7 @@ export class ForgeService {
       });
     cache.inflight = run;
     cache.inflightForced = options.force === true;
+    cache.inflightSettings = JSON.stringify(this.#forgeSettings());
     return run;
   }
 

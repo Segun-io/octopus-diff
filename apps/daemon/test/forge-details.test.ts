@@ -324,6 +324,24 @@ describe('request detail and repository routes (fake git-core, fake gh)', () => 
     expect(forge.batchFetches).toBe(batches + 1);
   });
 
+  it('a settings change during a forced refresh is not swallowed by sharing it (PR #60 review)', async () => {
+    let release = () => {};
+    forge.batchGate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const batches = forge.batchFetches;
+    const refreshing = api.refreshChangeRequest(featId());
+    await eventually(() => forge.batchFetches === batches + 1);
+    // A host override changes the forge settings while that batch (which captured the old ones) runs.
+    await api.updateSettings({ forges: { hosts: { 'git.acme.io': 'github' } } });
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    forge.batchGate = null;
+    release();
+    await refreshing;
+    // The settings change got a fetch of its own, under the new settings.
+    await eventually(() => forge.batchFetches === batches + 2);
+  });
+
   it('errors on a refresh keep the last good data', async () => {
     await api.getChangeRequest(featId());
     forge.fail = 'HTTP 502';
