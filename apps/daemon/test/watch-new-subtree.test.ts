@@ -117,7 +117,9 @@ function setup() {
     return eventually(
       async () => {
         await writeFile(path.join(dir, `probe-${n++}.txt`), 'x');
-        return raw.find((e) => path.dirname(e.path) === dir && path.basename(e.path).startsWith('probe-'));
+        return raw.find(
+          (e) => path.dirname(e.path) === dir && path.basename(e.path).startsWith('probe-'),
+        );
       },
       10_000,
       50,
