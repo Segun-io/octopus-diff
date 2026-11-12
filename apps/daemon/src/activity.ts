@@ -55,6 +55,12 @@ export interface SnapshotState {
    * changing, and nothing about refs (a fetch or a commit elsewhere must not look like activity).
    */
   stateHash?: string;
+  /**
+   * `SummarySnapshot.omittedPlan` (#43): which untracked files the snapshot leaves out. Equal on
+   * both sides, a listed path that is missing is gone; different, paths may have moved between
+   * listed and omitted, so the comparison is coarse.
+   */
+  omittedPlan?: string;
 }
 
 export function entryKey(e: Pick<SummarySnapshotEntry, 'path' | 'rawPath'>): string {
@@ -75,6 +81,7 @@ export function snapshotState(
     total: snapshot.total,
     truncated: snapshot.truncated,
     ...(snapshot.contentHash === undefined ? {} : { stateHash: snapshot.contentHash }),
+    ...(snapshot.omittedPlan === undefined ? {} : { omittedPlan: snapshot.omittedPlan }),
     head: {
       sha: summary.headSha,
       branch: summary.branch,
@@ -247,7 +254,8 @@ function deletedOid(e: SummarySnapshotEntry): string | null {
  * The entries one refresh produces. Files that left the uncommitted set together with a HEAD change
  * are listed on the `commit` / `head` entry (committed, merged or checked out), not as restored.
  * More than `ACTIVITY_BULK_THRESHOLD` file changes fold into one `bulk` entry; a truncated snapshot
- * on either side gives one coarse `bulk` entry when anything differs.
+ * on either side, or a change of which untracked files are omitted (#43), gives one coarse `bulk`
+ * entry when anything differs. Omitted untracked files are never entries: new ones add nothing.
  */
 export function diffSnapshots(
   prev: SnapshotState,
@@ -257,7 +265,8 @@ export function diffSnapshots(
 ): ActivityDraft[] {
   const files: ActivityDraft[] = [];
   const left: string[] = [];
-  const coarse = prev.truncated || cur.truncated;
+  // Another set of omitted untracked files (#43): a listed file that left may only be omitted now.
+  const coarse = prev.truncated || cur.truncated || prev.omittedPlan !== cur.omittedPlan;
   // A truncated snapshot cannot see an edit to a path beyond its cap: neither `total` nor a retained
   // entry moves, but the whole-worktree state hash does.
   let coarseChanged =
