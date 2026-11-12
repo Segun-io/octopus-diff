@@ -86,11 +86,14 @@ References to read (do not fork):
   worktree sits in the sidebar, `docs/STATUS-FLOW.md`):
   - `review` ("To review", the default): working tree + index + untracked vs the branch's **review bookmark**, i.e.
     the commits after it plus the uncommitted changes, one patch per file
-  - `branch` with `includeWorking` ("All on branch"): working tree vs merge-base with the default branch
+  - `branch` with `includeWorking` ("All on branch"): working tree vs the integration base of the default branch
+    (the newest default-branch commit HEAD has absorbed, from the local branch or `origin/<default>`;
+    DECISIONS #196)
   - `working` ("Uncommitted"): working tree + index vs `HEAD` (includes untracked files as additions)
   - `staged`: index vs `HEAD`
   - `unstaged`: working tree vs index
-  - `branch`: `HEAD` vs merge-base with the default branch (auto-detected, overridable per project)
+  - `branch`: `HEAD` vs the integration base of the default branch (auto-detected, overridable per project;
+    plain merge-base when there is no `origin/<default>`)
   - `commit`: a single commit (`<sha>^..<sha>`; root commits handled)
 - **Reviewed mark** = app-side flag keyed by `(projectId, path, patchHash)` (no longer by scope kind, DECISIONS
   #95). If the file's patch changes, the key no longer matches, so the file is automatically "unreviewed" again.
