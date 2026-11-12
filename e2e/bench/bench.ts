@@ -553,9 +553,20 @@ async function main() {
     let page: Page | null = null;
     let paint: { cold: number; warm: number[]; fcp: number | null } | null = null;
     // --after-fetch: when is every worktree's merge-noise labelling known? Counted from the start of
-    // the cold paint (a browser opening the app right after the daemon came up).
-    const labelsStart = Date.now();
-    const labelsPoll = AFTER_FETCH ? waitForLabels(client, worktreeCount, labelsStart) : null;
+    // the cold paint's navigation (a browser opening the app right after the daemon came up), the
+    // same starting point as `firstPaint()`'s clock and not before the browser is launched. Without
+    // a UI it starts here.
+    const labelsState: { start: number; poll: ReturnType<typeof waitForLabels> | null } = {
+      start: Date.now(),
+      poll: null,
+    };
+    const startLabels = () => {
+      labelsState.start = Date.now();
+      labelsState.poll = AFTER_FETCH
+        ? waitForLabels(client, worktreeCount, labelsState.start)
+        : null;
+    };
+    if (uiProblem) startLabels();
     const phases: Record<string, [number, number]> = { startup: [startEpoch, summariesEpoch] };
     if (!uiProblem) {
       applyChromiumLibraryPath();
@@ -573,6 +584,7 @@ async function main() {
       }
       page = await context.newPage();
       let from = Date.now();
+      startLabels();
       const cold = await firstPaint(page, daemon.authUrl);
       phases.coldPaint = [from, Date.now()];
       const warm: number[] = [];
@@ -594,6 +606,7 @@ async function main() {
       triggeredByBench: boolean;
       stats: Awaited<ReturnType<typeof labelStats>>;
     } | null = null;
+    const labelsPoll = labelsState.poll;
     if (labelsPoll) {
       let result = await Promise.race([labelsPoll, sleep(10_000).then(() => null)]);
       let triggeredByBench = false;
@@ -730,6 +743,10 @@ async function main() {
     } | null = null;
     if (AFTER_FETCH && setup.origins) {
       const rssBeforeBytes = (await memory(daemon.child.pid as number)).rssBytes;
+      // The spawn window opens before the fetch: it updates the repositories in batches while the
+      // daemon watches their refs, so the first ones are already refreshing while the rest are
+      // still being fetched. The relabel timer below starts when the whole fetch is done.
+      const fetchStart = Date.now();
       const fetched = await setup.origins.fetchMovesOrigin(2);
       const from = Date.now();
       const t0 = performance.now();
@@ -743,7 +760,7 @@ async function main() {
       const relabelMs = performance.now() - t0;
       await settled(daemon.spawnFile, daemon.activeFile, 500, 30_000);
       const spawned = spawnStats(
-        within(gitSpawns(await readSpawns(daemon.spawnFile)), from, Date.now()),
+        within(gitSpawns(await readSpawns(daemon.spawnFile)), fetchStart, Date.now()),
       );
       liveFetch = {
         fetchMs: fetched.ms,

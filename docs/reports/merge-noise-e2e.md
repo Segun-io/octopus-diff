@@ -142,3 +142,9 @@ None added or removed.
   `git-core has been disposed` request errors between specs.
 - `pnpm check`: exit 0 (numbers above).
 - Not done: Windows/macOS runs; CI (no push); README screenshots (see Notes).
+
+## PR review round 1 (Greptile on #73)
+
+- **The fetch's spawns were undercounted** (valid). `fetchMovesOrigin(2)` updates the repositories in batches while the daemon watches their refs, but the spawn window opened after every batch had finished, so the processes of the repositories refreshed during the fetch were dropped. The window now opens before the fetch (`fetchStart`); the relabel timer still starts when the whole fetch is done (the waiting time stays a separate figure).
+- **The label timer included the browser's startup** (valid). `labelsStart` was taken before `chromium.launch()`, context and page creation, while `firstPaint()` starts its clock at navigation. For UI runs the label timer now starts right before the cold navigation (same starting point as the cold paint); without a UI it starts where it did.
+- **The committed `results-after-fetch.*` predate both changes**: its live-fetch spawn count (647) uses the old window and its `knownMs` (1889 ms) included the browser startup. A rerun after the fix (`pnpm --filter @octopus-diff/e2e bench --after-fetch`, exit 0, 678 spawns, 60 of 60 relabelled) was made on a machine busy with other sessions (cold paint 309 ms against 145 ms, labels known after 5332 ms), so its timings were not committed; regenerate the results on a quiet machine before quoting them. Spawn counts are not timing-sensitive, so expect about 650-700 for the live fetch.
