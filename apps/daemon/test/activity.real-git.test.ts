@@ -360,8 +360,13 @@ describe('live activity feed (real git, #38)', { timeout: 90_000 }, () => {
     const settledCount = (x: Started) =>
       x.spawns().filter((l) => subcommand(l) !== 'config').length;
     expect(settledCount(a) - lastA).toBe(0);
-    // Startup and the file steps: identical totals; the commit adds exactly one `log`.
-    expect(withSnapshot.slice(0, 4)).toEqual(without.slice(0, 4));
+    // Startup and the file steps: identical totals; the commit adds exactly one `log`. The totals
+    // are compared after the last file step (index 3), not after each one: a startup process
+    // (a relist, a probe) can land in the first or the second step depending on the runner's
+    // speed (macOS CI saw [6,11,16,20] against [7,12,16,20]), which says nothing about the snapshot.
+    expect(withSnapshot[3]).toBe(without[3]);
+    // Every file step after the first settles to the same cost with and without the snapshot.
+    expect(withSnapshot[3] - (withSnapshot[2] ?? 0)).toBe(without[3] - (without[2] ?? 0));
     expect(lastA - lastB).toBe(1);
     // The extra process is the HEAD classification's `git log`.
     // (The review state runs its own `log`s; only the classification's carries `--max-count`.)
