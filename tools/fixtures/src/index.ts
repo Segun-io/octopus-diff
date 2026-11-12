@@ -7,6 +7,7 @@ export * from './generator.js';
 export * from './git.js';
 export * from './large.js';
 export * from './manifest.js';
+export * from './merge-noise.js';
 export * from './oracle.js';
 export * from './perf.js';
 export * from './random.js';

@@ -6,6 +6,8 @@ dir, except `profile:real`, which reads your repositories and never writes to th
 | Command (repository root) | What it does | Output |
 |---|---|---|
 | `pnpm --filter @octopus-diff/e2e bench` | 30 repos × 3 worktrees: startup, cold/warm paint, idle CPU, edit→SSE, payloads, RSS, budgets (about 3 min) | `results.{json,md}` |
+| `pnpm --filter @octopus-diff/e2e bench --after-fetch` | The 30 × 3 layout where every repo has a bare `origin`, every linked worktree merged `origin/main` and a fetch moved `origin/main` before the daemon starts (the UI opens on To review). Also records the time until every worktree's merge-noise labels are known, then a second fetch while the daemon runs: relabel time, git spawns by subcommand, RSS (issue #35; about 3 min) | `results-after-fetch.{json,md}` |
+| `pnpm --filter @octopus-diff/e2e bench --to-review` | Control for the above: the plain 30 × 3 layout with the UI opening on To review (no origins). Not committed (`--out <dir>` to keep it) | `results-to-review.{json,md}` |
 | `pnpm --filter @octopus-diff/e2e bench --layout large-ci` | One monorepo, ~20k tracked files, three worktrees (a 30k-line rewrite; a stale index; 5k untracked). Fixture in 2 s | `results-large-ci.{json,md}` |
 | `pnpm --filter @octopus-diff/e2e bench --layout large` | Same shape at 100k files, 30k untracked, 300k-line rewrite. Fixture in 10 s | `results-large.{json,md}` |
 | `pnpm --filter @octopus-diff/fixtures fixtures large --layout large-ci` | Only builds the large layout and prints its paths | |
@@ -13,7 +15,7 @@ dir, except `profile:real`, which reads your repositories and never writes to th
 | `pnpm --filter @octopus-diff/web build` then `pnpm --filter @octopus-diff/web perf` | Render bench in Chromium on the large mock dataset (30 worktrees × 200 files; no daemon). Starts its own mock + `vite preview` (fresh every run, about 15 s). `SCOPE=review`, `MOCK_MERGE_NOISE=0`, `PERF_OUT=<file>`, `BASE_URL` for a server you started (must serve `MOCK_DATASET=large`) | `web-perf.json` |
 | `pnpm --filter @octopus-diff/web perf:smoke` | Same script, fewer iterations (about 8 s); structural checks only. Runs in the CI `e2e` job | exit code |
 
-Options for `bench`: `--idle-seconds N`, `--iterations N`, `--no-ui`, `--out <dir>`, `--strict`. pnpm 12 forwards
+Options for `bench`: `--idle-seconds N`, `--iterations N`, `--no-ui`, `--out <dir>`, `--strict`, `--after-fetch`, `--to-review` (both small layout only). pnpm 12 forwards
 arguments as they are (no `--` needed; a literal `--` is tolerated). Build first (`pnpm build`).
 
 ## Budgets and the exit code
@@ -31,6 +33,8 @@ arguments as they are (no `--` needed; a literal `--` is tolerated). Build first
 A *tracked* budget is known to fail today. It prints `FAIL (tracked: #n)` and does not turn the run red. When the
 issue lands, delete the entry from `TRACKED` in `e2e/bench/bench.ts` (the bench prints `PASS (tracked …; remove it)`
 once it passes), so the budget is enforced from then on. `--strict` counts tracked budgets as failures.
+
+`--after-fetch` is judged by the same budgets as the plain 30 × 3 run (cold paint, warm reload, idle CPU, refresh, startup spawns per worktree); the fetch figures are report-only (no new budget). Its fixtures come from `addBenchOrigins` in `tools/fixtures/src/merge-noise.ts`, an opt-in: `generateFixtures({ bench })` and every other bench stay without remotes. The labels cost shows up as the live-fetch table: `merge-base` + `diff-tree` are the label work (about 3.3 per linked worktree, at most 2 at once); `status` and `diff` are the summary refreshes the moved ref triggers in every worktree.
 
 ## How the large layout is built
 
