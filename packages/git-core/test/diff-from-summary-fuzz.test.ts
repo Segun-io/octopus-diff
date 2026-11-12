@@ -12,7 +12,8 @@
  * On a case-folding filesystem (macOS, `OCTOPUS_DIFF_TEST_FOLDS_CASE=1`) the summary route is off by
  * design (#288): the equality checks run all the same and no call may take it.
  */
-import { cpSync } from 'node:fs';
+import { cpSync, existsSync } from 'node:fs';
+import path from 'node:path';
 import type { DiffOptions, DiffScope, GitCore, GitFileDiff } from '@octopus-diff/contracts';
 import { isGitCoreError } from '@octopus-diff/contracts';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -23,6 +24,7 @@ import { createFixture, type Fixture } from './helpers/fixture.js';
 import { worktreesFoldCase } from './helpers/folds.js';
 import {
   abs,
+  allowNestedRepositories,
   BODIES,
   nextOp,
   PATHS,
@@ -65,6 +67,10 @@ function setupRepo(name: string, r: () => number): string {
   fx.git(repo, ['branch', 'side']);
   fx.write(abs(repo, 'side-only.txt'), 'on main\n');
   fx.commitAll(repo, 'third');
+  // An untracked directory with its own old .gitignore: where a nested repository is created.
+  fx.write(abs(repo, 'nest/.gitignore'), '*.tmp\n');
+  fx.write(abs(repo, 'nest/n1.txt'), 'one\n');
+  fx.write(abs(repo, 'nest/sub/n2.txt'), 'two\n');
   // Half of the repositories name a global excludes file the ops rewrite.
   if (r() < 0.5) fx.git(repo, ['config', 'core.excludesFile', `${repo}.excludes`]);
   return repo;
@@ -100,6 +106,7 @@ async function runSeed(
   const r = prng(seed);
   silentlyEdited.length = 0;
   useUniverse(planShapes);
+  allowNestedRepositories(0);
   const repo = setupRepo(`dfuzz-${seed.toString(16)}`, r);
   const wt = locator(repo);
   const root = fx.git(repo, ['rev-list', '--max-parents=0', 'HEAD']).trim();
@@ -107,23 +114,45 @@ async function runSeed(
   const reasons = new Map<string, number>();
   const summaryBefore = fileDiffRoutes.summary;
   let compared = 0;
+  let nestedNow = false;
+  // The rule files must be older than the first summary for it to vouch for them.
+  await new Promise((resolve) => setTimeout(resolve, 60));
   await cores.fast.getSummary(wt);
   for (let step = 0; step < STEPS; step++) {
+    // One nested repository per seed (git init + commit inside a directory, event lost, PR #93 P1),
+    // in the second half: it keeps the route off below it for the rest of the run.
+    if (step === Math.floor(STEPS / 2)) {
+      allowNestedRepositories(1);
+      // Scripted too, so every seed has one: a repository inside the untracked `nest/` right
+      // before the diffs of this step are asked, no summary in between.
+      const nest = abs(repo, 'nest');
+      if (existsSync(nest) && !existsSync(path.join(nest, '.git'))) {
+        fx.git(nest, ['init', '-q'], { allowFail: true });
+        fx.git(nest, ['add', '-A'], { allowFail: true });
+        fx.git(nest, ['commit', '-q', '-m', 'inner', '--allow-empty'], { allowFail: true });
+        log.push(`${step}: nested repository in nest (scripted)`);
+        nestedNow = true;
+      }
+    }
     const ops = 1 + Math.floor(r() * 3);
     const touched = new Set<string>();
     let lost = false;
+    let nested = nestedNow;
+    nestedNow = false;
     for (let i = 0; i < ops; i++) {
       const done = nextOp(r)(fx, repo, r);
       if (!done) continue;
       if (done.silent) lost = true;
       log.push(`${step}: ${done.name}`);
+      if (done.name.startsWith('nested repository')) nested = true;
       for (const p of done.touched) touched.add(p);
     }
     // The state: brought up to date from the touched paths (a watcher), from fewer (events lost),
     // by a full summary, or not at all (the diff is asked before any summary has seen the step).
     const roll = r();
     let mode: string;
-    if (roll < 0.15) mode = 'none';
+    // A step that created a nested repository is asked about before any summary has seen it.
+    if (roll < 0.15 || nested) mode = 'none';
     else if (roll < 0.25) mode = 'full';
     else if (roll < 0.35 && touched.size > 0) mode = 'fewer';
     else mode = 'exact';
@@ -147,6 +176,9 @@ async function runSeed(
     const candidates = new Set<string>(listed.map((file) => file.path));
     for (let i = 0; i < 3; i++) candidates.add(pick(r, PATHS));
     const picked = [...candidates].sort(() => r() - 0.5).slice(0, PER_STEP);
+    // The files of the untracked `nest/`, always: where the nested repository appears.
+    for (const file of ['nest/n1.txt', 'nest/sub/n2.txt'])
+      if (!picked.includes(file)) picked.push(file);
     for (const file of picked) {
       const options: DiffOptions = { defaultBranch: 'main', ...(pick(r, VIEWS) ?? {}) };
       const asked = `seed 0x${seed.toString(16)} step ${step} (${mode}) scope ${JSON.stringify(scope)} file ${JSON.stringify(file)} options ${JSON.stringify(options)}\n${log.slice(-12).join('\n')}`;

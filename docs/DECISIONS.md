@@ -3983,3 +3983,31 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      `useUniverse` in `helpers/fuzz-ops.ts`, caps 1 and 2, the directory-count invariants and thresholds) were ported into
      the shared-operations structure; the set of `it`/`describe` titles and every threshold is identical to main's.
 
+### Nested repositories above the file (PR #93, another P1, 2026-11-12)
+
+340. **The summary route refuses a path with a `.git` in any directory above it.** (Review: an untracked `dir/file.txt`
+     with an old, unchanged `dir/.gitignore`, then a repository created and committed inside `dir` before the next
+     summary: the parent's index, HEAD, ignore files and the file's signature are all unchanged, so every check passed
+     and the route returned an addition where the whole scope lists `dir/` and says `not_found`.) `check()` now also runs
+     `nestedRepositoryAbove(root, [key])` beside the read, one `lstat` of `<ancestor>/.git` per ancestor directory (root
+     excluded: its `.git` is this repository), in parallel with the stamp, HEAD and signature reads; the answer is the
+     reason `nested-repository`. The helper **is the incremental summary's own ancestor check, extracted** to
+     `incremental.ts` and now used by both (`collectIncremental` for hinted paths, the diff route), so the two cannot
+     disagree. It counts a `.git` directory or **file** (a gitlink to a separate git dir, a linked worktree) and covers
+     a repository created in any ancestor, deep or shallow, including one in a directory the summary recorded without
+     one; the kernel resolves symlinked ancestors, so a path through a link to a repository is seen too (and a directory
+     replaced by a symlink also moves the file's signature). Checked on the **tracked** route too: with the file in the
+     parent's index git keeps diffing it normally even inside a nested repository (the reference core and the stale
+     route returned the same bytes), so nothing was wrong there; the check refuses it anyway (a fallback costs one
+     whole route, a vendored repository above a tracked file is rare, and "the track cannot be stale about a repository
+     appearing" is simpler to state than the exception). Cost: one parallel `lstat` per ancestor inside the existing
+     file-system round (about 7 for the bench paths): not measurable (tracked 15-16 ms, untracked 2 ms, as before).
+     Tests: the exact repro, a `.git` file (`--separate-git-dir`), a repository in a deeper ancestor with a sibling
+     file, a directory replaced by a symlink to a repository, and a tracked file (all against the reference core;
+     four failed first with the check removed); mutations killed: check removed, parent-only, directory-only, reason
+     dropped. `diff-from-summary-fuzz` gained a nested repository per seed (a scripted one in the untracked `nest/`
+     in the second half and a random operation, `helpers/fuzz-ops.ts` `allowNestedRepositories`; the step is asked with
+     no summary in between): it keeps the equality but its random history rarely isolates the case (other refusals
+     come first, files get committed), so the deterministic tests are the guard and the fuzz did **not** kill the
+     check-removed mutant.
+

@@ -175,3 +175,12 @@ daemon run twice more with the same counts); folding mode git-core 414 + 16 skip
 Diff-open, 100k layout after the merge (the untracked-heavy worktree now lists 700 files under the cap): modified 15 ms / 1 spawn in all three worktrees; a listed
 untracked file 2 ms (20 ms in the untracked-heavy worktree) / 0 spawns; a file the cap omitted 271 ms / 2 spawns (the whole route, unchanged from before this work:
 `diff --raw` and `status`; the summary has nothing to serve it from); the 300k-line rewrite 278 ms.
+
+## PR #93 review, round 4: nested repositories
+
+- **Bug (Greptile):** a repository created above an untracked file after the summary left every check unchanged; the route returned an addition where the
+  whole route says `not_found`. Fix (DECISIONS #340): `nestedRepositoryAbove` (the incremental summary's ancestor check, extracted and shared) runs in the
+  route's check round: `.git` directory or file, any ancestor, symlinked ancestors followed by the kernel. Tracked files: git diffs a tracked file normally
+  inside a nested repository, so nothing was wrong; the route refuses anyway.
+- **Tests:** 5 golden cases against the reference core (4 failed first), 4 mutations killed; fuzz extended (nested repository per seed) but, honestly, it does
+  not isolate the case by itself.

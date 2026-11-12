@@ -76,6 +76,16 @@ const PLAN_DIRS = ['node_modules', 'pkg/node_modules', 'dist', 'src/build'];
 export let PATHS: readonly string[] = BASE_PATHS;
 export let DIRS: readonly string[] = BASE_DIRS;
 
+/**
+ * How many nested repositories the operations may still create (0: none). Off by default: a nested
+ * repository keeps incremental refreshes off for the rest of a run, which the incremental fuzz's
+ * thresholds do not allow; the diff fuzz turns it on.
+ */
+let nestedBudget = 0;
+export function allowNestedRepositories(count: number): void {
+  nestedBudget = count;
+}
+
 /** Chooses the universe of the next seed: with the plan shapes (#43) or without. */
 export function useUniverse(planShapes: boolean): void {
   PATHS = planShapes ? [...BASE_PATHS, ...PLAN_PATHS] : BASE_PATHS;
@@ -346,6 +356,26 @@ export const OPS: Array<[number, Op]> = [
       if (r() < 0.3) rmSync(file, { force: true });
       else writeFileSync(file, pick(r, ['*.log\n', '', '!keep.log\n', 'ign/\n']));
       return { name: 'core.excludesFile content', touched: [], silent: true };
+    },
+  ],
+  [
+    1,
+    (fx, repo, r) => {
+      // A repository created inside a directory (git init + a commit) with its event lost: the
+      // paths below it now belong to it, whatever the parent's index, HEAD and ignore files say
+      // (PR #93 P1). Usually a directory that holds untracked files.
+      if (nestedBudget <= 0) return null;
+      // The diff fuzz keeps an untracked `nest/` (with an old .gitignore) for exactly this.
+      const dir = r() < 0.5 ? 'nest' : pick(r, ['dir', 'dir/sub', 'other', 'ünï', 'fresh']);
+      const full = abs(repo, dir);
+      if (!exists(full) || !lstatSync(full).isDirectory() || exists(path.join(full, '.git'))) {
+        return null;
+      }
+      nestedBudget -= 1;
+      fx.git(full, ['init', '-q'], { allowFail: true });
+      fx.git(full, ['add', '-A'], { allowFail: true });
+      fx.git(full, ['commit', '-q', '-m', 'inner', '--allow-empty'], { allowFail: true });
+      return { name: `nested repository in ${dir}`, touched: [], silent: true };
     },
   ],
   // Git operations: the index or HEAD changes (the daemon would see git-dir events and refresh

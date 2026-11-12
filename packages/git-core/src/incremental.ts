@@ -8,7 +8,7 @@ import { mapLimit } from './fs-utils.js';
 import type { IgnoreRecord } from './ignore-sources.js';
 import type { NumstatEntry } from './parse/diff-output.js';
 import type { StatusBranch, StatusEntry } from './parse/status.js';
-import type { UntrackedInfo } from './untracked.js';
+import { absolutePathBuffer, type UntrackedInfo } from './untracked.js';
 import type { UntrackedPlan } from './untracked-plan.js';
 
 /**
@@ -300,6 +300,33 @@ export function regionOfKeys(keys: ReadonlySet<string>): Region | null {
     if (bytes > PATHSPEC_BYTES) return null;
   }
   return new Region([...keys].sort(compareBstr));
+}
+
+/**
+ * Does any directory above one of `keys` (bstr keys; the root itself is the repository) hold a
+ * `.git` entry, directory or file (a nested repository, a linked worktree, a submodule's gitlink
+ * file)? Such a path belongs to that repository, not to this one: the superproject lists the
+ * directory as one entry (or none), whatever its own index says about the file. One `lstat` per
+ * ancestor, in parallel; a symlinked ancestor is followed by the kernel, as git itself would see
+ * what is behind it. Shared by the incremental summary (a hinted path) and the diff route (#41).
+ */
+export async function nestedRepositoryAbove(
+  root: string,
+  keys: Iterable<string>,
+): Promise<boolean> {
+  const ancestors = new Set<string>();
+  for (const key of keys) {
+    for (let slash = key.indexOf('/'); slash >= 0; slash = key.indexOf('/', slash + 1)) {
+      ancestors.add(key.slice(0, slash));
+    }
+  }
+  const nested = await mapLimit([...ancestors], 16, (dir) =>
+    lstat(absolutePathBuffer(root, `${dir}/.git`)).then(
+      () => true,
+      () => false,
+    ),
+  );
+  return nested.some(Boolean);
 }
 
 /** Why the last state cannot take an incremental update at all (or null when it can). */

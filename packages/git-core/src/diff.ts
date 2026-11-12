@@ -31,6 +31,7 @@ import {
   changedSince,
   foldsCase,
   keysInRegion,
+  nestedRepositoryAbove,
   Region,
   readStamp,
   regionOfKeys,
@@ -1545,13 +1546,19 @@ async function diffFromSummary(
    * the thread pool, so rounds, not calls, are what a diff opened then pays for.
    */
   const check = async (signed: boolean): Promise<{ moved: string | null; signature: string }> => {
-    const [stamp, head, signature] = await Promise.all([
+    const [stamp, head, signature, nested] = await Promise.all([
       readStamp(repo, env),
       resolveHead(ctx, repo),
       signed ? lstatSignature(repo.cwd, key) : Promise.resolve(''),
+      // A repository created in a directory above the file since the state: the path belongs to it
+      // (the whole scope lists the directory as one entry), and no stamp or signature of the
+      // parent's moves (PR #93 review). The incremental summary's own ancestor check.
+      nestedRepositoryAbove(repo.cwd, [key]),
     ]);
     const changed = stampChange(track.stamp, stamp);
-    return { moved: changed ?? (head !== headSha ? 'head-moved' : null), signature };
+    const moved =
+      changed ?? (head !== headSha ? 'head-moved' : nested ? 'nested-repository' : null);
+    return { moved, signature };
   };
 
   // The checks run beside the read. The read is a snapshot of one instant, which the checks (the

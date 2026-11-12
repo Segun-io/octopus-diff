@@ -678,6 +678,86 @@ describe('ignore rules that changed since the summary (PR #93 review, P1)', () =
   });
 });
 
+describe('a repository created above the file since the summary (PR #93 review, P1)', () => {
+  const REASON = (reason: string): string => (FOLDS ? 'case-insensitive' : reason);
+  const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 250));
+
+  /** `git init` + a commit inside `dir` (a nested repository: its own `.git`). */
+  function nest(repo: string, dir: string, extra: string[] = []): void {
+    fx.git(path.join(repo, dir), ['init', '-q', ...extra]);
+    fx.git(path.join(repo, dir), ['add', '-A']);
+    fx.git(path.join(repo, dir), ['commit', '-q', '-m', 'inner']);
+  }
+
+  it('the reviewer’s repro: an untracked file whose directory became a nested repository', async () => {
+    const repo = fx.repo('nested-repro', { files: { 'a.txt': 'a\n' } });
+    text(repo, 'dir/.gitignore', '*.tmp\n');
+    text(repo, 'dir/file.txt', 'f\n');
+    await settle();
+    await fast.getSummary(locator(repo));
+    expect((await diffBoth(repo, WORKING, 'dir/file.txt')).route).toBe(SUMMARY);
+    nest(repo, 'dir');
+    const outcome = await diffBoth(repo, WORKING, 'dir/file.txt');
+    expect(outcome.route).toBe(REASON('nested-repository'));
+    expect(outcome.result).toEqual({ error: 'not_found' });
+  });
+
+  it('a `.git` file (a gitlink to a separate git dir) counts as well', async () => {
+    const repo = fx.repo('nested-gitfile', { files: { 'a.txt': 'a\n' } });
+    text(repo, 'dir/.gitignore', '*.tmp\n');
+    text(repo, 'dir/file.txt', 'f\n');
+    await settle();
+    await fast.getSummary(locator(repo));
+    nest(repo, 'dir', [`--separate-git-dir=${path.join(fx.root, 'nested-gitfile-gitdir')}`]);
+    const outcome = await diffBoth(repo, WORKING, 'dir/file.txt');
+    expect(outcome.route).toBe(REASON('nested-repository'));
+    expect(outcome.result).toEqual({ error: 'not_found' });
+  });
+
+  it('a repository created in a deeper ancestor, and in a directory the summary recorded without one', async () => {
+    const repo = fx.repo('nested-deep', { files: { 'a.txt': 'a\n' } });
+    text(repo, 'x/y/z/file.txt', 'deep\n');
+    text(repo, 'x/y/other.txt', 'other\n');
+    await settle();
+    await fast.getSummary(locator(repo));
+    expect((await diffBoth(repo, WORKING, 'x/y/z/file.txt')).route).toBe(SUMMARY);
+    nest(repo, 'x/y');
+    for (const file of ['x/y/z/file.txt', 'x/y/other.txt']) {
+      const outcome = await diffBoth(repo, WORKING, file);
+      expect(outcome.route, file).toBe(REASON('nested-repository'));
+      expect(outcome.result, file).toEqual({ error: 'not_found' });
+    }
+  });
+
+  it('a path through an ancestor that became a symlink to a repository', async () => {
+    const elsewhere = path.join(fx.root, 'nested-symlink-target');
+    fx.repo('nested-symlink-target', { files: { 'file.txt': 'inside\n' } });
+    const repo = fx.repo('nested-symlink', { files: { 'a.txt': 'a\n' } });
+    text(repo, 'dir/file.txt', 'inside\n');
+    await settle();
+    await fast.getSummary(locator(repo));
+    rmSync(path.join(repo, 'dir'), { recursive: true });
+    symlinkSync(elsewhere, path.join(repo, 'dir'));
+    const outcome = await diffBoth(repo, WORKING, 'dir/file.txt');
+    // `dir` is a symlink entry now: the file is not listed. Whatever refuses it, the answer is the whole route's.
+    expect(['nested-repository', 'stale-signature', 'ignore-rules', 'case-insensitive']).toContain(
+      outcome.route,
+    );
+    expect(outcome.result).toEqual({ error: 'not_found' });
+  });
+
+  it('a tracked file whose directory became a nested repository is never served from the stale state', async () => {
+    const repo = fx.repo('nested-tracked', { files: { 'dir/t.txt': lines(5), 'a.txt': 'a\n' } });
+    text(repo, 'dir/t.txt', lines(6));
+    await settle();
+    await fast.getSummary(locator(repo));
+    expect((await diffBoth(repo, WORKING, 'dir/t.txt')).route).toBe(SUMMARY);
+    nest(repo, 'dir');
+    const outcome = await diffBoth(repo, WORKING, 'dir/t.txt');
+    expect(outcome.route).toBe(REASON('nested-repository'));
+  });
+});
+
 describe('what the summary route refuses (the whole-scope route answers, identically)', () => {
   const REASON = (reason: string): string => (FOLDS ? 'case-insensitive' : reason);
 

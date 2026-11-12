@@ -33,6 +33,7 @@ import {
   keysInRegion,
   mergeSorted,
   type NumstatRecord,
+  nestedRepositoryAbove,
   nextJournal,
   type Region,
   readStamp,
@@ -650,19 +651,7 @@ async function collectIncremental(
   if (kinds.some(Boolean)) return 'directory';
   // A path inside a nested repository (its own `.git` in an ancestor directory): the
   // superproject sees that repository as one entry whose state no event of ours describes.
-  const ancestors = new Set<string>();
-  for (const key of check.keys) {
-    for (let slash = key.indexOf('/'); slash >= 0; slash = key.indexOf('/', slash + 1)) {
-      ancestors.add(key.slice(0, slash));
-    }
-  }
-  const nested = await mapLimit([...ancestors], STAT_CONCURRENCY, (dir) =>
-    lstat(absolutePathBuffer(root, `${dir}/.git`)).then(
-      () => true,
-      () => false,
-    ),
-  );
-  if (nested.some(Boolean)) return 'nested-repository';
+  if (await nestedRepositoryAbove(root, check.keys)) return 'nested-repository';
   // A changed file whose event never came still shows in its signature: recompute it too.
   const presigs = new Map<string, string>();
   const missed: string[] = [];
