@@ -211,6 +211,7 @@ test.describe('UX-4/5/6 settings, themes and assets (UI)', () => {
     await expect(svgIcon).toHaveAttribute('href', /^data:image\/svg\+xml/);
     const live = findWorktree(manifest, 'live').worktree;
     await ui.selectWorktree(live.id);
+    await expect.poll(async () => (await ui.filePaths()).length).toBeGreaterThan(0);
     const [first] = await ui.filePaths();
     if (!first) throw new Error('no files');
     await ui.openFile(first);
