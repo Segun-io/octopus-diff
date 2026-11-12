@@ -3293,3 +3293,8 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      `snapshot`, so it never reaches an API payload) and `GitCoreOptions.incremental?: boolean` (default true; false =
      every summary and file list in full, the kill switch and the bench's A/B). Nothing is renamed or removed, and a
      caller that passes none of it gets the old behaviour.
+273. **Contract (additive): `ScopeOptions.summaryState?: string`.** A list may be updated incrementally only when the
+     caller asks for "the list of the summary state I hold" and that state is git-core's latest summary of the
+     worktree. Without it (any other caller, tests, `getFileDiff`), `listChangedFiles` stays what it was: a full
+     status and diff of the worktree as it is now. Found by `review-fixes.test.ts` (F8): with no summary between an
+     edit of `.gitattributes` and a list, the journal was empty and the cached list came back stale.

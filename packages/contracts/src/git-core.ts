@@ -433,6 +433,14 @@ export interface ScopeOptions extends CallOptions {
    * ahead/behind reference when there is no upstream. If null/undefined, git-core detects it.
    */
   defaultBranch?: string | null;
+  /**
+   * `listChangedFiles` (#40): the `stateHash` of this worktree's latest `getSummary` that the
+   * caller holds, meaning "the list for that state". When it is git-core's own latest summary of
+   * the worktree, a scope that reads the worktree may be answered by updating git-core's last
+   * list for it from the paths whose records changed in the summaries since (one pathspec-limited
+   * `git diff`, the summary's status), instead of a full status and diff. Absent: a full list.
+   */
+  summaryState?: string;
 }
 
 export interface DiffOptions extends ScopeOptions {
