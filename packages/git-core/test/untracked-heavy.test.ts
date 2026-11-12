@@ -580,6 +580,13 @@ describe('summaries and lists above the cap (#43)', () => {
   });
 });
 
+/**
+ * Lets the clock move past the last write before a summary (macOS CI, PR #95): the trust rule for
+ * numstat alongside the status compares ctimes with the summary's start, and a coarse or
+ * ahead-of-clock timestamp could make a file written a moment before look as young as the summary.
+ */
+const ageFiles = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 80));
+
 describe('numstat alongside the status of a full summary (#43)', () => {
   /** A git wrapper that logs every start and end, and holds `status` while `slow` exists. */
   function loggingCore(name: string, extra: Parameters<Fixture['coreOptions']>[0] = {}) {
@@ -608,6 +615,9 @@ describe('numstat alongside the status of a full summary (#43)', () => {
     return {
       core: c,
       lines,
+      /** For an assertion message: what the summary counted and every git call it made. */
+      why: (summary: SummaryResult) =>
+        JSON.stringify({ counts: summary.counts, refresh: summary.refresh, log: lines() }, null, 1),
       reset: () => writeFileSync(log, ''),
       slow: (on: boolean) => (on ? writeFileSync(slow, '') : rmSync(slow, { force: true })),
       /** Did a numstat start before the status ended (side by side)? And how many numstats? */
@@ -631,23 +641,31 @@ describe('numstat alongside the status of a full summary (#43)', () => {
     const probe = loggingCore('speculate');
     try {
       fx.write(path.join(repo, 'a.txt'), 'a\nmore\n');
+      await ageFiles();
       probe.slow(true);
-      await probe.core.getSummary(wt);
+      const cold = await probe.core.getSummary(wt);
       // No kept state, small index: numstat after the status, as before.
-      expect(probe.shape()).toMatchObject({ alongside: false, numstats: 1 });
+      expect(probe.shape(), probe.why(cold)).toMatchObject({ alongside: false, numstats: 1 });
       probe.reset();
       const warm = await probe.core.getSummary(wt);
-      expect(probe.shape()).toMatchObject({ alongside: true, numstats: 1 });
+      // What the status saw first (a numstat runs only for tracked changes), then the calls.
+      expect(warm.counts.unstaged, probe.why(warm)).toBe(1);
+      expect(probe.shape(), probe.why(warm)).toMatchObject({ alongside: true, numstats: 1 });
       expect(warm.additions).toBe(1);
       // A commit (PR #91 P3-1): the guess is the new HEAD, read from the ref files, so a commit with
       // changes left costs one numstat, side by side, at the new commit.
       fx.write(path.join(repo, 'b.txt'), 'b\nb2\nb3\n');
       const head = fx.commitAll(repo, 'move');
       fx.write(path.join(repo, 'a.txt'), 'a\nmore\nand more\n');
+      await ageFiles();
       probe.reset();
       const moved = await probe.core.getSummary(wt);
       const shape = probe.shape();
-      expect(shape).toMatchObject({ alongside: true, numstats: 1, commits: [head] });
+      expect(shape, probe.why(moved)).toMatchObject({
+        alongside: true,
+        numstats: 1,
+        commits: [head],
+      });
       const { updatedAt: _a, refresh: _b, ...got } = moved;
       const { updatedAt: _c, refresh: _d, ...want } = await full.getSummary(wt);
       expect(got).toEqual(want);
@@ -674,10 +692,11 @@ describe('numstat alongside the status of a full summary (#43)', () => {
       await probe.core.getSummary(wt);
       // Clean now: the speculative run is waited for and discarded.
       fx.git(repo, ['checkout', '-q', '--', '.']);
+      await ageFiles();
       probe.reset();
       const clean = await probe.core.getSummary(wt);
       expect(clean.changedFiles).toBe(0);
-      expect(probe.shape().numstats).toBe(1);
+      expect(probe.shape().numstats, probe.why(clean)).toBe(1);
     } finally {
       probe.slow(false);
       await probe.core.dispose();
@@ -688,9 +707,8 @@ describe('numstat alongside the status of a full summary (#43)', () => {
     const repo = fx.repo('speculate-cold', { files: { 'a.txt': 'a\n' } });
     fx.write(path.join(repo, 'a.txt'), 'a\nb\n');
     // Without a margin the proof is "its ctime is older than the summary's start": let the clock
-    // move past the write first, so a coarse or ahead-of-clock timestamp (macOS CI) cannot make
-    // the file look as young as the summary.
-    await new Promise((resolve) => setTimeout(resolve, 80));
+    // move past the write first (see `ageFiles`).
+    await ageFiles();
     const wt = locator(repo);
     const saved = { ...summaryLimits };
     summaryLimits.speculateIndexBytes = 1;
@@ -880,6 +898,7 @@ describe('numstat alongside the status of a full summary (#43)', () => {
       const race = racingCore('race-sub');
       try {
         fx.write(path.join(repo, 'a.txt'), 'a\na2\n');
+        await ageFiles();
         await race.core.getSummary(wt);
         race.arm();
         const running = race.core.getSummary(wt);
