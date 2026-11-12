@@ -1121,11 +1121,7 @@ export class MockBackend {
     return { ok: true, restored };
   }
 
-  inbox(
-    scope: DiffScope,
-    onlyUnreviewed: boolean,
-    projectIds?: readonly string[],
-  ): InboxResponse {
+  inbox(scope: DiffScope, onlyUnreviewed: boolean, projectIds?: readonly string[]): InboxResponse {
     if (scope.kind === 'commit') {
       throw new MockApiError(400, 'bad_request', 'commit scope is not supported by the inbox');
     }
