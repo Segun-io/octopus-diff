@@ -3087,4 +3087,3 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      `offsetHeight` for the virtual rows (the getters `@tanstack/virtual-core` reads). The default viewport (6000 px
      ≈ 100 rows) shows every row of the small fixtures, so older tests are unaffected; a test that is about the window
      calls `setSidebarLayout({ viewport })` before rendering and `scrollSidebarTo(el, top)` to scroll.
-||||||| 3f5d004

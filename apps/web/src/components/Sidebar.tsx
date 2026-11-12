@@ -286,6 +286,9 @@ export function Sidebar() {
             items={items}
             scrollRef={scrollRef}
             selectedId={selectedWorktree}
+            menuId={
+              menu.state?.target.kind === 'worktree' ? menu.state.target.row.worktree.id : null
+            }
             onSelect={onSelect}
             onMenu={onMenu}
             onHide={onHide}

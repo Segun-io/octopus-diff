@@ -34,6 +34,7 @@ export function SidebarList({
   items,
   scrollRef,
   selectedId,
+  menuId = null,
   renderHeader,
   ...rowProps
 }: {
@@ -41,6 +42,8 @@ export function SidebarList({
   /** The scrolling element the list lives in. */
   scrollRef: RefObject<HTMLElement | null>;
   selectedId: string | null;
+  /** The worktree whose actions menu is open: kept mounted, so closing the menu can focus it. */
+  menuId?: string | null;
   renderHeader: (item: Extract<SidebarItem, { kind: 'hiddenHeader' }>) => React.ReactNode;
 } & Omit<RowProps, 'row' | 'selected'>) {
   const selectedIndex =
@@ -48,13 +51,20 @@ export function SidebarList({
       ? -1
       : items.findIndex((i) => i.kind === 'row' && i.row.worktree.id === selectedId);
 
+  const menuIndex =
+    menuId === null ? -1 : items.findIndex((i) => i.kind === 'row' && i.row.worktree.id === menuId);
+
+  // The selected row and the one whose menu is open stay mounted whatever the scroll position:
+  // focus, `aria-current` and J/K keep the first, and the menu returns focus to its opener (the
+  // second) when it closes, which a scrolled-away row could not receive.
   const rangeExtractor = useCallback(
     (range: Range) => {
       const indexes = defaultRangeExtractor(range);
-      if (selectedIndex < 0 || indexes.includes(selectedIndex)) return indexes;
-      return [...indexes, selectedIndex].sort((a, b) => a - b);
+      const extra = [selectedIndex, menuIndex].filter((i) => i >= 0 && !indexes.includes(i));
+      if (extra.length === 0) return indexes;
+      return [...indexes, ...extra].sort((a, b) => a - b);
     },
-    [selectedIndex],
+    [selectedIndex, menuIndex],
   );
 
   const virtualizer = useVirtualizer({

@@ -321,6 +321,31 @@ describe('virtualised sidebar', () => {
     expect(mountedRows().length).toBeLessThanOrEqual(10 + 2 * OVERSCAN + 2);
   });
 
+  it('keeps the row whose menu is open mounted, so closing the menu can return focus to it (PR #82 review)', async () => {
+    setSidebarLayout({ viewport: 580, row: 58 });
+    mount(LARGE);
+    await listed(TOTAL);
+    const opener = mountedRows()[3] as string;
+    const item = document.querySelector<HTMLElement>(
+      `[data-testid="worktree-item"][data-worktree-id="${opener}"]`,
+    ) as HTMLElement;
+    fireEvent.contextMenu(item);
+    await screen.findByRole('menu');
+    // The list scrolls far away while the menu is open: the opener is not in the window...
+    act(() => scrollSidebarTo(scroller(), 200 * 58));
+    await waitFor(() => expect(list().querySelector('li[data-index="200"]')).toBeTruthy());
+    // ...and is still there, to take focus back when the menu closes.
+    expect(mountedRows()).toContain(opener);
+    expect(mountedRows().length).toBeLessThanOrEqual(10 + 2 * OVERSCAN + 2);
+    // Closed, the row follows the window again.
+    await act(async () => {
+      await userEvent.setup().keyboard('{Escape}');
+    });
+    await waitFor(() => expect(screen.queryByRole('menu')).toBeNull());
+    act(() => scrollSidebarTo(scroller(), 201 * 58));
+    await waitFor(() => expect(mountedRows()).not.toContain(opener));
+  });
+
   it('keeps every row of a small list mounted and names the repository on each', async () => {
     setSidebarLayout({ viewport: 6000 });
     mount({ dataset: 'demo' });
