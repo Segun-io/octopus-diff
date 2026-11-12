@@ -92,6 +92,9 @@ test.describe('UX-1 bulk review (UI)', () => {
     ui,
     page,
   }) => {
+    // Since #10 review states are computed on demand (a project is opened), not at startup. The To
+    // review inbox computes every one of them, so this test starts with them all in place.
+    await daemon.client.inbox({ scope: { kind: 'review' } });
     const total = await unreviewedTotal(daemon.client);
     expect(total).toBeGreaterThan(0);
     await ui.open(daemon.authUrl);
