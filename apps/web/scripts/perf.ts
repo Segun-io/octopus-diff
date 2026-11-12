@@ -129,20 +129,26 @@ async function measure(base: string) {
     const pageState = () =>
       page
         .evaluate(() => {
-          const q = (sel: string) => document.querySelector(sel);
+          // No helper functions in here: tsx's keepNames wraps them in a `__name` the page lacks.
+          const viewer = document.querySelector('[data-testid="diff-viewer"]');
           return JSON.stringify({
-            scope: q('[data-testid="scope-select"]')?.getAttribute('data-scope'),
+            scope: document
+              .querySelector('[data-testid="scope-select"]')
+              ?.getAttribute('data-scope'),
             files: document.querySelectorAll('[data-testid="file-item"]').length,
+            groups: document.querySelectorAll('[data-testid="file-group"]').length,
             worktrees: document.querySelectorAll('[data-testid="worktree-item"]').length,
-            current: q('[data-testid="worktree-item"][aria-current="true"]')?.getAttribute(
-              'data-worktree-id',
-            ),
-            firstFile: q('[data-testid="file-item"]')?.getAttribute('data-worktree-id'),
-            viewer: q('[data-testid="diff-viewer"]')?.getAttribute('data-state'),
-            placeholder: q('[data-testid="diff-viewer"]')?.getAttribute('data-placeholder'),
+            current: document
+              .querySelector('[data-testid="worktree-item"][aria-current="true"]')
+              ?.getAttribute('data-worktree-id'),
+            firstFile: document
+              .querySelector('[data-testid="file-item"]')
+              ?.getAttribute('data-worktree-id'),
+            viewer: viewer?.getAttribute('data-state'),
+            placeholder: viewer?.getAttribute('data-placeholder'),
           });
         })
-        .catch(() => '(page gone)');
+        .catch((e: unknown) => `(cannot read the page: ${e instanceof Error ? e.message : e})`);
     const waitStep = async (what: string, wait: Promise<unknown>) => {
       try {
         await wait;
