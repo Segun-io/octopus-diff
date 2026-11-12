@@ -15,7 +15,7 @@ import { type DirtyReason, type SubscribeFn, WatcherService } from '../src/watch
 import { eventually, onCleanup, sleep, tempDir } from './helpers.js';
 
 /**
- * Issue #36 (DECISIONS #212): `@parcel/watcher`'s inotify backend watches a directory that appears,
+ * Issue #36 (DECISIONS #213): `@parcel/watcher`'s inotify backend watches a directory that appears,
  * for that directory only. A subdirectory that already exists by then (`mkdir -p a/b/c`) is never
  * watched: the stream reports `create a` and nothing else, ever. These tests run the real
  * `@parcel/watcher` on temp directories through the `subscribe` seam. They wait on the event

@@ -138,7 +138,7 @@ export interface WatcherServiceOptions {
   resubscribeDelayMs?: number;
   /**
    * Re-subscribe a tree after new directories appear in it (default: on Linux, where inotify
-   * does not watch the contents of a directory that is created with subdirectories; DECISIONS #212).
+   * does not watch the contents of a directory that is created with subdirectories; DECISIONS #213).
    */
   watchNewSubtrees?: boolean;
   /** Shortest gap between two such re-subscribes of one tree (default 2 s). */
@@ -711,7 +711,7 @@ export class WatcherService {
     return st.policy !== null || (this.#projects.get(st.info.projectId)?.policy ?? null) !== null;
   }
 
-  // --- new directories (DECISIONS #212) ----------------------------------------------------------
+  // --- new directories (DECISIONS #213) ----------------------------------------------------------
 
   /**
    * Looks for directories that appeared with subdirectories already inside (inotify watches only

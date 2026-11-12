@@ -75,8 +75,8 @@ commands run" (5 s timeout while all packages ran in parallel); it passes alone 
 
 ## Decisions
 
-DECISIONS **#212** (one entry, new section "Watcher: new directories"). The parallel `feat/daemon-activity`
-branch also uses #212 and up: renumber one of them at merge.
+DECISIONS **#213** (one entry, new section "Watcher: new directories"; renumbered from #212 when the perf-script entry took #212). The parallel `feat/daemon-activity`
+branch may also use #213 and up: renumber one of them at merge.
 
 ## Contract changes
 
@@ -106,7 +106,7 @@ None added or removed (`pnpm credits` not needed; `pnpm lint` runs `credits:chec
 
 ## Notes for integration
 
-- Merge conflicts: `docs/DECISIONS.md` (#212 vs `feat/daemon-activity`), nothing else expected; the
+- Merge conflicts: `docs/DECISIONS.md` (#213 vs `feat/daemon-activity`), nothing else expected; the
   changed existing test is `apps/daemon/test/watcher.test.ts` ("ignores node_modules, ..."), which now
   creates its nested ignored directories before subscribing (otherwise the new re-subscribe's refresh lands
   inside its quiet window).

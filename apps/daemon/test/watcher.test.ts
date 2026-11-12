@@ -137,7 +137,7 @@ describe('WatcherService', () => {
     const layout = await makeLayout();
     await mkdir(path.join(layout.main, 'generated'), { recursive: true });
     // Created before subscribing: a directory that appears afterwards with subdirectories inside
-    // makes the watcher re-subscribe and refresh once (DECISIONS #212), which is not what this
+    // makes the watcher re-subscribe and refresh once (DECISIONS #213), which is not what this
     // test is about.
     await mkdir(path.join(layout.main, 'packages', 'a', 'node_modules', 'dep'), {
       recursive: true,

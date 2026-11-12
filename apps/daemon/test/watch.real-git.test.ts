@@ -305,7 +305,7 @@ describe.skipIf(!GIT_CORE_IMPLEMENTED)(
 );
 
 /**
- * Issue #36 (DECISIONS #212): thousands of files created inside a fresh `<name>/pkg/deep`. The
+ * Issue #36 (DECISIONS #213): thousands of files created inside a fresh `<name>/pkg/deep`. The
  * writer is a separate process (a shell loop of builtin writes), like the agent or installer that
  * produced the report. The fallback polls are an hour away, so only the watcher can notice.
  */

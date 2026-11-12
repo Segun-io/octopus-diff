@@ -2727,9 +2727,9 @@ branches also use #213+: renumber at merge.
      whose forge and local answers cannot be slowed on demand without timing-dependent tests.
 ## Watcher: new directories (session, 2026-11-12; roadmap #36, step 17)
 
-Numbers: #212. The parallel `feat/daemon-activity` branch also uses #212 and up; renumber at merge.
+Numbers: #213 (renumbered from #212 when the perf-script entry took #212).
 
-212. **Linux: a directory that appears with subdirectories already inside is subscribed again; so is a tree after a
+213. **Linux: a directory that appears with subdirectories already inside is subscribed again; so is a tree after a
      creation burst big enough to overflow the inotify queue (`apps/daemon/src/watch-subtree.ts`).** Cause of
      issue #36, reproduced with the raw `@parcel/watcher`: its inotify backend answers `IN_CREATE` of a directory with
      `watchDir(path)` for that one directory (`InotifyBackend::handleSubscription`; it never crawls the new

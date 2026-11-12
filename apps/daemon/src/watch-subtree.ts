@@ -3,7 +3,7 @@ import { readdir } from 'node:fs/promises';
 import path from 'node:path';
 
 /**
- * New directories under a watched tree (issue #36, DECISIONS #212).
+ * New directories under a watched tree (issue #36, DECISIONS #213).
  *
  * `@parcel/watcher`'s inotify backend (Linux) adds a watch for a directory that appears, for that
  * one directory only, and never crawls it (`InotifyBackend::handleSubscription` calls `watchDir`,
