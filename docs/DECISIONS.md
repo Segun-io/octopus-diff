@@ -3087,3 +3087,20 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      `offsetHeight` for the virtual rows (the getters `@tanstack/virtual-core` reads). The default viewport (6000 px
      ≈ 100 rows) shows every row of the small fixtures, so older tests are unaffected; a test that is about the window
      calls `setSidebarLayout({ viewport })` before rendering and `scrollSidebarTo(el, top)` to scroll.
+
+## Event deltas: the worktree's row and changed paths in `worktree.changed` (session, 2026-11-12; roadmap #51, step 22)
+
+249. **Contract (additive).** `worktree.changed` gains optional `worktree`, `summary`, `error` and `review` (the
+     worktree's `WorktreeListItem` exactly as `GET /api/projects` now holds it: the summary with its `review`, the
+     effective review policy) and `paths` (`WorktreeChangedPaths`: `scope`, `files: {path, rawPath?, patchHash}[]`,
+     `total`, `truncated`). The row rather than the bare summary: a checkout changes `worktree.branch` / `headSha`
+     and may change the effective policy (it depends on the branch), and a failed refresh has `summary: null` with an
+     `error`; with the whole row the client replaces it and re-implements no daemon rule. `worktree` + `summary` are
+     the feature test (an older daemon sends neither; an older client's schema strips them). `paths.scope` says which
+     (resolved) scope the hashes belong to, because the list is the one the daemon already holds for the new state
+     (below), not necessarily `working`. Bounded: at most `WORKTREE_CHANGED_PATHS_MAX` = 200 files and
+     `WORKTREE_CHANGED_PATHS_MAX_CHARS` = 24 000 characters of path text; above either, `files` is **empty** with
+     `truncated: true` and `total` (a partial list would not let a client skip anything, so it is not worth its
+     bytes: a 2000-path worktree's event stays about 1.5 KB). `GET /api/inbox` gains `worktreeIds` (comma-separated
+     ids, deduplicated, at most `INBOX_WORKTREES_MAX` = 200; unknown ids ignored; within `projectIds` when both are
+     given), and `ApiClient.inbox` passes it.
