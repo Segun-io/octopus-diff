@@ -6,6 +6,7 @@ import {
   ACTIVITY_RING_SIZE,
   type ActivityEntry,
   type ActivityHeadOp,
+  type ActivityKind,
   type CommitInfo,
   type FileOrigin,
   type FileOriginVia,
@@ -148,13 +149,20 @@ export function classifyHead(
   }
   // The new commits since the previous HEAD, newest first, while they form a linear run.
   const run: CommitInfo[] = [];
+  let reached = false;
   for (const c of commits) {
-    if (c.sha === prev.sha) break;
+    if (c.sha === prev.sha) {
+      reached = true;
+      break;
+    }
     if (c.parents.length > 1) return { kind: 'head', op: 'merge' };
     run.push(c);
-    if (prev.sha === null && c.parents.length === 0) break; // the first commit of an unborn branch
+    // The first commit of an unborn branch, or the list ends right above the previous HEAD.
+    if (prev.sha === null ? c.parents.length === 0 : c.parents[0] === prev.sha) {
+      reached = true;
+      break;
+    }
   }
-  const reached = prev.sha === null ? run.length > 0 : run.length < commits.length;
   if (!reached) return { kind: 'head', op: cur.detached ? 'checkout' : 'reset' };
   // A pull or fast-forward of the upstream lowers `behind`; own commits do not.
   const sameRef = prev.aheadBehindRef !== null && prev.aheadBehindRef === cur.aheadBehindRef;
@@ -182,7 +190,8 @@ export interface OriginLabel {
   originVia?: FileOriginVia;
 }
 
-function sample(paths: readonly string[]): { paths: string[]; pathCount: number } {
+function sample(paths: readonly string[]): { paths?: string[]; pathCount?: number } {
+  if (paths.length === 0) return {};
   return { paths: paths.slice(0, ACTIVITY_PATHS_MAX), pathCount: paths.length };
 }
 
@@ -308,7 +317,7 @@ export function diffSnapshots(
 
   if (coarse) {
     if (coarseChanged) {
-      out.push({ kind: 'bulk', truncated: true, paths: [], pathCount: cur.total });
+      out.push({ kind: 'bulk', truncated: true, pathCount: cur.total });
     }
   } else if (files.length > ACTIVITY_BULK_THRESHOLD) {
     const kinds = { added: 0, modified: 0, deleted: 0, restored: 0 };
@@ -333,35 +342,125 @@ export function diffSnapshots(
 // The rings
 // ---------------------------------------------------------------------------------------------
 
-interface StoredEntry {
-  entry: ActivityEntry;
-  /** `updatedAt` in ms (coalescing window). */
-  updatedMs: number;
-  bytes: number;
+/**
+ * Fields an entry carries besides the common ones, kept in one side object (absent for most
+ * file entries, which keeps them small: memory is capped, see `ACTIVITY_BYTES_MAX`).
+ */
+type Rest = Omit<ActivityDraft, 'kind' | 'path' | 'rawPath' | 'xy' | 'added' | 'deleted' | 'oid'>;
+
+/**
+ * A flat copy of a string. Paths parsed from git output are often V8 sliced strings that keep the
+ * whole output they were cut from alive (a `git status` of thousands of files, per entry kept),
+ * and concatenations are cons strings; an entry must hold only its own characters.
+ */
+function own(s: string): string;
+function own(s: string | undefined): string | undefined;
+function own(s: string | null | undefined): string | null | undefined;
+function own(s: string | null | undefined): string | null | undefined {
+  return typeof s === 'string' && s.length > 0 ? (JSON.parse(JSON.stringify(s)) as string) : s;
+}
+
+/**
+ * One stored entry. A fixed-shape class with times as milliseconds since the store started (small
+ * integers) instead of an `ActivityEntry` with ISO strings: about 40% smaller (DECISIONS #214).
+ * `toEntry` builds the API form on read.
+ */
+class Item {
+  id: number;
+  seq: number;
+  kind: ActivityKind;
+  at: number;
+  updated: number;
+  count: number;
+  path: string | undefined;
+  rawPath: string | undefined;
+  xy: string | undefined;
+  added: number | null | undefined;
+  deleted: number | null | undefined;
+  oid: string | null | undefined;
+  rest: Rest | null;
+
+  constructor(d: ActivityDraft, id: number, seq: number, at: number) {
+    const { kind, path, rawPath, xy, added, deleted, oid, ...rest } = d;
+    this.id = id;
+    this.seq = seq;
+    this.kind = kind;
+    this.at = at;
+    this.updated = at;
+    this.count = 1;
+    this.path = own(path);
+    this.rawPath = own(rawPath);
+    this.xy = own(xy);
+    this.added = added;
+    this.deleted = deleted;
+    this.oid = own(oid);
+    // Only the fields that are set (no `delete`: it would turn the object into a slow dictionary).
+    let kept: Record<string, unknown> | null = null;
+    for (const [key, value] of Object.entries(rest)) {
+      if (value === undefined) continue;
+      kept ??= {};
+      kept[key] =
+        typeof value === 'string'
+          ? own(value)
+          : Array.isArray(value)
+            ? value.map((v: string) => own(v))
+            : value;
+    }
+    this.rest = kept as Rest | null;
+  }
+
+  get key(): string | undefined {
+    return this.rawPath ?? this.path;
+  }
+
+  toEntry(epoch: number): ActivityEntry {
+    const e: ActivityEntry = {
+      id: this.id,
+      seq: this.seq,
+      kind: this.kind,
+      at: new Date(epoch + this.at).toISOString(),
+      updatedAt: new Date(epoch + this.updated).toISOString(),
+      count: this.count,
+    };
+    if (this.path !== undefined) e.path = this.path;
+    if (this.rawPath !== undefined) e.rawPath = this.rawPath;
+    if (this.xy !== undefined) e.xy = this.xy;
+    if (this.added !== undefined) e.added = this.added;
+    if (this.deleted !== undefined) e.deleted = this.deleted;
+    if (this.oid !== undefined) e.oid = this.oid;
+    if (this.rest) Object.assign(e, this.rest);
+    return e;
+  }
+}
+
+/**
+ * Rough V8 size of an item: its slots and array slot, one-byte strings (header + 1 byte per char),
+ * the side object. Calibrated against the heap (the memory test in `activity.test.ts`: 90 x 200
+ * file entries measure about 3.7 MB, this estimate gives about 3.9 MB).
+ */
+function estimateBytes(item: Item): number {
+  const str = (s: string | null | undefined) => (typeof s === 'string' ? 16 + s.length : 0);
+  let bytes = 130 + str(item.path) + str(item.rawPath) + str(item.xy) + str(item.oid);
+  if (item.rest) {
+    bytes += 48;
+    for (const v of Object.values(item.rest)) {
+      if (typeof v === 'string') bytes += 8 + str(v);
+      else if (Array.isArray(v)) bytes += 24 + v.reduce((n: number, s) => n + 8 + str(s), 0);
+      else if (v !== null && typeof v === 'object') bytes += 64;
+      else bytes += 8;
+    }
+  }
+  return bytes;
 }
 
 interface Ring {
-  entries: StoredEntry[];
-  /** The latest entry per path (file kinds) and the latest `head` entry, for coalescing. */
-  latestByPath: Map<string, StoredEntry>;
-  latestHead: StoredEntry | null;
+  /** Oldest first (ascending `seq`). */
+  items: Item[];
   /** Highest `seq` dropped by a cap (0 = none). */
   droppedSeq: number;
   seq: number;
   /** Snapshot of the last refresh (the baseline after start). */
   state: SnapshotState | null;
-}
-
-/** Rough V8 size of an entry: object slots plus one-byte strings (header + 1 byte per char). */
-function estimateBytes(e: ActivityEntry): number {
-  let bytes = 160;
-  for (const v of Object.values(e)) {
-    if (typeof v === 'string') bytes += 16 + v.length;
-    else if (Array.isArray(v))
-      bytes += 16 + v.length * 8 + v.reduce((n, s) => n + 16 + s.length, 0);
-    else if (v !== null && typeof v === 'object') bytes += 64;
-  }
-  return bytes;
 }
 
 export interface ActivityLimits {
@@ -386,30 +485,25 @@ export interface ActivityRead {
 export class ActivityStore {
   readonly #rings = new Map<string, Ring>();
   readonly #limits: ActivityLimits;
+  readonly #epoch: number;
   #seq = 0;
   #count = 0;
   #bytes = 0;
 
-  constructor(limits: Partial<ActivityLimits> = {}) {
+  constructor(limits: Partial<ActivityLimits> = {}, epoch: number = Date.now()) {
     this.#limits = {
       ringSize: limits.ringSize ?? ACTIVITY_RING_SIZE,
       globalMax: limits.globalMax ?? ACTIVITY_GLOBAL_MAX,
       bytesMax: limits.bytesMax ?? ACTIVITY_BYTES_MAX,
       coalesceMs: limits.coalesceMs ?? ACTIVITY_COALESCE_MS,
     };
+    this.#epoch = epoch;
   }
 
   #ring(worktreeId: string): Ring {
     let ring = this.#rings.get(worktreeId);
     if (!ring) {
-      ring = {
-        entries: [],
-        latestByPath: new Map(),
-        latestHead: null,
-        droppedSeq: 0,
-        seq: 0,
-        state: null,
-      };
+      ring = { items: [], droppedSeq: 0, seq: 0, state: null };
       this.#rings.set(worktreeId, ring);
     }
     return ring;
@@ -422,103 +516,102 @@ export class ActivityStore {
 
   /**
    * Records a refresh: the first one is the baseline (no entries); later ones append the drafts
-   * (`diffSnapshots`) with coalescing. Returns the number of entries added or updated.
+   * (`diffSnapshots`) with coalescing. Returns the number of drafts recorded.
    */
-  observe(worktreeId: string, state: SnapshotState, drafts: readonly ActivityDraft[], now: Date) {
+  observe(
+    worktreeId: string,
+    state: SnapshotState,
+    drafts: readonly ActivityDraft[],
+    now: Date,
+  ): number {
     const ring = this.#ring(worktreeId);
     const baseline = ring.state === null;
     ring.state = state;
     if (baseline) return 0;
-    for (const d of drafts) this.#append(ring, d, now);
+    const at = now.getTime() - this.#epoch;
+    for (const d of drafts) this.#append(ring, d, at);
     this.#enforceGlobal();
     return drafts.length;
   }
 
-  #coalesceTarget(ring: Ring, d: ActivityDraft, nowMs: number): StoredEntry | null {
-    let candidate: StoredEntry | null = null;
-    if (d.kind === 'head') candidate = ring.latestHead;
-    else if (d.kind !== 'commit' && d.kind !== 'bulk' && d.path !== undefined) {
-      candidate = ring.latestByPath.get(d.rawPath ?? d.path) ?? null;
+  /**
+   * The entry a draft folds into: the ring's newest entry for the same path (file kinds) or its
+   * newest `head` entry, when it has the same kind (and `op`), is recent enough, and no commit,
+   * HEAD change or bulk entry came after it (otherwise history would reorder).
+   */
+  #coalesceTarget(ring: Ring, d: ActivityDraft, at: number): Item | null {
+    if (d.kind === 'commit' || d.kind === 'bulk') return null;
+    const key = d.rawPath ?? d.path;
+    if (d.kind !== 'head' && key === undefined) return null;
+    for (let i = ring.items.length - 1; i >= 0; i--) {
+      const item = ring.items[i] as Item;
+      if (at - item.updated > this.#limits.coalesceMs) return null;
+      if (item.kind === 'commit' || item.kind === 'bulk') return null;
+      if (d.kind === 'head') {
+        if (item.kind !== 'head') continue;
+        return item.rest?.op === d.op ? item : null;
+      }
+      if (item.kind === 'head') return null;
+      if (item.key !== key) continue;
+      return item.kind === d.kind ? item : null;
     }
-    if (!candidate || candidate.entry.kind !== d.kind) return null;
-    if (d.kind === 'head' && candidate.entry.op !== d.op) return null;
-    if (nowMs - candidate.updatedMs > this.#limits.coalesceMs) return null;
-    // Only the newest entry of the ring for this path / HEAD (otherwise history would reorder).
-    return candidate;
+    return null;
   }
 
-  #append(ring: Ring, d: ActivityDraft, now: Date): void {
-    const nowMs = now.getTime();
-    const iso = now.toISOString();
+  #append(ring: Ring, d: ActivityDraft, at: number): void {
     const seq = ++this.#seq;
     ring.seq = seq;
-    const target = this.#coalesceTarget(ring, d, nowMs);
+    const target = this.#coalesceTarget(ring, d, at);
     if (target) {
-      const prev = target.entry;
-      const merged: ActivityEntry = {
-        ...prev,
-        ...d,
-        id: prev.id,
-        seq,
-        at: prev.at,
-        updatedAt: iso,
-        count: prev.count + 1,
-      };
-      if (d.kind === 'head') {
-        merged.from = prev.from ?? null;
-        merged.fromBranch = prev.fromBranch ?? null;
-        const paths = [...new Set([...(prev.paths ?? []), ...(d.paths ?? [])])];
-        merged.paths = paths.slice(0, ACTIVITY_PATHS_MAX);
-        merged.pathCount = (prev.pathCount ?? 0) + (d.pathCount ?? 0);
-      }
-      const index = ring.entries.indexOf(target);
-      if (index >= 0) ring.entries.splice(index, 1);
-      this.#bytes -= target.bytes;
+      const index = ring.items.lastIndexOf(target);
+      ring.items.splice(index, 1);
       this.#count--;
-      this.#push(ring, merged, nowMs);
+      this.#bytes -= estimateBytes(target);
+      const item = new Item(d, target.id, seq, target.at);
+      item.updated = at;
+      item.count = target.count + 1;
+      if (d.kind === 'head' && target.rest) {
+        // A run of the same operation: from the first HEAD to the last, paths accumulated.
+        const prev = target.rest;
+        const rest = (item.rest ??= {});
+        rest.from = prev.from ?? null;
+        rest.fromBranch = prev.fromBranch ?? null;
+        const paths = [...new Set([...(prev.paths ?? []), ...(rest.paths ?? [])])];
+        if (paths.length > 0) {
+          rest.paths = paths.slice(0, ACTIVITY_PATHS_MAX);
+          rest.pathCount = (prev.pathCount ?? 0) + (rest.pathCount ?? 0);
+        }
+      }
+      this.#push(ring, item);
       return;
     }
-    this.#push(ring, { ...d, id: seq, seq, at: iso, updatedAt: iso, count: 1 }, nowMs);
+    this.#push(ring, new Item(d, seq, seq, at));
   }
 
-  #push(ring: Ring, entry: ActivityEntry, nowMs: number): void {
-    const stored: StoredEntry = { entry, updatedMs: nowMs, bytes: estimateBytes(entry) };
-    ring.entries.push(stored);
+  #push(ring: Ring, item: Item): void {
+    ring.items.push(item);
     this.#count++;
-    this.#bytes += stored.bytes;
-    if (entry.kind === 'head') ring.latestHead = stored;
-    else if (entry.path !== undefined) ring.latestByPath.set(entry.rawPath ?? entry.path, stored);
-    // A commit, checkout or bulk change ends every coalescing run before it.
-    if (entry.kind === 'commit' || entry.kind === 'bulk') {
-      ring.latestByPath.clear();
-      ring.latestHead = null;
-    } else if (entry.kind === 'head') {
-      ring.latestByPath.clear();
-    }
-    while (ring.entries.length > this.#limits.ringSize) this.#evictFrom(ring);
+    this.#bytes += estimateBytes(item);
+    while (ring.items.length > this.#limits.ringSize) this.#evictFrom(ring);
   }
 
   #evictFrom(ring: Ring): void {
-    const stored = ring.entries.shift();
-    if (!stored) return;
+    const item = ring.items.shift();
+    if (!item) return;
     this.#count--;
-    this.#bytes -= stored.bytes;
-    ring.droppedSeq = Math.max(ring.droppedSeq, stored.entry.seq);
-    const e = stored.entry;
-    if (ring.latestHead === stored) ring.latestHead = null;
-    if (e.path !== undefined) {
-      const key = e.rawPath ?? e.path;
-      if (ring.latestByPath.get(key) === stored) ring.latestByPath.delete(key);
-    }
+    this.#bytes -= estimateBytes(item);
+    ring.droppedSeq = Math.max(ring.droppedSeq, item.seq);
   }
 
   #enforceGlobal(): void {
     while (this.#count > this.#limits.globalMax || this.#bytes > this.#limits.bytesMax) {
       let oldest: Ring | null = null;
+      let oldestSeq = Number.POSITIVE_INFINITY;
       for (const ring of this.#rings.values()) {
-        const first = ring.entries[0];
-        if (first && (!oldest || first.entry.seq < (oldest.entries[0]?.entry.seq ?? 0))) {
+        const first = ring.items[0];
+        if (first && first.seq < oldestSeq) {
           oldest = ring;
+          oldestSeq = first.seq;
         }
       }
       if (!oldest) return;
@@ -534,7 +627,7 @@ export class ActivityStore {
     if (!ring) return { entries: [], seq: 0, dropped: stale, live: false };
     const from = stale ? 0 : after;
     const entries: ActivityEntry[] = [];
-    for (const s of ring.entries) if (s.entry.seq > from) entries.push(s.entry);
+    for (const item of ring.items) if (item.seq > from) entries.push(item.toEntry(this.#epoch));
     return {
       entries,
       seq: ring.seq,
@@ -555,7 +648,7 @@ export class ActivityStore {
   allowsBlob(worktreeId: string, oid: string): boolean {
     const ring = this.#rings.get(worktreeId);
     if (!ring) return false;
-    for (const s of ring.entries) if (s.entry.oid === oid) return true;
+    for (const item of ring.items) if (item.oid === oid) return true;
     if (ring.state) {
       for (const e of ring.state.entries.values()) if (e.hH === oid || e.hI === oid) return true;
     }
@@ -572,9 +665,9 @@ export class ActivityStore {
   forget(worktreeId: string): void {
     const ring = this.#rings.get(worktreeId);
     if (!ring) return;
-    for (const s of ring.entries) {
+    for (const item of ring.items) {
       this.#count--;
-      this.#bytes -= s.bytes;
+      this.#bytes -= estimateBytes(item);
     }
     this.#rings.delete(worktreeId);
   }
