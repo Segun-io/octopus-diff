@@ -88,6 +88,13 @@ export const ChangeCountsSchema = z.object({
   unstaged: Count,
   untracked: Count,
   conflicted: Count,
+  /**
+   * Tracked files deleted and not committed (in the index or the working tree), from the daemon's
+   * snapshot of the summary (#38; state-based: it drops when the deletion is committed or undone).
+   * Counts the snapshot's entries only (the first 2000 changed paths, tracked ones first). Absent
+   * from older daemons and from git-core's own summary.
+   */
+  deleted: Count.optional(),
 });
 export type ChangeCounts = z.infer<typeof ChangeCountsSchema>;
 

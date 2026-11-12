@@ -82,6 +82,9 @@ export const ROUTES = {
     path: '/api/forges/projects/:projectId/repository/refresh',
   },
   listRepositories: { method: 'GET', path: '/api/repositories' },
+  // --- live view (additive; see activity.ts) ---
+  getActivity: { method: 'GET', path: '/api/worktrees/:worktreeId/activity' },
+  getBlob: { method: 'GET', path: '/api/worktrees/:worktreeId/blob/:oid' },
 } as const;
 export type RouteName = keyof typeof ROUTES;
 

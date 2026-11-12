@@ -297,7 +297,12 @@ describe('getSummary snapshot', () => {
     const summary = await core.getSummary(locator(clean, path.join(clean, '.git')), {
       snapshot: true,
     });
-    expect(summary.snapshot).toEqual({ entries: [], total: 0, truncated: false });
+    expect(summary.snapshot).toEqual({
+      entries: [],
+      total: 0,
+      truncated: false,
+      contentHash: expect.stringMatching(/^[0-9a-f]{32}$/),
+    });
     const bare = path.join(fx.root, 'snap-bare.git');
     fx.git(fx.root, ['clone', '-q', '--bare', clean, bare]);
     const bareSummary = await core.getSummary(locator(bare), { snapshot: true });
@@ -611,5 +616,56 @@ describe('readBlob', () => {
       oid: 'a'.repeat(40),
     }).catch((e: unknown) => e);
     expect(isGitCoreError(error, 'disposed')).toBe(true);
+  });
+});
+
+describe('snapshot contentHash (PR #77 review)', () => {
+  it('moves with a changed path, beyond the cap too, and not with refs', async () => {
+    const repo = fx.repo('snap-hash', {
+      files: { 'a.txt': 'a\n', 'b.txt': 'b\n', 'c.txt': 'c\n' },
+    });
+    const bare = path.join(fx.root, 'snap-hash-remote.git');
+    git(fx.root, ['init', '-q', '--bare', '-b', 'main', bare]);
+    git(repo, ['remote', 'add', 'origin', bare]);
+    git(repo, ['push', '-q', '-u', 'origin', 'main']);
+    fx.write(path.join(repo, 'a.txt'), 'a1\n');
+    fx.write(path.join(repo, 'b.txt'), 'b1\n');
+    fx.write(path.join(repo, 'c.txt'), 'c1\n');
+    const core = createGitCore(fx.coreOptions());
+    try {
+      const wt = locator(repo, path.join(repo, '.git'));
+      const hash = async (maxEntries: number): Promise<string | undefined> =>
+        (await core.getSummary(wt, { snapshot: { maxEntries } })).snapshot?.contentHash;
+      const first = await hash(1);
+      expect(first).toMatch(/^[0-9a-f]{32}$/);
+      expect(await hash(1)).toBe(first);
+      // The cap does not change what it covers.
+      expect(await hash(10)).toBe(first);
+
+      // Another clone pushes, this one fetches: the status header (ahead/behind) and the summary's
+      // stateHash move, the files do not.
+      const other = path.join(fx.root, 'snap-hash-other');
+      git(fx.root, ['clone', '-q', bare, other]);
+      fx.write(path.join(other, 'z.txt'), 'z\n');
+      git(other, ['add', '-A']);
+      git(other, ['commit', '-q', '-m', 'elsewhere']);
+      git(other, ['push', '-q', 'origin', 'main']);
+      const stateBefore = (await core.getSummary(wt)).stateHash;
+      git(repo, ['fetch', '-q', 'origin']);
+      expect((await core.getSummary(wt)).stateHash).not.toBe(stateBefore);
+      expect(await hash(1)).toBe(first);
+
+      // Staging is not an edit: the status letters and the index object id change, the file does not.
+      git(repo, ['add', 'a.txt', 'b.txt', 'c.txt']);
+      expect(await hash(1)).toBe(first);
+
+      // An edit to a path the cap cut off moves it (the retained entry and `total` do not change).
+      const kept = (await core.getSummary(wt, { snapshot: { maxEntries: 1 } })).snapshot;
+      const beyond = ['a.txt', 'b.txt', 'c.txt'].filter((n) => n !== kept?.entries[0]?.path)[1];
+      fx.write(path.join(repo, beyond as string), 'edited\nmore\n');
+      expect(await hash(1)).not.toBe(first);
+    } finally {
+      await core.dispose();
+    }
   });
 });

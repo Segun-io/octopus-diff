@@ -2770,6 +2770,91 @@ Numbers: #213 (renumbered from #212 when the perf-script entry took #212).
      `darwin` nor `win32`; tests force it on). `onSubtreeCheck` and `newSubtreeGapMs` are options for tests.
      Follow-up (Greptile on PR #75, after it merged): a successful git-dir re-subscribe also asks for a worktree-list refresh (`#scheduleListDirty`), because a `git worktree add` / `remove` that completed while the old subscription was released leaves no event behind and the list would otherwise wait for the 60 s relist.
 
+## Live view: activity ring and `/activity` route (session, 2026-11-12; roadmap #38, step 19)
+
+Numbers: #218 and up (renumbered after #212-#217 and the watcher entry #213 reached `main`).
+
+218. **contracts (additive, `packages/contracts/src/activity.ts`, `contracts:` commit).** `ActivityEntrySchema` is one flat
+     object (`id`, `seq`, `kind`, `at`, `updatedAt`, `count` plus optional per-kind fields) rather than a discriminated
+     union, because coalescing updates an entry in place and later kinds can add fields without a new variant. Kinds:
+     `added | modified | deleted | restored | commit | head | bulk`; `head` has `op` (`checkout | merge | rebase | reset |
+     cherry-pick | revert | am | bisect | moved`, clients tolerate more). `id` is the sequence number an entry was created
+     with and never changes; `seq` is that of its latest update, so `?after=<seq>` also returns entries that were
+     coalesced since. Routes: `GET /api/worktrees/:worktreeId/activity?after=<seq>` -> `ActivityResponse = { worktreeId,
+     entries, seq, dropped, live, watch: { mode: native | polling | disabled, pollMs } }` (`live` false until the
+     baseline exists; `watch` lets the UI say "polling every N s"), and `GET /api/worktrees/:worktreeId/blob/:oid?maxBytes=`
+     -> `{ worktreeId, blob: BlobRead }` (oid = `GitObjectIdSchema`, `maxBytes` <= `ACTIVITY_BLOB_MAX_BYTES` = 1 MiB).
+     `WorktreeChangedEvent.activitySeq?` (positive int, absent while the feed is empty): no new SSE event, so no extra
+     traffic. `ChangeCounts.deleted?`: uncommitted tracked deletions, state-based, set by the daemon only (git-core's own
+     summary leaves it out). API client: `getActivity`, `getBlob`. Constants: ring 200, global 20000, coalesce 10 s,
+     bulk threshold 50, 20 listed paths per commit/head/bulk entry.
+219. **The snapshot rides on every summary refresh; it never leaves the daemon.** `#computeSummary` calls
+     `getSummary(wt, { defaultBranch, snapshot: true })` (default cap 2000) and destructures `snapshot` off the result
+     before `withBase`, so `entry.summary` (and every API body: projects, inbox, files, refresh) has no snapshot field
+     (tested on the raw HTTP bodies; the typed client would strip unknown keys and hide a leak). Zero extra git processes:
+     a real-git test drives two identical repositories by manual refreshes (watching off), one through a git-core proxy
+     that removes the option, and the spawn totals after startup, an edit, a deletion and a new file are equal. The first
+     snapshot of a worktree after start (or after it went missing or was replaced, F1) is the baseline and produces no
+     entries. `counts.deleted` = snapshot entries whose `xy` has a `D` (not unmerged, not untracked): `.D`, `D.`, `AD`;
+     set on every summary that has a snapshot (0 included, so a client can tell support), so a
+     30000-path worktree counts within the first 2000 entries (tracked first). `worktree.changed` carries `activitySeq`
+     when the ring has entries; `#recordActivity` runs before `#announce`, so the seq in the event already covers the
+     refresh that triggered it. The review state, when wanted, is computed first, and its non-own origin labels
+     (`ReviewComputed.origins`, collected from the files `#labelFiles` already labeled) label the entries; with no
+     review state for this exact `stateHash` there are no labels (no new origin reads, no startup cost).
+220. **The ring is memory only, and compact.** `ActivityStore` (`apps/daemon/src/activity.ts`) holds one ring per worktree
+     and one daemon-wide sequence; nothing touches the store or disk (tested: after an agent run the state directory's
+     files contain neither the deleted file's name nor its content, and a restarted daemon starts empty with
+     `dropped: true` for an `after` from the earlier run). Caps: 200 entries per ring, 20000 overall, and 4 MiB of
+     *estimated* bytes overall (the globally oldest entry is dropped first). An entry is stored as a fixed-shape class with
+     times as milliseconds since the store started and rare fields in one side object, and every string is copied flat
+     (`JSON.parse(JSON.stringify(s))`): paths cut from git output are V8 sliced strings that would keep a whole
+     `git status` output alive per entry (a test cuts 30 characters from 100 KB strings 100 times: under 1 MiB retained).
+     Measured with `--expose-gc` in `test/activity.test.ts`: 90 worktrees x 200 entries (45-character paths, a fifth
+     deletions with an oid) = **3.7 MB** of heap (6.6 MB with plain `ActivityEntry` objects and ISO strings); the
+     estimate is calibrated to it (about 3.9 MB), so that load fits and longer paths make the byte cap evict instead
+     (1000-character paths stay under 5 MiB). The previous snapshot per worktree is kept for the next diff; it is
+     state, bounded by the snapshot cap, and not counted in the 4 MiB.
+221. **Diff rules.** Per path (`rawPath ?? path`): new and deleted (`xy` has `D`) -> `deleted` with `oid = hI ?? hH`;
+     new and untracked/`A`/`R`/`C` -> `added` (a rename carries `oldPath`); other new -> `modified`; in both and changed
+     (signature, deletion state or +/- differ; index-only changes such as `git add` are not activity) -> `deleted`,
+     `added` (it came back) or `modified`; gone -> attributed to the HEAD change when there is one (listed on the
+     `commit` / `head` entry, never "restored"), else `deleted` with `oid: null, untracked: true` for an untracked file
+     ("content unavailable", #25 decision 8), `deleted` with the staged blob for a never-committed `A.` file, skipped
+     when it is the source of a rename in the new snapshot, and `restored` otherwise (`git restore`, an edit back, also
+     `git stash`). Unmerged paths count as modified. More than 50 file changes in one refresh -> one `bulk` entry
+     (`kinds`, 20 sample paths, `pathCount`; `origin: base` when every path is base-labeled). A truncated snapshot on
+     either side -> one coarse `bulk` entry with `truncated: true` when anything differs. Coalescing: a draft folds into
+     the ring's newest entry for the same path when it has the same kind and was updated less than 10 s ago (a sliding
+     window: an edit every few seconds stays one entry), and only if no commit, HEAD change or bulk entry came after
+     it; a run of the same HEAD operation (a rebase's picks) folds into one `head` entry (first `from`, last `to`,
+     paths accumulated). A folded entry keeps its `id` and gets a new `seq`, so `?after=` returns it again.
+222. **HEAD moves: one `git log`, only when needed.** A change of branch or detached state is `checkout`; an operation in
+     progress before or after names `op` (`merge`, `rebase`, `cherry-pick`, ...). Only a move on the same branch with no
+     operation on either side reads `listCommits(limit 32)` (one `log`, the existing allowlisted read; the real-git
+     test asserts exactly one extra process for a commit step). From it: the newest commits down to the previous HEAD,
+     single-parent -> one `commit` entry each (sha, subject; at most 10, more is a `merge`), oldest first, the paths on
+     the newest; a merge commit, or a lower `behind` against the same tracking ref (a pull), -> `merge`; the previous
+     HEAD not reached -> `reset` (a reset, an amend, a rewrite; `checkout` when detached); a failed read -> `moved`.
+     So `reset --hard` of a dirty worktree is a `reset` with the paths it discarded, never a commit. (PR #77 review: a list that is *full* (32) and still does not reach the previous HEAD proves nothing, since the run may just be longer than the list: it is `merge` when the tracking ref's `behind` dropped (a long pull), else `moved`; only a shorter list that misses it is a `reset`.) (A merge commit among the listed ones says `merge` only after the previous HEAD was found below it: a reset onto an older merge commit lists one too and stays a `reset`.) No reflog parsing
+     (that would be git internals outside git-core).
+223. **Blob route.** `GET /api/worktrees/:worktreeId/blob/:oid` validates the oid with `GitObjectIdSchema` (400 for
+     abbreviations, uppercase, `HEAD`, the null id, options), `?maxBytes` <= 1 MiB, then serves only an oid that the
+     worktree's ring holds on an entry or its current snapshot holds as `hH` / `hI` (404 "not in this worktree's recent
+     activity" otherwise, before any git process: tested with the HEAD commit, its tree and an unchanged file's blob, and
+     with another worktree's oid). Reads go through `GitCore.readBlob` only (501 when absent); git-core's `not_found`
+     becomes 404 "content gone (the object was pruned)". Behind the token, Host/Origin checks, `no-store` and the API
+     CSP like every route. The e2e read-only proof is not extended (e2e is WS4's): the daemon now asks every summary
+     for a snapshot, which that proof covers, and git-core's `readonly.test.ts` covers `readBlob`.
+224. **How fresh the feed is.** The activity response carries `watch = WatcherService.liveness(id)`: `native` when file
+     events reach the worktree, `polling` otherwise (degraded, too broad, over the per-project cap, a Windows mount,
+     `forcePolling`), `disabled` when watching is off (polls still run, so `pollMs` is set); `pollMs` is the worktree's
+     current poll interval (it depends on focus), null when the watcher does not know the worktree. The UI (#39) words
+     "polling every N s" from it.
+     PR #77 review (contracts, additive): `ActivityResponse.run` and `ActivityQuery.run` identify the daemon run. A cursor (`after`) from before a restart can look valid when this run's counters overlap it (other worktrees advanced the daemon-wide counter past the old value), so a client sends back the `run` it saw and a different one is `dropped`; without it, a cursor beyond the worktree's own newest `seq` is treated as stale as well. Also: a truncated snapshot (more than 2000 paths) now compares a whole-worktree hash (round 2 below: `contentHash`), because an edit to a path beyond the cap changes neither `total` nor a retained entry; and a refresh that waited for the commit list does not write its snapshot if the worktree was removed or its baseline reset meanwhile.
+     PR #77 review round 2 (contracts, additive): `SummarySnapshot.contentHash` (optional) is a hash of every changed path's status codes, object ids, content signatures and counts, including paths beyond the cap, and nothing about refs. It replaces the summary's `stateHash` as the truncated-snapshot signal: that hash is extended with the default branch's commit (and the status header carries the upstream), so a commit in another worktree or a fetch looked like activity once a worktree had more than 2000 changed paths. A worktree whose files did not change now records nothing. Computed in `git-core/src/snapshot.ts` from inputs the summary already has (no new git process). It holds only what the feed's per-file comparison looks at (path, content signature, line counts, deletion flag), so staging (`git add`: status letters, index object id) is not activity either.
+||||||| 2661c42
+
 ## Remote spawns: warm reload and startup config reads with a remote (session, 2026-11-12; GitHub #74)
 
 Numbers: #225-#228 (after #218-#224 of `feat/daemon-activity`, which merges first). Report: `docs/reports/remote-spawns.md`.

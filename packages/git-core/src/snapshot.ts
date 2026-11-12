@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import {
   GitCoreError,
   SNAPSHOT_MAX_ENTRIES_DEFAULT,
@@ -122,5 +123,49 @@ export function buildSnapshot(input: SnapshotInput): SummarySnapshot {
     });
   }
 
-  return { entries, total, truncated: total > entries.length };
+  return {
+    entries,
+    total,
+    truncated: total > entries.length,
+    contentHash: contentHash(tracked, untracked, input),
+  };
+}
+
+/**
+ * Hash of every changed path (the capped-off ones too): path, content signature, line counts and
+ * whether it is a deletion, which is what the activity feed compares per file. Nothing about refs
+ * (`git status` headers: HEAD, upstream, ahead/behind) and nothing about staging (status letters,
+ * index object ids), so a fetch, a commit elsewhere or a `git add` never moves it. It is what tells
+ * a truncated snapshot that a path beyond its cap was edited.
+ */
+function contentHash(
+  tracked: readonly StatusEntry[],
+  untracked: readonly UntrackedInfo[],
+  input: SnapshotInput,
+): string {
+  const hash = createHash('sha256');
+  const part = (value: string | number | null | undefined): void => {
+    hash.update(String(value ?? ''), 'latin1').update('\u0000');
+  };
+  for (const entry of tracked) {
+    part(entry.path);
+    part(input.signatureOf(entry.path));
+    const counts = input.counts.get(entry.path);
+    part(counts?.added);
+    part(counts?.deleted);
+    // Only what the activity feed's per-file comparison looks at: staging (status letters, index
+    // object id) is not an edit, a deletion is.
+    const deletion =
+      entry.kind === 'ordinary' || entry.kind === 'renamed'
+        ? entry.x === 'D' || entry.y === 'D'
+        : false;
+    part(deletion ? 1 : 0);
+  }
+  part('untracked');
+  for (const info of untracked) {
+    part(info.key);
+    part(info.statSig);
+    part(info.lines);
+  }
+  return hash.digest('hex').slice(0, 32);
 }

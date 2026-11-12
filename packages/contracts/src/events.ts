@@ -25,6 +25,12 @@ export const WorktreeChangedEventSchema = z.object({
   projectId: IdSchema,
   worktreeId: IdSchema,
   stateHash: z.string().min(1),
+  /**
+   * The worktree's latest activity sequence number (`ActivityResponse.seq`, #38) when its live feed
+   * has entries: a client showing the feed fetches `GET /api/worktrees/:id/activity?after=<its seq>`
+   * when this moved. Absent when the feed is empty, and from older daemons.
+   */
+  activitySeq: z.number().int().positive().optional(),
 });
 
 export const WorktreeAddedEventSchema = z.object({

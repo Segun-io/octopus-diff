@@ -1,5 +1,7 @@
 import type {
   DiffScope,
+  FileOrigin,
+  FileOriginVia,
   GitChangedFile,
   ReviewRange,
   Worktree,
@@ -94,5 +96,10 @@ export interface ReviewComputed {
   baseCommits: ReadonlySet<string>;
   /** `N` from the file origins (null when unknown or not computed). */
   integrationBase: string | null;
+  /**
+   * Non-own origins of the listed files by `rawPath ?? path` (null when not labeled), reused to
+   * label live activity entries (#38).
+   */
+  origins?: ReadonlyMap<string, { origin: FileOrigin; originVia?: FileOriginVia }> | null;
   info: WorktreeReview;
 }

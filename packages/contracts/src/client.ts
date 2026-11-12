@@ -1,5 +1,11 @@
 import type { z } from 'zod';
 import {
+  type ActivityResponse,
+  ActivityResponseSchema,
+  type BlobResponse,
+  BlobResponseSchema,
+} from './activity.js';
+import {
   type AddProjectRequest,
   type AddProjectResponse,
   AddProjectResponseSchema,
@@ -184,6 +190,13 @@ export interface ApiClient {
   refreshRepositoryForge(projectId: string): Promise<RepositoryForgeResponse>;
   /** Local git facts for the listed projects (Overview). */
   listRepositories(projectIds: readonly string[]): Promise<RepositoriesResponse>;
+  /** Live view (#38): the worktree's activity feed after `after` (default 0: all of it). */
+  getActivity(
+    worktreeId: string,
+    params?: { after?: number; run?: string },
+  ): Promise<ActivityResponse>;
+  /** Live view (#38): a blob of the worktree's feed (a deleted file's `oid`). */
+  getBlob(worktreeId: string, oid: string, params?: { maxBytes?: number }): Promise<BlobResponse>;
   /** Absolute or same-origin URL of the SSE stream. */
   eventsUrl(): string;
   /** Subscribes via fetch streaming with the bearer token (browsers and Node). */
@@ -441,6 +454,19 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
       const query = new URLSearchParams();
       query.set('projectIds', projectIds.join(','));
       return request(RepositoriesResponseSchema, 'GET', ROUTES.listRepositories.path, { query });
+    },
+    getActivity: (worktreeId, params = {}) => {
+      const query = new URLSearchParams();
+      if (params.after !== undefined) query.set('after', String(params.after));
+      if (params.run !== undefined) query.set('run', params.run);
+      return request(ActivityResponseSchema, 'GET', p(ROUTES.getActivity, { worktreeId }), {
+        query,
+      });
+    },
+    getBlob: (worktreeId, oid, params = {}) => {
+      const query = new URLSearchParams();
+      if (params.maxBytes !== undefined) query.set('maxBytes', String(params.maxBytes));
+      return request(BlobResponseSchema, 'GET', p(ROUTES.getBlob, { worktreeId, oid }), { query });
     },
     eventsUrl: () => url(ROUTES.events.path),
     subscribe,
