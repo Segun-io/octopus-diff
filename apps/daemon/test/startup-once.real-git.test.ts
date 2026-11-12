@@ -163,9 +163,12 @@ describe.skipIf(!GIT_CORE_IMPLEMENTED)('startup: summaries once, review on deman
     });
     onCleanup(() => daemon.close());
     const api = client(daemon);
-    await api.listProjects();
+    const worktreeId = (await api.listProjects()).projects[0]?.worktrees[0]?.worktree.id ?? '';
+    expect(worktreeId).not.toBe('');
     fx.git(repo, 'add', '-A');
     fx.git(repo, 'commit', '-q', '-m', 'agent: edit');
+    // Do not depend on the watcher noticing the commit (it can be in polling mode, 30 s): ask.
+    await api.refreshWorktree(worktreeId);
     const review = await eventually(
       async () => {
         const { projects } = await api.listProjects();
