@@ -139,3 +139,7 @@ None added or removed (`pnpm credits:check` passes inside `pnpm lint`).
 - #35 (e2e/bench): the daemon side is ready for the merge-noise spec; the 90-worktree "fetch moves `origin/main`"
   bench should show at most 2 concurrent origin computations and about 3 spawns per worktree that has commits.
 - No migration, no new route, no new event.
+
+## PR review round 1 (Greptile on #66)
+
+- **Overlapping requests lost the fallback** (valid). `#labelFiles` cached the raw single-flight promise and attached the "plain files on failure" fallback only to the first caller's copy, so a second request for the same list (`/files` and `/inbox` together) that joined the cached promise got the raw rejection when the origin read failed or timed out. The fallback (drop the cache entry, log, return the unlabelled files) is now part of the cached promise itself, so every caller sees the same answer. Test: with the origin read failing after a moment, an overlapping `/files` and `/inbox` for the same list both return the files, all own (it fails without the change).

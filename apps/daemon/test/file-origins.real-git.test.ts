@@ -44,6 +44,8 @@ interface Counting {
   /** `readFileOrigins` calls so far, and the most that ran at once. */
   originCalls: () => number;
   peakOrigins: () => number;
+  /** While `on`, `readFileOrigins` takes a moment and then fails. */
+  failing: { on: boolean };
 }
 
 async function startCounting(
@@ -59,6 +61,7 @@ async function startCounting(
   let calls = 0;
   let active = 0;
   let peak = 0;
+  const failing = { on: false };
   const counted = new Proxy(core, {
     get(target, prop, receiver) {
       if (prop === 'readFileOrigins') {
@@ -67,6 +70,10 @@ async function startCounting(
           active++;
           peak = Math.max(peak, active);
           try {
+            if (failing.on) {
+              await sleep(250);
+              throw new Error('origins unavailable (test)');
+            }
             return await target.readFileOrigins?.(...args);
           } finally {
             active--;
@@ -92,6 +99,7 @@ async function startCounting(
     spawns: () => readFileSync(log, 'utf8').split('\n').filter(Boolean).length,
     originCalls: () => calls,
     peakOrigins: () => peak,
+    failing,
   };
 }
 
@@ -177,6 +185,27 @@ async function agreeing(api: Api, worktreeId: string): Promise<Record<string, st
 }
 
 describe.skipIf(!GIT_CORE_IMPLEMENTED)('file origins in the daemon (#33, real git)', () => {
+  it('overlapping /files and /inbox requests all get the plain files when the origin read fails (PR #66 review)', async () => {
+    const s = await local();
+    const { api, failing } = await startCounting(s.fx);
+    await opened(api, s);
+    commit(s.fx, s.feature, { 'own.txt': 'own\n' });
+    commit(s.fx, s.repo, { 'theirs.txt': 't\n' });
+    s.fx.git(s.feature, 'merge', '-q', '--no-edit', 'main');
+    await review(api, s.featureId);
+
+    failing.on = true;
+    // Both ask for the same list while the (failing) origin read is still running.
+    const [files, inbox] = await Promise.all([
+      api.listFiles(s.featureId, { scope: BRANCH_ALL }),
+      api.inbox({ scope: BRANCH_ALL }),
+    ]);
+    // The failure costs the labels, nothing else: the list is there for both, all own.
+    expect(files.files.map((f) => f.path)).toContain('own.txt');
+    expect(inboxFiles(inbox, s.featureId).map((f) => f.path)).toContain('own.txt');
+    expect(Object.values(labels(files.files)).every((l) => l === 'own')).toBe(true);
+  });
+
   it('merging main in leaves the To review count unchanged; main files are base (merge)', async () => {
     const s = await local();
     const { api } = await startCounting(s.fx);

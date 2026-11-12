@@ -1391,7 +1391,9 @@ export class DaemonCore {
     const key = [scopeKey(scope), base ?? '', defaultBranch ?? '', refs ?? ''].join('\u0000');
     const cached = this.#origins.get(files);
     if (cached && cached.key === key) return cached.run;
-    const run = this.#originsLimit
+    // The fallback is part of the cached promise: every caller that shares it gets the same answer,
+    // so an overlapping `/files` and `/inbox` request never sees the raw failure.
+    const run: Promise<Labels> = this.#originsLimit
       .run(() => read.call(this.#git, this.#locator(entry), { base, defaultBranch, files }))
       .then(
         (result): Labels => ({
@@ -1400,16 +1402,17 @@ export class DaemonCore {
           integrationRef: result.integrationRef,
           n: result.n,
         }),
-      );
+      )
+      .catch((error: unknown) => {
+        if (this.#origins.get(files)?.run === run) this.#origins.delete(files);
+        if (!isShutdownError(error)) {
+          this.#log.debug('file origins unavailable', { worktreeId: entry.worktree.id, error });
+        }
+        return plain;
+      });
     // Unreadable default-branch refs: no identity to cache under (as `#gitFiles`).
     if (refs !== null) this.#origins.set(files, { key, run });
-    return run.catch((error: unknown) => {
-      if (this.#origins.get(files)?.run === run) this.#origins.delete(files);
-      if (!isShutdownError(error)) {
-        this.#log.debug('file origins unavailable', { worktreeId: entry.worktree.id, error });
-      }
-      return plain;
-    });
+    return run;
   }
 
   /** `#gitFiles` with the origins attached (`#labelFiles`). */
