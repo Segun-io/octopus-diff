@@ -117,7 +117,9 @@ function waitEntry(
   api: ApiClient,
   worktreeId: string,
   match: (e: ActivityEntry) => boolean,
-  timeoutMs = 8000,
+  // A loaded CI runner can take several seconds from a file event to the feed (debounce, the
+  // review state, the summary); a miss still fails, only later.
+  timeoutMs = 20_000,
 ): Promise<ActivityEntry> {
   return eventually(
     async () => (await api.getActivity(worktreeId)).entries.find(match),
@@ -127,7 +129,7 @@ function waitEntry(
 }
 
 const live = (api: ApiClient, id: string) =>
-  eventually(async () => (await api.getActivity(id)).live, 8000, 50);
+  eventually(async () => (await api.getActivity(id)).live, 20_000, 50);
 
 /** The git subcommand of a logged argv (after the global options and `-c` pairs). */
 function subcommand(line: string): string | undefined {
@@ -149,7 +151,7 @@ async function filesUnder(dir: string): Promise<string[]> {
 }
 
 // Each test starts a real daemon on real git (two in one case); a loaded CI runner needs more than 5 s.
-describe('live activity feed (real git, #38)', { timeout: 30_000 }, () => {
+describe('live activity feed (real git, #38)', { timeout: 90_000 }, () => {
   it('shows what an agent does: edit, delete (content served), untracked delete, commit, checkout, reset', async () => {
     const fx = await makeRealGitFixture();
     const dir = await repo(fx);
