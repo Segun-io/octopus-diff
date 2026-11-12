@@ -131,7 +131,8 @@ function tracking(
       fn(error, filter ? events.filter((e) => filter(dir, e)) : events);
       for (const e of events) raw.push({ dir, path: e.path });
     };
-    let gate: Promise<void> = Promise.resolve();
+    // Without a replay events are handed over synchronously, as before.
+    let gate: Promise<void> | null = null;
     if (options.replay) {
       const { delayMs, events } = options.replay;
       gate = sleep(delayMs).then(() => deliver(null, events(dir)));
@@ -139,7 +140,8 @@ function tracking(
     const sub = await parcelWatcher.subscribe(
       dir,
       (error, events) => {
-        gate = gate.then(() => deliver(error, events));
+        if (gate) gate = gate.then(() => deliver(error, events));
+        else deliver(error, events);
       },
       opts,
     );
