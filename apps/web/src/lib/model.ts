@@ -392,6 +392,8 @@ export type RowIndicatorKind =
   | 'changed'
   | 'request'
   | 'reviewed'
+  /** Reviewed, but untracked files above the daemon's cap are not listed (#43). */
+  | 'notListed'
   | 'clean';
 
 export interface RowIndicator {
@@ -432,9 +434,12 @@ export function rowIndicator(
           : 'open request, nothing new to review',
     };
   }
-  return isDirtySummary(summary)
-    ? { kind: 'reviewed', label: 'reviewed' }
-    : { kind: 'clean', label: 'no changes' };
+  if (!isDirtySummary(summary)) return { kind: 'clean', label: 'no changes' };
+  // Reviewed as far as the list goes, but files the list does not hold were never seen (#43).
+  const omitted = summary.untrackedOmitted?.count ?? 0;
+  return omitted > 0
+    ? { kind: 'notListed', label: `reviewed, ${countOf(omitted, 'untracked file')} not listed` }
+    : { kind: 'reviewed', label: 'reviewed' };
 }
 
 export interface ProjectGroup {

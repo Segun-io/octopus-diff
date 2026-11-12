@@ -44,5 +44,12 @@ export function describeBulkResult(res: BulkReviewResponse): string {
   if (res.skippedDisabled.length > 0)
     parts.push(`${res.skippedDisabled.length} skipped: review off`);
   if (res.stale.length > 0) parts.push(`${res.stale.length} changed meanwhile`);
+  // #43: untracked files above the daemon's cap have no row, so nothing could mark them.
+  const omitted = res.untrackedOmitted ?? 0;
+  if (omitted > 0) {
+    parts.push(
+      `${omitted} untracked ${omitted === 1 ? 'file is' : 'files are'} not listed and cannot be marked`,
+    );
+  }
   return parts.join(' · ');
 }

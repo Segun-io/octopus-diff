@@ -14,6 +14,7 @@ import { worktreeSource } from '../lib/source.ts';
 import { useNow } from '../lib/ticker.ts';
 import { RECENT_MS, relativeTime, shortAge } from '../lib/time.ts';
 import { ChangeRequestGlyph, ChangeRequestHoverBlock } from './ChangeRequest.tsx';
+import { NotListedMarker } from './NotListedMarker.tsx';
 import { DefaultBranchChip, RowChips } from './WorktreeChips.tsx';
 
 /**
@@ -160,6 +161,14 @@ function StateGlyph({ kind }: { kind: RowIndicatorKind }) {
           <path d="m3.8 8.4 2.8 2.8 5.6-6.2" />
         </Glyph>
       );
+    case 'notListed':
+      // The reviewed tick with a dot: reviewed as far as the list goes, files not listed (#43).
+      return (
+        <Glyph className="text-warn">
+          <path d="m2.8 8.4 2.8 2.8 4.6-5.2" />
+          <circle cx="13" cy="4" r="1.6" fill="currentColor" stroke="none" />
+        </Glyph>
+      );
     case 'loading':
       return (
         <Glyph className="text-faint">
@@ -224,6 +233,7 @@ function RowStatus({ row, indicator }: { row: WorktreeRow; indicator: RowIndicat
           {countLabel(row.unreviewed)}
         </span>
       )}
+      <NotListedMarker omission={row.summary?.untrackedOmitted} />
       {word && (
         <span className={word.danger ? 'text-danger' : merged ? 'text-faint' : 'text-warn'}>
           {word.text}
@@ -512,6 +522,9 @@ export const WorktreeItem = memo(function WorktreeItem({
         <span className="sr-only" data-testid="row-status-text">
           {indicator.label}
           {!row.review.enabled && indicator.kind !== 'reviewOff' ? ', review off' : ''}
+          {indicator.kind !== 'notListed' && row.summary?.untrackedOmitted
+            ? `, ${row.summary.untrackedOmitted.count} untracked files not listed`
+            : ''}
           {row.hidden ? ', hidden' : ''}
         </span>
       </button>
