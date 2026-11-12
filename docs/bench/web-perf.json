@@ -5,18 +5,19 @@
     "server": "own mock",
     "worktrees": 30,
     "filesPerWorktree": 200,
-    "inboxGroups": 12,
+    "inboxGroups": 30,
     "mountedRowsAtLoad": 46
   },
   "load": {
-    "fcp": 84,
-    "domContentLoaded": 54.79999999701977,
-    "readyAt": 916.2999999970198,
+    "fcp": 80,
+    "domContentLoaded": 54.399999998509884,
+    "readyAt": 907.7999999970198,
+    "inboxCompleteAt": 1191.5,
     "longTasks": {
-      "n": 0,
-      "p50": 0,
-      "p95": 0,
-      "max": 0
+      "n": 1,
+      "p50": 103,
+      "p95": 103,
+      "max": 103
     }
   },
   "jNavigation": {
@@ -24,13 +25,13 @@
       "n": 200,
       "p50": 33.3,
       "p95": 34,
-      "max": 102.7
+      "max": 37.8
     },
     "longTasks": {
-      "n": 1,
-      "p50": 88,
-      "p95": 88,
-      "max": 88
+      "n": 0,
+      "p50": 0,
+      "p95": 0,
+      "max": 0
     }
   },
   "scroll": {
@@ -39,7 +40,7 @@
       "n": 261,
       "p50": 16.7,
       "p95": 16.9,
-      "max": 19.3
+      "max": 20.3
     },
     "framesOver50ms": 0,
     "longTasks": {
@@ -54,8 +55,8 @@
     "wallClock": {
       "n": 30,
       "p50": 31,
-      "p95": 39,
-      "max": 40
+      "p95": 40,
+      "max": 42
     },
     "longTasks": {
       "n": 0,
@@ -67,13 +68,13 @@
   "liveRefreshInbox": {
     "mutateToIdle": {
       "n": 10,
-      "p50": 92.2,
-      "p95": 111,
-      "max": 111
+      "p50": 84.5,
+      "p95": 95.8,
+      "max": 95.8
     },
     "requestsPerRefresh": {
       "n": 10,
-      "p50": 3,
+      "p50": 2,
       "p95": 3,
       "max": 3
     },
@@ -84,7 +85,7 @@
       "max": 0
     }
   },
-  "usedJsHeapMB": 48,
+  "usedJsHeapMB": 54,
   "pageErrors": [],
   "checks": [
     {
@@ -110,7 +111,7 @@
     {
       "name": "a refresh fetches (projects + files)",
       "ok": true,
-      "detail": "requests per refresh: 2, 3, 3, 3, 2, 2, 2, 3, 2, 3"
+      "detail": "requests per refresh: 2, 2, 3, 3, 2, 2, 2, 3, 2, 3"
     }
   ]
 }
