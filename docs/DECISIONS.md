@@ -3104,3 +3104,77 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      bytes: a 2000-path worktree's event stays about 1.5 KB). `GET /api/inbox` gains `worktreeIds` (comma-separated
      ids, deduplicated, at most `INBOX_WORKTREES_MAX` = 200; unknown ids ignored; within `projectIds` when both are
      given), and `ApiClient.inbox` passes it.
+250. **Daemon: where `paths` comes from, without a git process.** At the announcement (`#cachedPaths`, after the
+     summary, the review state and the activity snapshot): an empty `working` list when the summary counts no changed
+     file; else the `working` list if `#filesCache` holds it for this `stateHash` and the same attributes stamp (two
+     `stat`s); else the review state's list (`{kind:'review', base}`), which `#computeReview` lists *before* the
+     announcement for every worktree that changed after startup (`#reviewWanted`); else no `paths`. Why not always
+     `working`: listing it costs `status` + `diff` (+ `config`) per edit in every edited worktree whether or not a
+     client looks, which is exactly what #51 must not add. So `paths.scope` is `review` in practice and the client
+     treats it as a shortcut for that scope only. The spawn-wrapper test (`event-deltas.real-git.test.ts`) pins an edit
+     to the counts measured on main with the same test (7 / 6 / 7 processes for three appends, identical over 3 runs);
+     adding a `working` listing makes it fail (mutation-checked).
+251. **Daemon: the event is checked, the replay is slim.** The full event is parsed with
+     `WorktreeChangedEventSchema` before it is sent: a client drops an event its schema rejects, so a field it would
+     reject (a path the list schema refuses) costs the delta, not the event (the slim event goes out instead, logged
+     at debug). `EventHub.emit(event, replay)` keeps the slim form in the `Last-Event-ID` buffer: a reconnecting client
+     refetches everything after its second `hello` anyway, and the buffer (1000 events) would otherwise hold up to
+     1000 rows and path lists (about 1.5 KB each for a few files, up to about 30 KB at the caps). Sizes measured from
+     the test fixtures: a row is about 1 KB, a path entry 60-120 bytes.
+252. **Daemon: `inbox(..., worktreeIds)`.** Only the named worktrees are candidates, within `projectIds` when both
+     are given; unknown ids match nothing; the single-flight key includes the sorted ids; the bounded wait for first
+     summaries covers only projects that hold a named worktree. Validation is the contract's (`IdSchema`, at most 200,
+     deduplicated): `worktreeIds=nope` is a 400.
+253. **Web: rows go into the projects list, newest wins.** `api/deltas.ts`: `applyRow` replaces the worktree's row in
+     the cached `['projects']` list (a new object for that project only; React Query's structural sharing keeps the
+     rest). A row older than the cached one (`summary.updatedAt`, the daemon's compute time) is dropped (`stale`).
+     A worktree the cached list does not have (no list yet, or added or removed between the event and the apply) is
+     not added: it falls back to a projects refetch. A projects request in flight while a row is applied answers with
+     the older state and would put the old row back: applied rows are remembered for 60 s and win over an older row in
+     any projects answer (`keepNewerRows`, wrapped into the projects query function by `projectsQueryOptions`). The
+     cached-hash skip (`cachedStateHash === event.stateHash`) is unchanged. A reconnect's `hello` still invalidates
+     everything, and replayed events carry no delta.
+254. **Web: the inbox rows come from the daemon.** The client-side reconstruction from `/files` (`patchInbox`,
+     DECISIONS P6, and its `INBOX_PATCH_MAX_WORKTREES` = 8) is removed. For delta events the inbox queries on screen
+     ask `GET /api/inbox?scope=<their scope>&worktreeIds=<the changed ones>` (one request per scope on screen, up to
+     `INBOX_WORKTREES_MAX` ids; above that a full refetch) and replace those rows (a named worktree without a row
+     leaves the inbox); queries not on screen are only marked stale. A full inbox fetch in flight would write older
+     rows over the delta when it lands (the streamed query writes its result at the end), so the delta is asked for
+     after it (`query.promise`). Of two delta batches that overlap, the later one's rows win (a sequence per query
+     and worktree). **Older daemons** (no `worktree`/`summary` on the event): the projects list and the whole inbox
+     are refetched, the old invalidation; that costs an old daemon more bytes than the removed patch did, with the
+     same data on screen. Feature detection is per event, so it needs no version check.
+255. **Web: the open worktree's lists.** For a delta worktree its file lists are invalidated (the ones on screen
+     refetch: one request each, as before). A diff is refetched only when its own file moved: at once when the event's
+     `paths` are for the diff's (resolved) scope and say another patch or no entry; otherwise once the refetched file
+     list of the same view scope (or the worktree's inbox row in it) is current for the latest `stateHash`, by
+     `patchHash`; nothing current to compare with → invalidated, as before. A kept diff takes `reviewed` from the list.
+     Commits are refetched only when HEAD or the branch moved. **Not done: skipping the file-list refetch when the
+     event's paths equal the cached list.** The event cannot tell a touch (new mtime, same content) from a move of
+     the default branch, which relabels merge-noise origins (#33) without changing any `patchHash`, so a skip could
+     leave stale `origin` labels on screen. A follow-up could put `origin` per path into `paths`. Selection and
+     scroll: nothing selection-related changed; the open diff simply keeps its data more often.
+256. **Bench: per-edit traffic budgets.** The refresh loop (Inbox view, an append in a different worktree each time)
+     records every finished `/api/*` request of the page with `request.sizes()` (body + headers on the wire, gzip
+     included) and judges two new budgets on the small layout: `editTraffic` (worst edit under 100 KB) and
+     `editProjects` (`/api/projects` requests per edit, worst edit, below 1). The primary proofs are the request-count
+     tests (`apps/web/test/event-deltas.test.ts`, `app.test.tsx` "applies the event delta", e2e
+     `04-live-updates` "an edit costs no /api/projects …"); the bench is the end-to-end number.
+257. **Daemon: a first review state computed for an announcement rides on it, not on `review.ready`.** The first
+     bench run with the new budgets measured 1 `/api/projects` refetch (10 KB at 30 × 3) on 12 of 15 edits: the
+     first edit of a worktree after startup computes its first review state (`#reviewWanted`), which noted a
+     `review.ready` for the project 50 ms after the `worktree.changed`, and every client refetched the projects list
+     for it. That row already carries `summary.review`. Now a first review state that lands while `#computeSummary`
+     waits for it (`entry.announcing`) is held back (`readyHeld`). It is sent only if the refresh then announces nothing
+     (same state hash) or fails. A first review state reached any other way (an opened project, a request) still sends
+     `review.ready`. Older clients refetch the projects list on every `worktree.changed` anyway, so they see it too.
+     Mutation-checked in `event-deltas.real-git.test.ts` (no `review.ready` after the first edits).
+258. **Web: bulk review expects the state of the files it acts on.** `state/model.tsx`'s `stateHashes` (the
+     `expectedStateHashes` of a bulk request; the daemon skips a worktree that moved on) used to prefer the sidebar's
+     summary, then the inbox row. Before #51 both refetched together after an edit. Now the sidebar row is applied
+     from the event at once, while the inbox row or file list on screen refetches. Sending the sidebar's newer hash with
+     the older files on screen defeated the stale check: e2e `11-ui-bulk-review` "stale" marked 44 files instead of
+     skipping the edited worktree. The order is now the open file list's `stateHash`, then the inbox row's, then the
+     sidebar's. A sidebar-target bulk (a folder or project from the menu) may then expect an inbox row's hash that
+     lags by one refetch. The daemon then skips that worktree and the toast says so: conservative, and the next click
+     works. This is the one change outside `apps/web/src/api` and `mock`.
