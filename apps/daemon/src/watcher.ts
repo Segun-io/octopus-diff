@@ -26,6 +26,14 @@ import {
   readNestedBuildDirRules,
   readRootBuildDirRules,
 } from './watch-ignores.js';
+import {
+  burstThreshold,
+  isIgnoredGitDirChild,
+  MIN_RESUBSCRIBE_GAP_MS,
+  NewSubtreeWatch,
+  ResubscribeGate,
+  type SubtreeCheck,
+} from './watch-subtree.js';
 
 export type SubscribeFn = (
   dir: string,
@@ -128,6 +136,15 @@ export interface WatcherServiceOptions {
   pollDegradedFocusedMs?: number;
   relistMs?: number;
   resubscribeDelayMs?: number;
+  /**
+   * Re-subscribe a tree after new directories appear in it (default: on Linux, where inotify
+   * does not watch the contents of a directory that is created with subdirectories; DECISIONS #212).
+   */
+  watchNewSubtrees?: boolean;
+  /** Shortest gap between two such re-subscribes of one tree (default 2 s). */
+  newSubtreeGapMs?: number;
+  /** Every finished new-directory pass (diagnostics and tests). */
+  onSubtreeCheck?: (info: SubtreeCheck & { target: 'worktree' | 'git'; id: string }) => void;
   /** Natively watched worktrees per project (default 64); the rest are polled (SEC-07). */
   maxWorktreesPerProject?: number;
   logger: Logger;
@@ -187,6 +204,9 @@ interface WorktreeState {
   lastFireAt: number;
   /** Re-subscribe after the subscription reported an error. */
   retry: ErrorRetry;
+  /** Directories created under the root (see `watch-subtree.ts`); null when not used. */
+  subtrees: NewSubtreeWatch | null;
+  resub: ResubscribeGate;
 }
 
 /** Backoff state for re-subscribing after a subscription error (DECISIONS #130). */
@@ -214,6 +234,8 @@ interface ProjectState {
   relist: NodeJS.Timeout | undefined;
   listDebounce: NodeJS.Timeout | undefined;
   retry: ErrorRetry;
+  subtrees: NewSubtreeWatch | null;
+  resub: ResubscribeGate;
 }
 
 const REFUSAL_LABELS: Record<WatchRefusal, string> = {
@@ -341,6 +363,7 @@ export class WatcherService {
       | 'guardDirs'
       | 'maxWorktreesPerProject'
       | 'onWorktreeReplaced'
+      | 'onSubtreeCheck'
     >
   >;
   readonly #log: Logger;
@@ -356,6 +379,10 @@ export class WatcherService {
   readonly #onDirty: WatcherServiceOptions['onWorktreeDirty'];
   readonly #onListDirty: WatcherServiceOptions['onWorktreeListDirty'];
   readonly #onReplaced: (worktreeId: string) => void;
+  readonly #onSubtreeCheck: NonNullable<WatcherServiceOptions['onSubtreeCheck']>;
+  readonly #burstThreshold: number;
+  /** Plain directory names the worktree subscription ignores (checked for new subdirectories). */
+  readonly #ignoredNames: ReadonlySet<string>;
   readonly #worktrees = new Map<string, WorktreeState>();
   readonly #projects = new Map<string, ProjectState>();
   readonly #loggedFailures = new Set<FailureKind>();
@@ -385,7 +412,12 @@ export class WatcherService {
         1,
         options.resubscribeDelayMs ?? WATCH_DEFAULTS.resubscribeDelayMs,
       ),
+      watchNewSubtrees:
+        options.watchNewSubtrees ?? (process.platform !== 'darwin' && process.platform !== 'win32'),
+      newSubtreeGapMs: Math.max(0, options.newSubtreeGapMs ?? MIN_RESUBSCRIBE_GAP_MS),
     };
+    this.#burstThreshold = this.#opts.watchNewSubtrees ? burstThreshold() : Infinity;
+    this.#onSubtreeCheck = options.onSubtreeCheck ?? (() => {});
     this.#log = options.logger;
     if (options.subscribe) {
       this.#host = null;
@@ -397,6 +429,9 @@ export class WatcherService {
       if (this.#opts.enabled && !this.#opts.forcePolling) this.#host.warm();
     }
     this.#baseIgnores = buildWorktreeIgnores(options.ignore);
+    this.#ignoredNames = new Set(
+      this.#baseIgnores.filter((entry) => !isGlobOrPath(entry) && entry !== ''),
+    );
     this.#guard = options.guardDirs ?? defaultGuardDirs();
     this.#maxPerProject = Math.max(
       1,
@@ -433,7 +468,7 @@ export class WatcherService {
     let project = this.#projects.get(projectId);
     const pending: Promise<void>[] = [];
     if (!project) {
-      project = {
+      const created: ProjectState = {
         projectId,
         commonDir,
         sub: null,
@@ -447,7 +482,22 @@ export class WatcherService {
         relist: undefined,
         listDebounce: undefined,
         retry: newRetry(),
+        subtrees: null,
+        resub: new ResubscribeGate(this.#opts.newSubtreeGapMs),
       };
+      created.subtrees = this.#subtreeWatch(
+        'git',
+        projectId,
+        (child) => isIgnoredGitDirChild(commonDir, child),
+        created.resub,
+        async () => {
+          if (this.#projects.get(projectId) !== created || !created.sub) return;
+          await this.#enqueue(created, () => this.#subscribeProject(created));
+          // Changes made while the git dir had no subscription were missed.
+          if (created.sub) for (const id of created.worktreeIds) this.markDirty(id, 'git');
+        },
+      );
+      project = created;
       this.#projects.set(projectId, project);
       this.#scheduleRelist(project);
       if (project.policy) {
@@ -488,6 +538,8 @@ export class WatcherService {
     clearTimeout(project.relist);
     clearTimeout(project.listDebounce);
     clearTimeout(project.retry.timer);
+    project.subtrees?.dispose();
+    project.resub.dispose();
     const pending = [...project.worktreeIds].map((id) => this.#unwatchWorktree(id));
     pending.push(this.#releaseProjectSub(project));
     await Promise.all(pending);
@@ -659,6 +711,47 @@ export class WatcherService {
     return st.policy !== null || (this.#projects.get(st.info.projectId)?.policy ?? null) !== null;
   }
 
+  // --- new directories (DECISIONS #212) ----------------------------------------------------------
+
+  /**
+   * Looks for directories that appeared with subdirectories already inside (inotify watches only
+   * the new directory itself, see `watch-subtree.ts`) and re-subscribes the tree, rate-limited.
+   */
+  #subtreeWatch(
+    target: 'worktree' | 'git',
+    id: string,
+    isIgnored: (childPath: string) => boolean,
+    gate: ResubscribeGate,
+    resubscribe: () => Promise<void>,
+  ): NewSubtreeWatch | null {
+    if (!this.#opts.watchNewSubtrees) return null;
+    return new NewSubtreeWatch({
+      debounceMs: this.#opts.debounceMs,
+      maxWaitMs: this.#opts.maxWaitMs,
+      burstThreshold: this.#burstThreshold,
+      isIgnored,
+      onCheck: (check) => this.#onSubtreeCheck({ ...check, target, id }),
+      onUnwatched: (check) => {
+        if (this.#closed) return;
+        this.#log.debug('new directories may not be watched; re-subscribing', {
+          target,
+          id,
+          reason: check.reason,
+        });
+        gate.request(resubscribe);
+      },
+    });
+  }
+
+  /** Is `child` a directory the worktree subscription does not watch by design? */
+  #isUnwatchedByDesign(st: WorktreeState, child: string): boolean {
+    if (this.#ignoredNames.has(path.basename(child))) return true;
+    for (const other of this.#worktrees.values()) {
+      if (other !== st && other.info.root === child) return true;
+    }
+    return this.#buildVerdict(st, child) === 'drop';
+  }
+
   // --- worktree subscriptions ------------------------------------------------------------------
 
   /** Which worktrees may be watched natively: refuses too-broad roots, caps the rest (SEC-07). */
@@ -719,7 +812,21 @@ export class WatcherService {
       poll: undefined,
       lastFireAt: 0,
       retry: newRetry(),
+      subtrees: null,
+      resub: new ResubscribeGate(this.#opts.newSubtreeGapMs),
     };
+    st.subtrees = this.#subtreeWatch(
+      'worktree',
+      info.worktreeId,
+      (child) => this.#isUnwatchedByDesign(st, child),
+      st.resub,
+      async () => {
+        if (this.#worktrees.get(info.worktreeId) !== st || !st.sub) return;
+        await this.#enqueue(st, () => this.#subscribeWorktree(st));
+        // Files written while the tree was not subscribed were missed.
+        if (st.sub) this.markDirty(info.worktreeId, 'fs');
+      },
+    );
     this.#worktrees.set(info.worktreeId, st);
     this.#schedulePoll(info.worktreeId);
     if (policy) this.#logPolicy(st);
@@ -977,6 +1084,8 @@ export class WatcherService {
     clearTimeout(st.poll);
     clearTimeout(st.build.recheck);
     clearTimeout(st.retry.timer);
+    st.subtrees?.dispose();
+    st.resub.dispose();
     if (this.#focus === worktreeId) this.#focus = null;
     if (st.subscribing) await st.subscribing;
     await this.#releaseSub(st);
@@ -993,15 +1102,22 @@ export class WatcherService {
     }
     const owners = new Set<WorktreeState>();
     const deferred: Array<{ owner: WorktreeState; path: string }> = [];
+    const created = new Map<WorktreeState, string[]>();
     let rootDeleted = false;
     for (const event of events) {
       if (event.path === st.info.root && event.type === 'delete') rootDeleted = true;
       const owner = this.#ownerOf(event.path, st);
       const verdict = this.#buildVerdict(owner, event.path);
       if (verdict === 'drop') continue;
+      if (event.type === 'create' && owner.subtrees) {
+        const list = created.get(owner);
+        if (list) list.push(event.path);
+        else created.set(owner, [event.path]);
+      }
       if (verdict === 'unknown') deferred.push({ owner, path: event.path });
       else owners.add(owner);
     }
+    for (const [owner, paths] of created) owner.subtrees?.note(paths);
     if (rootDeleted) this.#onRootDeleted(st);
     this.#markOwnersDirty(owners, 'fs');
     if (deferred.length) void this.#resolveDeferred(deferred);
@@ -1246,8 +1362,10 @@ export class WatcherService {
     const states = [...project.worktreeIds]
       .map((id) => this.#worktrees.get(id))
       .filter((s): s is WorktreeState => s !== undefined);
+    const created: string[] = [];
     for (const event of events) {
       const p = event.path;
+      if (event.type === 'create' && !isLockFile(p)) created.push(p);
       if (p === project.commonDir && event.type === 'delete') {
         // Same as a deleted worktree root (F1): the subscription is dead from here on.
         project.native = false;
@@ -1279,6 +1397,7 @@ export class WatcherService {
       }
       if (!matched && isSameOrInside(worktreesDir, p) && !relist) relist = true;
     }
+    project.subtrees?.note(created);
     if (relist) this.#scheduleListDirty(project);
     this.#markOwnersDirty(dirty, 'git');
   }
@@ -1403,6 +1522,8 @@ export class WatcherService {
       clearTimeout(st.poll);
       clearTimeout(st.build.recheck);
       clearTimeout(st.retry.timer);
+      st.subtrees?.dispose();
+      st.resub.dispose();
       pending.push(
         (async () => {
           if (st.subscribing) await st.subscribing;
@@ -1414,6 +1535,8 @@ export class WatcherService {
       clearTimeout(project.relist);
       clearTimeout(project.listDebounce);
       clearTimeout(project.retry.timer);
+      project.subtrees?.dispose();
+      project.resub.dispose();
       pending.push(this.#releaseProjectSub(project));
     }
     this.#worktrees.clear();
