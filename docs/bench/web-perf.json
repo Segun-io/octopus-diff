@@ -1,14 +1,17 @@
 {
   "dataset": {
+    "scope": "working",
+    "mode": "full",
+    "server": "own mock",
     "worktrees": 30,
     "filesPerWorktree": 200,
-    "inboxGroups": 30,
+    "inboxGroups": 12,
     "mountedRowsAtLoad": 46
   },
   "load": {
-    "fcp": 72,
-    "domContentLoaded": 46,
-    "readyAt": 445.3999999985099,
+    "fcp": 84,
+    "domContentLoaded": 54.79999999701977,
+    "readyAt": 916.2999999970198,
     "longTasks": {
       "n": 0,
       "p50": 0,
@@ -20,23 +23,23 @@
     "perPressToNextFrame": {
       "n": 200,
       "p50": 33.3,
-      "p95": 34.6,
-      "max": 123.4
+      "p95": 34,
+      "max": 102.7
     },
     "longTasks": {
       "n": 1,
-      "p50": 92,
-      "p95": 92,
-      "max": 92
+      "p50": 88,
+      "p95": 88,
+      "max": 88
     }
   },
   "scroll": {
     "listHeightPx": 156900,
     "frameDelta": {
       "n": 261,
-      "p50": 16.6,
-      "p95": 17.2,
-      "max": 20.5
+      "p50": 16.7,
+      "p95": 16.9,
+      "max": 19.3
     },
     "framesOver50ms": 0,
     "longTasks": {
@@ -50,9 +53,9 @@
   "worktreeSwitchJ": {
     "wallClock": {
       "n": 30,
-      "p50": 34,
-      "p95": 37,
-      "max": 37
+      "p50": 31,
+      "p95": 39,
+      "max": 40
     },
     "longTasks": {
       "n": 0,
@@ -64,9 +67,15 @@
   "liveRefreshInbox": {
     "mutateToIdle": {
       "n": 10,
-      "p50": 96,
-      "p95": 192.5,
-      "max": 192.5
+      "p50": 92.2,
+      "p95": 111,
+      "max": 111
+    },
+    "requestsPerRefresh": {
+      "n": 10,
+      "p50": 3,
+      "p95": 3,
+      "max": 3
     },
     "longTasks": {
       "n": 0,
@@ -75,5 +84,33 @@
       "max": 0
     }
   },
-  "pageErrors": []
+  "usedJsHeapMB": 48,
+  "pageErrors": [],
+  "checks": [
+    {
+      "name": "page errors",
+      "ok": true,
+      "detail": "0"
+    },
+    {
+      "name": "virtualised list (mounted rows at load / after scrolling < 120)",
+      "ok": true,
+      "detail": "46 / 46"
+    },
+    {
+      "name": "the list is long (a 6000-file inbox)",
+      "ok": true,
+      "detail": "156900 px"
+    },
+    {
+      "name": "J visited distinct worktrees",
+      "ok": true,
+      "detail": "30 of 30 presses"
+    },
+    {
+      "name": "a refresh fetches (projects + files)",
+      "ok": true,
+      "detail": "requests per refresh: 2, 3, 3, 3, 2, 2, 2, 3, 2, 3"
+    }
+  ]
 }

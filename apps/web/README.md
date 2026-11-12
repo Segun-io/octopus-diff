@@ -51,5 +51,6 @@ test/            vitest (node + jsdom) tests
 
 ## Scripts
 
-`pnpm test` (vitest), `pnpm typecheck`, `pnpm build`, `pnpm check:browser` / `pnpm perf` (need a
-running `dev:mock` / `preview:mock`; set `BASE_URL`).
+`pnpm test` (vitest), `pnpm typecheck`, `pnpm build`, `pnpm check:browser` (needs a running `dev:mock` /
+`preview:mock`; set `BASE_URL`), `pnpm perf` / `pnpm perf:smoke` (render benchmark: build first; it starts its own mock
+with the large dataset, see `docs/bench/README.md`).

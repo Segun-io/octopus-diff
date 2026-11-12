@@ -81,6 +81,10 @@ jobs:
       - name: Install Chromium and its system dependencies
         run: pnpm --filter @octopus-diff/e2e exec playwright install --with-deps chromium
       - run: pnpm test:e2e
+      # About 10 s: the web render benchmark's waits (list, viewer, J, live refresh) against its own
+      # mock with the large dataset, fewer iterations. Structural checks only, no timing budget (#68).
+      - name: Web perf script smoke
+        run: pnpm --filter @octopus-diff/web perf:smoke
       - name: Upload Playwright report
         if: failure()
         uses: actions/upload-artifact@v7

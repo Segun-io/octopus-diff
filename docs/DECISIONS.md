@@ -2662,3 +2662,18 @@ Numbers: #209 and up (other sessions may also have used #209; renumber at merge)
      until `git gc` prunes it (tested before and after a commit and a hard reset, and for a file that was staged and
      then unstaged: an unreferenced loose object).
      PR #70 review (contracts, additive): `SummarySnapshotOptionSchema` (`boolean | { maxEntries?: int 1..LIMIT }`, strict) parses `SummaryOptions.snapshot` at the git-core boundary, as AGENTS.md requires for every input; and a path that is both staged-deleted and still on disk (`git rm --cached`) appears once in a snapshot, as its tracked entry (it carries the blob oids), not twice.
+## Web perf script: self-hosted mock, in-page timing, CI smoke (session, 2026-11-12; issue #68)
+
+Number: #209 (another session working on `e2e/` may also have taken #209: renumber whichever lands second).
+
+209. **`scripts/perf.ts` starts its own mock and measures in the page.** The failures in #68 were not UI regressions:
+     the documented command (`preview:mock`, no `MOCK_DATASET`) serves the 10-worktree `demo` dataset, where the
+     script's load wait (before #67's scope-aware wait) and its `J` step (a worktree with no files has no `file-item`)
+     can never be met. The script now starts the mock (`large`, no simulator, merge noise on) and `vite preview` of
+     `dist/` in-process (`mock/preview-server.ts`, shared with `preview:mock`), fresh every run; with `BASE_URL` it
+     checks the worktree count and says what to start. `J` waits for the current worktree to *change* and the first row
+     to belong to it; every timed-out wait prints the page's state. The live-refresh time is taken inside the page
+     (a `MutationObserver` on the refresh indicator, clock started just before the mutate request): the old
+     Playwright `locator.waitFor` polls on a 100 ms grid, which quantised a ~85 ms refresh to ~90 or ~190 ms (the
+     "86 → 187 ms with merge noise" of #67 was that, not the UI). Structural checks make it exit 1; timings are never a
+     gate. `perf:smoke` (fewer iterations, ~8 s) is a step of the CI `e2e` job (Chromium is installed there).

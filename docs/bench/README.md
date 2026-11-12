@@ -10,7 +10,8 @@ dir, except `profile:real`, which reads your repositories and never writes to th
 | `pnpm --filter @octopus-diff/e2e bench --layout large` | Same shape at 100k files, 30k untracked, 300k-line rewrite. Fixture in 10 s | `results-large.{json,md}` |
 | `pnpm --filter @octopus-diff/fixtures fixtures large --layout large-ci` | Only builds the large layout and prints its paths | |
 | `pnpm --filter @octopus-diff/e2e profile:real <repo>... \| --scan-root <dir> [--redact] [--json f]` | Read-only profile of real repos: `status`, `ls-files`, `diff HEAD`, untracked count, speed-related git config, probable stale index; checks `.git/index` is untouched | stdout, optional JSON |
-| `pnpm --filter @octopus-diff/web preview:mock` then `BASE_URL=… pnpm --filter @octopus-diff/web perf` | Render bench in Chromium on the large mock dataset (no daemon) | `web-perf.json` |
+| `pnpm --filter @octopus-diff/web build` then `pnpm --filter @octopus-diff/web perf` | Render bench in Chromium on the large mock dataset (30 worktrees × 200 files; no daemon). Starts its own mock + `vite preview` (fresh every run, about 15 s). `SCOPE=review`, `MOCK_MERGE_NOISE=0`, `PERF_OUT=<file>`, `BASE_URL` for a server you started (must serve `MOCK_DATASET=large`) | `web-perf.json` |
+| `pnpm --filter @octopus-diff/web perf:smoke` | Same script, fewer iterations (about 8 s); structural checks only. Runs in the CI `e2e` job | exit code |
 
 Options for `bench`: `--idle-seconds N`, `--iterations N`, `--no-ui`, `--out <dir>`, `--strict`. pnpm 12 forwards
 arguments as they are (no `--` needed; a literal `--` is tolerated). Build first (`pnpm build`).
@@ -39,3 +40,22 @@ by changing every tracked file's mtime without touching its content in one workt
 on each `status`/`diff` and `--no-optional-locks` never rewrites the index, so it never heals. It is the worst case
 (every file stale). At 100k files `git status` took 255 ms in the untracked-heavy worktree and 720 ms in the stale
 one on the dev machine.
+
+## The web render bench (`apps/web/scripts/perf.ts`, #68)
+
+It drives the production build in headless Chromium, so it rots when the UI's waiting conditions change
+(it broke in #26 and again in #68). Rules that keep it honest:
+
+- **Run it when** you change the file list, the sidebar, J/K/j/k navigation, the scope select, the diff viewer's
+  states or the live-refresh path in `apps/web`, and after any change to the mock backend. Build first
+  (`pnpm --filter @octopus-diff/web build`): it measures `dist/`, not the sources.
+- Every wait is on a condition the app exposes (`data-scope`, `data-state`, `data-placeholder`, `aria-current`,
+  `data-worktree-id`, the refresh indicator's `data-state`), never a sleep; a timeout prints the page's state. If you
+  rename one of those, update the script in the same commit.
+- The dataset must be the large mock one. The script starts its own; with `BASE_URL` it checks the worktree count and
+  stops with the reason (`preview:mock` alone serves the 10-worktree `demo` dataset).
+- Live refresh is timed inside the page (a `MutationObserver` on the indicator). Do not time it with a Playwright
+  `waitFor`: those poll on a 100 ms grid and turned an 85 ms refresh into 190 ms for a few ms of server time.
+- `perf:smoke` runs in CI (the `e2e` job, where Chromium is installed) and fails on structure only: page errors, a
+  non-virtualised list, `J` not reaching distinct worktrees, a refresh that fetches nothing, or a timed-out wait.
+  Timings are never a gate (shared runners); compare against `web-perf.json` by hand, three runs, medians.
