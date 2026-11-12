@@ -27,7 +27,7 @@ import {
   isDeltaEvent,
   type WorktreeDeltaEvent,
 } from './deltas.ts';
-import { type DiffQueryData, queryKeys } from './queries.ts';
+import { type DiffQueryData, queryKeys, settleOvertaken } from './queries.ts';
 
 export interface ReviewPatch {
   projectId: string;
@@ -352,7 +352,9 @@ async function applyInboxDelta(
       // request an edit causes, and a user watching the Inbox should see it.
       const response = await queryClient.fetchQuery({
         queryKey: queryKeys.inboxDelta(before.scope, worktreeIds, seq),
-        queryFn: () => api.inbox({ scope: before.scope, worktreeIds }),
+        // Rows the daemon marks overtaken are asked for again (#43, Greptile P1 on PR #95).
+        queryFn: async () =>
+          settleOvertaken(api, await api.inbox({ scope: before.scope, worktreeIds })),
         staleTime: 0,
         gcTime: 0,
         retry: false,

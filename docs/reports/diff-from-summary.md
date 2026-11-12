@@ -164,9 +164,9 @@ None added or removed (`pnpm credits:check`: up to date).
 
 ## Merge with main (PR #91, untracked-heavy)
 
-Conflicts: DECISIONS (kept #305-#327, then #330-#339), PLAN §5.6 (both paragraphs), `incremental-fuzz.test.ts` (ported into the
+Conflicts: DECISIONS (kept #305-#327, then #330-#345), PLAN §5.6 (both paragraphs), `incremental-fuzz.test.ts` (ported into the
 `helpers/fuzz-ops.ts` structure: `useUniverse`, plan path shapes, caps 1 and 2, directory-count invariants; titles and thresholds identical to
-main's). Semantic checks (DECISIONS #339): omitted untracked files take the whole route (test + mutation), `unsettled` signatures refuse,
+main's). Semantic checks (DECISIONS #345): omitted untracked files take the whole route (test + mutation), `unsettled` signatures refuse,
 capped seeds added to the diff fuzz.
 
 Verification after the merge: lint, typecheck, build exit 0; `pnpm test` exit 0 (git-core 429 + 1 skipped, daemon 398 + 4 skipped, web 455, e2e unit 8; git-core and
@@ -179,7 +179,7 @@ untracked file 2 ms (20 ms in the untracked-heavy worktree) / 0 spawns; a file t
 ## PR #93 review, round 4: nested repositories
 
 - **Bug (Greptile):** a repository created above an untracked file after the summary left every check unchanged; the route returned an addition where the
-  whole route says `not_found`. Fix (DECISIONS #340): `nestedRepositoryAbove` (the incremental summary's ancestor check, extracted and shared) runs in the
+  whole route says `not_found`. Fix (DECISIONS #346): `nestedRepositoryAbove` (the incremental summary's ancestor check, extracted and shared) runs in the
   route's check round: `.git` directory or file, any ancestor, symlinked ancestors followed by the kernel. Tracked files: git diffs a tracked file normally
   inside a nested repository, so nothing was wrong; the route refuses anyway.
 - **Tests:** 5 golden cases against the reference core (4 failed first), 4 mutations killed; fuzz extended (nested repository per seed) but, honestly, it does

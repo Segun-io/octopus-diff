@@ -25,7 +25,9 @@ function countingGitCore(fx: RealGitFixture): { git: GitCore; calls: Map<string,
       const value = Reflect.get(target, prop, receiver);
       if (typeof value !== 'function') return value;
       return (...args: unknown[]) => {
-        calls.set(String(prop), (calls.get(String(prop)) ?? 0) + 1);
+        // Both list calls count as `listChangedFiles` (the daemon uses the one reporting its state).
+        const name = prop === 'listChangedFilesWithState' ? 'listChangedFiles' : String(prop);
+        calls.set(name, (calls.get(name) ?? 0) + 1);
         return value.apply(target, args);
       };
     },

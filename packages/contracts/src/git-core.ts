@@ -8,6 +8,7 @@ import type {
   GitFileDiff,
   GitProjectInfo,
   GitRepositoryInfo,
+  UntrackedOmission,
   Worktree,
   WorktreeSummary,
 } from './domain.js';
@@ -59,6 +60,18 @@ export interface GitCore {
     scope: DiffScope,
     options?: ScopeOptions,
   ): Promise<GitChangedFile[]>;
+
+  /**
+   * `listChangedFiles` saying which state the list is of (#43 follow-up, Greptile on PR #95): a
+   * caller pairing the list with summary fields must label it with the state git-core actually
+   * listed, not with the one it asked for. Optional: older implementations and test doubles lack
+   * it (callers then label as before).
+   */
+  listChangedFilesWithState?(
+    worktree: WorktreeLocator,
+    scope: DiffScope,
+    options?: ScopeOptions,
+  ): Promise<ListedChangedFiles>;
 
   /**
    * The unified diff of one file in `scope`. `patchHash` must equal the value from
@@ -319,6 +332,25 @@ export interface CommitDetails {
    * every parent (`--cc`), i.e. conflict resolutions and evil-merge edits.
    */
   paths: string[];
+}
+
+/** A file list and the state it is of (`GitCore.listChangedFilesWithState`). */
+export interface ListedChangedFiles {
+  files: GitChangedFile[];
+  /**
+   * The summary state (`SummaryResult.stateHash`) the list is of: `ScopeOptions.summaryState`
+   * when git-core built the list from that state. Null when it listed the worktree as it is now
+   * (no state asked for, the state asked for is no longer git-core's latest, or the list could not
+   * follow it): then the list belongs to no summary the caller holds.
+   */
+  summaryState: string | null;
+  /**
+   * With `summaryState` null, the untracked files this list leaves out, as it applied the cap
+   * (`WorktreeSummary.untrackedOmitted`'s shape; ignore lines are the exact directories). Absent
+   * when none were omitted, when the scope lists no untracked files, or when `summaryState` is
+   * set (the summary of that state says it).
+   */
+  untrackedOmitted?: UntrackedOmission;
 }
 
 export interface GitCoreOptions {
