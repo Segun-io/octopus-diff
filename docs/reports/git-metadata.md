@@ -1,7 +1,7 @@
 # git-metadata report
 
 Roadmap #29 "Perf: per-project git metadata instead of per-worktree" (milestone M1, step 05 of #24).
-Branch `perf/git-metadata`. DECISIONS #172–#178 (the parallel #10 session uses #180+; renumber at merge if needed).
+Branch `perf/git-metadata`. DECISIONS #188–#194 (stacked after #10's #180–#187).
 
 ## Shipped
 
@@ -102,11 +102,11 @@ Tests:
 
 ## Decisions
 
-DECISIONS #172 (overview, numbers), #173 (one base lookup from ref files; known differences for hand-made
-non-commit branch tips and broken refs), #174 (batched `%(ahead-behind:)` over checked-out branches only), #175
-(config scan reuse conditions and the security argument), #176 (worktree repo info from `worktree list`, ownership
-check, not on Windows), #177 (commit facts memo; replace-refs caveat; missing object in a branch merge base is now
-`not_found`), #178 (bench budget enforced).
+DECISIONS #188 (overview, numbers), #189 (one base lookup from ref files; known differences for hand-made
+non-commit branch tips and broken refs), #190 (batched `%(ahead-behind:)` over checked-out branches only), #191
+(config scan reuse conditions and the security argument), #192 (worktree repo info from `worktree list`, ownership
+check, not on Windows), #193 (commit facts memo; replace-refs caveat; missing object in a branch merge base is now
+`not_found`), #194 (bench budget enforced).
 
 ## Contract changes
 
@@ -125,7 +125,7 @@ None added or removed (`pnpm credits` not needed; `pnpm credits:check` runs in `
   git-core itself produced (merge-base output); left out to keep the check exact.
 - Ownership-based fallback (another user's worktree) is not covered by a test (needs a second uid); the code
   path is the pre-existing `rev-parse` discovery.
-- `refs/replace/` changes are not seen by the commit-facts memo until restart (DECISIONS #177).
+- `refs/replace/` changes are not seen by the commit-facts memo until restart (DECISIONS #193).
 
 ## Notes for integration
 
@@ -133,4 +133,3 @@ None added or removed (`pnpm credits` not needed; `pnpm credits:check` runs in `
 - #30 (integration base incl. the remote default ref) should change `resolveRefName` / `resolveDefaultBranch`
   only: `readBranchBase`, the scope and the summary already share it.
 - The `startupSpawns` budget is enforced on every layout; if #10 changes the startup window, re-run the bench.
-- DECISIONS numbers #172–#178 may need renumbering against #10's #180+.
