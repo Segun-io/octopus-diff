@@ -11,6 +11,7 @@
     "test": "vitest run --passWithNoTests",
     "test:e2e": "playwright test",
     "bench": "tsx bench/bench.ts",
+    "profile:real": "tsx --conditions=@octopus-diff/source bench/real-repos.ts",
     "screenshots": "tsx scripts/screenshots.ts",
     "lint": "biome check ."
   },
@@ -18,6 +19,7 @@
     "@octopus-diff/contracts": "workspace:*",
     "@octopus-diff/daemon": "workspace:*",
     "@octopus-diff/fixtures": "workspace:*",
+    "@octopus-diff/git-core": "workspace:*",
     "@playwright/test": "^1.65.0"
   }
 }

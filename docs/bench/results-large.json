@@ -1,0 +1,620 @@
+{
+  "generatedAt": "2026-11-11T23:46:28.356Z",
+  "environment": {
+    "platform": "linux 6.18.58.1-microsoft-standard-WSL2",
+    "cpu": "AMD Ryzen 7 7800X3D 8-Core Processor",
+    "cores": 12,
+    "node": "v26.13.0",
+    "git": "git version 2.53.0"
+  },
+  "layout": {
+    "name": "large",
+    "files": 100000,
+    "dirtyTracked": 300,
+    "untracked": 400,
+    "manyUntracked": 30000,
+    "rewriteLines": 300000,
+    "description": "one monorepo, 100000 tracked files, 3 worktrees (main with a 300000-line rewrite, a stale index, 30400 untracked files)",
+    "worktrees": 3,
+    "generationMs": 9798
+  },
+  "startup": {
+    "listeningMs": 170,
+    "allSummariesMs": 8500,
+    "gitSpawns": 50,
+    "gitSpawnsPerWorktree": 16.7,
+    "gitWallMs": 12525,
+    "bySubcommand": {
+      "rev-parse": {
+        "count": 13,
+        "totalMs": 57,
+        "p50": 3.7,
+        "p95": 11.2
+      },
+      "for-each-ref": {
+        "count": 7,
+        "totalMs": 53,
+        "p50": 7.6,
+        "p95": 13.4
+      },
+      "config": {
+        "count": 7,
+        "totalMs": 33,
+        "p50": 3.9,
+        "p95": 9.1
+      },
+      "status": {
+        "count": 6,
+        "totalMs": 3132,
+        "p50": 473.8,
+        "p95": 881.5
+      },
+      "diff": {
+        "count": 6,
+        "totalMs": 9183,
+        "p50": 531.3,
+        "p95": 4583.3
+      },
+      "symbolic-ref": {
+        "count": 3,
+        "totalMs": 11,
+        "p50": 3.9,
+        "p95": 5.2
+      },
+      "rev-list": {
+        "count": 2,
+        "totalMs": 17,
+        "p50": 6.4,
+        "p95": 10.3
+      },
+      "check-attr": {
+        "count": 2,
+        "totalMs": 28,
+        "p50": 13.9,
+        "p95": 14.2
+      },
+      "merge-base": {
+        "count": 2,
+        "totalMs": 6,
+        "p50": 2.4,
+        "p95": 4
+      },
+      "--version": {
+        "count": 1,
+        "totalMs": 2,
+        "p50": 2.3,
+        "p95": 2.3
+      },
+      "worktree": {
+        "count": 1,
+        "totalMs": 2,
+        "p50": 2.1,
+        "p95": 2.1
+      }
+    }
+  },
+  "firstPaint": {
+    "coldMs": 183464,
+    "warmMs": 89706,
+    "warmSamplesMs": [
+      97764,
+      88763,
+      89706
+    ],
+    "firstContentfulPaintMs": 84,
+    "spawns": {
+      "coldPaint": {
+        "spawns": 38,
+        "wallMs": 103056,
+        "bySub": {
+          "config": {
+            "count": 10,
+            "totalMs": 64,
+            "p50": 4.2,
+            "p95": 13
+          },
+          "diff": {
+            "count": 7,
+            "totalMs": 99428,
+            "p50": 958.1,
+            "p95": 91943.6
+          },
+          "status": {
+            "count": 7,
+            "totalMs": 3478,
+            "p50": 493.6,
+            "p95": 911.6
+          },
+          "for-each-ref": {
+            "count": 4,
+            "totalMs": 21,
+            "p50": 2.8,
+            "p95": 9
+          },
+          "rev-parse": {
+            "count": 4,
+            "totalMs": 34,
+            "p50": 5.9,
+            "p95": 12.6
+          },
+          "merge-base": {
+            "count": 4,
+            "totalMs": 18,
+            "p50": 3.3,
+            "p95": 7.3
+          },
+          "worktree": {
+            "count": 2,
+            "totalMs": 13,
+            "p50": 5.2,
+            "p95": 8.1
+          }
+        }
+      },
+      "warmReload1": {
+        "spawns": 30,
+        "wallMs": 9422,
+        "bySub": {
+          "config": {
+            "count": 6,
+            "totalMs": 42,
+            "p50": 8,
+            "p95": 8.6
+          },
+          "status": {
+            "count": 6,
+            "totalMs": 3361,
+            "p50": 504,
+            "p95": 965.8
+          },
+          "diff": {
+            "count": 5,
+            "totalMs": 5850,
+            "p50": 141.4,
+            "p95": 4750.6
+          },
+          "for-each-ref": {
+            "count": 4,
+            "totalMs": 52,
+            "p50": 10,
+            "p95": 27.2
+          },
+          "rev-parse": {
+            "count": 4,
+            "totalMs": 83,
+            "p50": 10.3,
+            "p95": 34
+          },
+          "merge-base": {
+            "count": 4,
+            "totalMs": 28,
+            "p50": 8,
+            "p95": 8.2
+          },
+          "worktree": {
+            "count": 1,
+            "totalMs": 6,
+            "p50": 5.7,
+            "p95": 5.7
+          }
+        }
+      },
+      "warmReload2": {
+        "spawns": 40,
+        "wallMs": 11912,
+        "bySub": {
+          "diff": {
+            "count": 8,
+            "totalMs": 9631,
+            "p50": 131.8,
+            "p95": 4951.3
+          },
+          "rev-parse": {
+            "count": 7,
+            "totalMs": 77,
+            "p50": 7.1,
+            "p95": 31.8
+          },
+          "for-each-ref": {
+            "count": 7,
+            "totalMs": 63,
+            "p50": 5.9,
+            "p95": 26.9
+          },
+          "config": {
+            "count": 6,
+            "totalMs": 68,
+            "p50": 7.8,
+            "p95": 24.9
+          },
+          "status": {
+            "count": 5,
+            "totalMs": 2023,
+            "p50": 208.4,
+            "p95": 903.3
+          },
+          "merge-base": {
+            "count": 4,
+            "totalMs": 23,
+            "p50": 4.6,
+            "p95": 10.1
+          },
+          "rev-list": {
+            "count": 2,
+            "totalMs": 22,
+            "p50": 5.2,
+            "p95": 16.5
+          },
+          "worktree": {
+            "count": 1,
+            "totalMs": 7,
+            "p50": 6.6,
+            "p95": 6.6
+          }
+        }
+      },
+      "warmReload3": {
+        "spawns": 36,
+        "wallMs": 9178,
+        "bySub": {
+          "diff": {
+            "count": 7,
+            "totalMs": 6787,
+            "p50": 113.2,
+            "p95": 5167.9
+          },
+          "rev-parse": {
+            "count": 6,
+            "totalMs": 47,
+            "p50": 6.7,
+            "p95": 11.9
+          },
+          "config": {
+            "count": 6,
+            "totalMs": 44,
+            "p50": 5.2,
+            "p95": 13.8
+          },
+          "status": {
+            "count": 6,
+            "totalMs": 2217,
+            "p50": 206.2,
+            "p95": 885.1
+          },
+          "for-each-ref": {
+            "count": 5,
+            "totalMs": 37,
+            "p50": 5.9,
+            "p95": 14.4
+          },
+          "merge-base": {
+            "count": 4,
+            "totalMs": 36,
+            "p50": 5.3,
+            "p95": 17.2
+          },
+          "rev-list": {
+            "count": 1,
+            "totalMs": 6,
+            "p50": 5.9,
+            "p95": 5.9
+          },
+          "worktree": {
+            "count": 1,
+            "totalMs": 5,
+            "p50": 5.2,
+            "p95": 5.2
+          }
+        }
+      }
+    }
+  },
+  "idleCpu": {
+    "supported": true,
+    "durationMs": 20012,
+    "averagePercent": 0.049970062081319155,
+    "averageSelfPercent": 0.049970062081319155,
+    "maxIntervalPercent": 0.999281651395725,
+    "intervals": [
+      1,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "rssBytes": 330178560
+  },
+  "memory": {
+    "rssBytes": 379330560,
+    "peakRssBytes": 496910336
+  },
+  "refresh": {
+    "iterations": 6,
+    "sse": {
+      "count": 6,
+      "min": 1543,
+      "max": 219964,
+      "mean": 86793.83333333333,
+      "p50": 87865,
+      "p90": 219964,
+      "p95": 219964
+    },
+    "sseByRole": {
+      "main": {
+        "count": 2,
+        "min": 1543,
+        "max": 2009,
+        "mean": 1776,
+        "p50": 1543,
+        "p90": 2009,
+        "p95": 2009
+      },
+      "stale-index": {
+        "count": 2,
+        "min": 93384,
+        "max": 219964,
+        "mean": 156674,
+        "p50": 93384,
+        "p90": 219964,
+        "p95": 219964
+      },
+      "untracked-heavy": {
+        "count": 2,
+        "min": 87865,
+        "max": 115998,
+        "mean": 101931.5,
+        "p50": 87865,
+        "p90": 115998,
+        "p95": 115998
+      }
+    },
+    "ui": {
+      "count": 6,
+      "min": 1562,
+      "max": 222490,
+      "mean": 87245,
+      "p50": 87890,
+      "p90": 222490,
+      "p95": 222490
+    },
+    "spawnsPerEdit": [
+      {
+        "role": "main",
+        "spawns": 21,
+        "wallMs": 4146
+      },
+      {
+        "role": "stale-index",
+        "spawns": 31,
+        "wallMs": 15522
+      },
+      {
+        "role": "untracked-heavy",
+        "spawns": 39,
+        "wallMs": 8635
+      },
+      {
+        "role": "main",
+        "spawns": 21,
+        "wallMs": 209887
+      },
+      {
+        "role": "stale-index",
+        "spawns": 55,
+        "wallMs": 252030
+      },
+      {
+        "role": "untracked-heavy",
+        "spawns": 62,
+        "wallMs": 126898
+      }
+    ],
+    "samples": [
+      {
+        "worktree": "/tmp/octopus-diff-bench-vVZvSp/mono",
+        "role": "main",
+        "sseMs": 1543,
+        "uiMs": 1562
+      },
+      {
+        "worktree": "/tmp/octopus-diff-bench-vVZvSp/mono-stale-index",
+        "role": "stale-index",
+        "sseMs": 93384,
+        "uiMs": 93413
+      },
+      {
+        "worktree": "/tmp/octopus-diff-bench-vVZvSp/mono-untracked-heavy",
+        "role": "untracked-heavy",
+        "sseMs": 87865,
+        "uiMs": 87890
+      },
+      {
+        "worktree": "/tmp/octopus-diff-bench-vVZvSp/mono",
+        "role": "main",
+        "sseMs": 2009,
+        "uiMs": 2087
+      },
+      {
+        "worktree": "/tmp/octopus-diff-bench-vVZvSp/mono-stale-index",
+        "role": "stale-index",
+        "sseMs": 219964,
+        "uiMs": 222490
+      },
+      {
+        "worktree": "/tmp/octopus-diff-bench-vVZvSp/mono-untracked-heavy",
+        "role": "untracked-heavy",
+        "sseMs": 115998,
+        "uiMs": 116028
+      }
+    ]
+  },
+  "payloads": [
+    {
+      "name": "projects",
+      "path": "/api/projects",
+      "status": 200,
+      "rawBytes": 3405,
+      "gzipBytes": 798,
+      "wireEncoding": null,
+      "wireBytes": 3405,
+      "firstMs": 108702.99961299996,
+      "warmMs": 4.25925699993968
+    },
+    {
+      "name": "inbox, working",
+      "path": "/api/inbox?scope=working",
+      "status": 200,
+      "rawBytes": 8480567,
+      "gzipBytes": 889338,
+      "wireEncoding": null,
+      "wireBytes": 8480567,
+      "firstMs": 2873.3007669998333,
+      "warmMs": 55.732622999930754
+    },
+    {
+      "name": "inbox, review (To review)",
+      "path": "/api/inbox?scope=review",
+      "status": 200,
+      "rawBytes": 8480566,
+      "gzipBytes": 889335,
+      "wireEncoding": null,
+      "wireBytes": 8480566,
+      "firstMs": 57.17519300011918,
+      "warmMs": 55.94150900002569
+    },
+    {
+      "name": "inbox, branch + working (All on branch)",
+      "path": "/api/inbox?scope=branch&working=1",
+      "status": 200,
+      "rawBytes": 8480588,
+      "gzipBytes": 889355,
+      "wireEncoding": null,
+      "wireBytes": 8480588,
+      "firstMs": 106022.46346200001,
+      "warmMs": 112032.26971299993
+    },
+    {
+      "name": "files main, working",
+      "path": "/api/worktrees/7a0a6ba8677680a4/files?scope=working",
+      "status": 200,
+      "rawBytes": 184856,
+      "gzipBytes": 21385,
+      "wireEncoding": null,
+      "wireBytes": 184856,
+      "firstMs": 3.469050999963656,
+      "warmMs": 2.293355999980122
+    },
+    {
+      "name": "files stale-index, working",
+      "path": "/api/worktrees/f97e5f6e4844d4f1/files?scope=working",
+      "status": 200,
+      "rawBytes": 184592,
+      "gzipBytes": 21308,
+      "wireEncoding": null,
+      "wireBytes": 184592,
+      "firstMs": 1.9883239998016506,
+      "warmMs": 1.848831000039354
+    },
+    {
+      "name": "files untracked-heavy, working",
+      "path": "/api/worktrees/b41e2c368783ef7b/files?scope=working",
+      "status": 200,
+      "rawBytes": 8107992,
+      "gzipBytes": 844879,
+      "wireEncoding": null,
+      "wireBytes": 8107992,
+      "firstMs": 53.31464599980973,
+      "warmMs": 55.940142000094056
+    }
+  ],
+  "targets": {
+    "firstPaintMs": 3000,
+    "idleCpuPercent": 10,
+    "refreshMs": 1000,
+    "warmReloadMs": 300,
+    "startupSpawnsPerWorktree": 8
+  },
+  "tracked": {
+    "warmReload": "#27 (cache the branch-scope inbox and files)",
+    "startupSpawns": "#10 and #29 (compute each summary once; per-project git metadata)"
+  },
+  "strict": false,
+  "budgets": [
+    {
+      "id": "firstPaint",
+      "label": "Time to first paint (cold, `data-ready`)",
+      "actual": 183464.401664,
+      "limit": 3000,
+      "unit": "ms",
+      "applies": false,
+      "tracked": null,
+      "status": "report-only"
+    },
+    {
+      "id": "warmReload",
+      "label": "Time to first paint (warm reload, median of 3)",
+      "actual": 89706.48079900001,
+      "limit": 300,
+      "unit": "ms",
+      "applies": false,
+      "tracked": "#27 (cache the branch-scope inbox and files)",
+      "status": "report-only"
+    },
+    {
+      "id": "startupSpawns",
+      "label": "Startup git spawns per worktree",
+      "actual": 16.666666666666668,
+      "limit": 8,
+      "unit": "spawns",
+      "applies": true,
+      "tracked": "#10 and #29 (compute each summary once; per-project git metadata)",
+      "status": "tracked-fail"
+    },
+    {
+      "id": "idleCpu",
+      "label": "Idle CPU, daemon + git children (average)",
+      "actual": 0.049970062081319155,
+      "limit": 10,
+      "unit": "%",
+      "applies": false,
+      "tracked": null,
+      "status": "report-only"
+    },
+    {
+      "id": "refreshSse",
+      "label": "Refresh: write → SSE `worktree.changed` p95",
+      "actual": 219964,
+      "limit": 1000,
+      "unit": "ms",
+      "applies": false,
+      "tracked": null,
+      "status": "report-only"
+    },
+    {
+      "id": "refreshUi",
+      "label": "Refresh: write → UI sidebar update p95",
+      "actual": 222490,
+      "limit": 1000,
+      "unit": "ms",
+      "applies": false,
+      "tracked": null,
+      "status": "report-only"
+    }
+  ],
+  "pass": true
+}

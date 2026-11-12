@@ -3,7 +3,9 @@
  * Chromium. Start the server first, preferably the production build:
  *   pnpm build && MOCK_DATASET=large MOCK_INTERVAL_MS=0 WEB_PORT=4173 pnpm preview:mock
  *   BASE_URL=http://127.0.0.1:4173 pnpm perf
- * Prints a JSON summary (all times in ms).
+ * Prints a JSON summary (all times in ms). Needs `[data-testid=scope-select]`'s `working` option and a
+ * selected first file (see step 1 below); if the UI changes those, this script fails at step 1.
+ * Fix history: 2026-11-11 (#26) the default scope became "To review" and the old wait never ended.
  */
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -57,6 +59,10 @@ async function main() {
   // 1. Initial load.
   await page.goto(base);
   await page.locator('[data-testid="app"][data-ready="true"]').waitFor({ timeout: 30_000 });
+  // The default scope is "To review", which the mock has nothing in, so nothing is selected and
+  // the viewer stays `empty`. The benchmark measures a busy inbox: show the uncommitted changes
+  // (the scope this script was written for); the first file is then selected and the viewer ready.
+  await page.getByTestId('scope-select').selectOption('working');
   await page
     .locator('[data-testid="diff-viewer"][data-state="ready"]')
     .waitFor({ timeout: 30_000 });
