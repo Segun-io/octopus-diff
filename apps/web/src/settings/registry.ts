@@ -21,7 +21,7 @@ export interface SettingsSection {
 }
 
 export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
-  { id: 'general', label: 'General', description: 'How the Inbox and the review flow behave.' },
+  { id: 'general', label: 'General', description: 'How the review flow behaves.' },
   {
     id: 'review',
     label: 'Review',
@@ -82,17 +82,6 @@ export const GENERAL_ITEMS: readonly PrefItem[] = [
     key: 'autoAdvance',
     label: 'Auto-advance after marking',
     description: 'After r marks a file reviewed, jump to the next unreviewed file.',
-  },
-  {
-    kind: 'select',
-    key: 'reviewOffDisplay',
-    label: 'Worktrees with review off',
-    description: 'How the Inbox shows worktrees that are out of the review loop.',
-    options: [
-      { value: 'dim', label: 'Dimmed' },
-      { value: 'hide', label: 'Hidden' },
-      { value: 'show', label: 'Like the others' },
-    ],
   },
   {
     kind: 'toggle',

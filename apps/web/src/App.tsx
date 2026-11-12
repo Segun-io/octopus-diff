@@ -40,7 +40,13 @@ import { Sidebar } from './components/Sidebar.tsx';
 import { SkeletonLines, StaleNote, WaitNote } from './components/WaitNote.tsx';
 import { useFaviconDot } from './lib/favicon.ts';
 import { toFileRef } from './lib/fileRef.ts';
-import { type NavEntry, repairSelection } from './lib/model.ts';
+import {
+  hasSidebarFilters,
+  type NavEntry,
+  repairSelection,
+  type WorktreeRow,
+  worktreeLabel,
+} from './lib/model.ts';
 import { useDocumentTitle } from './lib/title.ts';
 import { useDelayedFlag } from './lib/useWait.ts';
 import { LOCAL_WAIT } from './lib/wait.ts';
@@ -109,15 +115,15 @@ function useSelectionRepair() {
   const model = useAppModel();
   const store = useUiStore();
   const lastIndex = useRef(0);
-  const { entries, globalEntries, visible, viewReady, selectedKey, view } = model;
+  const { entries, visible, viewReady, selectedKey, view } = model;
   const viewKey =
-    view.kind === 'inbox'
-      ? 'inbox'
-      : view.kind === 'worktree'
-        ? view.worktreeId
-        : view.kind === 'folder'
-          ? `folder:${view.scanRootId}`
-          : `project:${view.projectId}`;
+    view.kind === 'worktree'
+      ? view.worktreeId
+      : view.kind === 'folder'
+        ? `folder:${view.scanRootId}`
+        : view.kind === 'project'
+          ? `project:${view.projectId}`
+          : 'none';
   const lastView = useRef(viewKey);
 
   useEffect(() => {
@@ -132,17 +138,42 @@ function useSelectionRepair() {
       if (visibleIndex !== -1) lastIndex.current = visibleIndex;
       return;
     }
-    // In the inbox, a selection hidden by the sidebar filters still exists: keep it open.
-    if (
-      selectedKey !== null &&
-      view.kind === 'inbox' &&
-      globalEntries.some((e) => e.key === selectedKey)
-    ) {
-      return;
-    }
     const next = repairSelection(entries, selectedKey, lastIndex.current, visible);
     actions.select(store, next ? toFileRef(next.worktreeId, next.file) : null);
-  }, [entries, globalEntries, visible, viewReady, selectedKey, viewKey, view.kind, store]);
+  }, [entries, visible, viewReady, selectedKey, viewKey, store]);
+}
+
+/**
+ * Where the app lands (#83): with nothing open (a fresh load, or the open worktree was removed)
+ * it opens the worktree that was open last when it is still there, else the top row of the list
+ * (pinned first, then the latest activity). With no row it stays on the empty state. The
+ * worktree that is open is remembered (`lastWorktree`) for the next load.
+ */
+function useLanding() {
+  const model = useAppModel();
+  const store = useUiStore();
+  const { view, projects, sidebar } = model;
+  const lastWorktree = useUi((s) => s.lastWorktree);
+  const loaded = projects.data !== undefined;
+  const openId = view.kind === 'worktree' ? view.worktreeId : null;
+  const missing = openId !== null && !sidebar.byId.has(openId);
+  // Only a row of the list counts (the filters apply): the last worktree if it is there, else the top.
+  const pick =
+    (lastWorktree && sidebar.order.includes(lastWorktree) ? lastWorktree : null) ??
+    sidebar.order[0];
+
+  useEffect(() => {
+    if (!loaded) return;
+    if ((view.kind === 'none' || missing) && pick) {
+      actions.setView(store, { kind: 'worktree', worktreeId: pick });
+    }
+  }, [loaded, view.kind, missing, pick, store]);
+
+  useEffect(() => {
+    if (openId !== null && !missing && lastWorktree !== openId) {
+      store.setState({ lastWorktree: openId });
+    }
+  }, [openId, missing, lastWorktree, store]);
 }
 
 function Notice() {
@@ -214,6 +245,87 @@ function EmptyState() {
         From a terminal: <code className="font-mono">octopus-diff scan ~/code</code> or{' '}
         <code className="font-mono">octopus-diff add ~/code/my-repo</code>
       </p>
+    </div>
+  );
+}
+
+/**
+ * The main pane when the open worktree is not in the list the sidebar shows (#83). `empty`: the
+ * list has no row at all (every worktree is filtered out or gone; no project at all is the
+ * onboarding screen). `hidden`: rows are listed but the filters leave the open worktree out; it
+ * stays the open view, so clearing the filters brings its pane back. Says what to do.
+ */
+function NoWorktree({
+  reason,
+  open,
+  first,
+}: {
+  reason: 'empty' | 'hidden';
+  open?: WorktreeRow;
+  first?: WorktreeRow;
+}) {
+  const store = useUiStore();
+  const filtered = useUi((s) =>
+    hasSidebarFilters({
+      folders: s.filterFolders,
+      projects: s.filterProjects,
+      worktrees: s.filterWorktrees,
+      onlyDirty: s.onlyDirty,
+      onlyUnreviewed: s.onlyUnreviewed,
+    }),
+  );
+  const clear = () =>
+    store.setState({
+      filterFolders: [],
+      filterProjects: [],
+      filterWorktrees: [],
+      onlyDirty: false,
+      onlyUnreviewed: false,
+    });
+  return (
+    <div
+      data-testid="no-worktree"
+      data-reason={reason}
+      className="mx-auto mt-[8vh] w-[min(480px,92vw)] p-4 text-sm"
+    >
+      <h1 className="mb-2 text-base font-semibold">
+        {reason === 'hidden' ? 'The open worktree is hidden by the filters' : 'No worktree to show'}
+      </h1>
+      <p className="mb-4 text-muted">
+        {reason === 'hidden' && open
+          ? `${open.project.name} ${worktreeLabel(open.worktree)} is not in the list the sidebar shows. Clear the filters to see it again, or open the first worktree in the list.`
+          : filtered
+            ? 'The filters in the sidebar hide every worktree. Clear them to see the list again, or add a folder to watch.'
+            : 'Add a folder to watch: every repository inside it shows up in the list.'}
+      </p>
+      <div className="flex flex-wrap gap-2">
+        {filtered && (
+          <button type="button" className="od-btn" onClick={clear}>
+            Clear filters
+          </button>
+        )}
+        {reason === 'hidden' && first && (
+          <button
+            type="button"
+            className="od-btn"
+            onClick={() =>
+              actions.setView(store, { kind: 'worktree', worktreeId: first.worktree.id })
+            }
+          >
+            Open the first worktree in the list ({first.project.name}{' '}
+            {worktreeLabel(first.worktree)})
+          </button>
+        )}
+        {reason === 'empty' && (
+          <button
+            type="button"
+            className="od-btn"
+            onClick={() => store.setState({ addProjectOpen: true })}
+          >
+            Add repositories…
+          </button>
+        )}
+      </div>
     </div>
   );
 }
@@ -292,7 +404,6 @@ function AppShell({ eventSourceFactory }: { eventSourceFactory?: EventSourceFact
   const layout = useUi((s) => s.fileListLayout);
   const selected = useUi((s) => s.selected);
   const titleCount = useUi((s) => s.titleCount);
-  const reviewOffDisplay = useUi((s) => s.reviewOffDisplay);
 
   useApplyTheme();
   useDocumentTitle(model.unreviewedTotal, titleCount);
@@ -304,6 +415,7 @@ function AppShell({ eventSourceFactory }: { eventSourceFactory?: EventSourceFact
   // The project Overview opens its project too: the daemon computes review states on demand (#10).
   useFocusReporting(focusWorktree, model.view.kind === 'project' ? model.view.projectId : null);
   useSelectionRepair();
+  useLanding();
   const toggleOrigin = useCallback(
     (worktreeId: string) => actions.toggleOriginGroup(store, worktreeId),
     [store],
@@ -320,7 +432,7 @@ function AppShell({ eventSourceFactory }: { eventSourceFactory?: EventSourceFact
 
   const projectsData = model.projects.data;
   const hasProjects = (projectsData?.projects.length ?? 0) > 0;
-  // First paint is the sidebar from `/api/projects` (#10); the inbox fills in afterwards.
+  // First paint is the sidebar from `/api/projects` (#10); the review data fills in afterwards.
   const ready = projectsData !== undefined;
   useKeyboardShortcuts(commands, ready && hasProjects);
 
@@ -329,7 +441,7 @@ function AppShell({ eventSourceFactory }: { eventSourceFactory?: EventSourceFact
   const viewWorktreeId = model.view.kind === 'worktree' ? model.view.worktreeId : null;
   const hasRequest =
     viewWorktreeId !== null && !!forgeIndex.get(viewWorktreeId)?.worktree.changeRequest;
-  const viewId = activeView(model.view, { hasRequest }).id;
+  const viewId = model.view.kind === 'none' ? null : activeView(model.view, { hasRequest }).id;
 
   let body: React.ReactNode;
   if (model.projects.isError && !projectsData) {
@@ -356,11 +468,28 @@ function AppShell({ eventSourceFactory }: { eventSourceFactory?: EventSourceFact
         </div>
       </div>
     );
-  } else if (
-    viewId === 'overview' &&
-    model.view.kind !== 'inbox' &&
-    model.view.kind !== 'worktree'
-  ) {
+  } else if (model.view.kind === 'none' || !model.viewListed) {
+    // Nothing is open, or the open worktree is not a row of the list the sidebar shows (the
+    // filters leave it out, or it is gone): the pane says so instead of keeping a stale worktree
+    // on screen. The landing effect opens a row as soon as there is one to open.
+    const open =
+      model.view.kind === 'worktree' ? model.sidebar.byId.get(model.view.worktreeId) : null;
+    const first = model.sidebar.byId.get(model.sidebar.order[0] ?? '');
+    body = (
+      <div className="grid h-full min-h-0 grid-cols-[minmax(200px,260px)_1fr]">
+        <div className="min-h-0">
+          <Sidebar />
+        </div>
+        <div className="min-h-0 min-w-0 bg-canvas">
+          {first === undefined ? (
+            <NoWorktree reason="empty" />
+          ) : open ? (
+            <NoWorktree reason="hidden" open={open} first={first} />
+          ) : null}
+        </div>
+      </div>
+    );
+  } else if (viewId === 'overview' && model.view.kind !== 'worktree') {
     const view = model.view;
     body = (
       <div className="grid h-full min-h-0 grid-cols-[minmax(200px,260px)_1fr]">
@@ -375,8 +504,7 @@ function AppShell({ eventSourceFactory }: { eventSourceFactory?: EventSourceFact
       </div>
     );
   } else {
-    const inbox = model.view.kind === 'inbox';
-    const useTree = !inbox && layout === 'tree';
+    const useTree = layout === 'tree';
     body = (
       <div className="grid h-full min-h-0 grid-cols-[minmax(200px,260px)_minmax(240px,340px)_1fr] grid-rows-[auto_1fr]">
         <div className="row-span-2 min-h-0">
@@ -405,15 +533,6 @@ function AppShell({ eventSourceFactory }: { eventSourceFactory?: EventSourceFact
                 </div>
               )}
             </>
-          )}
-          {model.inbox.isError && !model.inbox.data && (
-            <div
-              data-testid={TEST_IDS.errorBanner}
-              role="alert"
-              className="px-2 py-1 text-xs text-danger"
-            >
-              Inbox: {describeError(model.inbox.error).detail}
-            </div>
           )}
           <FilePaneHeader />
           <div className="min-h-0 flex-1">
@@ -444,23 +563,18 @@ function AppShell({ eventSourceFactory }: { eventSourceFactory?: EventSourceFact
             ) : (
               <FileList
                 groups={model.groups}
-                disabled={model.disabledWorktrees}
-                dimDisabled={reviewOffDisplay === 'dim'}
                 entries={model.entries}
                 visible={model.visible}
                 selectedKey={model.selectedKey}
-                grouped={inbox}
                 onSelect={onSelectEntry}
                 origin={origin}
-                emptyMessage={
-                  inbox ? 'No dirty worktrees in this scope.' : 'No changes in this scope.'
-                }
+                emptyMessage="No changes in this scope."
               />
             )}
           </div>
           <WaitNote
             variant="float"
-            active={model.viewReady && (inbox ? model.inbox.isFetching : model.files.isFetching)}
+            active={model.viewReady && model.files.isFetching}
             source={LOCAL_WAIT}
           />
         </div>
@@ -502,7 +616,7 @@ function AppShell({ eventSourceFactory }: { eventSourceFactory?: EventSourceFact
               autoFocus
               onOpen={(view) => {
                 store.setState({ addProjectOpen: false });
-                actions.setView(store, view);
+                commands.openView(view);
               }}
             />
           </Dialog>

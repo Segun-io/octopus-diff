@@ -13,7 +13,7 @@ import { createFixture, type Fixture, lines } from './helpers/fixture.js';
 import { FOLDING_SKIP, worktreesFoldCase } from './helpers/folds.js';
 
 /**
- * macOS (and `OCTOPUS_DIFF_TEST_FOLDS_CASE=1`): every hinted refresh is full by design (#277).
+ * macOS (and `OCTOPUS_DIFF_TEST_FOLDS_CASE=1`): every hinted refresh is full by design (#288).
  * Tests about the incremental path are skipped there; refusals checked after the case probe report
  * `case-insensitive`; the fallback has its own test below.
  */
@@ -454,7 +454,7 @@ describe('incremental summary: missed events', () => {
   });
 });
 
-describe.runIf(FOLDS)('a case-folding filesystem (macOS; DECISIONS #277)', () => {
+describe.runIf(FOLDS)('a case-folding filesystem (macOS; DECISIONS #288)', () => {
   it('every hinted refresh is full (case-insensitive) and equals a full summary', async () => {
     const repo = dirtyRepo('folding');
     const core = createGitCore(fx.coreOptions({ env: isolated() }));

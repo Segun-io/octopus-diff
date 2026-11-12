@@ -10,26 +10,26 @@
   `finish` step as a full refresh: same counts, `changedFiles`, additions/deletions, `activityAt`, snapshot and state
   hash. Spawn-free guards first (`Stamp`: index, ignore, config, attribute, sparse-checkout and `.gitmodules`
   files), and the limited status's own `--branch` header must equal the last one (HEAD, branch, upstream,
-  ahead/behind). Refused hints refresh in full and say why (`SummaryResult.refresh.reason`), see DECISIONS #276-#278.
+  ahead/behind). Refused hints refresh in full and say why (`SummaryResult.refresh.reason`), see DECISIONS #287-#289.
 - **State hash: same meaning, one narrow change.** Both modes hash a canonical rebuild of the status text in git's
   own order (changed by path, unmerged by path, untracked by path; the fuzz asserts it equals git's raw output)
   and the numstat lines of paths git status reports. Main hashed the raw numstat output, which also has a
   `-\t-\t<file>` line for a stat-dirty but unchanged binary file: **a worktree with a real tracked change and a
   touched, unchanged binary gets a new state hash once on upgrade**; every other worktree keeps its hash
-  (DECISIONS #275).
+  (DECISIONS #286).
 - **File lists follow the summary** (`packages/git-core/src/diff.ts` `listFromSummary`). With
   `ScopeOptions.summaryState` (the held summary state), a list of a worktree-reading scope (working, review,
   branch + working) is either updated from the journal of changed keys (one `diff -p` limited to them plus the
   list's rename candidates) or seeded with one diff limited to the summary's status paths plus the base's
-  `diff-tree` paths; flags and untracked rows come from the summary's status and inspections (DECISIONS #279).
+  `diff-tree` paths; flags and untracked rows come from the summary's status and inspections (DECISIONS #290).
 - **Daemon** (`apps/daemon/src/watcher.ts`, `core.ts`, `daemon.ts`). The watcher keeps native event paths per
   worktree through the debounce and passes them on, null after anything else (poll, focus, git-dir events,
   re-subscribes, too many paths). The core turns them into `changedPaths`, gives a failed refresh's paths back as a
   full refresh, passes `summaryState` to lists, and reconciles with a full refresh 30 s after the first incremental
-  one (DECISIONS #280, #281). Merge-noise labels of an uncommitted-only list skip the per-file work (#283).
+  one (DECISIONS #291, #292). Merge-noise labels of an uncommitted-only list skip the per-file work (#294).
 - **Kill switch / A/B:** `OCTOPUS_DIFF_INCREMENTAL=0`, `git.incremental: false` or `internal.incremental: false`
-  (#282); bench `--no-incremental`. It restores the full git calls only: the state hash keeps the canonical
-  rebuild, and the merge-noise shortcut for uncommitted-only lists (#283) still applies.
+  (#293); bench `--no-incremental`. It restores the full git calls only: the state hash keeps the canonical
+  rebuild, and the merge-noise shortcut for uncommitted-only lists (#294) still applies.
 - **Bench** (`e2e/bench/bench.ts`): `--no-incremental`, a "Git spawns to SSE" column (write → `worktree.changed`),
   the edit windows in `--keep-trace`, and two budgets on later edits of a worktree: spawns to SSE ≤ 3 (enforced) and
   edit → SSE p95 < 120 ms (report only, the 100k-file target). `docs/bench/README.md` documents them.
@@ -103,10 +103,10 @@ All from the repository root on this machine (12-core WSL2, Node 26, git 2.53).
 
 ## Decisions
 
-DECISIONS #272-#284: the two `contracts:` commits (#272, #273); the incremental summary (#274); the state hash
-(#275); refusals, and renames and deleted directories not forcing a full refresh (a deviation from the brief, #276);
-case-folding filesystems (#277); conflicts (#278); file lists (#279); watcher paths (#280); reconciliation (#281);
-kill switch (#282); origins of uncommitted-only lists (#283); spawns per edit (#284). PLAN §5.6 has a paragraph.
+DECISIONS #283-#295: the two `contracts:` commits (#283, #284); the incremental summary (#285); the state hash
+(#286); refusals, and renames and deleted directories not forcing a full refresh (a deviation from the brief, #287);
+case-folding filesystems (#288); conflicts (#289); file lists (#290); watcher paths (#291); reconciliation (#292);
+kill switch (#293); origins of uncommitted-only lists (#294); spawns per edit (#295). PLAN §5.6 has a paragraph.
 
 ## Contract changes
 
@@ -123,10 +123,10 @@ None added or removed (`pnpm credits:check`: up to date).
   list needs every changed file's patch (seeded, limited to the changed paths: 247 ms on the stale-index worktree,
   305 ms with 30k untracked files, 525 ms with a 300k-line rewrite). The event waits for it (#265). Later edits:
   see the table in Verification. Announcing before the first review state would remove it; not done (web behaviour of #51).
-- **macOS, Windows and case-folding mounts refresh in full** (#277). A fold-aware region is the follow-up.
-- **Conflicts, submodules, nested repositories and sparse checkouts refresh in full** (#276, #278).
+- **macOS, Windows and case-folding mounts refresh in full** (#288). A fold-aware region is the follow-up.
+- **Conflicts, submodules, nested repositories and sparse checkouts refresh in full** (#287, #289).
 - **Hashing 30k untracked records costs ~15 ms per refresh** (SHA-256 over ~3.6 MB). Section digests would remove
-  it at the price of one changed state hash per worktree on upgrade (#275, proposal).
+  it at the price of one changed state hash per worktree on upgrade (#286, proposal).
 - **A new file costs two processes** (status and a speculative numstat), since the last state cannot tell a new
   file from a clean tracked one; an edit of an untracked file costs one.
 - **Config scan TTL.** One `git config` every 60 s at most (#29) can land on an edit: 4 processes then.
@@ -135,7 +135,7 @@ None added or removed (`pnpm credits:check`: up to date).
 
 ## Notes for integration
 
-- Merge order does not matter; the `contracts:` commits are separate. DECISIONS numbers #272-#284 may need renumbering.
+- Merge order does not matter; the `contracts:` commits are separate. DECISIONS numbers #283-#295 may need renumbering.
 - `apps/web` is untouched. The event and row shapes are unchanged; `SummaryResult.refresh` is stripped like
   `snapshot` and never reaches a payload.
 - The read-only allowlist is unchanged: `status` and `diff` take `--`-separated literal pathspecs as before, and
@@ -146,7 +146,7 @@ None added or removed (`pnpm credits:check`: up to date).
 
 ## PR #89 review follow-up
 
-- **P1, phantom rows in cached lists** (DECISIONS #286). A list read from the files while an event was pending
+- **P1, phantom rows in cached lists** (DECISIONS #297). A list read from the files while an event was pending
   could keep a row for a file that is clean in the summary state for ever. Now: an incremental summary journals its
   whole region (the watcher's paths), a full summary is "blind" and lists then re-diff the paths they read whose file
   moved since (lstat signatures taken before reading; full lists are seeded again), rows the state does not explain
@@ -158,16 +158,16 @@ None added or removed (`pnpm credits:check`: up to date).
   killed: hint region not journaled, full summaries not blind, moved files ignored, full lists kept after a blind
   summary, re-check keys not re-diffed, the early return ignoring them, nothing counted unexplained, untracked rows
   always explained, the drop removed.
-- **P2, embedded repositories** (#287). Gitlinks in the index (parsed, memoized by the index's stat) and hinted
+- **P2, embedded repositories** (#298). Gitlinks in the index (parsed, memoized by the index's stat) and hinted
   paths below a `.git` refresh in full. Tests: a commit inside an embedded repository then an edit elsewhere
   (`changedFiles` 2, as a full refresh), a hinted path inside it, a hinted path inside an ignored nested
   repository. Mutations killed: gitlink scan removed, ancestor check removed.
-- **P3a, Refresh** (#285, #288): full, and `forgetState` drops git-core's state and lists. Tests:
+- **P3a, Refresh** (#296, #299): full, and `forgetState` drops git-core's state and lists. Tests:
   `apps/daemon/test/incremental-core.test.ts` (a refresh queued behind a slow one with watcher paths pending:
   `changedPaths` absent, `forgetState` true; failing first), `incremental.real-git.test.ts` (Refresh repairs a
   lost event, reconciliation off), `incremental-review.test.ts` (`forgetState` in git-core). Mutations killed:
   the hint kept, `forgetState` not passed, `forgetState` ignored by git-core.
-- **P3b/P3c**: the state-hash and kill-switch wording above and in DECISIONS #275, #282.
+- **P3b/P3c**: the state-hash and kill-switch wording above and in DECISIONS #286, #293.
 - Verification of the follow-up (head after the merge of main): `pnpm lint`, `pnpm typecheck`, `pnpm build`: exit 0.
   `pnpm test`: exit 0 (contracts 107, forge 101 + 5 skipped, fixtures 58, web 416, git-core 338, daemon 388 +
   3 skipped, e2e unit 7, cli 139, scripts 34); git-core and daemon suites passed three times in all (the known
@@ -180,8 +180,8 @@ None added or removed (`pnpm credits:check`: up to date).
 
 ## macOS CI follow-up (PR #89)
 
-macOS folds case, so it gets full refreshes only (#277), but the new tests assumed the incremental path (DECISIONS
-#289). Tests now ask the implementation's probe: incremental-only tests are skipped there with a reason, refusals the
+macOS folds case, so it gets full refreshes only (#288), but the new tests assumed the incremental path (DECISIONS
+#300). Tests now ask the implementation's probe: incremental-only tests are skipped there with a reason, refusals the
 probe preempts expect `case-insensitive`, list tests keep running, folding-only tests assert the fallback in git-core
 and through the daemon, and the fuzz asserts per-step equality and zero incremental refreshes, at 40 steps per seed
 on darwin. `OCTOPUS_DIFF_TEST_FOLDS_CASE=1` emulates folding on Linux. Runs here, both modes:

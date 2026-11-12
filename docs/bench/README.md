@@ -30,7 +30,7 @@ arguments as they are (no `--` needed; a literal `--` is tolerated). Build first
 | Warm reload (median of 3) | < 300 ms | small at 30 × 3 | enforced (#27 fixed it) |
 | Startup git spawns per worktree | ≤ 8 | every layout | enforced (since #29) |
 | Diff opened during a 60-edit burst, p95 | < 100 ms | small | enforced (#44) |
-| Browser traffic per edit (Inbox view, worst edit) | < 100 KB | small | enforced (#51) |
+| Browser traffic per edit (worktree view, worst edit) | < 100 KB | small | enforced (#51) |
 | `/api/projects` requests per edit (worst edit) | 0 | small | enforced (#51) |
 | Git spawns from the write to SSE, later edits of a worktree | ≤ 3 | every layout with a worktree edited twice | enforced (#40) |
 | Edit → SSE p95, later edits of a worktree | < 120 ms | the 100k-file target | report only (#40) |
@@ -56,7 +56,7 @@ row, whose full refresh re-hashes every file.
 
 ## Traffic per edit (issue #51)
 
-During the refresh loop the page sits on the Inbox view; each sample appends to `README.md` in a different worktree.
+During the refresh loop the page sits on a worktree (no Inbox view since #83); each sample appends to `README.md` in a different worktree.
 Every finished `/api/*` request of the page inside the sample's window counts (body + headers as sent, gzip included;
 the SSE stream itself is not a finished request). Since #51 an edit costs one `GET /api/inbox?worktreeIds=` (and the
 Activity feed when it is open) and no `/api/projects`; before it, the projects list and the whole inbox or the changed

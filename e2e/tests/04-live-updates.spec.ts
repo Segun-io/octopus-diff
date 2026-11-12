@@ -193,7 +193,7 @@ test.describe('§8.5 live updates', () => {
     await expect(app.diffViewer).toHaveAttribute('data-path', LIVE_FILES.edit);
   });
 
-  test('sidebar counts follow external edits in the inbox view', async ({
+  test('sidebar counts follow external edits while another worktree is open', async ({
     manifest,
     daemon,
     app,
@@ -201,22 +201,20 @@ test.describe('§8.5 live updates', () => {
   }) => {
     const agent = findWorktree(manifest, 'live-agent').worktree;
     await app.open(daemon.authUrl);
-    await app.selectInbox();
+    // Another worktree is open (not the agent's), as the Inbox view used to be.
+    await app.selectWorktree(findWorktree(manifest, 'alpha').worktree.id);
     const item = app.worktreeItem(agent.id);
+    await app.reveal(item);
     const untracked = Number(await item.getAttribute('data-untracked'));
     await edits.write(join(agent.path, 'src/agent-note.ts'), 'export {};\n');
+    await app.reveal(item);
     await expect(item).toHaveAttribute('data-untracked', String(untracked + 1), {
       timeout: liveBudgetMs(),
     });
-    // The inbox list is virtualized and this group sits below the fold: scan the whole list.
+    // Opening the worktree lists the new file.
+    await app.selectWorktree(agent.id);
     await expect
-      .poll(
-        async () =>
-          (await app.allFileItems()).some(
-            (f) => f.path === 'src/agent-note.ts' && f.worktreeId === agent.id,
-          ),
-        { timeout: 10_000 },
-      )
+      .poll(async () => (await app.filePaths()).includes('src/agent-note.ts'), { timeout: 10_000 })
       .toBe(true);
   });
 

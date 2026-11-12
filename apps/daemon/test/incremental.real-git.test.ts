@@ -29,11 +29,11 @@ type Changed = ServerEventOf<'worktree.changed'>;
 
 /**
  * macOS (APFS folds case) and `OCTOPUS_DIFF_TEST_FOLDS_CASE=1`: git-core refreshes every worktree
- * in full by design (DECISIONS #277), asked through the same probe. The tests that need an
+ * in full by design (DECISIONS #288), asked through the same probe. The tests that need an
  * incremental refresh are skipped there; the fallback is asserted instead.
  */
 /** Shown in a skipped test's title on a case-folding filesystem. */
-const FOLDING_SKIP = 'case-folding filesystem: every refresh is full by design (DECISIONS #277)';
+const FOLDING_SKIP = 'case-folding filesystem: every refresh is full by design (DECISIONS #288)';
 const FOLDS = await (async () => {
   const dir = await tempDir('octopus-diff-fold-');
   await mkdir(path.join(dir, '.git'));

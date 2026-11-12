@@ -12,7 +12,7 @@ import { locator } from './helpers/core.js';
 import { createFixture, type Fixture, lines } from './helpers/fixture.js';
 import { FOLDING_SKIP, worktreesFoldCase } from './helpers/folds.js';
 
-/** macOS / `OCTOPUS_DIFF_TEST_FOLDS_CASE=1`: hinted refreshes are full (#277); lists must still be right. */
+/** macOS / `OCTOPUS_DIFF_TEST_FOLDS_CASE=1`: hinted refreshes are full (#288); lists must still be right. */
 const FOLDS = await worktreesFoldCase();
 /** A skipped test's title says why. */
 const skipped = (title: string): string => (FOLDS ? `${title} [skipped: ${FOLDING_SKIP}]` : title);

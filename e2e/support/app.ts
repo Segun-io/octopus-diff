@@ -41,9 +41,8 @@ export class AppPage {
     return this.byTestId(TEST_IDS.app);
   }
   /**
-   * The context bar above the file list. Since #13 the sidebar has no Inbox entry, so this is
-   * how a test sees the current view: `data-view` (`inbox` | `worktree`) and, in the Inbox,
-   * `data-count` (the dirty worktrees it lists).
+   * The context bar above the file list: how a test sees the current view (`data-view`, always
+   * `worktree`: the Overviews have no bar). There is no Inbox view since #83.
    */
   get contextBar() {
     return this.byTestId('context-bar');
@@ -159,18 +158,63 @@ export class AppPage {
     return this.byTestId(TEST_IDS.worktreeItem);
   }
 
-  /** Opens the Inbox view the way the app offers it now: `g i` (there is no sidebar entry). */
-  async selectInbox(): Promise<void> {
+  /**
+   * The app lands on the first row of the sidebar list (#83): the list's top row is current and
+   * the context bar is that worktree's. Returns its id.
+   */
+  async expectLanded(): Promise<string> {
+    await expect(this.contextBar).toHaveAttribute('data-view', 'worktree');
+    const top = this.allWorktreeItems().first();
+    await expect(top).toHaveAttribute('aria-current', 'true');
+    return (await top.getAttribute('data-worktree-id')) ?? '';
+  }
+
+  /**
+   * Types `query` in the command palette (Ctrl+K) and returns the item of the registered command
+   * `id` (`cmd:<id>`). The palette stays open.
+   */
+  async openPaletteCommand(id: string, query: string): Promise<Locator> {
     await this.focusApp();
-    await this.press('g');
-    await this.press('i');
-    await expect(this.contextBar).toHaveAttribute('data-view', 'inbox');
+    await this.press('Control+k');
+    const input = this.byTestId(TEST_IDS.commandPaletteInput);
+    await expect(input).toBeVisible();
+    await input.fill(query);
+    return this.page.locator(`${tid(TEST_IDS.commandPaletteItem)}[data-id="cmd:${id}"]`);
+  }
+
+  /**
+   * What "Review all worktrees in the list" (`reviewed`) or "Mark all worktrees in the list
+   * unreviewed" would change right now, as the palette says (`N files to mark reviewed`). It
+   * counts the worktrees the sidebar filters leave in the list. Closes the palette again.
+   */
+  async everyWorktreeCount(reviewed = true): Promise<number> {
+    const item = await this.openPaletteCommand(
+      reviewed ? 'markEveryVerified' : 'markEveryUnreviewed',
+      'worktrees in the list',
+    );
+    await expect(item).toBeVisible();
+    const text = (await item.textContent()) ?? '';
+    await this.press('Escape');
+    await expect(this.byTestId(TEST_IDS.commandPalette)).toBeHidden();
+    const match = /(\d+) files to mark (?:un)?reviewed/.exec(text);
+    if (!match) throw new Error(`no count in the palette item: ${text}`);
+    return Number(match[1]);
+  }
+
+  /** Runs "Review all worktrees in the list" (or its unreviewed twin) from the palette. */
+  async runEveryWorktree(reviewed = true): Promise<void> {
+    const item = await this.openPaletteCommand(
+      reviewed ? 'markEveryVerified' : 'markEveryUnreviewed',
+      'worktrees in the list',
+    );
+    await item.click();
+    await expect(this.byTestId(TEST_IDS.commandPalette)).toBeHidden();
   }
 
   async selectWorktree(worktreeId: string): Promise<void> {
     const item = this.worktreeItem(worktreeId);
     // The list is virtual: scroll the row into the window first (the filter or the palette would
-    // do too). Click then retries if the row remounts as a new scope's inbox lands.
+    // do too).
     await this.reveal(item);
     await item.click();
     await expect(item).toHaveAttribute('aria-current', 'true');

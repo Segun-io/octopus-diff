@@ -350,7 +350,8 @@ describe('Request tab (mock daemon)', () => {
     expect(view.textContent).toContain('changes requested');
     expect(view.textContent).toContain('stale');
     expect(view.textContent).toContain('enhancement');
-    await screen.findByTestId(TEST_IDS.markdown);
+    // The description and the conversation both render markdown; either may land first.
+    expect((await screen.findAllByTestId(TEST_IDS.markdown)).length).toBeGreaterThan(0);
     expect(view.querySelector('script')).toBeNull();
     const checks = within(view).getAllByTestId(TEST_IDS.requestCheck);
     expect(checks.map((c) => c.dataset.status)).toContain('failure');

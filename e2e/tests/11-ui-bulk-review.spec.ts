@@ -1,8 +1,9 @@
 /**
- * UX-1 in the browser: "Review all" against the real daemon. Worktree (with filters),
- * Inbox-wide with the confirm dialog, undo via the toast and Ctrl/Cmd+Z, Shift+R, project and
- * folder via context menu / Overview, "mark all unreviewed", and the stale case. Every DOM
- * assertion is paired with the daemon's own `reviewed` flags.
+ * UX-1 in the browser: "Review all" against the real daemon. Worktree (with filters), every
+ * worktree of the list through the palette (the Inbox view that used to do it is gone, #83) with
+ * the confirm dialog, undo via the toast and Ctrl/Cmd+Z, Shift+R, project and folder via their
+ * Overviews, "mark all unreviewed", and the stale case. Every DOM assertion is paired with the
+ * daemon's own `reviewed` flags.
  */
 import { join } from 'node:path';
 import { TEST_IDS } from '@octopus-diff/contracts';
@@ -49,28 +50,39 @@ test.describe('UX-1 bulk review (UI)', () => {
     await expect(ui.undoButton).toHaveCount(0);
   });
 
-  test('inbox with a sidebar filter: only the visible worktrees are marked (paths), Ctrl+Z undoes', async ({
+  test('every worktree of the list with a sidebar filter: only the visible worktrees are marked (paths), Ctrl+Z undoes', async ({
     manifest,
     daemon,
     ui,
+    page,
   }) => {
     const liveProject = findProject(manifest, 'live');
     const alpha = findWorktree(manifest, 'alpha').worktree;
     const total = await unreviewedTotal(daemon.client);
+    const bulkBodies: { target: { kind: string }; paths?: unknown[] }[] = [];
+    page.on('request', (request) => {
+      if (request.method() === 'POST' && request.url().endsWith('/api/review/bulk')) {
+        bulkBodies.push(request.postDataJSON());
+      }
+    });
     await ui.open(daemon.authUrl);
-    await ui.selectInbox();
-    await expect(ui.markAll).toHaveAttribute('data-target', 'all');
-    await expect(ui.markAll).toHaveAttribute('data-count', String(total));
+    // The palette says what the command would mark: everything the daemon counts, once the
+    // review data of every worktree is in.
+    await expect.poll(() => ui.everyWorktreeCount()).toBe(total);
 
     await ui.filterProject(liveProject.id, liveProject.name);
-    await expect(ui.markAll).toHaveAttribute('data-target', 'worktree');
     const liveFiles = (await daemon.client.inbox()).entries
       .filter((e) => e.project.id === liveProject.id)
       .reduce((n, e) => n + e.files.length, 0);
-    await expect(ui.markAll).toHaveAttribute('data-count', String(liveFiles));
-    await ui.markAll.click();
+    await expect.poll(() => ui.everyWorktreeCount()).toBe(liveFiles);
+    await ui.runEveryWorktree();
     await ui.confirmBulk(); // two worktrees of `live` are visible
     await expect(ui.toast).toHaveAttribute('data-changed', String(liveFiles));
+    // One request per visible worktree, each with its paths: never the `all` request.
+    expect(bulkBodies.length).toBeGreaterThan(0);
+    expect(bulkBodies.every((b) => b.target.kind === 'worktree' && Array.isArray(b.paths))).toBe(
+      true,
+    );
     await expect
       .poll(async () => {
         const unreviewed = await daemon.client.inbox({ onlyUnreviewed: true });
@@ -87,7 +99,7 @@ test.describe('UX-1 bulk review (UI)', () => {
     await expect.poll(() => unreviewedTotal(daemon.client)).toBe(total);
   });
 
-  test('inbox-wide with Shift+R: confirm dialog, title count, Ctrl+Z undo', async ({
+  test('every worktree of the list: one all request, confirm dialog, title count, Ctrl+Z undo', async ({
     daemon,
     ui,
     page,
@@ -97,24 +109,30 @@ test.describe('UX-1 bulk review (UI)', () => {
     await daemon.client.inbox({ scope: { kind: 'review' } });
     const total = await unreviewedTotal(daemon.client);
     expect(total).toBeGreaterThan(0);
+    const bulkBodies: { target: { kind: string } }[] = [];
+    page.on('request', (request) => {
+      if (request.method() === 'POST' && request.url().endsWith('/api/review/bulk')) {
+        bulkBodies.push(request.postDataJSON());
+      }
+    });
     await ui.open(daemon.authUrl);
-    await ui.selectInbox();
     // The title counts To review (status flow v2), not the Uncommitted scope marked here.
     const titled = await expectTitle(page, daemon.client);
 
-    // The Inbox fills in per project: wait until it lists everything before marking it all.
-    await expect(ui.markAll).toHaveAttribute('data-count', String(total));
-    await ui.focusApp();
-    await ui.press('Shift+R');
+    // The review data fills in per project: wait until the command covers everything.
+    await expect.poll(() => ui.everyWorktreeCount()).toBe(total);
+    await ui.runEveryWorktree();
     await expect(ui.confirmDialog).toBeVisible();
     await expect(ui.confirmDialog).toContainText(`Mark ${total} files reviewed?`);
     await ui.press('Escape');
     await expect(ui.confirmDialog).toBeHidden();
     expect(await unreviewedTotal(daemon.client)).toBe(total);
+    expect(bulkBodies).toEqual([]);
 
-    await ui.press('Shift+R');
+    await ui.runEveryWorktree();
     await ui.confirmBulk();
     await expect(ui.toast).toHaveAttribute('data-changed', String(total));
+    expect(bulkBodies.map((b) => b.target.kind)).toEqual(['all']);
     await expect.poll(() => unreviewedTotal(daemon.client)).toBe(0);
     expect(await expectTitle(page, daemon.client)).toBeLessThan(titled);
 
@@ -122,6 +140,22 @@ test.describe('UX-1 bulk review (UI)', () => {
     await expect(ui.toast).toContainText(`Undone: ${total} marks restored`);
     await expect.poll(() => unreviewedTotal(daemon.client)).toBe(total);
     expect(await expectTitle(page, daemon.client)).toBe(titled);
+  });
+
+  test('Shift+R marks the open worktree only', async ({ manifest, daemon, ui }) => {
+    const live = findWorktree(manifest, 'live').worktree;
+    const files = (await daemon.client.listFiles(live.id)).files.map((f) => f.path).sort();
+    const total = await unreviewedTotal(daemon.client);
+    expect(total).toBeGreaterThan(files.length);
+    await ui.open(daemon.authUrl);
+    await ui.selectWorktree(live.id);
+    await expect(ui.markAll).toHaveAttribute('data-count', String(files.length));
+    await ui.focusApp();
+    await ui.press('Shift+R');
+    // A single worktree needs no confirmation: the toast comes straight away.
+    await expect(ui.toast).toHaveAttribute('data-changed', String(files.length));
+    await expect.poll(() => reviewedPaths(daemon.client, live.id)).toEqual(files);
+    expect(await unreviewedTotal(daemon.client)).toBe(total - files.length);
   });
 
   test('project and folder via their Overviews, mark all reviewed / unreviewed', async ({
@@ -198,9 +232,11 @@ test.describe('UX-1 bulk review (UI)', () => {
     const total = await unreviewedTotal(daemon.client);
     const liveCount = (await daemon.client.listFiles(live.id)).files.length;
     await ui.open(daemon.authUrl);
-    await ui.selectInbox();
-    // The UI must hold everything it will mark before the refetches are frozen (the Inbox fills in per project).
-    await expect(ui.markAll).toHaveAttribute('data-count', String(total));
+    // Another worktree is open: the edited one is known to the UI only by its review data.
+    await ui.selectWorktree(findWorktree(manifest, 'alpha').worktree.id);
+    // The UI must hold everything it will mark before the refetches are frozen (the review data
+    // fills in per project).
+    await expect.poll(() => ui.everyWorktreeCount()).toBe(total);
     const before = (await stateHashes(daemon.client))[live.id] ?? '';
 
     // Freeze what the UI knows: hold the refetches the live update would trigger.
@@ -216,7 +252,7 @@ test.describe('UX-1 bulk review (UI)', () => {
     await edits.append(join(live.path, LIVE_FILES.edit), '// octopus-marker-ui-stale\n');
     await waitForStateHashChange(daemon.client, live.id, before);
 
-    await ui.markAll.click();
+    await ui.runEveryWorktree();
     await ui.confirmBulk();
     await expect(ui.toast).toBeVisible();
     await expect(ui.toast).toContainText('1 changed meanwhile');
@@ -225,7 +261,7 @@ test.describe('UX-1 bulk review (UI)', () => {
     expect(await unreviewedTotal(daemon.client)).toBe(liveCount);
     frozen = false;
     release();
-    // Once the UI catches up, the button offers exactly the skipped worktree's files.
-    await expect(ui.markAll).toHaveAttribute('data-count', String(liveCount));
+    // Once the UI catches up, the command offers exactly the skipped worktree's files.
+    await expect.poll(() => ui.everyWorktreeCount()).toBe(liveCount);
   });
 });

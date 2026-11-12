@@ -575,7 +575,7 @@ function ProjectOverview({ group }: { group: ProjectGroup }) {
               id: 'open',
               label: 'Open changes',
               onSelect: () =>
-                actions.setView(store, {
+                commands.openView({
                   kind: 'worktree',
                   worktreeId: menu.state?.target.worktree.id ?? '',
                 }),
@@ -602,7 +602,7 @@ function WorktreeTable({
   rows: readonly WorktreeRow[];
   onMenu: (event: React.MouseEvent, row: WorktreeRow) => void;
 }) {
-  const store = useUiStore();
+  const commands = useCommandsContext();
   const slice = usePage(defaultBranchFirst(rows));
   return (
     <>
@@ -625,8 +625,7 @@ function WorktreeTable({
             const source = row.worktree.isMain ? null : worktreeSource(row.worktree.path);
             const dirty = s ? isDirtySummary(s) : false;
             const isDefault = isDefaultBranch(row.worktree, row.project);
-            const go = () =>
-              actions.setView(store, { kind: 'worktree', worktreeId: row.worktree.id });
+            const go = () => commands.openView({ kind: 'worktree', worktreeId: row.worktree.id });
             return (
               <tr
                 key={row.worktree.id}

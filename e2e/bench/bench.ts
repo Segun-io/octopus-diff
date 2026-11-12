@@ -624,9 +624,7 @@ async function main() {
         phases[`warmReload${i + 1}`] = [from, Date.now()];
       }
       paint = { cold: cold.ms, warm, fcp: cold.fcp };
-      // The sidebar has no Inbox entry since #13: `g i` opens the Inbox view (already the landing view).
-      await page.keyboard.press('g');
-      await page.keyboard.press('i');
+      // No Inbox view since #83: the app has landed on the top worktree of the list by now.
       log(
         `first paint: cold ${cold.ms.toFixed(0)} ms, warm ${warm.map((w) => w.toFixed(0)).join(' / ')} ms`,
       );
@@ -1385,7 +1383,7 @@ Tracked budgets are known to fail until the issue they name lands: they are list
 | Idle CPU, daemon + git children (avg over ${Math.round(r.idleCpu.durationMs / 1000)} s / worst 1 s) | ${r.idleCpu.supported ? `${r.idleCpu.averagePercent.toFixed(2)} % / ${r.idleCpu.maxIntervalPercent.toFixed(2)} %` : 'n/a'} |
 | Refresh: write → SSE \`worktree.changed\` (p50 / p95 / max) | ${fmt(r.refresh.sse.p50)} / ${fmt(r.refresh.sse.p95)} / ${fmt(r.refresh.sse.max)} (${r.refresh.sse.count}/${r.refresh.iterations}) |
 | Refresh: write → UI sidebar update (p50 / p95 / max) | ${ui ? `${fmt(ui.p50)} / ${fmt(ui.p95)} / ${fmt(ui.max)} (${ui.count}/${r.refresh.iterations})` : 'skipped'} |
-| Browser traffic per edit, Inbox view (median / worst; requests median / worst; \`/api/projects\` in all edits) | ${trafficCell(r.refresh.trafficPerEdit)} |
+| Browser traffic per edit, worktree view (median / worst; requests median / worst; \`/api/projects\` in all edits) | ${trafficCell(r.refresh.trafficPerEdit)} |
 | Daemon startup: listening / all summaries | ${fmt(r.startup.listeningMs)} / ${fmt(r.startup.allSummariesMs)} |
 | Daemon RSS: end of run / peak | ${bytes(r.memory.rssBytes)} / ${bytes(r.memory.peakRssBytes)} |
 

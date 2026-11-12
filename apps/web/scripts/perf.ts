@@ -1,6 +1,7 @@
 /**
- * Render benchmark against the large mock dataset (30 worktrees × 200 files = 6000 files in the
- * Inbox) in headless Chromium.
+ * Render benchmark against the large mock dataset (30 worktrees × 200 files, 6000 files across
+ * them) in headless Chromium. The app lands on the top worktree of the sidebar list (#83: there is
+ * no Inbox view), so the file list measured here is one worktree's 200 files.
  *
  *   pnpm --filter @octopus-diff/web build      # a preview serves the production build
  *   pnpm --filter @octopus-diff/web perf       # starts its own mock + preview, fresh every run
@@ -28,7 +29,11 @@
  * through React Query), and the request check asserts the new shape instead of "projects + files";
  * 2026-11-12 (#68) the script needed `MOCK_DATASET=large` without saying so (the first file of a
  * demo worktree can be missing, so `J` never matched), and the live-refresh number was quantised
- * by Playwright's polling (see docs/reports/web-perf-script.md).
+ * by Playwright's polling (see docs/reports/web-perf-script.md);
+ * 2026-11-12 (#83) the Inbox view is gone: the load wait is the landing worktree's list (200 files)
+ * plus the review data of every worktree coming in (the indicator goes idle), `j` and the scroll
+ * run in that worktree's list, `J` starts at the first row (the landing one) and the live refresh
+ * is measured in the worktree view (it still fetches `/api/inbox?worktreeIds=` for `n`).
  */
 import { existsSync } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
@@ -172,12 +177,11 @@ async function measure(base: string) {
       'app never became ready',
       page.locator('[data-testid="app"][data-ready="true"]').waitFor({ timeout: 30_000 }),
     );
-    // The default scope is "To review"; the benchmark measures a busy inbox in the scope this
+    // The default scope is "To review"; the benchmark measures a busy list in the scope this
     // script was written for (`working`) or, with SCOPE=review, the merge-noise one.
     await page.getByTestId('scope-select').selectOption(scopeKind);
     // The viewer may already be `ready` for another scope's first file: wait for this scope's list,
-    // every worktree of the dataset in the sidebar (the Inbox fills in project batches) and a
-    // viewer that shows this scope's diff.
+    // every worktree of the dataset in the sidebar and a viewer that shows this scope's diff.
     await waitStep(
       `load wait (scope ${scopeKind})`,
       page.waitForFunction(
@@ -210,26 +214,27 @@ async function measure(base: string) {
       return {
         fcp,
         domContentLoaded: nav?.domContentLoadedEventEnd ?? null,
-        // First list of the scope shown; `inboxCompleteAt` (below) is when all groups are in.
+        // First list of the scope shown; `reviewDataCompleteAt` (below) is when every worktree's
+        // review data (what `n` reads) is in.
         readyAt: performance.now(),
       };
     });
-    // The Inbox fills in project batches after the first list is shown (3 of 30 groups at the first
-    // paint, all of them ~1.4 s later): measure on the complete one, and report both times.
+    // The review data of every worktree (the cross-worktree files `n` walks) fills in project
+    // batches after the first list is shown (3 of 30 worktrees at the first paint, all of them
+    // ~1.4 s later); the refresh indicator is idle once nothing is in flight. Measure on that, and
+    // report both times.
     await waitStep(
-      'the Inbox never showed every worktree group',
-      page.waitForFunction(
-        (n) => document.querySelectorAll('[data-testid="file-group"]').length >= n,
-        DATASET.worktrees,
-        { timeout: 30_000 },
-      ),
+      'the review data never finished loading',
+      page
+        .locator('[data-testid="refresh-indicator"][data-state="idle"]')
+        .waitFor({ timeout: 30_000 }),
     );
-    const inboxCompleteAt = await now();
+    const reviewDataCompleteAt = await now();
     const loadLongTasks = await longTasksSince(0);
     const fileRows = await page.getByTestId('file-item').count();
     const groups = await page.getByTestId('file-group').count();
 
-    // 2. j navigation in the inbox (6000 files): keydown → next frame painted.
+    // 2. j navigation in the landing worktree's list (200 files): keydown → next frame painted.
     const t2 = await now();
     const jTimes = await page.evaluate(async (n) => {
       const out: number[] = [];
@@ -245,7 +250,7 @@ async function measure(base: string) {
     }, ITER.j);
     const jLongTasks = await longTasksSince(t2);
 
-    // 3. Scroll the inbox file list top → bottom.
+    // 3. Scroll the file list top → bottom.
     const t3 = await now();
     const scroll = await page.evaluate(async () => {
       const list = document.querySelector<HTMLElement>('[data-testid="file-list"]');
@@ -265,12 +270,14 @@ async function measure(base: string) {
     const scrollLongTasks = await longTasksSince(t3);
     const mountedRows = await page.getByTestId('file-item').count();
 
-    // 4. J through the worktrees (each has 200 files): the press moves the current worktree and the
-    // file list shows that worktree's files, first row included.
+    // 4. J down the sidebar list from the landing row (each worktree has 200 files): the press moves
+    // the current worktree and the file list shows that worktree's files, first row included. The
+    // list has one row fewer to step to than it has worktrees (the first is the landing one).
+    const presses = ITER.switches - 1;
     const t4 = await now();
     const switchTimes: number[] = [];
     const visited = new Set<string>();
-    for (let i = 0; i < ITER.switches; i++) {
+    for (let i = 0; i < presses; i++) {
       const before = await page.evaluate(() =>
         document
           .querySelector('[data-testid="worktree-item"][aria-current="true"]')
@@ -303,20 +310,18 @@ async function measure(base: string) {
     }
     const switchLongTasks = await longTasksSince(t4);
 
-    // 5. Live refresh in the inbox: mutate a worktree, time until the refresh indicator is idle
+    // 5. Live refresh in the worktree view: mutate a worktree, time until the refresh indicator is idle
     // again. Observed inside the page (MutationObserver on the indicator, clock started just before
     // the mutation request): a Playwright `waitFor` polls on a 100 ms grid, which quantised this
     // number to ~90 or ~190 ms depending on a few ms of server time (#68).
-    await page.keyboard.press('g');
-    await page.keyboard.press('i');
     await waitStep(
-      'inbox idle before the refresh measurements',
+      'idle before the refresh measurements',
       page.locator('[data-testid="refresh-indicator"][data-state="idle"]').waitFor(),
     );
     const t5 = await now();
     const refreshTimes: number[] = [];
     const refreshRequests: number[] = [];
-    /** The API paths each refresh requested (#51: the inbox's changed rows only, no projects). */
+    /** The API paths each refresh requested (#51: the changed rows only, no projects). */
     const refreshUrls: string[][] = [];
     for (let i = 0; i < ITER.refreshes; i++) {
       const requestsBefore = apiRequests.length;
@@ -373,19 +378,24 @@ async function measure(base: string) {
       `${fileRows} / ${mountedRows}`,
     );
     check(
-      'the list is long (a 6000-file inbox)',
-      scroll.height > DATASET.worktrees * DATASET.filesPerWorktree * 10,
+      'the list is long (one worktree of 200 files)',
+      scroll.height > DATASET.filesPerWorktree * 10,
       `${scroll.height} px`,
     );
     check(
-      'J visited distinct worktrees',
-      visited.size >= Math.min(ITER.switches, DATASET.worktrees) - 1,
-      `${visited.size} of ${ITER.switches} presses`,
+      'the app landed on one worktree and its files only (one file group)',
+      groups === 1,
+      `${groups} groups`,
     );
     check(
-      // Since #51 a live edit in the Inbox fetches the changed worktree's rows
-      // (`/api/inbox?worktreeIds=`) and never the projects list (the event carries the row).
-      'a refresh fetches the changed inbox rows only (no /api/projects, #51)',
+      'J visited distinct worktrees',
+      visited.size >= Math.min(presses, DATASET.worktrees - 1),
+      `${visited.size} of ${presses} presses`,
+    );
+    check(
+      // Since #51 a live edit fetches the changed worktree's rows (`/api/inbox?worktreeIds=`, what
+      // `n` reads) and never the projects list (the event carries the row).
+      'a refresh fetches the changed rows only (no /api/projects, #51)',
       refreshUrls.every(
         (urls) =>
           urls.some((u) => u.includes('/api/inbox?') && u.includes('worktreeIds=')) &&
@@ -403,10 +413,10 @@ async function measure(base: string) {
         server: process.env.BASE_URL ? 'BASE_URL' : 'own mock',
         worktrees: DATASET.worktrees,
         filesPerWorktree: DATASET.filesPerWorktree,
-        inboxGroups: groups,
+        fileGroupsAtLoad: groups,
         mountedRowsAtLoad: fileRows,
       },
-      load: { ...load, inboxCompleteAt, longTasks: stats(loadLongTasks) },
+      load: { ...load, reviewDataCompleteAt, longTasks: stats(loadLongTasks) },
       jNavigation: { perPressToNextFrame: stats(jTimes), longTasks: stats(jLongTasks) },
       scroll: {
         listHeightPx: scroll.height,
@@ -416,7 +426,7 @@ async function measure(base: string) {
         mountedRowsAfterScroll: mountedRows,
       },
       worktreeSwitchJ: { wallClock: stats(switchTimes), longTasks: stats(switchLongTasks) },
-      liveRefreshInbox: {
+      liveRefresh: {
         mutateToIdle: stats(refreshTimes),
         requestsPerRefresh: stats(refreshRequests),
         longTasks: stats(refreshLongTasks),

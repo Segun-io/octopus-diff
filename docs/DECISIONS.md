@@ -3284,21 +3284,157 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      refresh asks `/api/inbox?worktreeIds=` and never `/api/projects`, and still prints the requests and paths per
      refresh (1 / 1 / 1 locally). It judges no timing, as before.
 
+## The Inbox view is removed; the app lands on a worktree (session, 2026-11-12; roadmap #83, follow-up of #13)
+
+272. **Landing view = a worktree, not a list.** `View` loses `{ kind: 'inbox' }` and gains `{ kind: 'none' }` ("nothing
+     open yet", the store's initial value). `useLanding` (App) settles it as soon as `/api/projects` has landed:
+     the worktree that was open last (`lastWorktree`, #273) when it is still a row of the sidebar list, else the
+     **top row of the flat list** (pinned first, then latest activity: `sidebar.order[0]`). The same effect lands
+     again when the open worktree disappears (a removed project). While a row exists the pane stays blank for the
+     one frame in between. **No row** (every worktree is filtered out, the filters being the only way to get there
+     with projects present): the main pane is an empty state (`data-testid="no-worktree"`) that says what to do, with
+     **Clear filters** and **Add repositories…** (the existing folder picker dialog). **No project at all** is the
+     unchanged onboarding screen (`EmptyState` with the folder picker). Only a row of the *filtered* list counts for
+     the landing, so a filter set before the landing is respected. Supersedes the "kept" half of #242 (the Inbox view,
+     the landing view, `g i`, the palette's "Go to Inbox", `J`/`K` stepping to it, context bar `data-view=inbox` and
+     `data-count`).
+273. **`lastWorktree` pref (new).** Before this work nothing restored the open worktree: `view` was in memory only and
+     the URL carries no state, so a reload always showed the Inbox. The brief said the restore "stays"; there was none,
+     so the smallest honest version is a persisted device preference (`prefs.lastWorktree`, a worktree id, `''` =
+     none, normalised like the others: no version bump, ignored when it is not a string or longer than 256). The
+     open worktree is written to it (App effect), the store starts at `none`, and #272 picks it up. An id that is not
+     in the list any more falls back to the top row. The URL is not touched.
+274. **What the Inbox view gave, and where each part went.** (a) *Cross-worktree "to review" files list*: dropped as a
+     view. The same facts are one click or one key away: the unreviewed count on every row, the tab title and favicon
+     dot (`unreviewedTotal`, own files only), the worktree's own file list, and `n` ("next unreviewed file anywhere"),
+     which still crosses worktrees. (b) *The data*: the web still fetches the daemon's inbox rows
+     (`useInboxQuery`, `GET /api/inbox`, streamed in project batches, patched by `worktree.changed` deltas through
+     `GET /api/inbox?worktreeIds=`, #51) because `n`, the bulk "every worktree" plan, the bulk `expectedStateHashes`
+     and the "from main" refs read them; contracts and the daemon route are untouched. The model's `inbox` query field
+     and `inboxUnfiltered` are gone; `inboxEntries` stays as the review data. (c) *Per-worktree group headers in the
+     file list* (`GroupHeader`: name, unreviewed, `k/total files`), the diff header's worktree name, the context bar's
+     `Inbox  N worktrees  M files` and the Inbox's separate error banner: dropped with the view (the file list is one
+     worktree's: `FileList` loses `grouped`, `disabled`, `dimDisabled` and the group menu; the `file-group` container
+     stays, one per list). The "expanding the group does not change the file count in the Inbox group header" test
+     goes with the header; "Review N shown" keeps its own test for the same invariant.
+275. **Bulk review after the Inbox.** `Shift+R` and the button above the file list act on the open worktree (the
+     button's label is always `Review N shown`, `data-target=worktree`). Folder and project levels stay where #13/#242
+     put them: their Overviews (`Mark all reviewed` / `unreviewed`) and the row context menus. The Inbox's "everything"
+     is kept as two **palette commands**, `Review all worktrees in the list` (`markEveryVerified`) and `Mark all
+     worktrees in the list unreviewed` (`markEveryUnreviewed`; `Commands.markEvery`, `currentPlan(reviewed, every)`):
+     they act on every worktree the sidebar filters leave in the list (no filter, "show reviewed" on and the review
+     data complete: **one `all` request**, as before; otherwise one request per worktree with its paths), skip review-off
+     worktrees, respect the eye and the "from main" chip, ask for confirmation across several worktrees and are
+     undoable. The palette item says what it would mark (`30 files to mark reviewed`), which is also what the e2e reads.
+     `planBulk`'s `view: 'inbox' | 'worktree'` + `inboxUnfiltered` became one `allUnfiltered` flag; the model's
+     `allGroups` / `allEntries` are the groups the command covers.
+276. **Keys.** `g i` is unbound, and the `g` key is no longer swallowed (there is no chord left: `pendingG`,
+     `CHORD_TIMEOUT_MS` and the `goInbox` command are removed; `CommandDef.chord` stays as generic metadata). `J`/`K`
+     walk the list (`sidebar.order`) with no stop above the first row (`stepWorktree` no longer has the `null` Inbox
+     item); from an Overview either key opens the first row. `n` from an Overview or with nothing open opens the target
+     file's worktree (it used to do that only from a filtered Inbox).
+277. **`reviewOffDisplay` is removed** (pref, Settings → General "Worktrees with review off"): it only chose whether
+     the Inbox dimmed, hid or listed review-off worktrees. The sidebar shows review-off rows on their own terms
+     (`review off`, #244); the open worktree's own list was never affected. Old stored values are dropped by
+     `normalizePrefs`.
+278. **Tests and scripts.** Unit: new landing tests (`app.test.tsx`: top row, last worktree restored, unknown last
+     worktree, disappearing worktree, empty state with its two buttons, no Inbox anywhere, `n`/`J` from an Overview,
+     `g i` unbound), `ux.test.tsx` (the two palette bulk commands, with and without a sidebar filter, and `Shift+R` for
+     one worktree), `lib.test.ts`, `model.test.ts`, `prefs.test.ts`; older tests that assumed the Inbox now open a
+     worktree. e2e: `AppPage.selectInbox()` is replaced by `expectLanded()`, `openPaletteCommand`, `everyWorktreeCount`
+     and `runEveryWorktree`; every spec that used the Inbox is rewritten to the equivalent behaviour (list in
+     `docs/reports/web-no-inbox.md`). `apps/web/scripts/perf.ts` measures the landing worktree's 200-file list; its load
+     wait is the indicator going idle (the review data complete) and `J` starts at the landing row. `shots.ts` /
+     `browser-check.ts` / `screenshots.ts` name the first state `landing`, not `inbox`.
+
+### Inbox removal: review follow-up (PR #86, 2026-11-12)
+
+279. **The pane shows only a worktree the sidebar lists.** The sidebar displays `sidebar.order` (the filtered rows:
+     flat, then the Hidden section; it does *not* keep a filtered-out selected row, only the closed Hidden section keeps
+     the selected one). The main pane now follows that list: when the open worktree is not in it (`model.viewListed`
+     false: `view` is a worktree and `!sidebar.order.includes(id)`), the pane is the `no-worktree` state instead of a
+     stale worktree. Two reasons, `data-reason`: `empty` (no row at all: every worktree filtered out, or the open one was
+     removed with nothing else to land on; "Clear filters" when filters are on, "Add repositories…") and `hidden` (rows
+     are listed but the filters leave the open worktree out: it is named, with "Clear filters" and "Open the first
+     worktree in the list"). The view is **not** changed: it stays the open worktree, so clearing the filters brings its
+     pane back (an e2e that filters and clears relies on it). The earlier condition (`view.kind === 'none'` only) missed
+     both cases: filtering never set `none`, and `sidebar.byId` keeps every row. A removed open worktree with other rows
+     listed still lands on the top row (#272); with none, the empty state. Keys act on what is shown: with the open
+     worktree unlisted, `j`/`k`, `r` and the open-worktree bulk plan do nothing (`Shift+R` says "Nothing to mark here"),
+     so nothing is marked that the user cannot see. `n` and `J`/`K` still move to a worktree.
+280. **A bulk plan has one snapshot.** `markEvery` took its paths and counts from `allEntries` (the review data's rows)
+     but its `expectedStateHashes` from `stateHashes`, which prefers the open worktree's own file query; the two refresh
+     in parallel, so a newer file list put a new hash on old paths and the daemon accepted it (a filtered request marked
+     only the old paths, a request without `paths` could mark more than the preview counted). The every-worktree plan now
+     reads `inboxStateHashes` (the `summary.stateHash` of the same inbox rows `allGroups`/`allEntries` come from), so a
+     worktree that moved on is reported "changed meanwhile". The open worktree's own plan (`markAll`, files from its file
+     query) keeps `stateHashes` (that query's hash first): files and hash are one response. Overview bulks
+     (`markAllFor`) send no paths and keep `stateHashes`.
+
+281. **Navigation and the pane agree: one list, `listedIds` (PR #86 review, 2026-11-12).** The pane shows only a worktree
+     of the list the sidebar shows (#279), so every way of moving between worktrees must land on one. The single
+     predicate is `AppModel.listedIds` (the set of `sidebar.order`; `viewListed` is `listedIds.has(open)`). Two kinds of
+     move: **automatic** ones only target listed worktrees: `n` (and the auto-advance after `r`, which calls it) searches
+     `globalEntries` filtered by `listedIds`, so it wraps inside the filtered list and, when nothing else is unreviewed
+     there, stays put with the notice "No more unreviewed files in the listed worktrees." (the old text when no filter is
+     on); `J`/`K` walk `sidebar.order`; the landing picks from `sidebar.order` (a remembered worktree the filters hide is
+     not a target). **Explicit** ones name a worktree (the palette, an Overview row, a link): if the filters hide it, the
+     filters are cleared and the notice "Filters cleared to show that worktree." says so. **Amendment (PR #86, P2, revised):** the rule is an *explicit-pick* action,
+     `Commands.openView(view)` (palette, Overview rows and menus, request links, the add-folder dialog and toast), not
+     something every `setView` does and not an effect: it reads `listedIds` of the model the user is looking at, so
+     picking the worktree that is *already open* but hidden clears the filters too, and there is no lagging copy of the
+     list in the store (the earlier `UiState.listed` was removed: the landing could run before its effect and clear the
+     filters on an automatic move). Automatic moves (the landing and re-landing after a removal, `n`, auto-advance,
+     `J`/`K`) call `actions.setView` directly and never touch the filters. A filter that later hides the open worktree is still
+     the #279 "hidden by the filters" pane, not a navigation. The opposite rule (the pane shows what was navigated to whatever the filters say) was not
+     taken: it would need a second source of truth for what the pane may show. Bulk plans never select. Filtering itself
+     never navigates. Table-driven test: `app.test.tsx` "every navigation targets a worktree the pane can show" (n at the
+     last unreviewed file, n wrapping, auto-advance, J/K, palette, Overview row, landing).
+
+282. **A file list behind its row is refetched, and "Review all" waits for it (PR #86, CI `15-ui-status-flow`, 2026-11-12).**
+     Root cause of the flaky "a commit keeps the work out of the shelf" spec, found with a stress (`--repeat-each 20
+     --workers 1`: 17-18 of 20 passed, 14 of 20 with four busy-loop processes) and the button's hashes at failure (row =
+     daemon = current, the open file list's hash the old one, `fetching=false`): `collectEventEffects` treated a
+     `worktree.changed` whose `stateHash` the *cached projects list* already held as "same git state, refetch nothing"
+     (#51 review). But the projects list is refreshed by other fetches too, so it can get the new hash before the event
+     arrives, and then nothing refetched the open worktree's file list: it stayed on the old state, "Review all" sent
+     that list's hash and the daemon (correctly) answered "changed meanwhile", with no way out but a reload. Fix at the
+     source (`api/cache.ts`): that shortcut now applies only when no *observed* file list of the worktree is behind the
+     event (`fileListBehind`: another hash, or a request in flight, the first one included). Lists nobody observes do not
+     count (the earlier "the commit scope is exempt" branch was dead: `listFiles` returns the summary hash in every scope;
+     an unobserved list refetches when it is observed, and the self-heal below covers a stale one shown from cache). A
+     list whose *first* request is in flight has no data, so `invalidateQueries` would join that request instead of
+     replacing it (react-query cancels a refetch only over existing data): `invalidateFileLists` cancels such a request
+     first, so its answer for an older state cannot land. In the app (`model.listBehind`: the open worktree's row hash
+     differs from its file list's hash, any scope): while the list catches up the "Review N shown" button is pending
+     (`data-pending="true"`, `aria-disabled`, `data-list-state`) and `Shift+R`, a click and the sidebar's "Mark all
+     reviewed / unreviewed" for a request that includes the open worktree (`commands.listBehind`, one helper; the
+     every-worktree palette bulk uses the review data's own hashes, #280) mark nothing and say "This worktree just changed
+     and its list is refreshing. Try again in a moment.". A list behind with nothing in flight **heals itself**: the model
+     refetches it once per (row hash, list hash) pair, so it cannot stay stuck behind a row nobody will move again. If that
+     refetch ends with the list still behind (a failed request, or a daemon answering an older state) the state is
+     `failed`: the button's title says "Could not refresh this worktree's file list. Click to retry.", and a click or
+     `Shift+R` says "Could not refresh this worktree's file list. Retrying now." and refetches; it never claims a refresh
+     that is not happening. No automatic retry of the marking itself: the stale check exists so that nobody marks a diff
+     they have not seen. The spec waits for that
+     condition (`data-pending` gone) instead of the refresh indicator. Result: 20 of 20 without load, 20 of 20 with load,
+     twice each (before the fix: 17-18 of 20 and 14 of 20).
+
 ## Incremental summary and file lists from the watcher's paths (session, 2026-11-12; roadmap #40, step 23)
 
-272. **Contract (additive).** `SummaryOptions.changedPaths?: readonly string[]` (worktree-relative, `/`-separated
+283. **Contract (additive).** `SummaryOptions.changedPaths?: readonly string[]` (worktree-relative, `/`-separated
      paths a watcher saw change since the previous `getSummary` of the worktree; absent = full refresh),
      `SummaryResult.refresh?: SummaryRefresh` (`mode: 'full' | 'incremental'`, `reason` why a hinted refresh was
      full, `pathspecs` passed to git; set by git-core, absent from test doubles; the daemon strips it like
      `snapshot`, so it never reaches an API payload) and `GitCoreOptions.incremental?: boolean` (default true; false =
      every summary and file list in full, the kill switch and the bench's A/B). Nothing is renamed or removed, and a
      caller that passes none of it gets the old behaviour.
-273. **Contract (additive): `ScopeOptions.summaryState?: string`.** A list may be updated incrementally only when the
+284. **Contract (additive): `ScopeOptions.summaryState?: string`.** A list may be updated incrementally only when the
      caller asks for "the list of the summary state I hold" and that state is git-core's latest summary of the
      worktree. Without it (any other caller, tests, `getFileDiff`), `listChangedFiles` stays what it was: a full
      status and diff of the worktree as it is now. Found by `review-fixes.test.ts` (F8): with no summary between an
      edit of `.gitattributes` and a list, the journal was empty and the cached list came back stale.
-274. **git-core: an incremental summary merges pathspec-limited records into the last state.** `getSummary` with
+285. **git-core: an incremental summary merges pathspec-limited records into the last state.** `getSummary` with
      `changedPaths` keeps the worktree's last state (`SummaryTrack` in `packages/git-core/src/incremental.ts`: status
      entries, numstat lines, lstat signatures, untracked inspections, per worktree, 256 worktrees) and runs
      `git status … -- <region>` and `git diff --numstat <HEAD> -- <region>` (literal pathspecs after `--`,
@@ -3312,7 +3448,7 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      alongside the status unless every hinted path is a known untracked file. Everything global (default-branch
      ahead/behind, the operation in progress, HEAD's activity time, untracked attributes) is recomputed exactly as a
      full refresh does: it is the same `finish` step.
-275. **The state hash is rebuilt canonically, in git's order.** Both modes hash the status text rebuilt from its
+286. **The state hash is rebuilt canonically, in git's order.** Both modes hash the status text rebuilt from its
      header and entries (changed entries by path, then unmerged ones by path, then untracked by path: git's own
      order, so that part's bytes are what they were; `incremental-fuzz.test.ts` asserts it against raw output)
      and the numstat lines by destination path, **only those of paths git status reports**. That last part is a
@@ -3324,31 +3460,31 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      same bytes. Considered and not done: section digests (`summary-v3`),
      which would cut the ~15 ms of SHA-256 per refresh of a 30k-untracked worktree but change every state hash once
      (rows hidden "until it changes" would come back); a proposal for the lead.
-276. **When a hint is refused (a full refresh, `SummaryRefresh.reason`).** No last state; `incremental: false`; a
+287. **When a hint is refused (a full refresh, `SummaryRefresh.reason`).** No last state; `incremental: false`; a
      hint with more than 256 paths, a path that is invalid, inside a `.git`, not UTF-8, or a `.gitignore`,
      `.gitattributes` or `.gitmodules`; a hinted path that is now a directory (its contents may predate the events);
      a stamp change (`index`, `ignore-rules`, `config`); a different `defaultBranch`; more than 1000 pathspecs or
      256 KB of them; an empty region (no pathspec would mean the whole tree); a changed status header (`head`); any
      output outside the region, a parse error or a failed numstat (unreadable files, F7, are the full refresh's
-     business); and states that are never updated: unmerged paths (#278), submodules or gitlinks, a nested
+     business); and states that are never updated: unmerged paths (#289), submodules or gitlinks, a nested
      repository (an untracked `dir/` entry), a sparse checkout, a degraded numstat, a case-insensitive or
-     Unicode-normalising filesystem (#277). **Deviation from the brief:** renames and deleted directories do not force
+     Unicode-normalising filesystem (#288). **Deviation from the brief:** renames and deleted directories do not force
      a full refresh. A file rename reaches the watcher as a delete plus a create, both paths are in the hint, and the
      rename candidates make git pair it as a full run would; editors save by renaming a temp file, so forcing a full
      refresh there would undo the work. A deleted directory is covered by its path: a literal pathspec matches
      everything below it (`Region.has` implements the same rule, byte for byte). Both are fuzzed.
-277. **Case-insensitive and normalising filesystems refresh in full.** git matches literal pathspecs byte for byte
+288. **Case-insensitive and normalising filesystems refresh in full.** git matches literal pathspecs byte for byte
      even with `core.ignorecase` (tested), and `GIT_ICASE_PATHSPECS` is refused together with the global literal
      setting. A watcher can name a file in another case or Unicode form than the index, so an update could miss it.
      macOS and Windows are therefore never incremental. On Linux, `foldsCase` probes `<root>/.git` against
      `<root>/.GIT` (same inode: a case-folding mount such as a WSL `/mnt` drive or ciopfs). `core.ignorecase=true` on
      a case-sensitive filesystem is fuzzed and agrees. Follow-up: a fold-aware region for macOS.
-278. **Unmerged paths refresh in full (found by the fuzz).** With an unmerged path in the index, `git status` can pair
+289. **Unmerged paths refresh in full (found by the fuzz).** With an unmerged path in the index, `git status` can pair
      a worktree deletion with it as a rename and then print neither the rename nor the deletion (an `u` line has no
      room for one): a full status lists no entry for the deleted file, `status -- <it>` lists `.D`. A deletion that no
      state shows cannot be a rename candidate, so the "every addition and deletion is in the last state" argument
      fails while conflicts exist. Seed 0x5eed03 step 112 reproduced it (a stash pop with conflicts).
-279. **File lists of the scopes that read the worktree follow the summary.** `ScopeOptions.summaryState` (#273) asks
+290. **File lists of the scopes that read the worktree follow the summary.** `ScopeOptions.summaryState` (#284) asks
      for the list of the summary state the caller holds. git-core keeps the last list per worktree and scope (64)
      and a journal of the keys whose summary records changed, per summary version (64 entries; null when HEAD, the
      config/attribute stamp or the untracked read mode changed, or an attributes file is among them). It then
@@ -3360,7 +3496,7 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      inspections (no `git status`, no lstat per untracked file). Refused: no or a stale summary state, a stamp change
      since it, unmerged rows, unreadable files, non-UTF-8 pathspecs, more than 1000 paths. The allowlist is
      untouched: `diff-tree` already runs with exactly these flags for file origins.
-280. **Daemon: watcher paths become the hint; anything else refreshes in full.** `WatcherService` keeps the
+291. **Daemon: watcher paths become the hint; anything else refreshes in full.** `WatcherService` keeps the
      worktree-relative paths its native events named through the debounce (at most 256, `MAX_PENDING_PATHS`) and
      hands them to `onWorktreeDirty(id, reason, paths)`; `paths` is null as soon as anything without paths asked: a
      poll (the polling fallback has no paths), focus, git-dir events (HEAD, index, refs, `info/`, config), a
@@ -3369,22 +3505,22 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      it into `changedPaths` (`#takeHint`), gives a failed refresh's paths back as "refresh in full", and asks lists for
      `summaryState: entry.gitStateHash` (git-core's own hash, before `withBase`). A daemon restart starts with full
      refreshes (no state).
-281. **Daemon: reconciliation 30 s after the first incremental refresh.** The fallback poll alone cannot reconcile a
+292. **Daemon: reconciliation 30 s after the first incremental refresh.** The fallback poll alone cannot reconcile a
      busy worktree: every refresh re-arms it, so it never fires while an agent keeps writing. `#armReconcile` starts a
      timer (`CORE_DEFAULTS.reconcileMs`, 30 s; `internal.incremental.reconcileMs`) at the first incremental refresh
      after a full one; it refreshes in full and is cleared by any full refresh. A lost event costs at most 30 s of
      staleness (test: a watcher that drops one file's events; the repair arrives with no new event).
-282. **Kill switch (git calls only).** `DaemonInternals.incremental: false`, `StartDaemonOptions.git.incremental: false`, or
+293. **Kill switch (git calls only).** `DaemonInternals.incremental: false`, `StartDaemonOptions.git.incremental: false`, or
      `OCTOPUS_DIFF_INCREMENTAL=0` in the daemon's environment: no hints, no `summaryState`, git-core created with
      `incremental: false`. The bench's `--no-incremental` uses the first two (A/B). It restores
      the full `status` / `diff` of every summary and list and nothing else: the state hash is still computed from the
-     canonical rebuild (#275), and #283 (no per-file origins for uncommitted-only lists) still applies (PR #89
+     canonical rebuild (#286), and #294 (no per-file origins for uncommitted-only lists) still applies (PR #89
      review).
-283. **Daemon: no per-file origins for a list of uncommitted files only.** Every such file is own when no operation is
+294. **Daemon: no per-file origins for a list of uncommitted files only.** Every such file is own when no operation is
      in progress (`readFileOrigins`' rules need a committed file, or a staged one during a merge), so `#labelFiles`
      asks git-core without the files (for the integration base and ref, which the review state still carries) and
      keeps the list as it is. With 30k untracked files, validating them took 23 ms of every edit's review state.
-284. **What one edit costs now.** status and numstat (side by side) for the summary, one `diff -p` for the review
+295. **What one edit costs now.** status and numstat (side by side) for the summary, one `diff -p` for the review
      state's list: 3 git processes, each limited to the edited path. Extra, and not per edit: the config scan's
      60 s TTL (#29), a `rev-parse` of a new review base (memoized), and the worktree's **first** review state in a
      daemon session, which seeds its list with one diff of every changed file (patches are what a review state is
@@ -3393,10 +3529,10 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
 
 ### Incremental summary: review follow-up (PR #89, 2026-11-12)
 
-285. **Contract (additive): `SummaryOptions.forgetState?: boolean`.** git-core drops the worktree's kept summary state
+296. **Contract (additive): `SummaryOptions.forgetState?: boolean`.** git-core drops the worktree's kept summary state
      and its cached file lists, then refreshes in full (`SummaryRefresh.reason` `forget`). The daemon's explicit
      Refresh passes it. Nothing is renamed or removed.
-286. **A cached list never outlives what it read (PR #89 review P1).** A list's rows come from the files at the
+297. **A cached list never outlives what it read (PR #89 review P1).** A list's rows come from the files at the
      moment it runs, which can be after its summary state (an edit whose event is pending); the journal named only
      the paths whose records differ between two states, so a file changed and changed back between them (a revert,
      a chmod undone by `git stash`, a short-lived untracked file) kept a row read mid-edit for ever, and the
@@ -3416,17 +3552,17 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      by a seeded or a full list and changed back before an incremental or a full summary). The fuzz asks for lists
      between a step's operations (with the stale held state or none) and restores files to HEAD's content by plain
      writes; its 16-seed sweep found the chmod/stash case. Every layer is mutation-checked.
-287. **Embedded repositories refresh in full (PR #89 review P2).** A repository added with plain `git add sub` is a
+298. **Embedded repositories refresh in full (PR #89 review P2).** A repository added with plain `git add sub` is a
      gitlink without `.gitmodules`; clean, it is in no status line, and a commit inside it writes only to `sub/.git`
      (no watcher event), so an incremental refresh for another path missed it until the reconciliation. The stamp
      now says whether the index holds a gitlink (`indexHasGitlinks`: parses index versions 2-4, memoized by the
      index's stat signature; a split index, an unparsable or a >256 MB index counts as "has one"), and
      `trackBlocker` refuses then (`submodules`). Also, a hinted path with a `.git` in any ancestor directory
      refreshes in full (`nested-repository`: an ignored nested repository shows in no status line either).
-288. **An explicit Refresh is a full refresh that forgets (PR #89 review P3a).** `refreshWorktree` makes the next
-     summary full whatever the watcher holds (`#noteHint(entry, null)`) and passes `forgetState` (#285), so
+299. **An explicit Refresh is a full refresh that forgets (PR #89 review P3a).** `refreshWorktree` makes the next
+     summary full whatever the watcher holds (`#noteHint(entry, null)`) and passes `forgetState` (#296), so
      git-core's kept state and lists of the worktree are rebuilt from scratch.
-289. **Tests on case-folding filesystems (macOS CI, PR #89).** macOS gets full refreshes only (#277), but the new
+300. **Tests on case-folding filesystems (macOS CI, PR #89).** macOS gets full refreshes only (#288), but the new
      tests assumed the incremental path, and the fuzz ran 15 s per seed there. The tests now ask the
      implementation's own probe (`foldsCase`, exported from git-core; `test/helpers/folds.ts`): where it says
      folding, tests about the incremental path itself (spawn counts, a trusted stale hint, the daemon's edit,

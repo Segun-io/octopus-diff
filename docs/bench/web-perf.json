@@ -5,27 +5,27 @@
     "server": "own mock",
     "worktrees": 30,
     "filesPerWorktree": 200,
-    "inboxGroups": 30,
-    "mountedRowsAtLoad": 46
+    "fileGroupsAtLoad": 1,
+    "mountedRowsAtLoad": 49
   },
   "load": {
-    "fcp": 80,
-    "domContentLoaded": 54.399999998509884,
-    "readyAt": 907.7999999970198,
-    "inboxCompleteAt": 1191.5,
+    "fcp": 84,
+    "domContentLoaded": 59.400000005960464,
+    "readyAt": 896.3000000044703,
+    "reviewDataCompleteAt": 1252.8000000044703,
     "longTasks": {
       "n": 1,
-      "p50": 103,
-      "p95": 103,
-      "max": 103
+      "p50": 95,
+      "p95": 95,
+      "max": 95
     }
   },
   "jNavigation": {
     "perPressToNextFrame": {
       "n": 200,
       "p50": 33.3,
-      "p95": 34,
-      "max": 37.8
+      "p95": 33.9,
+      "max": 36.8
     },
     "longTasks": {
       "n": 0,
@@ -35,12 +35,12 @@
     }
   },
   "scroll": {
-    "listHeightPx": 156900,
+    "listHeightPx": 5200,
     "frameDelta": {
-      "n": 261,
-      "p50": 16.7,
-      "p95": 16.9,
-      "max": 20.3
+      "n": 8,
+      "p50": 16.6,
+      "p95": 19.7,
+      "max": 19.7
     },
     "framesOver50ms": 0,
     "longTasks": {
@@ -49,14 +49,14 @@
       "p95": 0,
       "max": 0
     },
-    "mountedRowsAfterScroll": 46
+    "mountedRowsAfterScroll": 48
   },
   "worktreeSwitchJ": {
     "wallClock": {
-      "n": 30,
+      "n": 29,
       "p50": 31,
-      "p95": 40,
-      "max": 42
+      "p95": 45,
+      "max": 50
     },
     "longTasks": {
       "n": 0,
@@ -65,18 +65,18 @@
       "max": 0
     }
   },
-  "liveRefreshInbox": {
+  "liveRefresh": {
     "mutateToIdle": {
       "n": 10,
-      "p50": 84.5,
-      "p95": 95.8,
-      "max": 95.8
+      "p50": 81.1,
+      "p95": 95.2,
+      "max": 95.2
     },
     "requestsPerRefresh": {
       "n": 10,
-      "p50": 2,
-      "p95": 3,
-      "max": 3
+      "p50": 1,
+      "p95": 4,
+      "max": 4
     },
     "longTasks": {
       "n": 0,
@@ -96,22 +96,27 @@
     {
       "name": "virtualised list (mounted rows at load / after scrolling < 120)",
       "ok": true,
-      "detail": "46 / 46"
+      "detail": "49 / 48"
     },
     {
-      "name": "the list is long (a 6000-file inbox)",
+      "name": "the list is long (one worktree of 200 files)",
       "ok": true,
-      "detail": "156900 px"
+      "detail": "5200 px"
+    },
+    {
+      "name": "the app landed on one worktree and its files only (one file group)",
+      "ok": true,
+      "detail": "1 groups"
     },
     {
       "name": "J visited distinct worktrees",
       "ok": true,
-      "detail": "30 of 30 presses"
+      "detail": "29 of 29 presses"
     },
     {
-      "name": "a refresh fetches (projects + files)",
+      "name": "a refresh fetches the changed rows only (no /api/projects, #51)",
       "ok": true,
-      "detail": "requests per refresh: 2, 2, 3, 3, 2, 2, 2, 3, 2, 3"
+      "detail": "requests per refresh: 1, 1, 1, 2, 1, 1, 1, 4, 1, 4; /api/inbox | /api/inbox | /api/inbox | /api/focus + /api/inbox | /api/inbox | /api/inbox | /api/inbox | /api/inbox + /api/worktrees/68bb2cc3daf0edff/activity + /api/worktrees/68bb2cc3daf0edff/files + /api/worktrees/68bb2cc3daf0edff/files | /api/inbox | /api/inbox + /api/worktrees/68bb2cc3daf0edff/activity + /api/worktrees/68bb2cc3daf0edff/files + /api/worktrees/68bb2cc3daf0edff/files"
     }
   ]
 }

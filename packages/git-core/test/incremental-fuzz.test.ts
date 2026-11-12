@@ -32,13 +32,13 @@ import { locator } from './helpers/core.js';
 import { createFixture, type Fixture } from './helpers/fixture.js';
 import { FOLDING_SKIP, worktreesFoldCase } from './helpers/folds.js';
 
-/** A case-folding filesystem gets full refreshes only (#277): equality still holds, trivially. */
+/** A case-folding filesystem gets full refreshes only (#288): equality still holds, trivially. */
 const FOLDS = await worktreesFoldCase();
 /** A skipped test's title says why. */
 const skipped = (title: string): string => (FOLDS ? `${title} [skipped: ${FOLDING_SKIP}]` : title);
 
 /**
- * macOS runs fewer steps: every refresh is full there (#277), so the check is cheap to make but
+ * macOS runs fewer steps: every refresh is full there (#288), so the check is cheap to make but
  * each step costs more git, and the macOS job has a 25-minute budget for every package.
  */
 const STEPS = Number(process.env.FUZZ_STEPS ?? (process.platform === 'darwin' ? 40 : 120));

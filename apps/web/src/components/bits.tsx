@@ -182,29 +182,6 @@ export function ToggleButton({
   );
 }
 
-/**
- * A worktree's two-part name: the project, then the branch. Weight and colour set the parts
- * apart; no punctuation joins them (IDENTITY.md §5).
- */
-export function WorktreeName({
-  project,
-  branch,
-  className = '',
-  branchClassName = 'text-muted',
-}: {
-  project: string;
-  branch: string;
-  className?: string;
-  branchClassName?: string;
-}) {
-  return (
-    <span className={`inline-flex min-w-0 items-baseline gap-1.5 ${className}`}>
-      <span className="truncate font-medium">{project}</span>
-      <span className={`truncate ${branchClassName}`}>{branch}</span>
-    </span>
-  );
-}
-
 /** Unified diff layout: one column of rows. */
 export function RowsIcon(props: IconProps) {
   return (

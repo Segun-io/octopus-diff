@@ -318,10 +318,28 @@ describe('review all', () => {
     expect(screen.getByTestId(TEST_IDS.bulkReviewToast).textContent).toContain('Undone');
   });
 
-  it('Shift+R in the Inbox marks everything with one all request; Ctrl+Z undoes; confirm asks first', async () => {
+  /** Runs a palette command by its registry id (`cmd:<id>`) and returns the item's hint. */
+  async function runPaletteCommand(user: Harness['user'], id: string): Promise<string> {
+    await press(user, '{Control>}k{/Control}');
+    const palette = await screen.findByTestId(TEST_IDS.commandPalette);
+    await user.type(within(palette).getByTestId(TEST_IDS.commandPaletteInput), 'worktrees in the');
+    const item = within(palette)
+      .getAllByTestId(TEST_IDS.commandPaletteItem)
+      .find((i) => i.dataset.id === id);
+    if (!item) throw new Error(`no palette item ${id}`);
+    const hint = item.textContent ?? '';
+    fireEvent.click(item);
+    await waitFor(() => expect(screen.queryByTestId(TEST_IDS.commandPalette)).toBeNull());
+    return hint;
+  }
+
+  it('"Review all worktrees" (palette) marks everything with one all request; Ctrl+Z undoes; confirm asks first (#83)', async () => {
     const { user, requests, backend, store } = setup();
     await ready();
-    await press(user, 'R');
+    // Shift+R now acts on the open worktree only (the Inbox view that marked everything is gone).
+    expect(await runPaletteCommand(user, 'cmd:markEveryVerified')).toContain(
+      '30 files to mark reviewed',
+    );
     const toast = await screen.findByTestId(TEST_IDS.bulkReviewToast);
     expect(toast.dataset.changed).toBe('30');
     const bulk = requests.find((r) => r.url.endsWith('/api/review/bulk'));
@@ -333,11 +351,46 @@ describe('review all', () => {
     await waitFor(() => expect(backend.reviews.size).toBe(0));
 
     store.setState({ confirmBulk: true });
-    await press(user, 'R');
+    await runPaletteCommand(user, 'cmd:markEveryVerified');
     const confirm = await screen.findByRole('alertdialog');
     expect(confirm.textContent).toContain('Across 5 worktrees');
     fireEvent.click(within(confirm).getByText(/^Mark reviewed$/));
     await waitFor(() => expect(backend.reviews.size).toBe(30));
+    // And back: the unreviewed twin of the command counts the reviewed files.
+    store.setState({ confirmBulk: false });
+    expect(await runPaletteCommand(user, 'cmd:markEveryUnreviewed')).toContain(
+      '30 files to mark unreviewed',
+    );
+    await waitFor(() => expect(backend.reviews.size).toBe(0));
+  });
+
+  it('"Review all worktrees" honours the sidebar filters: one request per listed worktree, with paths (#83)', async () => {
+    const { user, requests, store, backend } = setup();
+    await ready();
+    const cache = worktreeItem('fix/cache').dataset.worktreeId as string;
+    store.setState({ filterWorktrees: [cache] });
+    await waitFor(() => expect(screen.getAllByTestId(TEST_IDS.worktreeItem)).toHaveLength(1));
+    expect(await runPaletteCommand(user, 'cmd:markEveryVerified')).toContain(
+      '2 files to mark reviewed',
+    );
+    await screen.findByTestId(TEST_IDS.bulkReviewToast);
+    const bulk = requests.filter((r) => r.url.endsWith('/api/review/bulk'));
+    expect(bulk).toHaveLength(1);
+    expect(bulk[0]?.body).toMatchObject({ target: { kind: 'worktree', worktreeId: cache } });
+    expect(bodyOf<{ paths: unknown[] }>(bulk[0]).paths).toHaveLength(2);
+    expect(backend.reviews.size).toBe(2);
+  });
+
+  it('Shift+R marks the open worktree only', async () => {
+    const { user, requests } = setup();
+    await ready();
+    fireEvent.click(worktreeItem('fix/cache'));
+    await waitFor(() => expect(screen.getByTestId(TEST_IDS.markAllButton).dataset.count).toBe('2'));
+    await press(user, 'R');
+    await screen.findByTestId(TEST_IDS.bulkReviewToast);
+    const bulk = requests.filter((r) => r.url.endsWith('/api/review/bulk'));
+    expect(bulk).toHaveLength(1);
+    expect(bulk[0]?.body).toMatchObject({ target: { kind: 'worktree' } });
   });
 
   it('respects a hidden-reviewed filter: only unreviewed visible files are sent', async () => {
@@ -391,9 +444,7 @@ describe('review policy', () => {
       expect(within(worktreeItem('fix/cache')).getByTestId(TEST_IDS.reviewOffBadge)).toBeTruthy(),
     );
     expect(screen.queryByTestId(TEST_IDS.reviewToggle)).toBeNull();
-    // the sidebar badge count is gone, the group header says review off in the inbox
-    await press(user, 'gi');
-    await waitFor(() => expect(screen.getAllByTestId(TEST_IDS.fileGroup).length).toBe(5));
+    // the sidebar badge count is gone
     // n never lands in the disabled worktree
     const visited = new Set<string>();
     for (let i = 0; i < 30; i++) {
@@ -403,7 +454,13 @@ describe('review policy', () => {
     expect(visited.has(worktreeItem('fix/cache').dataset.worktreeId ?? '')).toBe(false);
     // inherit again from the menu
     fireEvent.click(worktreeItem('fix/cache'));
-    fireEvent.click(await screen.findByTestId(TEST_IDS.reviewPolicyChip));
+    await waitFor(() =>
+      expect(screen.getByTestId('context-bar-worktree').textContent).toContain('fix/cache'),
+    );
+    // The menu of the earlier choice is still open (it stays open for the next level); a click
+    // on another row closes it in a browser (mousedown outside), which fireEvent does not send.
+    const chipAgain = await screen.findByTestId(TEST_IDS.reviewPolicyChip);
+    if (chipAgain.getAttribute('aria-expanded') !== 'true') fireEvent.click(chipAgain);
     const inherit = within(await screen.findByTestId(TEST_IDS.reviewPolicyMenu))
       .getAllByTestId(TEST_IDS.reviewPolicyItem)
       .find((i) => i.dataset.target === 'worktree' && i.dataset.state === 'inherit');
@@ -966,13 +1023,15 @@ describe('chrome hierarchy (docs/TOOLBAR.md)', () => {
     await ready();
     const bar = () => screen.getByTestId('context-bar');
     const listOptions = () => screen.getByRole('toolbar', { name: 'File list options' });
-    expect(bar().textContent).toMatch(/^Inbox\d+ worktrees\d+ files/);
-    // In the Inbox the list mixes worktrees, so the diff header names the file's.
-    expect(within(viewer()).getByTestId('diff-header-worktree')).toBeTruthy();
+    // The app lands on a worktree (#83): the bar names it, and the diff header does not repeat it.
+    expect(bar().dataset.view).toBe('worktree');
+    expect(bar().textContent).not.toMatch(/Inbox/);
+    expect(within(bar()).getByTestId('context-bar-worktree').textContent).toBe('octopus-apimain');
+    expect(within(viewer()).queryByTestId('diff-header-worktree')).toBeNull();
     // List controls over the list, diff controls over the diff.
     expect(within(listOptions()).getByTestId(TEST_IDS.scopeSelect)).toBeTruthy();
     expect(within(listOptions()).getByTestId(TEST_IDS.showReviewedToggle)).toBeTruthy();
-    expect(within(listOptions()).queryByTestId('tree-view-toggle')).toBeNull();
+    expect(within(listOptions()).getByTestId('tree-view-toggle')).toBeTruthy();
     expect(within(viewer()).getByTestId(TEST_IDS.diffModeToggle)).toBeTruthy();
     expect(within(viewer()).getByTestId(TEST_IDS.whitespaceToggle)).toBeTruthy();
 

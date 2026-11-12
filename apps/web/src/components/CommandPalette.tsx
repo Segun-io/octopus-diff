@@ -34,6 +34,13 @@ interface PaletteItem {
   run: () => void;
 }
 
+const BULK_COMMANDS: ReadonlySet<string> = new Set([
+  'markAllVerified',
+  'markAllUnreviewed',
+  'markEveryVerified',
+  'markEveryUnreviewed',
+]);
+
 const KIND_LABELS: Record<PaletteItem['kind'], string> = {
   go: 'Go to',
   command: 'Command',
@@ -66,7 +73,7 @@ export function CommandPalette() {
     enabled: browsing,
     onOpen: (view) => {
       close();
-      actions.setView(store, view);
+      commands.openView(view);
     },
     // The scan's progress and outcome show in the add-job toast (components/AddJobStatus.tsx).
     onWatched: () => close(),
@@ -75,6 +82,9 @@ export function CommandPalette() {
   const copyId = copyWorktreeId(model);
   const hasWorktree = copyId !== null && model.sidebar.byId.has(copyId);
   const hasFile = model.selectedEntry !== undefined;
+  // What the "every worktree in the list" bulk commands would change (the palette is open briefly).
+  const everyReviewed = commands.currentPlan(true, true).count;
+  const everyUnreviewed = commands.currentPlan(false, true).count;
   const items = useMemo<PaletteItem[]>(() => {
     const out: PaletteItem[] = [];
     out.push({
@@ -87,20 +97,13 @@ export function CommandPalette() {
         void folderStart.prefetch().then((text) => setQuery(text));
       },
     });
-    out.push({
-      id: 'go:inbox',
-      kind: 'go',
-      label: 'Inbox',
-      hint: `${model.inboxEntries.length} dirty worktrees`,
-      run: () => actions.setView(store, { kind: 'inbox' }),
-    });
     for (const node of model.sidebar.folders) {
       out.push({
         id: `go:folder:${node.id}`,
         kind: 'go',
         label: node.id === DIRECT_FOLDER_ID ? 'Added directly' : `Folder ${node.label}`,
         hint: `${node.stats.projects} repos, ${node.stats.dirty} dirty`,
-        run: () => actions.setView(store, { kind: 'folder', scanRootId: node.id }),
+        run: () => commands.openView({ kind: 'folder', scanRootId: node.id }),
       });
       for (const group of node.groups) {
         out.push({
@@ -108,7 +111,7 @@ export function CommandPalette() {
           kind: 'go',
           label: `Project ${group.project.name}`,
           hint: `${group.allRows.length} worktrees`,
-          run: () => actions.setView(store, { kind: 'project', projectId: group.project.id }),
+          run: () => commands.openView({ kind: 'project', projectId: group.project.id }),
         });
         for (const row of group.allRows) {
           out.push({
@@ -117,7 +120,7 @@ export function CommandPalette() {
             label: `${group.project.name} ${worktreeLabel(row.worktree)}`,
             parts: [group.project.name, worktreeLabel(row.worktree)],
             hint: row.unreviewed > 0 ? `${row.unreviewed} unreviewed` : row.worktree.path,
-            run: () => actions.setView(store, { kind: 'worktree', worktreeId: row.worktree.id }),
+            run: () => commands.openView({ kind: 'worktree', worktreeId: row.worktree.id }),
           });
         }
       }
@@ -126,14 +129,18 @@ export function CommandPalette() {
       if (c.hideInPalette) continue;
       if (c.needs === 'worktree' && !hasWorktree) continue;
       if (c.needs === 'file' && !hasFile) continue;
-      if ((c.id === 'markAllVerified' || c.id === 'markAllUnreviewed') && support !== 'ready') {
-        continue;
-      }
+      if (BULK_COMMANDS.has(c.id) && support !== 'ready') continue;
       out.push({
         id: `cmd:${c.id}`,
         kind: c.group === 'review' ? 'review' : 'command',
         label: c.label,
-        hint: GROUP_LABELS[c.group],
+        // The bulk commands over every worktree say how many files they would mark.
+        hint:
+          c.id === 'markEveryVerified'
+            ? `${everyReviewed} files to mark reviewed`
+            : c.id === 'markEveryUnreviewed'
+              ? `${everyUnreviewed} files to mark unreviewed`
+              : GROUP_LABELS[c.group],
         keys: c.keys.length ? c.keys : undefined,
         run: () => c.run(commands),
       });
@@ -159,13 +166,14 @@ export function CommandPalette() {
     return out;
   }, [
     model.sidebar.folders,
-    model.inboxEntries.length,
     store,
     commands,
     support,
     folderStart.prefetch,
     hasWorktree,
     hasFile,
+    everyReviewed,
+    everyUnreviewed,
   ]);
 
   const results = useMemo(
