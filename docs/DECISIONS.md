@@ -3708,3 +3708,10 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
 314. **Not done: the CLI config key.** `maxListedUntracked` is a `GitCoreOptions` and `StartDaemonOptions.git` field;
      `~/.config/octopus-diff/config.json` (apps/cli, WS5) does not accept it yet (its schema is strict). A one-line
      addition next to `maxUntrackedFiles` for the lead.
+
+### Untracked-heavy worktrees: review follow-up (PR #91, 2026-11-12)
+
+315. **Contract (additive): `UntrackedOmittedDirectory.generated?: boolean`** (PR #91 P2-2): true when the
+     directory's name, or an ancestor's, is a well-known dependency, cache or build-output name. The web may say
+     "build output or dependencies" only then; otherwise it words the notice neutrally. The `ignoreLine` doc now
+     says when a line is broader than the directory (#317) and when it is null (#318). Nothing renamed or removed.

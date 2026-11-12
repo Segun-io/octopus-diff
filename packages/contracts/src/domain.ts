@@ -162,10 +162,18 @@ export const UntrackedOmittedDirectorySchema = z.object({
   /**
    * A `.gitignore` line that would ignore it, for the user to copy (we never write to a
    * repository): `/<path>/` anchored at the worktree root, or `<name>/` when a path component is a
-   * well-known generated directory (`node_modules`, `dist`, `target`, ...). Null when the path
-   * cannot be written as one line (not UTF-8, a newline, a trailing backslash).
+   * well-known dependency or cache directory (`node_modules`, `__pycache__`, ...), or
+   * `/<path to a build-output component>/`, but only when that broader line covers no listed
+   * untracked file and no tracked file. Null when the path cannot be written as one safe line (not
+   * UTF-8, control, bidi, zero-width or other format characters).
    */
   ignoreLine: z.string().min(1).nullable(),
+  /**
+   * Its name, or an ancestor's, is a well-known dependency, cache or build-output directory
+   * (`node_modules`, `dist`, `__pycache__`, ...): only then may a client call it build output or
+   * dependencies. Absent from older daemons (word it neutrally then).
+   */
+  generated: z.boolean().optional(),
 });
 export type UntrackedOmittedDirectory = z.infer<typeof UntrackedOmittedDirectorySchema>;
 
