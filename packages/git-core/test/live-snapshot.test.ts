@@ -226,8 +226,17 @@ describe('getSummary snapshot', () => {
   });
 
   it('costs no extra git process, and the default result has no snapshot key', async () => {
-    await core.getSummary(wt);
-    spawns.take();
+    // Warm up until a call no longer reads the config: the scan git-core reuses is not stored while
+    // a config file is younger than 2 s (the racy guard, DECISIONS #191), and this fixture wrote
+    // config a moment ago, so the first call after that window costs one `config` read, once. The
+    // spawns of the calls below are then comparable (macOS CI: `expected [diff, status] to equal
+    // [config, diff, status]`).
+    for (let attempt = 0; attempt < 15; attempt++) {
+      spawns.take();
+      await core.getSummary(wt);
+      if (!subs(spawns.take()).includes('config')) break;
+      await new Promise((resolve) => setTimeout(resolve, 400));
+    }
     const plain = await core.getSummary(wt);
     const plainSpawns = subs(spawns.take());
     const withSnapshot = await core.getSummary(wt, { snapshot: true });
