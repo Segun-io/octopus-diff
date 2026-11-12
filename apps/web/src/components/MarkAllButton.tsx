@@ -1,22 +1,20 @@
 import { TEST_IDS } from '@octopus-diff/contracts';
 import { useSettingsSupport } from '../api/settings.ts';
 import { useCommandsContext } from '../state/commandsContext.tsx';
-import { useAppModel } from '../state/model.tsx';
 import { CheckIcon } from './bits.tsx';
 
 /**
- * "Review all" (⇧R) for the current view (worktree: the files after filters; Inbox: everything
- * shown): one verb, "Reviewed" (docs/STATUS-FLOW.md §2.3). Hidden on daemons without the bulk API.
+ * "Review all" (⇧R) for the open worktree (the files after the list's options): one verb,
+ * "Reviewed" (docs/STATUS-FLOW.md §2.3). Every worktree, a project or a folder: the palette and
+ * the Overviews. Hidden on daemons without the bulk API.
  */
 export function MarkAllButton({ compact = false }: { compact?: boolean }) {
   const support = useSettingsSupport();
   const commands = useCommandsContext();
-  const model = useAppModel();
   if (support !== 'ready') return null;
   const plan = commands.currentPlan(true);
   const disabled = plan.count === 0;
-  const label =
-    model.view.kind === 'inbox' ? `Review all ${plan.count}` : `Review ${plan.count} shown`;
+  const label = `Review ${plan.count} shown`;
   return (
     <button
       type="button"
@@ -27,7 +25,7 @@ export function MarkAllButton({ compact = false }: { compact?: boolean }) {
       onClick={() => {
         if (!disabled) commands.markAll(true);
       }}
-      title={`${label} (⇧ R). Right-click a sidebar item for folders and projects.`}
+      title={`${label} (⇧ R). Every worktree, a project or a folder: the command palette and the Overviews.`}
       className={`od-btn shrink-0 ${disabled ? '' : 'hover:border-add hover:bg-add-soft'}`}
     >
       <CheckIcon />

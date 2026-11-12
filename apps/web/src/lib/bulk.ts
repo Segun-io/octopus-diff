@@ -19,7 +19,7 @@ export interface BulkPlan {
 export interface BulkPlanInput {
   scope: DiffScope;
   reviewed: boolean;
-  /** Groups shown in the current view (inbox: after sidebar filters; worktree: one group). */
+  /** The groups the plan covers (the open worktree's, or every listed worktree's after the sidebar filters). */
   groups: readonly FileGroup[];
   entries: readonly NavEntry[];
   visible: VisiblePredicate;
@@ -27,9 +27,8 @@ export interface BulkPlanInput {
   stateHashes: ReadonlyMap<string, string>;
   /** Worktrees whose review is disabled (skipped unless `includeDisabled`). */
   disabled: ReadonlySet<string>;
-  /** True when every dirty worktree is shown and no file is hidden: one `all` request. */
-  inboxUnfiltered: boolean;
-  view: 'inbox' | 'worktree';
+  /** True when every dirty worktree is covered and no file is hidden: one `all` request. */
+  allUnfiltered: boolean;
   includeDisabled?: boolean;
 }
 
@@ -79,7 +78,7 @@ export function planBulk(input: BulkPlanInput): BulkPlan {
   // "Review all" in To review (docs/STATUS-FLOW.md §2.3) also moves the bookmark to HEAD. Hidden
   // files there are reviewed ones only, so the whole worktree is what the user sees: no `paths`.
 
-  if (input.view === 'inbox' && input.inboxUnfiltered) {
+  if (input.allUnfiltered) {
     const ids = groups.map((g) => g.worktree.id);
     return {
       target: 'all',

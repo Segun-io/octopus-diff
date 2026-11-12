@@ -12,7 +12,6 @@ import {
   loadPrefs,
   PREF_KEYS,
   type Prefs,
-  type ReviewOffDisplay,
   savePrefs,
   scopeForPref,
   storedPrefsAreCurrent,
@@ -20,14 +19,15 @@ import {
 import { createStore, type Store, useStoreSelector } from './store.ts';
 
 export { PREFS_STORAGE_KEY } from './prefs.ts';
-export type { Density, DiffMode, FileListLayout, ReviewOffDisplay, ThemePrefs };
+export type { Density, DiffMode, FileListLayout, ThemePrefs };
 
 /**
- * What the main pane shows. Shaped as a path through Inbox → folder → project → worktree so new
- * views need no shell changes (views/registry.ts).
+ * What the main pane shows. Shaped as a path through folder → project → worktree so new views
+ * need no shell changes (views/registry.ts). `none` is "nothing chosen yet": the app settles it
+ * on load (the last worktree, else the top row of the list, else an empty state).
  */
 export type View =
-  | { kind: 'inbox' }
+  | { kind: 'none' }
   | { kind: 'folder'; scanRootId: string }
   | { kind: 'project'; projectId: string }
   | { kind: 'worktree'; worktreeId: string; tab?: WorktreeTab };
@@ -122,7 +122,7 @@ export interface CopyToast {
 
 export const DEFAULT_UI_STATE: UiState = {
   ...DEFAULT_PREFS,
-  view: { kind: 'inbox' },
+  view: { kind: 'none' },
   selected: null,
   scope: DEFAULT_SCOPE,
   filterFolders: [],

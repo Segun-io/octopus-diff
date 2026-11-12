@@ -7,7 +7,7 @@
  *
  * (The subcommand allowlist itself is unit-tested in packages/git-core, WS1.)
  */
-import { ApiClientError } from '@octopus-diff/contracts';
+import { ApiClientError, TEST_IDS } from '@octopus-diff/contracts';
 import {
   type FixtureSet,
   findWorktree,
@@ -103,10 +103,21 @@ test.describe('§8.8 read-only proof', () => {
 
       // The UI exercises the same endpoints through the browser.
       await app.open(daemon.authUrl);
-      await app.selectInbox();
-      const items = await app.fileItems();
-      for (const item of items.slice(0, 8)) {
-        await app.openFile(item.path, item.worktreeId ?? undefined);
+      // The landing worktree, then the next few rows of the list (J), a few files each.
+      let current = await app.expectLanded();
+      for (let i = 0; i < 4; i++) {
+        await expect(app.byTestId(TEST_IDS.fileGroup)).toHaveAttribute('data-worktree-id', current);
+        const items = await app.fileItems();
+        for (const item of items.slice(0, 2)) {
+          await app.openFile(item.path, item.worktreeId ?? undefined);
+        }
+        await app.focusApp();
+        await app.press('J');
+        const previous = current;
+        await expect
+          .poll(async () => (await app.currentWorktreeId()) ?? previous)
+          .not.toBe(previous);
+        current = (await app.currentWorktreeId()) ?? previous;
       }
       sub.close();
     } finally {

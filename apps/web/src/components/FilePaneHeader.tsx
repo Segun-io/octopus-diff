@@ -22,7 +22,6 @@ export function FilePaneHeader() {
   const model = useAppModel();
   const commands = useCommandsContext();
   const layout = useUi((s) => s.fileListLayout);
-  const inbox = model.view.kind === 'inbox';
   const store = useUiStore();
   const fromMainOnly = useUi((s) => s.fromMainOnly);
   const branchToggleFrom = useUi((s) => s.branchToggleFrom);
@@ -90,19 +89,17 @@ export function FilePaneHeader() {
             <EyeIcon />
           </button>
         )}
-        {!inbox && (
-          <button
-            type="button"
-            data-testid={TREE_VIEW_TEST_ID}
-            aria-pressed={layout === 'tree'}
-            onClick={commands.toggleTreeLayout}
-            title="Show the files as a directory tree"
-            aria-label="Tree view"
-            className="od-btn od-btn-ghost od-btn-icon"
-          >
-            <TreeIcon />
-          </button>
-        )}
+        <button
+          type="button"
+          data-testid={TREE_VIEW_TEST_ID}
+          aria-pressed={layout === 'tree'}
+          onClick={commands.toggleTreeLayout}
+          title="Show the files as a directory tree"
+          aria-label="Tree view"
+          className="od-btn od-btn-ghost od-btn-icon"
+        >
+          <TreeIcon />
+        </button>
         <MarkAllButton compact />
       </span>
     </div>

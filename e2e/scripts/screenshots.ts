@@ -1,5 +1,5 @@
 /**
- * README screenshots: inbox, diff in split and unified mode, the sidebar filter, each in light and dark themes, from
+ * README screenshots: the landing worktree, diff in split and unified mode, the sidebar filter, each in light and dark themes, from
  * the acceptance fixtures. Writes PNGs to docs/screenshots/ (override with --out <dir>).
  *
  * Usage (after `pnpm build`): pnpm --filter @octopus-diff/fixtures screenshots
@@ -59,10 +59,10 @@ async function main() {
         written.push(file);
       };
 
-      await app.selectInbox();
       const login = findWorktree(fixtures.manifest, 'alpha-login').worktree;
+      await app.selectWorktree(login.id);
       await app.openFile('src/login.ts', login.id);
-      await shot('inbox');
+      await shot('landing');
 
       const sink = findWorktree(fixtures.manifest, 'kitchen-sink').worktree;
       await app.selectWorktree(sink.id);

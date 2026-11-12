@@ -68,7 +68,8 @@ test.describe('first run', () => {
       for (const name of scan.expectedProjects) await expect(toast).toContainText(name);
       await action(toast, 'open').click();
       await expect(toast).toHaveCount(0);
-      // "Show folder" leaves the Inbox for the folder's overview (no context bar there).
+      // "Show folder" leaves the worktree the app landed on for the folder's overview (no context
+      // bar there).
       await expect(app.contextBar).toHaveCount(0);
     } finally {
       await daemon.close();

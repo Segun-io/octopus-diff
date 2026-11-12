@@ -417,13 +417,17 @@ describe('keyboard navigation', () => {
     expect(nextUnreviewed(single, docs?.key ?? null)).toBeNull();
   });
 
-  it('J/K walk [inbox, ...worktrees] without wrapping', () => {
+  it('J/K walk the list without wrapping; from an Overview either key opens the first', () => {
     const order = ['a', 'b', 'c'];
-    expect(stepWorktree(order, null, 1)).toEqual({ changed: true, worktreeId: 'a' });
-    expect(stepWorktree(order, 'a', -1)).toEqual({ changed: true, worktreeId: null });
-    expect(stepWorktree(order, null, -1)).toEqual({ changed: false, worktreeId: null });
+    expect(stepWorktree(order, 'a', 1)).toEqual({ changed: true, worktreeId: 'b' });
+    expect(stepWorktree(order, 'b', -1)).toEqual({ changed: true, worktreeId: 'a' });
+    // There is no Inbox above the first row, and no wrapping at either end.
+    expect(stepWorktree(order, 'a', -1)).toEqual({ changed: false, worktreeId: 'a' });
     expect(stepWorktree(order, 'c', 1)).toEqual({ changed: false, worktreeId: 'c' });
+    expect(stepWorktree(order, null, 1)).toEqual({ changed: true, worktreeId: 'a' });
+    expect(stepWorktree(order, null, -1)).toEqual({ changed: true, worktreeId: 'a' });
     expect(stepWorktree(order, 'gone', 1)).toEqual({ changed: true, worktreeId: 'a' });
+    expect(stepWorktree([], null, 1)).toEqual({ changed: false, worktreeId: null });
   });
 });
 

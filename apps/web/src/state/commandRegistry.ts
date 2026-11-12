@@ -12,7 +12,7 @@ export interface CommandDef {
   id: string;
   label: string;
   group: CommandGroup;
-  /** Display keys, e.g. `['j']`, `['g', 'i']` (chord), `['⇧ R']`, `['Ctrl/⌘ K']`. */
+  /** Display keys, e.g. `['j']`, `['g', 'x']` (a chord), `['⇧ R']`, `['Ctrl/⌘ K']`. */
   keys: string[];
   /** Chord: keys are pressed in sequence. */
   chord?: boolean;
@@ -67,14 +67,6 @@ export const COMMANDS: readonly CommandDef[] = [
     run: (c) => c.nextUnreviewed(),
   },
   {
-    id: 'goInbox',
-    label: 'Go to the Inbox',
-    group: 'navigate',
-    keys: ['g', 'i'],
-    chord: true,
-    run: (c) => c.goInbox(),
-  },
-  {
     id: 'focusFilter',
     label: 'Filter worktrees',
     group: 'navigate',
@@ -110,6 +102,22 @@ export const COMMANDS: readonly CommandDef[] = [
     group: 'review',
     keys: [],
     run: (c) => c.markAll(false),
+    paletteOnly: true,
+  },
+  {
+    id: 'markEveryVerified',
+    label: 'Review all worktrees in the list (mark everything reviewed)',
+    group: 'review',
+    keys: [],
+    run: (c) => c.markEvery(true),
+    paletteOnly: true,
+  },
+  {
+    id: 'markEveryUnreviewed',
+    label: 'Mark all worktrees in the list unreviewed',
+    group: 'review',
+    keys: [],
+    run: (c) => c.markEvery(false),
     paletteOnly: true,
   },
   {

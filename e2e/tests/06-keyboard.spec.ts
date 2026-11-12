@@ -69,11 +69,7 @@ test.describe('§8.7 keyboard', () => {
     await expect(item).toHaveAttribute('data-reviewed', 'false');
   });
 
-  test('/ focuses the filter, g i opens the inbox, ? opens help', async ({
-    manifest,
-    daemon,
-    app,
-  }) => {
+  test('/ focuses the filter, g i is unbound, ? opens help', async ({ manifest, daemon, app }) => {
     await app.open(daemon.authUrl);
     await app.selectWorktree(findWorktree(manifest, 'beta').worktree.id);
     await app.focusApp();
@@ -86,9 +82,12 @@ test.describe('§8.7 keyboard', () => {
     await app.clearFilters();
     await app.focusApp();
 
+    // `g i` used to open the Inbox: it is not bound any more, and the open worktree stays.
+    const beta = findWorktree(manifest, 'beta').worktree.id;
     await app.press('g');
     await app.press('i');
-    await expect(app.contextBar).toHaveAttribute('data-view', 'inbox');
+    await expect(app.contextBar).toHaveAttribute('data-view', 'worktree');
+    await expect(app.worktreeItem(beta)).toHaveAttribute('aria-current', 'true');
 
     await app.press('?');
     await expect(app.byTestId(TEST_IDS.helpDialog)).toBeVisible();

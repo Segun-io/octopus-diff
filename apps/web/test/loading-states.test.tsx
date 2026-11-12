@@ -475,27 +475,19 @@ describe('loading states in the app (#11)', () => {
     expect(shownNotes()).toEqual([]);
   });
 
-  it('the file list names the local work while inbox batches are still coming in', async () => {
-    const h = setup({ backend: { dataset: 'large' } });
-    // The second batch of the first load never lands until released.
-    let batches = 0;
-    const second = h.hold((path) => {
-      if (path !== '/api/inbox') return false;
-      batches++;
-      return batches === 2;
-    });
-    await waitReady();
-    await waitFor(() => expect(second.count()).toBe(1));
+  it("the file list names the local work while the open worktree's files load", async () => {
+    const h = setup();
+    // The landing worktree's file list never arrives until released.
+    const files = h.hold((path) => /\/api\/worktrees\/[^/]+\/files$/.test(path));
     await waitFor(() =>
-      expect(
-        document.querySelector('[data-testid="file-group"], [data-testid="file-row"]'),
-      ).not.toBeNull(),
+      expect(screen.getByTestId(TEST_IDS.app).getAttribute('data-ready')).toBe('true'),
     );
+    await waitFor(() => expect(files.count()).toBeGreaterThan(0));
     await advance(300);
     expect(shownNotes()).toEqual([]);
     await advance(WAIT_NOTE_DELAY_MS);
     expect(shownNotes()).toContain('Loading from your computer…');
-    second.release();
+    files.release();
     await waitFor(() => expect(shownNotes()).not.toContain('Loading from your computer…'));
   });
 

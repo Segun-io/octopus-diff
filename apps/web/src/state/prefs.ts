@@ -7,7 +7,7 @@
  * v2 (UX round 1): adds `version: 2`, `theme` becomes `{ mode, light, dark }`, plus density,
  *             defaultScope, autoAdvance, reviewOffDisplay, titleCount, confirmBulk, sidebar
  *             collapse state. Later additive fields (`pinned`, `folderStart`, `settle`,
- *             `settledOpen`, `fromMainOnly`, `activityOpen`) need no version bump: `normalizePrefs` fills their defaults.
+ *             `settledOpen`, `fromMainOnly`, `activityOpen`, `lastWorktree`) need no version bump: `normalizePrefs` fills their defaults.
  */
 import { type DiffScope, type ScopeKind, scopeFromQueryFields } from '@octopus-diff/contracts';
 import type { SettleOverride } from '../lib/model.ts';
@@ -19,8 +19,6 @@ export const PREFS_VERSION = 2;
 export type DiffMode = 'split' | 'unified';
 export type FileListLayout = 'list' | 'tree';
 export type Density = 'compact' | 'comfortable';
-/** How worktrees with review disabled appear in the Inbox. */
-export type ReviewOffDisplay = 'dim' | 'hide' | 'show';
 
 export interface Prefs {
   diffMode: DiffMode;
@@ -38,7 +36,6 @@ export interface Prefs {
   defaultScope: Exclude<ScopeKind, 'commit'>;
   /** After marking a file reviewed, move to the next unreviewed file. */
   autoAdvance: boolean;
-  reviewOffDisplay: ReviewOffDisplay;
   titleCount: boolean;
   /** Ask before a bulk "mark all" that touches more than one worktree. */
   confirmBulk: boolean;
@@ -54,6 +51,8 @@ export interface Prefs {
   settledOpen: boolean;
   /** The Activity strip under the diff is open (collapsed by default: the diff comes first). */
   activityOpen: boolean;
+  /** The worktree that was open last: where the app lands on the next load (`''`: none yet). */
+  lastWorktree: string;
 }
 
 export const DEFAULT_PREFS: Prefs = {
@@ -66,7 +65,6 @@ export const DEFAULT_PREFS: Prefs = {
   density: 'compact',
   defaultScope: 'branch',
   autoAdvance: false,
-  reviewOffDisplay: 'dim',
   titleCount: true,
   confirmBulk: true,
   collapsed: [],
@@ -75,6 +73,7 @@ export const DEFAULT_PREFS: Prefs = {
   settle: [],
   settledOpen: false,
   activityOpen: false,
+  lastWorktree: '',
 };
 
 function stringList(value: unknown): string[] {
@@ -126,8 +125,6 @@ export function normalizePrefs(raw: unknown): Prefs {
       oneOf(v.defaultScope, ['review', 'working', 'staged', 'unstaged', 'branch']) ??
       DEFAULT_PREFS.defaultScope,
     autoAdvance: bool(v.autoAdvance) ?? DEFAULT_PREFS.autoAdvance,
-    reviewOffDisplay:
-      oneOf(v.reviewOffDisplay, ['dim', 'hide', 'show']) ?? DEFAULT_PREFS.reviewOffDisplay,
     titleCount: bool(v.titleCount) ?? DEFAULT_PREFS.titleCount,
     confirmBulk: bool(v.confirmBulk) ?? DEFAULT_PREFS.confirmBulk,
     collapsed: stringList(v.collapsed),
@@ -139,6 +136,10 @@ export function normalizePrefs(raw: unknown): Prefs {
     settle: settleList(v.settle),
     settledOpen: bool(v.settledOpen) ?? DEFAULT_PREFS.settledOpen,
     activityOpen: bool(v.activityOpen) ?? DEFAULT_PREFS.activityOpen,
+    lastWorktree:
+      typeof v.lastWorktree === 'string' && v.lastWorktree.length <= 256
+        ? v.lastWorktree
+        : DEFAULT_PREFS.lastWorktree,
   };
 }
 
