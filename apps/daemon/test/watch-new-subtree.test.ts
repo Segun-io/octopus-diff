@@ -287,10 +287,19 @@ describe('new directories with subdirectories (issue #36)', { timeout: 30_000 },
     await t.watcher.setProject('p1', layout.common, [layout.worktree]);
     expect(t.count(layout.common)).toBe(1);
     expect(t.listDirty).toEqual([]);
-    // A nested ref directory created in one go subscribes the git dir again. A `git worktree add`
-    // that completed while the old subscription was released left no event behind, and a refs
-    // directory is not under `worktrees/`, so nothing else asks for a relist.
-    mkdirSync(path.join(layout.common, 'refs', 'heads', 'feat', 'x'), { recursive: true });
+    // A burst of creations in the git dir subscribes it again (synthetic events, so the test does
+    // not depend on what the OS reports for a nested `mkdir`). A `git worktree add` that completed
+    // while the old subscription was released left no event behind, and a refs directory is not
+    // under `worktrees/`, so nothing else asks for a relist.
+    const deliver = t.callbacks.get(layout.common);
+    if (!deliver) throw new Error('no subscription');
+    deliver(
+      null,
+      Array.from({ length: burstThreshold() }, (_, i) => ({
+        type: 'create' as const,
+        path: path.join(layout.common, 'refs', 'heads', `gone-${i}`),
+      })),
+    );
     await eventually(() => t.count(layout.common) >= 2, 10_000);
     await eventually(() => t.listDirty.some((d) => d.id === 'p1' && d.reason === 'git'), 10_000);
   });
