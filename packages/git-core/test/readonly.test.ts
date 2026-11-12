@@ -220,9 +220,34 @@ describe('read-only proof', () => {
     let reviewCalls = 0;
     let originCalls = 0;
     const noise = new Set<string>();
+    let snapshots = 0;
+    const blobKinds = new Set<string>();
     for (const wt of locators) {
       await core.getSummary(wt);
       await core.getSummary(wt, { defaultBranch: 'main' });
+      // Live feed (#37): the snapshot, then every blob id it carries (deleted, modified, staged,
+      // renamed files), by `readBlob`; and a tree, which it must refuse without reading.
+      const snapshot = (await core.getSummary(wt, { snapshot: true })).snapshot;
+      expect(snapshot).toBeDefined();
+      for (const entry of snapshot?.entries ?? []) {
+        snapshots += 1;
+        for (const oid of [entry.hH, entry.hI]) {
+          if (oid === null) continue;
+          const blob = await core.readBlob?.(wt, { oid }).catch((error: unknown) => {
+            // A submodule's commit id is not an object of the superproject; nothing else may fail.
+            if (isGitCoreError(error, 'not_found')) return null;
+            throw error;
+          });
+          if (blob) blobKinds.add(blob.kind);
+        }
+      }
+      const treeOid = fx
+        .git(wt.path, ['rev-parse', '--verify', '-q', 'HEAD^{tree}'], { allowFail: true })
+        .trim();
+      if (treeOid) {
+        const refused = await core.readBlob?.(wt, { oid: treeOid }).catch((e: unknown) => e);
+        expect(isGitCoreError(refused, 'invalid_argument')).toBe(true);
+      }
       await core.getWatchTargets(wt);
       const commits = await core.listCommits(wt, { limit: 5 });
       const scopes: DiffScope[] = [
@@ -293,6 +318,8 @@ describe('read-only proof', () => {
         }
       }
     }
+    expect(snapshots).toBeGreaterThan(10);
+    expect(blobKinds).toContain('text');
     expect(diffs).toBeGreaterThan(10);
     expect(reviewCalls).toBeGreaterThan(3);
     expect(originCalls).toBeGreaterThan(6);

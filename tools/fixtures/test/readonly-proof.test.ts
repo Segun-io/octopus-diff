@@ -78,6 +78,34 @@ describe('read-only proof harness', () => {
     expect(() => assertReadOnly(report)).not.toThrow();
   });
 
+  it('passes for the blob read of the live feed (cat-file -t, blob, -s by full oid)', async () => {
+    // The argv of git-core's `readBlob` (#37): the content of a tracked file that was deleted
+    // in the working tree, by the object id `git status` reports, in every worktree.
+    const proof = await startReadOnlyProof({
+      env: set.env,
+      targets: proofTargetsFromManifest(set.manifest),
+    });
+    const ro = ['--no-optional-locks'];
+    const env0 = { GIT_OPTIONAL_LOCKS: '0' };
+    let blobs = 0;
+    for (const project of set.manifest.projects) {
+      for (const worktree of project.worktrees.filter((w) => !w.bare && w.headSha)) {
+        const listing = await git(worktree.path, [...ro, 'ls-files', '-s', '-z'], env0);
+        const oid = /^\d+ ([0-9a-f]{40,64}) \d\t/.exec(listing.stdout.toString('latin1'))?.[1];
+        if (!oid) continue;
+        const type = await git(worktree.path, [...ro, 'cat-file', '-t', oid], env0);
+        if (type.stdout.toString().trim() !== 'blob') continue;
+        await git(worktree.path, [...ro, 'cat-file', 'blob', oid], env0);
+        await git(worktree.path, [...ro, 'cat-file', '-s', oid], env0);
+        blobs += 1;
+      }
+    }
+    expect(blobs).toBeGreaterThan(3);
+    const report = await proof.finish();
+    expect(report.violations).toEqual([]);
+    expect(report.ok).toBe(true);
+  });
+
   it('catches a plain `git status` that refreshes the index (stat-dirty bait)', async () => {
     const target = proofTargetsFromManifest(set.manifest).filter((t) => t.name === 'kitchen-sink');
     const proof = await startReadOnlyProof({ env: set.env, targets: target });

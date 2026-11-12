@@ -11,6 +11,7 @@ import type {
   Worktree,
   WorktreeSummary,
 } from './domain.js';
+import type { BlobRead, BlobReadOptions, SummarySnapshot } from './live.js';
 import type { DiffScope } from './scope.js';
 
 /**
@@ -45,8 +46,12 @@ export interface GitCore {
    */
   scan(root: string, options: ScanOptions): Promise<ScanResult>;
 
-  /** Cheap status summary for one worktree (see `WorktreeSummary`). */
-  getSummary(worktree: WorktreeLocator, options?: ScopeOptions): Promise<WorktreeSummary>;
+  /**
+   * Cheap status summary for one worktree (see `WorktreeSummary`). With `options.snapshot` the
+   * result also carries the per-file snapshot the summary computed anyway (no extra git process);
+   * without it the result is exactly what it was before the option existed.
+   */
+  getSummary(worktree: WorktreeLocator, options?: SummaryOptions): Promise<SummaryResult>;
 
   /** Changed files in `scope`, with per-file line counts and `patchHash`. */
   listChangedFiles(
@@ -136,9 +141,31 @@ export interface GitCore {
    */
   readFileOrigins?(worktree: WorktreeLocator, options: FileOriginsOptions): Promise<FileOrigins>;
 
+  /**
+   * One blob by full object id, size-capped (live feed, #37): `cat-file -t` must say `blob`, then
+   * `cat-file blob`. The id comes from a snapshot entry (`hI` / `hH` of a deleted tracked file, so
+   * its last content stays readable after a commit or reset until `git gc`). Rejects with
+   * `invalid_argument` for anything but a full object id or an object that is not a blob, and
+   * `not_found` for an unknown or collected id. Binary and oversized blobs come back flagged
+   * without content. Untracked files have no object id and are never read from here. Optional
+   * (test doubles, older implementations).
+   */
+  readBlob?(worktree: WorktreeLocator, options: BlobReadOptions): Promise<BlobRead>;
+
   /** Kills in-flight git processes and rejects queued work. */
   dispose(): Promise<void>;
 }
+
+export interface SummaryOptions extends ScopeOptions {
+  /**
+   * Also return the per-file snapshot (`SummaryResult.snapshot`). `true` = the default cap
+   * (`SNAPSHOT_MAX_ENTRIES_DEFAULT`); `{ maxEntries }` sets it (1..`SNAPSHOT_MAX_ENTRIES_LIMIT`).
+   */
+  snapshot?: boolean | { maxEntries?: number };
+}
+
+/** `WorktreeSummary`, plus `snapshot` when `SummaryOptions.snapshot` asked for it. */
+export type SummaryResult = WorktreeSummary & { snapshot?: SummarySnapshot };
 
 /** A file to classify: the fields of a listed `GitChangedFile` that `readFileOrigins` reads. */
 export type FileOriginInput = Pick<
