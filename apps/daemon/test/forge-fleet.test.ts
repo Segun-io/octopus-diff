@@ -237,23 +237,26 @@ describe('simulated fleets: forge queries per scenario (fake clock, fake client)
       // Startup: the daemon starts, every project is looked up once.
       service.start();
       await advance(120_000 - 1000);
-      const startup = { ...client.total };
-      record(name, 'startup (first 2 min)', startup);
+      record(name, 'startup (first 2 min)', { ...client.total });
 
-      // Idle hour: nobody is looking (no browser, no events), the poll keeps running.
+      // Idle hour: no browser is looking (the tab is hidden or closed), nothing is edited.
+      service.focusChanged(false, null);
       const before = { ...client.total };
       await advance(HOUR);
-      record(name, 'idle hour (no browser)', {
+      const idle = {
         queries: client.total.queries - before.queries,
         points: client.total.points - before.points,
-      });
+      };
+      record(name, 'idle hour (no browser)', idle);
 
-      // Active hour: a user works with the Request tab open on a running-checks PR (the web polls
-      // the detail every 45 s and the conversation is shown), and agents edit three worktrees
-      // every 5 s (each edit is a `worktree.changed` event).
+      // Active hour: a user looks at project 0 with the Request tab open on a PR whose checks are
+      // running (the web polls the detail every 45 s and the conversation is shown, the focus is
+      // re-reported every 5 min), and agents edit three worktrees every 5 s (each edit is a
+      // `worktree.changed` event).
       const mark = { ...client.total };
       const first = items[0]?.worktrees[1]?.worktree.id ?? '';
       for (let t = 0; t < HOUR; t += 5000) {
+        if (t % 300_000 === 0) service.focusChanged(true, 'p0');
         for (const p of items.slice(0, 3)) {
           emit({
             type: 'worktree.changed',
@@ -269,12 +272,18 @@ describe('simulated fleets: forge queries per scenario (fake clock, fake client)
         }
         await vi.advanceTimersByTimeAsync(5000);
       }
-      record(name, 'active hour (focused, edits, Request tab)', {
+      const active = {
         queries: client.total.queries - mark.queries,
         points: client.total.points - mark.points,
-      });
+      };
+      record(name, 'active hour (focused, edits, Request tab)', active);
       await service.close();
-      expect(client.total.queries).toBeGreaterThan(0);
+
+      // Budgets the strategy promises (DECISIONS #197): no browser never costs more than 300 points
+      // an hour per fleet, and a busy hour stays under the 1 500-point background ceiling plus
+      // the user's own requests (detail + conversation about 40 + 40, the hot project 60).
+      expect(idle.points).toBeLessThanOrEqual(330);
+      expect(active.points).toBeLessThanOrEqual(1100 + 40 + 40 + 60 + 120);
     },
     120_000,
   );

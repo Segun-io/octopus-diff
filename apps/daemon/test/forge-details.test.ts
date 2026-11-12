@@ -221,6 +221,7 @@ describe('request detail and repository routes (fake git-core, fake gh)', () => 
       internal: {
         forges: {
           client: forge,
+          checkAgainSkipMs: 0,
           debounceMs: 20,
           followUpMs: [250],
           readSshConfig: async () => null,
@@ -512,7 +513,14 @@ describe('request detail and repository routes (fake git-core, fake gh)', () => 
       stateDir: await tempDir(),
       webRoot,
       projects: [alpha.mainPath],
-      internal: { forges: { client: forge, debounceMs: 20, readSshConfig: async () => null } },
+      internal: {
+        forges: {
+          client: forge,
+          checkAgainSkipMs: 0,
+          debounceMs: 20,
+          readSshConfig: async () => null,
+        },
+      },
     });
     await client(withUi).getForges();
     await eventually(async () => {
@@ -627,7 +635,13 @@ describe('a changed push destination reaches the forge service through the real 
       internal: {
         // The native watcher, as in the other real-git watch tests.
         subscribe: async (dir, fn, opts) => parcelWatcher.subscribe(dir, fn, opts),
-        forges: { client: forge, debounceMs: 20, followUpMs: [], readSshConfig: async () => null },
+        forges: {
+          client: forge,
+          checkAgainSkipMs: 0,
+          debounceMs: 20,
+          followUpMs: [],
+          readSshConfig: async () => null,
+        },
       },
     });
     onCleanup(() => daemon.close());

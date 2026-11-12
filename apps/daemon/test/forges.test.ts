@@ -140,7 +140,14 @@ describe('forge service (fake git-core, fake gh/glab)', () => {
       fake,
       stateDir: await tempDir(),
       projects: [alpha.mainPath, beta.mainPath, gamma.mainPath],
-      internal: { forges: { client: forge, debounceMs: 20, readSshConfig: async () => null } },
+      internal: {
+        forges: {
+          client: forge,
+          checkAgainSkipMs: 0,
+          debounceMs: 20,
+          readSshConfig: async () => null,
+        },
+      },
     });
     api = client(daemon);
   });
@@ -249,7 +256,7 @@ describe('forge service without remotes', () => {
       fake,
       stateDir: await tempDir(),
       projects: [repo.mainPath],
-      internal: { forges: { client: forge, debounceMs: 20 } },
+      internal: { forges: { client: forge, checkAgainSkipMs: 0, debounceMs: 20 } },
     });
     const api = client(daemon);
     await eventually(async () => {

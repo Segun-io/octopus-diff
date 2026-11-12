@@ -175,8 +175,10 @@ export const startDaemon = (async (options: DaemonOptions = {}): Promise<Daemon>
 
   // The forge service is built after the core (it needs it); git changes reach it through this.
   let forgeGitChanged: ((projectId: string) => void) | undefined;
+  let forgeFocused: ((visible: boolean, projectId: string | null) => void) | undefined;
   const core = new DaemonCore({
     onGitChange: (projectId) => forgeGitChanged?.(projectId),
+    onFocus: (visible, projectId) => forgeFocused?.(visible, projectId),
     gitCore,
     store,
     hub,
@@ -222,6 +224,9 @@ export const startDaemon = (async (options: DaemonOptions = {}): Promise<Daemon>
         });
 
   forgeGitChanged = forges ? (projectId) => forges.gitChanged(projectId) : undefined;
+  forgeFocused = forges
+    ? (visible, projectId) => forges.focusChanged(visible, projectId)
+    : undefined;
 
   const repositories = new RepositoryInfoService({
     core,

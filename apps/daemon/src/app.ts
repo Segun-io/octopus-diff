@@ -448,7 +448,7 @@ export function createApp(deps: AppDeps): Hono {
         text.trim() === '' ? {} : await jsonFrom(c, text),
         'request body',
       );
-      await forges.refresh(request.projectIds, { force: true });
+      await forges.checkAgain(request.projectIds);
       const body: ForgesResponse = await forges.response();
       return c.json(body);
     });

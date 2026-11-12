@@ -93,6 +93,12 @@ export interface CoreOptions {
    * push configuration changes, which the state hash does not cover.
    */
   onGitChange?: (projectId: string) => void;
+  /**
+   * Called on every `PUT /api/focus`: `visible` is false when the UI reports nothing focused (its
+   * tab is hidden), else `projectId` is the project of the focused worktree or the open Overview.
+   * The forge service paces its polling by it (DECISIONS #197).
+   */
+  onFocus?: (visible: boolean, projectId: string | null) => void;
 }
 
 interface WorktreeEntry {
@@ -230,6 +236,7 @@ export class DaemonCore {
   readonly #hub: EventHub;
   readonly #log: Logger;
   readonly #onGitChange: ((projectId: string) => void) | undefined;
+  readonly #onFocus: ((visible: boolean, projectId: string | null) => void) | undefined;
   readonly #version: string;
   readonly #startedAt: Date;
   readonly #now: () => Date;
@@ -275,6 +282,7 @@ export class DaemonCore {
     this.#hub = options.hub;
     this.#log = options.logger;
     this.#onGitChange = options.onGitChange;
+    this.#onFocus = options.onFocus;
     this.#version = options.version;
     this.#startedAt = options.startedAt;
     this.#now = options.now ?? (() => new Date());
@@ -1121,6 +1129,7 @@ export class DaemonCore {
     }
     project ??= projectId === null ? undefined : this.#projects.get(projectId);
     if (project) this.#openProject(project);
+    this.#onFocus?.(worktreeId !== null || projectId !== null, project?.row.id ?? null);
   }
 
   // --- files, diffs, commits -------------------------------------------------------------------
