@@ -8,6 +8,7 @@ import {
   type WorktreeSummary,
 } from '@octopus-diff/contracts';
 import { bstrFromBuffer, bstrToUtf8, compareBstr } from './bstr.js';
+import { aheadBehind as countAheadBehind } from './commits.js';
 import type { GitContext, RepoInfo } from './context.js';
 import type { DiffDeps } from './diff.js';
 import {
@@ -192,8 +193,10 @@ async function bareSummary(
 }
 
 /**
- * Cheap summary: one `git status`, plus `git diff --numstat` only when tracked files changed,
- * plus `for-each-ref` + `rev-list --count` only when there is no usable upstream.
+ * Cheap summary: one `git status`, plus `git diff --numstat` only when tracked files changed.
+ * Without a usable upstream, ahead/behind is counted against the default branch (resolved from
+ * the ref files), shared per project and commit (`commits.ts`: one `for-each-ref` per project,
+ * or `rev-list --count` on old git).
  *
  * stateHash covers the raw status output (which includes HEAD/index object ids of every
  * changed entry, the branch, upstream and ahead/behind), the numstat output, the
@@ -281,19 +284,19 @@ export async function getSummary(
     if (!base || (branchName !== null && base.ref === `refs/heads/${branchName}`)) {
       return { ref: null, oid: null, ahead: null, behind: null };
     }
-    const counts = await ctx.git(repo, [
-      'rev-list',
-      '--left-right',
-      '--count',
-      `${headSha}...${base.oid}`,
-      '--',
-    ]);
-    const [ahead, behind] = counts.stdout.toString('utf8').trim().split(/\s+/).map(Number);
+    // Shared by every worktree of the project at the same commit (#29).
+    const counts = await countAheadBehind(
+      ctx,
+      repo,
+      headSha,
+      base.oid,
+      branchName === null ? null : `refs/heads/${branchName}`,
+    );
     return {
       ref: base.name,
       oid: base.oid,
-      ahead: Number.isFinite(ahead) ? (ahead as number) : null,
-      behind: Number.isFinite(behind) ? (behind as number) : null,
+      ahead: counts?.ahead ?? null,
+      behind: counts?.behind ?? null,
     };
   })();
 

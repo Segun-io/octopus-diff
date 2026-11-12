@@ -2,12 +2,13 @@ import {
   type DiffScope,
   DiffScopeSchema,
   GitCoreError,
-  isGitCoreError,
   RefNameSchema,
   type ScopeOptions,
 } from '@octopus-diff/contracts';
+import { commitParents, mergeBase, verifyCommit } from './commits.js';
 import type { GitContext, RepoInfo } from './context.js';
 import { detectDefaultBranchRef, type ResolvedRef, resolveRefName } from './discovery.js';
+import { OID, readHeadFromFiles } from './ref-files.js';
 
 /**
  * Flags on every `git diff` git-core runs, so that output does not depend on user or repo
@@ -88,8 +89,13 @@ export async function resolveDefaultBranch(
   return detectDefaultBranchRef(ctx, repo);
 }
 
-/** Full HEAD commit id, or null for an unborn branch. */
+/**
+ * Full HEAD commit id, or null for an unborn branch. From `<gitDir>/HEAD` and the ref files
+ * when they can tell (#29), else `rev-parse`.
+ */
 export async function resolveHead(ctx: GitContext, repo: RepoInfo): Promise<string | null> {
+  const fromFiles = await readHeadFromFiles(repo.gitDir, repo.commonDir);
+  if (fromFiles !== undefined) return fromFiles.sha;
   const result = await ctx.git(repo, ['rev-parse', '--quiet', '--verify', 'HEAD^{commit}'], {
     okExitCodes: [0, 1],
   });
@@ -99,6 +105,8 @@ export async function resolveHead(ctx: GitContext, repo: RepoInfo): Promise<stri
 
 /** Full id of the commit `rev` names (`rev-parse --verify <rev>^{commit}`); `not_found` if none. */
 export async function resolveCommit(ctx: GitContext, repo: RepoInfo, rev: string): Promise<string> {
+  // A full object id names the same commit forever: memoized per repository (#29).
+  if (OID.test(rev)) return verifyCommit(ctx, repo, rev);
   const result = await ctx.git(
     repo,
     ['rev-parse', '--quiet', '--verify', '--end-of-options', `${rev}^{commit}`],
@@ -183,11 +191,8 @@ export async function planScope(
           ? worktreeAgainst('branch', 'HEAD')
           : { ...base, kind: 'branch', revArgs: [], empty: true };
       }
-      const mergeBase = await ctx.git(repo, ['merge-base', head, baseRef.oid], {
-        okExitCodes: [0, 1],
-      });
-      const mb = mergeBase.stdout.toString('utf8').trim();
-      if (mergeBase.exitCode !== 0 || !mb) {
+      const mb = await mergeBase(ctx, repo, head, baseRef.oid);
+      if (!mb) {
         throw new GitCoreError('not_found', `no merge base between HEAD and ${baseRef.name}`);
       }
       // A bare repository has no working tree: "All on branch" is the committed part.
@@ -195,23 +200,7 @@ export async function planScope(
       return { ...base, kind: 'branch', revArgs: [mb, head] };
     }
     case 'commit': {
-      let output: string;
-      try {
-        const result = await ctx.git(repo, [
-          'rev-list',
-          '--parents',
-          '--max-count=1',
-          `${scope.sha}^{commit}`,
-          '--',
-        ]);
-        output = result.stdout.toString('utf8').trim();
-      } catch (error) {
-        if (isGitCoreError(error, 'git_failed')) {
-          throw new GitCoreError('not_found', `commit not found: ${scope.sha}`, error.details);
-        }
-        throw error;
-      }
-      const [sha, parent] = output.split(' ');
+      const [sha, parent] = await commitParents(ctx, repo, scope.sha);
       if (!sha) throw new GitCoreError('not_found', `commit not found: ${scope.sha}`);
       return { ...base, kind: 'commit', revArgs: [parent ?? repo.emptyTree, sha] };
     }

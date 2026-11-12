@@ -25,6 +25,7 @@ import { exists, realpathOrSelf } from './fs-utils.js';
 import { hashId } from './hash.js';
 import { forEachRefFormat, parseForEachRef } from './parse/refs.js';
 import { parseWorktreeList, type WorktreeRecord } from './parse/worktrees.js';
+import { readRefOid, readSymrefTarget, refCandidates, resolveRefFromFiles } from './ref-files.js';
 
 /** Hard cap on directories visited by one scan. */
 export const SCAN_MAX_DIRS = 100_000;
@@ -65,6 +66,9 @@ export async function resolveProject(ctx: GitContext, input: string): Promise<Re
     gitDir: repo.commonDir,
     toplevel: null,
   };
+  // What git just discovered also answers later `repo()` lookups of the same paths (#29).
+  ctx.seedRepo(dir, repo);
+  await ctx.seedProjectRepo(repo);
   const [worktrees, detectedDefaultBranch] = await Promise.all([
     listWorktreesIn(ctx, projectRepo),
     detectDefaultBranchIn(ctx, projectRepo),
@@ -146,11 +150,24 @@ async function listWorktreesIn(ctx: GitContext, repo: RepoInfo): Promise<Worktre
   );
   // Two records for the same directory (a copied admin dir): keep the first.
   const seen = new Set<string>();
-  return worktrees.filter((worktree) => {
+  const unique = worktrees.filter((worktree) => {
     if (seen.has(worktree.id)) return false;
     seen.add(worktree.id);
     return true;
   });
+  // Per-project facts for the worktrees' own lookups (#29): their repository info, derived from
+  // the files git just listed (no `rev-parse` per worktree), and the branches checked out, so
+  // one `for-each-ref` can count ahead/behind for all of them.
+  ctx.noteCheckedOutBranches(
+    repo.commonDir,
+    unique.flatMap((w) => (w.branch && !w.missing ? [`refs/heads/${w.branch}`] : [])),
+  );
+  await Promise.all(
+    unique
+      .filter((w) => !w.bare && !w.missing && !w.prunable)
+      .map((w) => ctx.seedWorktreeRepo(w.path, repo)),
+  );
+  return unique;
 }
 
 /**
@@ -224,6 +241,8 @@ export async function detectDefaultBranchRef(
   ctx: GitContext,
   repo: RepoInfo,
 ): Promise<ResolvedRef | null> {
+  const fromFiles = await detectDefaultFromFiles(ctx, repo);
+  if (fromFiles !== undefined) return fromFiles;
   const result = await ctx.git(repo, [
     'for-each-ref',
     `--format=${forEachRefFormat(['refname', 'symref', 'objectname'])}`,
@@ -254,6 +273,42 @@ export async function detectDefaultBranchRef(
   return null;
 }
 
+/**
+ * `detectDefaultBranchRef` from the ref files (no git process, #29); undefined when they cannot
+ * tell, and then the `for-each-ref` above decides. Same rules: a dangling `origin/HEAD` is
+ * skipped, as `for-each-ref` skips broken refs.
+ */
+async function detectDefaultFromFiles(
+  ctx: GitContext,
+  repo: RepoInfo,
+): Promise<ResolvedRef | null | undefined> {
+  const { commonDir } = repo;
+  let originHead = await readSymrefTarget(commonDir, 'refs/remotes/origin/HEAD');
+  if (originHead === undefined) return undefined;
+  if (originHead !== null) {
+    const target = await readRefOid(commonDir, originHead);
+    if (target === undefined) return undefined;
+    if (target === null) originHead = null;
+  }
+  if (originHead?.startsWith('refs/remotes/origin/')) {
+    const short = originHead.slice('refs/remotes/origin/'.length);
+    const local = `refs/heads/${short}`;
+    const localOid = await readRefOid(commonDir, local);
+    if (localOid === undefined) return undefined;
+    if (localOid && RefNameSchema.safeParse(short).success) {
+      return { name: short, ref: local, oid: localOid };
+    }
+    const remote = await resolveRefName(ctx, repo, `origin/${short}`);
+    if (remote) return remote;
+  }
+  for (const name of ['main', 'master', 'trunk']) {
+    const oid = await readRefOid(commonDir, `refs/heads/${name}`);
+    if (oid === undefined) return undefined;
+    if (oid) return { name, ref: `refs/heads/${name}`, oid };
+  }
+  return null;
+}
+
 async function detectDefaultBranchIn(ctx: GitContext, repo: RepoInfo): Promise<string | null> {
   return (await detectDefaultBranchRef(ctx, repo))?.name ?? null;
 }
@@ -261,6 +316,8 @@ async function detectDefaultBranchIn(ctx: GitContext, repo: RepoInfo): Promise<s
 /**
  * Resolves a user-facing ref name (already validated by `RefNameSchema`) to a full ref:
  * exact `refs/...`, else `refs/heads/<n>`, `refs/remotes/<n>`, `refs/tags/<n>` in that order.
+ * The one base lookup of git-core (branch scope, summary ahead/behind, review range and
+ * `readBranchBase`): the ref files first, `for-each-ref` when they cannot tell (`ref-files.ts`).
  */
 export async function resolveRefName(
   ctx: GitContext,
@@ -270,9 +327,9 @@ export async function resolveRefName(
   if (!RefNameSchema.safeParse(name).success) {
     throw new GitCoreError('invalid_argument', `invalid ref name: ${name}`);
   }
-  const candidates = name.startsWith('refs/')
-    ? [name]
-    : [`refs/heads/${name}`, `refs/remotes/${name}`, `refs/tags/${name}`];
+  const fromFiles = await resolveRefFromFiles(repo.commonDir, name);
+  if (fromFiles !== undefined) return fromFiles;
+  const candidates = refCandidates(name);
   const result = await ctx.git(repo, [
     'for-each-ref',
     `--format=${forEachRefFormat(['refname', 'objectname'])}`,

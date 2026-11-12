@@ -7,7 +7,7 @@ import {
   isGitCoreError,
   type Logger,
 } from '@octopus-diff/contracts';
-import { readFileHead, realpathOrSelf } from './fs-utils.js';
+import { LruCache, readFileHead, realpathOrSelf } from './fs-utils.js';
 import type { GitLocation, GitRunner, GitRunOptions, GitRunResult } from './runner/runner.js';
 import { MIN_GIT_VERSION, parseGitVersion } from './version.js';
 
@@ -48,9 +48,9 @@ export interface RepoInfo {
   objectFormat: ObjectFormat;
   emptyTree: string;
   /**
-   * Config scan (filter-driver overrides, attributes file), computed at most once per GitCore
-   * operation: `repo()` returns a fresh object per call, so nothing is reused across
-   * operations (config may change).
+   * Config scan (filter-driver overrides, attributes file), read at most once per GitCore
+   * operation (`repo()` returns a fresh object per call). Across operations it is reused only
+   * while every config file's stat signature is unchanged (`GitContext.configScan`).
    */
   configScan?: Promise<ConfigScan>;
 }
@@ -73,6 +73,24 @@ interface CachedRepo {
 // every refresh after a quiet period, and every 60 s worktree relist, paid one extra
 // `rev-parse` spawn.
 const REPO_TTL_MS = 5 * 60_000;
+/**
+ * A config scan is reused across operations for at most this long, even when no config file we
+ * know of changed: git may read a system file in a place git-core does not stat (a packager's
+ * prefix). Those are trusted scopes, so this only bounds how long a changed trusted value can be
+ * missed; untrusted (repository) files are always in the signature.
+ */
+const CONFIG_SCAN_TTL_MS = 60_000;
+/**
+ * A config file changed this recently (or stamped in the future) is not cached: on a file system
+ * with coarse timestamps a second write within the same tick would keep the same signature
+ * (git's "racy" problem). Two seconds covers FAT's 2 s mtime resolution.
+ */
+const CONFIG_RACY_NS = 2_000_000_000n;
+const CONFIG_SCAN_CACHE_MAX = 512;
+/** Keys whose presence means config depends on more than the files we stat (`include*`). */
+const INCLUDE_KEY = /^include(if)?\./;
+const CONFIG_SCAN_REGEX = '^filter\\.|^core\\.attributesfile$|^include\\.|^includeif\\.';
+const IMMUTABLE_CACHE_MAX = 20_000;
 const FILTER_KEY = /^filter\.(.+)\.(clean|smudge|process|required)$/;
 const TRUSTED_SCOPES = new Set(['system', 'global', 'command']);
 
@@ -80,6 +98,24 @@ const TRUSTED_SCOPES = new Set(['system', 'global', 'command']);
 export class GitContext {
   private versionPromise: Promise<GitVersion> | null = null;
   private readonly repos = new Map<string, CachedRepo>();
+  private readonly resolving = new Map<string, Promise<RepoInfo>>();
+  /** Config scans by `<commonDir>\0<signatures of every config file git reads>` (#29). */
+  private readonly configScans = new LruCache<string, { at: number; scan: ConfigScan }>(
+    CONFIG_SCAN_CACHE_MAX,
+  );
+  /**
+   * Results that cannot change for a given key: facts about commits, keyed by the common dir
+   * and the commit ids (`merge-base`, ancestry, ahead/behind, review ranges). Objects are
+   * immutable; only positive results are stored (a commit that is missing now may be fetched).
+   */
+  private readonly configScanRuns = new Map<
+    string,
+    Promise<{ scan: ConfigScan; includes: boolean }>
+  >();
+  private readonly immutable = new LruCache<string, unknown>(IMMUTABLE_CACHE_MAX);
+  private readonly immutableRuns = new Map<string, Promise<unknown>>();
+  /** Branch refs checked out in a project's worktrees, from the last `worktree list` (#29). */
+  private readonly checkedOut = new Map<string, readonly string[]>();
 
   constructor(
     readonly runner: GitRunner,
@@ -119,18 +155,116 @@ export class GitContext {
     return version;
   }
 
-  /** Resolves the repository for a worktree root or bare git dir (cached). */
+  /** Resolves the repository for a worktree root or bare git dir (cached, single-flight). */
   async repo(cwd: string): Promise<RepoInfo> {
     assertAbsolute(cwd);
     const cached = this.repos.get(cwd);
     if (cached && Date.now() - cached.at < REPO_TTL_MS) return { ...cached.info };
-    const info = await this.resolveRepo(cwd);
-    this.repos.set(cwd, { info, at: Date.now() });
-    return { ...info };
+    let run = this.resolving.get(cwd);
+    if (!run) {
+      run = this.resolveRepo(cwd).then((info) => {
+        this.repos.set(cwd, { info, at: Date.now() });
+        return info;
+      });
+      const pending = run;
+      this.resolving.set(cwd, pending);
+      void pending.then(
+        () => this.resolving.delete(cwd),
+        () => this.resolving.delete(cwd),
+      );
+    }
+    return { ...(await run) };
   }
 
   forgetRepo(cwd: string): void {
     this.repos.delete(cwd);
+  }
+
+  /** Records what git's discovery found for `cwd` (from `resolveProject`). */
+  seedRepo(cwd: string, info: RepoInfo): void {
+    const { configScan: _scan, ...plain } = info;
+    this.repos.set(cwd, { info: plain, at: Date.now() });
+  }
+
+  /**
+   * Records the project-level repository (`repo(commonDir)`: the common dir as a git dir, no
+   * work tree) from a repository git just discovered, unless the common dir holds a `.git`
+   * entry of its own (then git's discovery from it could find something else).
+   */
+  async seedProjectRepo(found: RepoInfo): Promise<void> {
+    const { commonDir } = found;
+    if ((await dotGitTarget(commonDir)) !== null) return;
+    this.seedRepo(commonDir, {
+      cwd: commonDir,
+      toplevel: null,
+      gitDir: commonDir,
+      commonDir,
+      bare: true,
+      objectFormat: found.objectFormat,
+      emptyTree: found.emptyTree,
+    });
+  }
+
+  /**
+   * Records the repository of a worktree that `git worktree list` reported for `project`,
+   * derived from files instead of a `rev-parse` per worktree (#29): `<path>/.git` refers to its
+   * git dir, whose `commondir` file (linked worktrees) must lead back to the project's common
+   * dir. Skipped (left to git's discovery) when anything differs, when the worktree is not
+   * owned by this user (git's `safe.directory` check must stay git's decision), or on Windows.
+   */
+  async seedWorktreeRepo(worktreePath: string, project: RepoInfo): Promise<void> {
+    const cached = this.repos.get(worktreePath);
+    if (cached && Date.now() - cached.at < REPO_TTL_MS) return;
+    const info = await deriveWorktreeRepo(worktreePath, project);
+    if (info) this.repos.set(worktreePath, { info, at: Date.now() });
+  }
+
+  noteCheckedOutBranches(commonDir: string, refs: readonly string[]): void {
+    this.checkedOut.set(commonDir, [...new Set(refs)].sort());
+  }
+
+  /** Branch refs checked out in the project's worktrees (as of the last listing). */
+  checkedOutBranches(commonDir: string): readonly string[] {
+    return this.checkedOut.get(commonDir) ?? [];
+  }
+
+  /**
+   * A cached result that can never change for `key` (see `immutable`), computed once and
+   * single-flight. `compute` returning `undefined` means "unknown": nothing is stored.
+   */
+  async memo<T>(key: string, compute: () => Promise<T | undefined>): Promise<T | undefined> {
+    const hit = this.immutable.get(key);
+    if (hit !== undefined) return hit as T;
+    const running = this.immutableRuns.get(key);
+    if (running) return (await running) as T | undefined;
+    const run = compute().then((value) => {
+      if (value !== undefined) this.immutable.set(key, value);
+      return value;
+    });
+    this.immutableRuns.set(key, run);
+    try {
+      return await run;
+    } finally {
+      this.immutableRuns.delete(key);
+    }
+  }
+
+  /** Stores an immutable fact found as a by-product (e.g. one row of a batched query). */
+  remember(key: string, value: unknown): void {
+    if (value !== undefined) this.immutable.set(key, value);
+  }
+
+  /** A stored immutable fact, if any. */
+  recall<T>(key: string): T | undefined {
+    return this.immutable.get(key) as T | undefined;
+  }
+
+  /** Drops every cache (dispose). */
+  clearCaches(): void {
+    this.repos.clear();
+    this.configScans.clear();
+    this.immutable.clear();
+    this.checkedOut.clear();
   }
 
   /**
@@ -213,22 +347,117 @@ export class GitContext {
    * driver defined in repository-local config (`local`/`worktree` scope) is untrusted: it is
    * reset to the value from system/global config if there is one (so e.g. git-lfs keeps
    * working), else emptied and made non-required, which disables it. Entries are passed via
-   * `GIT_CONFIG_COUNT`, which overrides repository config. Read once per operation, not
-   * cached: config can include other files and depend on HEAD (`includeIf onbranch:`).
+   * `GIT_CONFIG_COUNT`, which overrides repository config. Read once per operation; reused
+   * across operations only under the conditions of `configScan`.
    */
   async filterOverrides(repo: RepoInfo): Promise<Array<[string, string]>> {
     return (await this.configScan(repo)).overrides;
   }
 
-  /** The per-operation config read (one `git config --get-regexp`). */
+  /**
+   * The config read (one `git config --get-regexp`), at most once per operation. Repository
+   * config is untrusted, so a scan is reused by a later operation (#29) only when:
+   * - every config file git reads for this worktree has the same stat signature (size, mtime and
+   *   ctime in ns, inode, mode, or "absent") as when the scan was read: system, global, the
+   *   common dir's `config` and the worktree's `config.worktree`; the signatures are taken
+   *   *before* git reads, so a write during the read changes them;
+   * - none of those files changed in the last two seconds (or is stamped in the future);
+   * - the scan saw no `include.*` / `includeIf.*` key in any scope: included files (and
+   *   `onbranch:` / `gitdir:` conditions) are not covered by the signatures, so such a
+   *   repository is re-read on every operation, as before;
+   * - it is younger than `CONFIG_SCAN_TTL_MS`.
+   * Any stat error other than "absent" means no reuse. Worktrees of one project share a scan
+   * while their `config.worktree` files are absent (the usual case).
+   */
   configScan(repo: RepoInfo): Promise<ConfigScan> {
-    repo.configScan ??= this.readConfigScan(repo);
+    repo.configScan ??= this.cachedConfigScan(repo);
     return repo.configScan;
   }
 
-  private async readConfigScan(repo: RepoInfo): Promise<ConfigScan> {
+  private async cachedConfigScan(repo: RepoInfo): Promise<ConfigScan> {
+    const signature = await this.configSignature(repo);
+    if (signature === null) return (await this.readConfigScan(repo)).scan;
+    const key = `${repo.commonDir}\u0000${signature}`;
+    const hit = this.configScans.get(key);
+    if (hit && Date.now() - hit.at < CONFIG_SCAN_TTL_MS) return hit.scan;
+    // Worktrees of one project refreshing together share one read (same files, same key). A
+    // read that found `include*` keys is not shared: each operation then reads its own.
+    const running = this.configScanRuns.get(key);
+    if (running) {
+      const shared = await running;
+      return shared.includes ? (await this.readConfigScan(repo)).scan : shared.scan;
+    }
+    const at = Date.now();
+    const run = this.readConfigScan(repo);
+    this.configScanRuns.set(key, run);
+    try {
+      const { scan, includes } = await run;
+      if (!includes) this.configScans.set(key, { at, scan });
+      return scan;
+    } finally {
+      this.configScanRuns.delete(key);
+    }
+  }
+
+  /**
+   * Files git reads config from for `repo` (see `configScan`), as `[label, path]`. The label of
+   * the worktree's own `config.worktree` does not name its path, so worktrees of one project
+   * that have none share a key.
+   */
+  private configFiles(repo: RepoInfo): Array<[string, string]> {
+    const env = (name: string): string | undefined => this.runner.envValue(name) || undefined;
+    const files: string[] = [];
+    if (!/^(1|true|yes|on)$/i.test(env('GIT_CONFIG_NOSYSTEM') ?? '')) {
+      const system = env('GIT_CONFIG_SYSTEM');
+      if (system) files.push(system);
+      else {
+        files.push('/etc/gitconfig');
+        try {
+          files.push(
+            path.join(path.dirname(path.dirname(this.runner.binary())), 'etc', 'gitconfig'),
+          );
+        } catch {
+          // No resolvable binary: the run itself will fail.
+        }
+      }
+    }
+    const global = env('GIT_CONFIG_GLOBAL');
+    if (global) files.push(global);
+    else {
+      const home = env('HOME');
+      const xdg = env('XDG_CONFIG_HOME') ?? (home ? path.join(home, '.config') : undefined);
+      if (xdg) files.push(path.join(xdg, 'git', 'config'));
+      if (home) files.push(path.join(home, '.gitconfig'));
+    }
+    const labelled: Array<[string, string]> = files.map((file) => [file, file]);
+    labelled.push([path.join(repo.commonDir, 'config'), path.join(repo.commonDir, 'config')]);
+    labelled.push(['config.worktree', path.join(repo.gitDir, 'config.worktree')]);
+    return labelled;
+  }
+
+  /** Stat signatures of `configFiles`, or null when one cannot be trusted for reuse. */
+  private async configSignature(repo: RepoInfo): Promise<string | null> {
+    const files = this.configFiles(repo);
+    const now = BigInt(Date.now()) * 1_000_000n;
+    const parts = await Promise.all(
+      files.map(async ([label, file]): Promise<string | null> => {
+        if (!path.isAbsolute(file)) return null;
+        try {
+          const st = await stat(file, { bigint: true });
+          if (st.mtimeNs > now - CONFIG_RACY_NS || st.ctimeNs > now - CONFIG_RACY_NS) return null;
+          return `${label}\u0000${st.size}:${st.mtimeNs}:${st.ctimeNs}:${st.ino}:${st.mode}`;
+        } catch (error) {
+          const code = (error as NodeJS.ErrnoException).code;
+          return code === 'ENOENT' || code === 'ENOTDIR' ? `${label}\u0000-` : null;
+        }
+      }),
+    );
+    return parts.some((part) => part === null) ? null : parts.join('\u0000');
+  }
+
+  private async readConfigScan(repo: RepoInfo): Promise<{ scan: ConfigScan; includes: boolean }> {
     const result = await this.runner.run(
-      ['config', '--null', '--show-scope', '--get-regexp', '^filter\\.|^core\\.attributesfile$'],
+      ['config', '--null', '--show-scope', '--get-regexp', CONFIG_SCAN_REGEX],
       {
         cwd: repo.cwd,
         queueKey: repo.commonDir,
@@ -245,14 +474,57 @@ export class GitContext {
       });
     }
     const attributesFiles: string[] = [];
-    for (const token of output.split('\u0000')) {
+    let includes = false;
+    const tokens = output.split('\u0000');
+    for (let i = 0; i + 1 < tokens.length; i += 2) {
+      const token = tokens[i + 1] as string;
+      if (INCLUDE_KEY.test(token)) includes = true;
       if (token === 'core.attributesfile') attributesFiles.push('');
       else if (token.startsWith('core.attributesfile\n')) {
         attributesFiles.push(token.slice('core.attributesfile\n'.length));
       }
     }
-    return { overrides: entries, attributesFiles };
+    return { scan: { overrides: entries, attributesFiles }, includes };
   }
+}
+
+/** See `GitContext.seedWorktreeRepo`. */
+async function deriveWorktreeRepo(
+  worktreePath: string,
+  project: RepoInfo,
+): Promise<RepoInfo | null> {
+  if (typeof process.getuid !== 'function' || process.platform === 'win32') return null;
+  const gitDir = await dotGitTarget(worktreePath);
+  if (gitDir === null) return null;
+  let commonDir = gitDir;
+  if (gitDir !== project.commonDir) {
+    const content = await readSmallFile(path.join(gitDir, 'commondir'));
+    if (content === null) return null;
+    const text = content.toString('utf8').replace(/[\r\n]+$/, '');
+    if (text.length === 0 || text.includes('\n') || text.includes('\u0000')) return null;
+    commonDir = await realpathOrSelf(path.resolve(gitDir, text));
+  }
+  if (commonDir !== project.commonDir) return null;
+  const uid = process.getuid();
+  try {
+    const owners = await Promise.all(
+      [worktreePath, path.join(worktreePath, '.git'), gitDir].map(
+        async (p) => (await lstat(p)).uid,
+      ),
+    );
+    if (owners.some((owner) => owner !== uid)) return null;
+  } catch {
+    return null;
+  }
+  return {
+    cwd: worktreePath,
+    toplevel: worktreePath,
+    gitDir,
+    commonDir,
+    bare: false,
+    objectFormat: project.objectFormat,
+    emptyTree: project.emptyTree,
+  };
 }
 
 /** `--git-dir` (always) and `--work-tree` (when the repository has one) for `repo`. */

@@ -9,9 +9,11 @@ import {
   type WorktreeLocator,
 } from '@octopus-diff/contracts';
 import { bstrFromBuffer, decodeRepoPath } from './bstr.js';
+import { isAncestor, mergeBase } from './commits.js';
 import type { GitContext, RepoInfo } from './context.js';
 import type { ResolvedRef } from './discovery.js';
 import { LruCache } from './fs-utils.js';
+import { readHeadFromFiles } from './ref-files.js';
 import {
   CANONICAL_CONTEXT,
   DIFF_PINS,
@@ -56,8 +58,10 @@ function fullSha(value: unknown, what: string): string {
 // readReviewRange
 // ---------------------------------------------------------------------------------------------
 
-/** The full ref HEAD points at, or null when detached. */
+/** The full ref HEAD points at, or null when detached (from the files when they can tell). */
 async function headRef(ctx: GitContext, repo: RepoInfo): Promise<string | null> {
+  const fromFiles = await readHeadFromFiles(repo.gitDir, repo.commonDir);
+  if (fromFiles !== undefined) return fromFiles.ref;
   const result = await ctx.git(repo, ['symbolic-ref', '-q', 'HEAD'], { okExitCodes: [0, 1] });
   const ref = result.stdout.toString('utf8').trim();
   return result.exitCode === 0 && ref ? ref : null;
@@ -71,34 +75,54 @@ function isDefaultBranch(ref: string, defaultRef: ResolvedRef | null): boolean {
   return remote !== null && ref === `refs/heads/${remote[1]}`;
 }
 
-/** `merge-base a b`, or null when there is none (or an object is missing). */
-async function mergeBase(
-  ctx: GitContext,
-  repo: RepoInfo,
-  a: string,
-  b: string,
-): Promise<string | null> {
-  const result = await ctx.git(repo, ['merge-base', '--end-of-options', a, b], {
-    okExitCodes: [0, 1, 128],
-  });
-  const sha = result.stdout.toString('utf8').trim();
-  return result.exitCode === 0 && sha ? sha : null;
-}
+/** Ranges with at most this many commits are memoized (by common dir, base, head and limit). */
+const RANGE_MEMO_MAX_COMMITS = 5000;
 
-/** `merge-base --is-ancestor`: exit 0 yes, 1 no; a missing object (128) counts as no. */
-async function isAncestor(
+/** `rev-list --parents base..head`, at most `maxCommits` (+1 to detect truncation). */
+async function rangeCommits(
   ctx: GitContext,
   repo: RepoInfo,
-  ancestor: string,
+  base: string,
   head: string,
-): Promise<boolean> {
-  if (ancestor === head) return true;
-  const result = await ctx.git(
-    repo,
-    ['merge-base', '--is-ancestor', '--end-of-options', ancestor, head],
-    { okExitCodes: [0, 1, 128] },
-  );
-  return result.exitCode === 0;
+  maxCommits: number,
+): Promise<{ commits: ReviewRangeCommit[]; truncated: boolean }> {
+  const compute = async () => {
+    const result = await ctx.git(repo, [
+      'rev-list',
+      '--parents',
+      `--max-count=${maxCommits + 1}`,
+      '--end-of-options',
+      `${base}..${head}`,
+      '--',
+    ]);
+    let commits = result.stdout
+      .toString('utf8')
+      .split('\n')
+      .filter((line) => line.length > 0)
+      .map((line) => {
+        const [sha = '', ...parents] = line.split(' ');
+        return { sha, parents };
+      });
+    let truncated = false;
+    if (commits.length > maxCommits) {
+      truncated = true;
+      commits = commits.slice(0, maxCommits);
+    }
+    return { commits, truncated };
+  };
+  // Both ends are full commit ids (HEAD and a merge base / bookmark): the range never changes.
+  if (!FULL_SHA.test(base) || !FULL_SHA.test(head) || maxCommits > RANGE_MEMO_MAX_COMMITS) {
+    return compute();
+  }
+  const key = `range\u0000${repo.commonDir}\u0000${base}\u0000${head}\u0000${maxCommits}`;
+  const range = (await ctx.memo(key, compute)) as {
+    commits: ReviewRangeCommit[];
+    truncated: boolean;
+  };
+  return {
+    commits: range.commits.map((c) => ({ sha: c.sha, parents: [...c.parents] })),
+    truncated: range.truncated,
+  };
 }
 
 export async function readReviewRange(
@@ -169,26 +193,7 @@ export async function readReviewRange(
   let commits: ReviewRangeCommit[] = [];
   let truncated = false;
   if (base !== head) {
-    const result = await ctx.git(repo, [
-      'rev-list',
-      '--parents',
-      `--max-count=${maxCommits + 1}`,
-      '--end-of-options',
-      `${base}..${head}`,
-      '--',
-    ]);
-    commits = result.stdout
-      .toString('utf8')
-      .split('\n')
-      .filter((line) => line.length > 0)
-      .map((line) => {
-        const [sha = '', ...parents] = line.split(' ');
-        return { sha, parents };
-      });
-    if (commits.length > maxCommits) {
-      truncated = true;
-      commits = commits.slice(0, maxCommits);
-    }
+    ({ commits, truncated } = await rangeCommits(ctx, repo, base, head, maxCommits));
   }
   return { head, startsAtHead, bookmarkReachable, initial, base, commits, truncated };
 }

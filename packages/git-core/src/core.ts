@@ -212,6 +212,7 @@ export const createGitCore: CreateGitCore = (options: GitCoreOptions = {}): GitC
       reviewDeps.commitCache.clear();
       deps.untrackedCache.clear();
       deps.attributeCache.clear();
+      ctx.clearCaches();
       await runner.dispose();
     },
   };
