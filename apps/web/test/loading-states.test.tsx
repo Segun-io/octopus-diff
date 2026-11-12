@@ -127,6 +127,26 @@ describe('wait messages (pure)', () => {
     backend.setForgeSim({ budget: 'backoff', fetchedAgoMs: 180_000 });
     expect(forgeStale(backend.forges())?.held).toBe(true);
   });
+
+  it('a cold-start lookup with no forge named yet is a wait too (PR #76 review)', () => {
+    const backend = new MockBackend({ dataset: 'demo' });
+    const forges = backend.forges();
+    // The daemon answers `pending` with `forge: null` until it has worked out which forge a
+    // project's remotes are on.
+    const cold = {
+      ...forges,
+      projects: forges.projects.map((p) => ({ ...p, status: 'pending' as const, forge: null })),
+    };
+    const source = pendingForgeWait(cold);
+    expect(source).toMatchObject({ kind: 'forge', forge: [] });
+    expect(waitText(source as NonNullable<typeof source>)).toBe('Waiting for the forge…');
+    // Once the forge is named the note names it.
+    const first = forges.projects[0];
+    if (!first) throw new Error('no project');
+    expect(
+      pendingForgeWait({ ...cold, projects: [{ ...first, status: 'pending' as const }] }),
+    ).toMatchObject({ forge: [first.forge?.kind] });
+  });
 });
 
 function Probe({ active }: { active: boolean }) {
@@ -297,6 +317,8 @@ function setup(
     backend?: MockBackendOptions;
     ui?: Partial<UiState>;
     router?: MockRouterOptions;
+    /** Paths an older daemon does not have (answered 404). */
+    missing?: (path: string, method: string) => boolean;
   } = {},
 ): Harness {
   const backend = new MockBackend({ dataset: 'demo', ...opts.backend });
@@ -324,6 +346,14 @@ function setup(
     baseUrl: 'http://mock.local',
     fetch: (input, init) => {
       requests.push(`${init?.method ?? 'GET'} ${new URL(input).pathname}${new URL(input).search}`);
+      if (opts.missing?.(new URL(input).pathname, init?.method ?? 'GET')) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ error: { code: 'not_found', message: 'no such route' } }), {
+            status: 404,
+            headers: { 'content-type': 'application/json' },
+          }),
+        );
+      }
       return mockFetch(input, init);
     },
   });
@@ -665,6 +695,20 @@ describe('loading states in the app (#11)', () => {
     forge.release();
     local.release();
     await waitFor(() => expect(shownNotes()).toEqual([]));
+  });
+
+  it('an older daemon without the repository facts route shows nothing, not a skeleton that never ends (PR #76 review)', async () => {
+    const probe = new MockBackend({ dataset: 'demo' });
+    const { projectId } = requestWorktree(probe, 'github');
+    setup({
+      ui: { view: { kind: 'project', projectId } },
+      missing: (path, method) => method === 'GET' && path.endsWith('/repository'),
+    });
+    await screen.findByTestId(TEST_IDS.repoInfoLocal);
+    await advance(WAIT_NOTE_DELAY_MS * 3);
+    // The route answered 404: a finished answer, rendered as nothing.
+    expect(screen.queryByTestId(TEST_IDS.repoInfoForge)).toBeNull();
+    expect(shownNotes()).not.toContain('Waiting for GitHub…');
   });
 
   it('a folder overview names the local work behind its table', async () => {

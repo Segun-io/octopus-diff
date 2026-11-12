@@ -168,10 +168,14 @@ export function describeStale(input: {
   return null;
 }
 
-/** Forge projects whose request lookup is running or queued (status `pending`), by forge kind. */
+/**
+ * Forge projects whose request lookup is running or queued (status `pending`), by forge kind. On a
+ * cold start a project is `pending` with no forge yet (the daemon has not worked out which forge
+ * its remotes are on): that wait is real too, named "the forge" until the forge is known.
+ */
 export function pendingForgeWait(forges: ForgesResponse | null | undefined): WaitSource | null {
   if (!forges?.enabled) return null;
-  const pending = forges.projects.filter((p) => p.status === 'pending' && p.forge);
+  const pending = forges.projects.filter((p) => p.status === 'pending');
   if (pending.length === 0) return null;
   const kinds = pending.flatMap((p) => (p.forge ? [p.forge.kind] : []));
   const hosts = new Set(pending.flatMap((p) => (p.forge ? [p.forge.host] : [])));

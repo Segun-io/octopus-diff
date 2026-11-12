@@ -194,6 +194,30 @@ describe('automatic timers use the background share (PR #62 review)', () => {
   });
 });
 
+describe('the first lookup is named while it runs (PR #76 review)', () => {
+  it('announces the forge as soon as the lookup starts, not only when it finishes', async () => {
+    const { service, client, emitted } = build(1, 1);
+    let release = () => {};
+    client.batchGate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const run = service.refresh(['p0']);
+    await vi.advanceTimersByTimeAsync(50);
+    // The batch query is held (a slow forge): the project is pending and its forge is known, and
+    // the clients were told, so the UI can say "Waiting for GitHub..." now.
+    expect(client.batch.queries).toBe(1);
+    expect((await service.response()).projects[0]).toMatchObject({
+      status: 'pending',
+      forge: { kind: 'github' },
+    });
+    expect(emitted).toContainEqual({ type: 'forge.updated', projectIds: ['p0'] });
+    client.batchGate = null;
+    release();
+    await run;
+    expect((await service.response()).projects[0]?.status).toBe('ok');
+  });
+});
+
 describe('Check again', () => {
   it('spends at most its allowance per call and leaves just-fetched projects alone', async () => {
     const { service, client } = build(10, 1, { checkAgainMaxPoints: 4, checkAgainSkipMs: 5000 });

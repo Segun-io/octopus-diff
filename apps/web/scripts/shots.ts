@@ -184,7 +184,10 @@ const STATES: Record<string, Step> = {
   },
 };
 
-/** Sets the mock's forge state (`POST /api/__mock/forge-sim`, see mock/server.ts). */
+/** States that change the mock's shared forge state (each resets it when its shot is done). */
+const SIMULATED_STATES = new Set(['rate-limit', 'rate-limit-stale', 'stale-request']);
+
+/** Sets the mock's forge state (`POST /api/__mock/forge-sim`, see mock/server.ts); no query resets it. */
 async function simulate(page: Page, query: string): Promise<void> {
   const response = await page.request.post(`${base}/api/__mock/forge-sim?${query}`);
   if (!response.ok()) throw new Error(`forge-sim failed: ${response.status()}`);
@@ -224,14 +227,25 @@ async function main() {
         await page.goto(base);
         await ready(page);
         try {
-          await step(page);
-        } catch (err) {
-          console.warn(`state ${state} failed on ${theme.id}: ${String(err).split('\n')[0]}`);
+          try {
+            await step(page);
+          } catch (err) {
+            console.warn(`state ${state} failed on ${theme.id}: ${String(err).split('\n')[0]}`);
+          }
+          const file = path.join(out, `${theme.id}-${size.w}-${state}.png`);
+          await page.screenshot({ path: file });
+          console.log(file, errors.length ? `errors: ${errors.join(' | ')}` : '');
+        } finally {
+          // The mock server is shared by every shot and a fresh browser context does not reset it:
+          // put the forge knobs back (also when the shot failed) so the next image shows the
+          // plain fixture, not this one's rate limit or error.
+          if (SIMULATED_STATES.has(state)) {
+            await simulate(page, '').catch((err) =>
+              console.warn(`could not reset the forge simulation: ${String(err).split('\n')[0]}`),
+            );
+          }
+          await context.close();
         }
-        const file = path.join(out, `${theme.id}-${size.w}-${state}.png`);
-        await page.screenshot({ path: file });
-        console.log(file, errors.length ? `errors: ${errors.join(' | ')}` : '');
-        await context.close();
       }
     }
   }

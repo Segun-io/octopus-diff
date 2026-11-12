@@ -198,7 +198,9 @@ export function ForgeRepositoryFacts({ projectId }: { projectId: string }) {
       state.status !== 'disabled' &&
       state.status !== 'no-forge' &&
       state.status !== 'ignored';
-    if (!hasForge) return null;
+    // Only while the query is really pending or fetching: an older daemon without the route answers
+    // `null` (a finished answer), which shows nothing, not a placeholder that never goes away.
+    if (!hasForge || !(query.isPending || query.isFetching)) return null;
     return (
       <section data-testid={TEST_IDS.repoInfoForge} data-status="loading" className="min-w-0">
         <h2 className="mb-1.5 text-[11px] font-medium text-muted uppercase">Forge</h2>
