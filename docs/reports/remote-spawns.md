@@ -1,7 +1,7 @@
 # remote-spawns report
 
 GitHub #74 "With a remote, warm reload spawns 68-71 git processes and startup config spawns double". Branch
-`fix/remote-spawns` from `main` at `152f90e`. DECISIONS #213-#216 (main already has #212; `feat/daemon-activity` and
+`fix/remote-spawns` from `main` at `152f90e`. DECISIONS #225-#228 (main already has #212; `feat/daemon-activity` and
 `fix/watch-new-subtree` also use #212 and up: renumber at merge).
 
 ## Root cause
@@ -36,15 +36,15 @@ Traced with the spawn trace (now with full argv) on the `--after-fetch` layout, 
 - **git-core: remote config through the config cache** (`packages/git-core/src/remotes.ts`,
   `GitContext.cachedConfigRead` in `context.ts`). It follows the config scan's rules (#191): same stat signature of
   every config file git reads, none younger than 2 s, no `include.*` / `includeIf.*` key (the read's regexp now also
-  asks for those keys; `REMOTE_CONFIG_REGEX` is unchanged), age limit 10 min (#214). Each caller gets a copy.
-- **git-core: racy config reads are joined when their process started after the operation asked** (#215). A new
+  asks for those keys; `REMOTE_CONFIG_REGEX` is unchanged), age limit 10 min (#226). Each caller gets a copy.
+- **git-core: racy config reads are joined when their process started after the operation asked** (#227). A new
   internal `onSpawn` runner option records when the git process starts. An operation that finds a read with the same
   key whose process started after it asked (or that still waits for a slot) takes that answer, even inside the 2 s
   window. This is safe because git reads the files after its process starts. A racy read is still never *reused*
   by a later operation.
 - **Bench** (`e2e/bench/`): `settledReload1-3` (start after 1 s without a git process, end when the daemon is quiet
   again) with a Numbers row "Warm reload once the daemon is quiet: git spawns (per worktree, worst of 3; reported,
-  not judged)"; `argv` in every trace line; `--keep-trace <dir>`. Fixed a bench bug (#216): the quiet wait counted
+  not judged)"; `argv` in every trace line; `--keep-trace <dir>`. Fixed a bench bug (#228): the quiet wait counted
   the long-lived watch host (`node`) as a running child, so it could only end at its timeout. It now counts only
   git processes. `docs/bench/README.md` has a "Spawns per reload" section. `docs/bench/results-after-fetch.*`
   were regenerated with this branch.
@@ -100,11 +100,11 @@ Machine: 12-core WSL2, Node 26.13, git 2.53, shared with other sessions (timings
 
 ## Decisions
 
-- #213: the warm-reload figure was the cold paint's work. The settled-reload figure is reported, not judged: it is a
+- #225: the warm-reload figure was the cold paint's work. The settled-reload figure is reported, not judged: it is a
   stable 3 (the open file's diff), not 0, until #41 caches diffs.
-- #214: `readRemoteConfig` cached under the config-scan rules, 10 min age limit, copies per caller.
-- #215: config reads joined when their process started after the operation asked, also when racy.
-- #216: the bench counts only git children as running; argv in the trace; `--keep-trace`.
+- #226: `readRemoteConfig` cached under the config-scan rules, 10 min age limit, copies per caller.
+- #227: config reads joined when their process started after the operation asked, also when racy.
+- #228: the bench counts only git children as running; argv in the trace; `--keep-trace`.
 
 ## Contract changes
 
@@ -132,7 +132,7 @@ None added or removed (`pnpm credits` not needed; `credits:check` passes in `pnp
 
 ## Notes for integration
 
-- DECISIONS numbers #213-#216 may collide with `feat/daemon-activity` / `fix/watch-new-subtree`: renumber whichever
+- DECISIONS numbers #225-#228 (renumbered from #213-#216 when other branches took #213-#224); may still collide with `fix/watch-new-subtree`: renumber whichever
   lands second (this report and the bench README's section reference them only by number in DECISIONS).
 - `e2e/bench/spawn-trace.mjs`'s active-file change affects every bench that waits for quiet: edit loops and the
   live-fetch wait now end when git is quiet instead of at their timeouts, so bench runs are shorter.
