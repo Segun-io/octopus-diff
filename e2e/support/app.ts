@@ -40,8 +40,13 @@ export class AppPage {
   get app() {
     return this.byTestId(TEST_IDS.app);
   }
-  get inbox() {
-    return this.byTestId(TEST_IDS.inboxItem);
+  /**
+   * The context bar above the file list. Since #13 the sidebar has no Inbox entry, so this is
+   * how a test sees the current view: `data-view` (`inbox` | `worktree`) and, in the Inbox,
+   * `data-count` (the dirty worktrees it lists).
+   */
+  get contextBar() {
+    return this.byTestId('context-bar');
   }
   get diffViewer() {
     return this.byTestId(TEST_IDS.diffViewer);
@@ -92,23 +97,81 @@ export class AppPage {
     );
   }
 
-  projectItem(name: string): Locator {
-    return this.page.locator(`${tid(TEST_IDS.projectItem)}[data-project-name="${cssValue(name)}"]`);
+  /**
+   * The sidebar rows of one project (it has no header of its own since #13: the list is flat and
+   * every row carries `data-project-name`). The list is virtual, so a row far down is not mounted
+   * until it is scrolled to: use `expectProjectListed` or `reveal`.
+   */
+  projectRows(name: string): Locator {
+    return this.page.locator(
+      `${tid(TEST_IDS.worktreeItem)}[data-project-name="${cssValue(name)}"]`,
+    );
+  }
+
+  /**
+   * Scrolls the (virtual) sidebar list from the top until `target` is mounted, then into view.
+   * Returns once it is there; fails the test if the end of the list is reached without it.
+   */
+  async reveal(target: Locator): Promise<void> {
+    const scroller = this.byTestId('sidebar-scroll');
+    await scroller.evaluate((el) => {
+      el.scrollTop = 0;
+    });
+    for (let i = 0; i < 400; i++) {
+      if ((await target.count()) > 0) {
+        await target.first().scrollIntoViewIfNeeded();
+        return;
+      }
+      const atEnd = await scroller.evaluate((el) => {
+        const before = el.scrollTop;
+        el.scrollTop = before + Math.max(1, el.clientHeight - 80);
+        return el.scrollTop === before;
+      });
+      // Let the virtualizer mount the new window.
+      await this.page.evaluate(() => new Promise((r) => requestAnimationFrame(() => r(null))));
+      if (atEnd && (await target.count()) === 0) break;
+    }
+    await expect(target.first(), 'a sidebar row, scrolled to').toBeAttached({ timeout: 2000 });
+  }
+
+  /** A project is in the sidebar: one of its rows is mounted, optionally with the project's id. */
+  async expectProjectListed(name: string, projectId?: string, timeout = 20_000): Promise<void> {
+    const rows = this.projectRows(name);
+    // The list fills in as the daemon answers: wait for the first row of the project to exist.
+    await expect
+      .poll(
+        async () => {
+          try {
+            await this.reveal(rows);
+            return true;
+          } catch {
+            return false;
+          }
+        },
+        { timeout, message: `a sidebar row of project ${name}` },
+      )
+      .toBe(true);
+    if (projectId !== undefined)
+      await expect(rows.first()).toHaveAttribute('data-project-id', projectId);
   }
 
   allWorktreeItems(): Locator {
     return this.byTestId(TEST_IDS.worktreeItem);
   }
 
+  /** Opens the Inbox view the way the app offers it now: `g i` (there is no sidebar entry). */
   async selectInbox(): Promise<void> {
-    await this.inbox.click();
-    await expect(this.inbox).toHaveAttribute('aria-current', 'true');
+    await this.focusApp();
+    await this.press('g');
+    await this.press('i');
+    await expect(this.contextBar).toHaveAttribute('data-view', 'inbox');
   }
 
   async selectWorktree(worktreeId: string): Promise<void> {
     const item = this.worktreeItem(worktreeId);
-    // No explicit scrollIntoViewIfNeeded: click scrolls itself and retries when the row remounts
-    // (a card moving between its project and the Settled shelf as a new scope's inbox lands).
+    // The list is virtual: scroll the row into the window first (the filter or the palette would
+    // do too). Click then retries if the row remounts as a new scope's inbox lands.
+    await this.reveal(item);
     await item.click();
     await expect(item).toHaveAttribute('aria-current', 'true');
   }
@@ -122,6 +185,7 @@ export class AppPage {
   /** Asserts a sidebar worktree item shows the manifest's branch, ahead/behind and counts. */
   async expectWorktreeItem(worktree: WorktreeFixture): Promise<void> {
     const item = this.worktreeItem(worktree.id);
+    await this.reveal(item);
     await expect(item, `sidebar item for ${worktree.name}`).toHaveCount(1);
     await expect(item).toHaveAttribute('data-branch', worktree.branch ?? '');
     await expect(item).toHaveAttribute('data-dirty', String(worktree.dirty));

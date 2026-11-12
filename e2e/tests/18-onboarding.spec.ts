@@ -54,7 +54,7 @@ test.describe('first run', () => {
       await main.click();
       // The app replaces the first-run screen by itself.
       for (const name of scan.expectedProjects) {
-        await expect(app.projectItem(name)).toBeVisible({ timeout: 20_000 });
+        await app.expectProjectListed(name);
       }
       await expect(app.byTestId(TEST_IDS.emptyState)).toHaveCount(0);
       expect((await reloaded()).reloaded).toBe(false);
@@ -68,8 +68,8 @@ test.describe('first run', () => {
       for (const name of scan.expectedProjects) await expect(toast).toContainText(name);
       await action(toast, 'open').click();
       await expect(toast).toHaveCount(0);
-      // "Show folder" leaves the Inbox for the folder's overview.
-      await expect(app.inbox).not.toHaveAttribute('aria-current', 'true');
+      // "Show folder" leaves the Inbox for the folder's overview (no context bar there).
+      await expect(app.contextBar).toHaveCount(0);
     } finally {
       await daemon.close();
     }
@@ -132,7 +132,7 @@ test.describe('first run', () => {
       await expect(main).toHaveAttribute('data-action', 'watch');
       await main.click();
       for (const name of scan.expectedProjects) {
-        await expect(app.projectItem(name)).toBeVisible({ timeout: 20_000 });
+        await app.expectProjectListed(name);
       }
       await expect(app.byTestId(IDS.toast)).toHaveAttribute('data-tone', 'success', {
         timeout: 20_000,

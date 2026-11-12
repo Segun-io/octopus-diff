@@ -597,7 +597,9 @@ async function main() {
         phases[`warmReload${i + 1}`] = [from, Date.now()];
       }
       paint = { cold: cold.ms, warm, fcp: cold.fcp };
-      await page.locator(`[data-testid="${TEST_IDS.inboxItem}"]`).click();
+      // The sidebar has no Inbox entry since #13: `g i` opens the Inbox view (already the landing view).
+      await page.keyboard.press('g');
+      await page.keyboard.press('i');
       log(
         `first paint: cold ${cold.ms.toFixed(0)} ms, warm ${warm.map((w) => w.toFixed(0)).join(' / ')} ms`,
       );

@@ -98,7 +98,7 @@ test.describe('forge details (UI)', () => {
   }) => {
     const project = findProject(manifest, 'alpha');
     await ui.open(daemon.authUrl);
-    await ui.projectNameButton(project.name).click();
+    await ui.openProjectOverview(project.name);
     const local = ui.byTestId(TEST_IDS.repoInfoLocal);
     await expect(local).toContainText(/\d+ branch(es)? · \d+ tags? · \d+ worktrees?/);
     await expect(local).toContainText('Default branch');
@@ -172,7 +172,7 @@ test.describe('forge details (UI)', () => {
       await expect(ui.byTestId(TEST_IDS.requestView)).toHaveCount(0);
 
       // The project Overview: local and forge facts, open requests joined to the worktree.
-      await ui.projectNameButton('app').click();
+      await ui.openProjectOverview('app');
       await expect(ui.byTestId(TEST_IDS.repoInfoLocal)).toContainText('github.com/octo-demo/app');
       const forge = ui.byTestId(TEST_IDS.repoInfoForge);
       await expect(forge).toHaveAttribute('data-status', 'ok');

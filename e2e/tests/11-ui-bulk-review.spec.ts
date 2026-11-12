@@ -122,7 +122,7 @@ test.describe('UX-1 bulk review (UI)', () => {
     expect(await expectTitle(page, daemon.client)).toBe(titled);
   });
 
-  test('project via context menu, folder via Overview, mark all unreviewed', async ({
+  test('project and folder via their Overviews, mark all reviewed / unreviewed', async ({
     manifest,
     daemon,
     ui,
@@ -141,8 +141,9 @@ test.describe('UX-1 bulk review (UI)', () => {
     expect(folderProjects.length).toBeGreaterThan(0);
 
     await ui.open(daemon.authUrl);
-    const menu = await ui.openRowMenu(ui.projectNameButton('live'));
-    await menu.getByRole('menuitem', { name: 'Mark all reviewed' }).click();
+    // The sidebar has no project header menu any more (#13): the project's Overview has the buttons.
+    await ui.openProjectOverview('live');
+    await ui.page.getByRole('button', { name: 'Mark all reviewed' }).click();
     await ui.confirmBulk();
     await expect(ui.toast).toHaveAttribute('data-reviewed', 'true');
     await expect
@@ -155,7 +156,7 @@ test.describe('UX-1 bulk review (UI)', () => {
     expect(Number(await ui.toast.getAttribute('data-changed'))).toBeGreaterThan(0);
 
     // Folder: open its Overview and use the bulk button there.
-    await ui.folderNameButton(scan.id).click();
+    await ui.openFolderOverview(scan.id);
     const overviewButton = ui.page.getByRole('button', { name: 'Mark all reviewed' });
     await expect(overviewButton).toBeVisible();
     await overviewButton.click();
@@ -170,9 +171,9 @@ test.describe('UX-1 bulk review (UI)', () => {
     const alpha = findWorktree(manifest, 'alpha').worktree;
     expect(await reviewedPaths(daemon.client, alpha.id)).toEqual([]); // added directly: untouched
 
-    // Back to unreviewed for the project, from its context menu.
-    const again = await ui.openRowMenu(ui.projectNameButton('live'));
-    await again.getByRole('menuitem', { name: 'Mark all unreviewed' }).click();
+    // Back to unreviewed for the project, from its Overview.
+    await ui.openProjectOverview('live');
+    await ui.page.getByRole('button', { name: 'Mark all unreviewed' }).click();
     await ui.confirmBulk();
     await expect(ui.toast).toHaveAttribute('data-reviewed', 'false');
     await expect

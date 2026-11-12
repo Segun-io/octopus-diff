@@ -73,6 +73,10 @@ export function ContextBar() {
     <div
       role="toolbar"
       data-testid={CONTEXT_BAR_TEST_ID}
+      // What the bar is about: `inbox` (with `data-count` = dirty worktrees) or `worktree`. The
+      // sidebar has no Inbox entry any more (#13), so this is how a test sees the current view.
+      data-view={model.view.kind}
+      data-count={inbox ? String(model.groups.length) : undefined}
       aria-label={label}
       className="flex min-h-9 flex-wrap items-center gap-2 border-b border-line bg-surface px-3 py-1.5"
     >

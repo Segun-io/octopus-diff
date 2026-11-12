@@ -40,7 +40,7 @@ test.describe('§8.3 inbox and diff', () => {
     await app.open(daemon.authUrl);
     await app.selectInbox();
     const dirty = dirtyCheckouts(manifest);
-    await expect(app.inbox).toHaveAttribute('data-count', String(dirty.length));
+    await expect(app.contextBar).toHaveAttribute('data-count', String(dirty.length));
     const groups = app.byTestId(TEST_IDS.fileGroup);
     await expect(groups).toHaveCount(dirty.length);
     const ids = await groups.evaluateAll((nodes) =>
