@@ -141,6 +141,11 @@ describe('query schemas', () => {
       onlyUnreviewed: true,
       scope: { kind: 'working' },
     });
+    const a = '0123456789abcdef';
+    const b = 'fedcba9876543210';
+    expect(InboxQuerySchema.parse({ projectIds: `${a},${b},${a},` }).projectIds).toEqual([a, b]);
+    expect(InboxQuerySchema.safeParse({ projectIds: 'not-an-id' }).success).toBe(false);
+    expect(InboxQuerySchema.safeParse({ projectIds: '' }).success).toBe(false);
     expect(
       DiffQuerySchema.parse({
         scope: 'staged',

@@ -6,7 +6,13 @@ import type {
 } from '@octopus-diff/contracts';
 import { createContext, type ReactNode, useContext, useMemo } from 'react';
 import { useForgeIndex } from '../api/forges.ts';
-import { inboxScopeFor, useFilesQuery, useInboxQuery, useProjectsQuery } from '../api/queries.ts';
+import {
+  inboxScopeFor,
+  isPartialInbox,
+  useFilesQuery,
+  useInboxQuery,
+  useProjectsQuery,
+} from '../api/queries.ts';
 import { useScanRootsQuery } from '../api/settings.ts';
 import { fileRefKey } from '../lib/fileRef.ts';
 import {
@@ -63,9 +69,6 @@ export interface AppModel {
   viewPolicy: EffectiveReviewPolicy | null;
 }
 
-/** The sidebar's fixed status scope (fallback for daemons without `summary.review`). */
-export const SIDEBAR_STATUS_SCOPE: DiffScope = { kind: 'working' };
-
 const AppModelContext = createContext<AppModel | null>(null);
 
 export function useAppModel(): AppModel {
@@ -98,17 +101,14 @@ function useBuildAppModel(): AppModel {
 
   const projects = useProjectsQuery();
   const scanRoots = useScanRootsQuery();
+  // The sidebar's status never depends on the toolbar scope (docs/STATUS-FLOW.md §1.1), nor on
+  // an inbox: it comes from the projects list alone, so it paints first (#10).
   const inbox = useInboxQuery(scope);
-  // The sidebar's status never depends on the toolbar scope (docs/STATUS-FLOW.md §1.1): its
-  // fallback source for daemons without `summary.review` is a fixed inbox (uncommitted files).
-  // While the toolbar shows Uncommitted both are the same query.
-  const statusInbox = useInboxQuery(SIDEBAR_STATUS_SCOPE);
   const worktreeId = view.kind === 'worktree' ? view.worktreeId : null;
   const files = useFilesQuery(worktreeId, scope);
 
   const projectList = projects.data?.projects;
   const inboxData = inbox.data;
-  const statusData = statusInbox.data;
 
   const scanRootList = scanRoots.data?.scanRoots;
   // Forge data moves rows only through stages (In PR, Merged/closed); never the toolbar scope.
@@ -119,17 +119,8 @@ function useBuildAppModel(): AppModel {
     return out;
   }, [forgeIndex]);
   const sidebar = useMemo(
-    () =>
-      buildSidebar(
-        projectList ?? [],
-        statusData?.entries,
-        filters,
-        scanRootList,
-        pinned,
-        settle,
-        forgeByWorktree,
-      ),
-    [forgeByWorktree, projectList, statusData, filters, scanRootList, pinned, settle],
+    () => buildSidebar(projectList ?? [], filters, scanRootList, pinned, settle, forgeByWorktree),
+    [forgeByWorktree, projectList, filters, scanRootList, pinned, settle],
   );
 
   const inboxEntries = useMemo(() => sortInboxEntries(inboxData?.entries ?? []), [inboxData]);
@@ -204,8 +195,10 @@ function useBuildAppModel(): AppModel {
     return out;
   }, [sidebar, inboxEntries]);
 
+  // While its batches are still landing (#10) the Inbox shows less than an "all" request covers.
   const inboxUnfiltered =
     view.kind === 'inbox' &&
+    !isPartialInbox(scope) &&
     !hasSidebarFilters(filters) &&
     showsReviewed &&
     groups.length === inboxEntries.length;

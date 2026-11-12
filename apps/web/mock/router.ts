@@ -129,7 +129,7 @@ export function createMockRouter(backend: MockBackend, options: MockRouterOption
       }
       if (path === '/api/inbox' && method === 'GET') {
         const q = parse(InboxQuerySchema, queryObject(url));
-        return json(200, backend.inbox(q.scope, q.onlyUnreviewed));
+        return json(200, backend.inbox(q.scope, q.onlyUnreviewed, q.projectIds));
       }
       const wtMatch = path.match(/^\/api\/worktrees\/([^/]+)\/(files|diff|commits|refresh)$/);
       if (wtMatch) {
@@ -156,7 +156,7 @@ export function createMockRouter(backend: MockBackend, options: MockRouterOption
       }
       if (path === '/api/focus' && method === 'PUT') {
         const req = parse(FocusRequestSchema, await body());
-        return json(200, backend.setFocus(req.worktreeId));
+        return json(200, backend.setFocus(req.worktreeId, req.projectId ?? null));
       }
       // --- UX round 1 ---
       if (path === '/api/settings' && method === 'GET') return json(200, backend.getSettings());

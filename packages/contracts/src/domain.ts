@@ -155,7 +155,10 @@ export const WorktreeSummarySchema = z.object({
   activityAt: TimestampSchema.nullable().optional(),
   /**
    * Review state (daemon app state, docs/STATUS-FLOW.md). Not part of `stateHash`, which stays a
-   * hash of git state only. Absent from older daemons (clients fall back to the inbox).
+   * hash of git state only. Absent until the daemon computed it (#10): it does so on demand
+   * (the project was opened, a request needed it, or the worktree changed after startup), not
+   * for every repository at startup; `review.ready` says when it lands. Older daemons never
+   * send it. Without it a client shows the worktree's changes, not a review stage.
    */
   review: WorktreeReviewSchema.optional(),
 });

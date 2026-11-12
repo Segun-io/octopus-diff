@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-11-11T22:50:12.304Z",
+  "generatedAt": "2026-11-12T03:41:16.923Z",
   "environment": {
     "platform": "linux 6.18.58.1-microsoft-standard-WSL2",
     "cpu": "AMD Ryzen 7 7800X3D 8-Core Processor",
@@ -13,258 +13,240 @@
     "worktreesPerRepo": 3,
     "description": "30 repos × 3 worktrees (all dirty)",
     "worktrees": 90,
-    "generationMs": 4942
+    "generationMs": 4748
   },
   "startup": {
-    "listeningMs": 729,
-    "allSummariesMs": 1972,
-    "gitSpawns": 1428,
-    "gitSpawnsPerWorktree": 15.9,
-    "gitWallMs": 7246,
+    "listeningMs": 782,
+    "allSummariesMs": 1236,
+    "gitSpawns": 740,
+    "gitSpawnsPerWorktree": 8.2,
+    "gitWallMs": 4295,
     "bySubcommand": {
       "rev-parse": {
-        "count": 342,
-        "totalMs": 1664,
-        "p50": 4.8,
-        "p95": 7.9
+        "count": 162,
+        "totalMs": 997,
+        "p50": 5.9,
+        "p95": 9.8
       },
       "for-each-ref": {
-        "count": 210,
-        "totalMs": 1003,
-        "p50": 4.7,
-        "p95": 7.3
+        "count": 120,
+        "totalMs": 617,
+        "p50": 5,
+        "p95": 8.2
       },
       "config": {
-        "count": 185,
-        "totalMs": 915,
-        "p50": 4.7,
-        "p95": 7.7
+        "count": 97,
+        "totalMs": 549,
+        "p50": 5.7,
+        "p95": 8.2
       },
       "status": {
-        "count": 180,
-        "totalMs": 1081,
-        "p50": 5.8,
-        "p95": 8.8
+        "count": 90,
+        "totalMs": 616,
+        "p50": 6.3,
+        "p95": 10.2
       },
       "diff": {
-        "count": 180,
-        "totalMs": 1058,
-        "p50": 5.7,
-        "p95": 7.8
+        "count": 90,
+        "totalMs": 588,
+        "p50": 6.5,
+        "p95": 9.8
       },
       "check-attr": {
         "count": 90,
-        "totalMs": 444,
+        "totalMs": 461,
         "p50": 4.7,
         "p95": 8
       },
-      "symbolic-ref": {
-        "count": 90,
-        "totalMs": 394,
-        "p50": 4.2,
-        "p95": 6.6
-      },
       "rev-list": {
         "count": 60,
-        "totalMs": 296,
-        "p50": 5,
-        "p95": 7.2
-      },
-      "merge-base": {
-        "count": 60,
-        "totalMs": 240,
-        "p50": 3.9,
-        "p95": 6.5
+        "totalMs": 309,
+        "p50": 4.7,
+        "p95": 8.2
       },
       "worktree": {
         "count": 30,
-        "totalMs": 148,
-        "p50": 4.6,
-        "p95": 8.6
+        "totalMs": 156,
+        "p50": 4.9,
+        "p95": 7.6
       },
       "--version": {
         "count": 1,
         "totalMs": 2,
-        "p50": 2.3,
-        "p95": 2.3
+        "p50": 2.2,
+        "p95": 2.2
       }
     }
   },
   "firstPaint": {
-    "coldMs": 1382,
-    "warmMs": 852,
+    "coldMs": 142,
+    "warmMs": 86,
     "warmSamplesMs": [
-      858,
-      851,
-      852
+      95,
+      77,
+      86
     ],
     "firstContentfulPaintMs": 88,
     "spawns": {
       "coldPaint": {
-        "spawns": 840,
-        "wallMs": 4398,
+        "spawns": 42,
+        "wallMs": 211,
         "bySub": {
-          "config": {
-            "count": 204,
-            "totalMs": 941,
-            "p50": 4.7,
-            "p95": 7.1
-          },
-          "diff": {
-            "count": 182,
-            "totalMs": 1091,
-            "p50": 6,
-            "p95": 8.2
-          },
-          "status": {
-            "count": 181,
-            "totalMs": 1042,
-            "p50": 5.7,
-            "p95": 8.8
+          "rev-parse": {
+            "count": 9,
+            "totalMs": 42,
+            "p50": 4.5,
+            "p95": 7.7
           },
           "for-each-ref": {
-            "count": 91,
-            "totalMs": 441,
-            "p50": 4.8,
-            "p95": 6.3
-          },
-          "rev-parse": {
-            "count": 91,
-            "totalMs": 466,
-            "p50": 4.8,
-            "p95": 8.3
+            "count": 9,
+            "totalMs": 40,
+            "p50": 4.7,
+            "p95": 5.4
           },
           "merge-base": {
-            "count": 91,
-            "totalMs": 417,
-            "p50": 4.6,
-            "p95": 7.5
+            "count": 9,
+            "totalMs": 44,
+            "p50": 4.7,
+            "p95": 6.8
+          },
+          "config": {
+            "count": 9,
+            "totalMs": 46,
+            "p50": 5.7,
+            "p95": 6.9
+          },
+          "status": {
+            "count": 4,
+            "totalMs": 24,
+            "p50": 5.8,
+            "p95": 8
+          },
+          "diff": {
+            "count": 2,
+            "totalMs": 14,
+            "p50": 6.7,
+            "p95": 7.2
           }
         }
       },
       "warmReload1": {
-        "spawns": 554,
-        "wallMs": 2828,
+        "spawns": 33,
+        "wallMs": 175,
         "bySub": {
-          "config": {
-            "count": 98,
-            "totalMs": 440,
-            "p50": 4.5,
-            "p95": 7.5
+          "rev-parse": {
+            "count": 10,
+            "totalMs": 48,
+            "p50": 4.4,
+            "p95": 8
           },
           "diff": {
-            "count": 92,
-            "totalMs": 523,
-            "p50": 5.8,
-            "p95": 7.4
+            "count": 7,
+            "totalMs": 36,
+            "p50": 4.9,
+            "p95": 7.5
           },
           "for-each-ref": {
-            "count": 91,
-            "totalMs": 447,
-            "p50": 4.8,
-            "p95": 7.2
-          },
-          "rev-parse": {
-            "count": 91,
-            "totalMs": 452,
-            "p50": 4.9,
-            "p95": 7.7
-          },
-          "merge-base": {
-            "count": 91,
-            "totalMs": 441,
-            "p50": 4.9,
-            "p95": 7.3
+            "count": 7,
+            "totalMs": 38,
+            "p50": 5.6,
+            "p95": 6.8
           },
           "status": {
-            "count": 91,
-            "totalMs": 525,
-            "p50": 5.7,
-            "p95": 8.1
+            "count": 5,
+            "totalMs": 29,
+            "p50": 5.9,
+            "p95": 7.1
+          },
+          "merge-base": {
+            "count": 3,
+            "totalMs": 19,
+            "p50": 6,
+            "p95": 7.5
+          },
+          "config": {
+            "count": 1,
+            "totalMs": 4,
+            "p50": 3.7,
+            "p95": 3.7
           }
         }
       },
       "warmReload2": {
-        "spawns": 547,
-        "wallMs": 2789,
+        "spawns": 40,
+        "wallMs": 233,
         "bySub": {
           "diff": {
-            "count": 92,
-            "totalMs": 534,
-            "p50": 6,
-            "p95": 7.7
-          },
-          "for-each-ref": {
-            "count": 91,
-            "totalMs": 434,
-            "p50": 4.7,
-            "p95": 6.3
-          },
-          "rev-parse": {
-            "count": 91,
-            "totalMs": 429,
-            "p50": 4.6,
-            "p95": 7.4
-          },
-          "merge-base": {
-            "count": 91,
-            "totalMs": 443,
-            "p50": 4.8,
-            "p95": 6.7
-          },
-          "config": {
-            "count": 91,
-            "totalMs": 441,
-            "p50": 4.9,
-            "p95": 6.3
+            "count": 11,
+            "totalMs": 73,
+            "p50": 6.8,
+            "p95": 7.8
           },
           "status": {
-            "count": 91,
-            "totalMs": 507,
-            "p50": 5.6,
-            "p95": 8.4
+            "count": 10,
+            "totalMs": 68,
+            "p50": 6.4,
+            "p95": 9.8
+          },
+          "config": {
+            "count": 9,
+            "totalMs": 43,
+            "p50": 4.9,
+            "p95": 5.8
+          },
+          "merge-base": {
+            "count": 7,
+            "totalMs": 35,
+            "p50": 5.4,
+            "p95": 6.1
+          },
+          "for-each-ref": {
+            "count": 3,
+            "totalMs": 14,
+            "p50": 5,
+            "p95": 6
           }
         }
       },
       "warmReload3": {
-        "spawns": 547,
-        "wallMs": 2805,
+        "spawns": 65,
+        "wallMs": 343,
         "bySub": {
-          "diff": {
-            "count": 92,
-            "totalMs": 518,
-            "p50": 5.8,
-            "p95": 7.3
-          },
-          "for-each-ref": {
-            "count": 91,
-            "totalMs": 439,
-            "p50": 4.7,
+          "rev-parse": {
+            "count": 11,
+            "totalMs": 55,
+            "p50": 5.1,
             "p95": 7.6
           },
-          "rev-parse": {
-            "count": 91,
-            "totalMs": 441,
-            "p50": 4.7,
+          "for-each-ref": {
+            "count": 11,
+            "totalMs": 49,
+            "p50": 4.5,
             "p95": 7.5
           },
           "merge-base": {
-            "count": 91,
-            "totalMs": 438,
-            "p50": 4.7,
-            "p95": 7
+            "count": 11,
+            "totalMs": 53,
+            "p50": 4.6,
+            "p95": 8
           },
           "config": {
-            "count": 91,
-            "totalMs": 440,
-            "p50": 4.7,
-            "p95": 7.6
+            "count": 11,
+            "totalMs": 56,
+            "p50": 5.8,
+            "p95": 7.5
+          },
+          "diff": {
+            "count": 11,
+            "totalMs": 71,
+            "p50": 6.3,
+            "p95": 8.4
           },
           "status": {
-            "count": 91,
-            "totalMs": 528,
-            "p50": 5.8,
-            "p95": 8.4
+            "count": 10,
+            "totalMs": 58,
+            "p50": 5.4,
+            "p95": 7.7
           }
         }
       }
@@ -272,10 +254,10 @@
   },
   "idleCpu": {
     "supported": true,
-    "durationMs": 60017,
-    "averagePercent": 0.3165765646287218,
-    "averageSelfPercent": 0.19994309344971906,
-    "maxIntervalPercent": 2.000130830557764,
+    "durationMs": 60025,
+    "averagePercent": 0.23323621312889958,
+    "averageSelfPercent": 0.14993756558286403,
+    "maxIntervalPercent": 1.9991546954209736,
     "intervals": [
       0,
       0,
@@ -297,251 +279,251 @@
       0,
       0,
       0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      2,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      1,
+      1,
+      1,
+      0,
+      1,
+      0,
+      0,
+      2,
       1,
       0,
       0,
       0,
       0,
-      0,
       2,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      2,
-      2,
-      0,
-      1,
-      1,
-      0,
-      2,
-      0,
-      0,
-      1,
-      0,
-      0,
-      0,
-      0,
-      2,
-      0,
-      0,
-      0,
-      0,
       0,
       0,
       0,
       2,
       1,
-      2
+      0,
+      0
     ],
-    "rssBytes": 184844288
+    "rssBytes": 154570752
   },
   "memory": {
-    "rssBytes": 186486784,
-    "peakRssBytes": 187858944
+    "rssBytes": 138371072,
+    "peakRssBytes": 163876864
   },
   "refresh": {
     "iterations": 15,
     "sse": {
       "count": 15,
-      "min": 27,
-      "max": 40,
-      "mean": 30,
+      "min": 21,
+      "max": 31,
+      "mean": 27.4,
       "p50": 29,
-      "p90": 36,
-      "p95": 40
+      "p90": 30,
+      "p95": 31
     },
     "sseByRole": {
       "bench": {
         "count": 15,
-        "min": 27,
-        "max": 40,
-        "mean": 30,
+        "min": 21,
+        "max": 31,
+        "mean": 27.4,
         "p50": 29,
-        "p90": 36,
-        "p95": 40
+        "p90": 30,
+        "p95": 31
       }
     },
     "ui": {
       "count": 15,
-      "min": 39,
-      "max": 59,
-      "mean": 45.8,
+      "min": 34,
+      "max": 50,
+      "mean": 43.266666666666666,
       "p50": 44,
-      "p90": 56,
-      "p95": 59
+      "p90": 49,
+      "p95": 50
     },
     "spawnsPerEdit": [
       {
         "role": "bench",
-        "spawns": 31,
-        "wallMs": 105
-      },
-      {
-        "role": "bench",
-        "spawns": 24,
+        "spawns": 25,
         "wallMs": 61
       },
       {
         "role": "bench",
-        "spawns": 21,
-        "wallMs": 55
+        "spawns": 26,
+        "wallMs": 68
       },
       {
         "role": "bench",
-        "spawns": 21,
-        "wallMs": 57
+        "spawns": 19,
+        "wallMs": 49
       },
       {
         "role": "bench",
-        "spawns": 21,
+        "spawns": 23,
+        "wallMs": 56
+      },
+      {
+        "role": "bench",
+        "spawns": 33,
+        "wallMs": 78
+      },
+      {
+        "role": "bench",
+        "spawns": 56,
+        "wallMs": 192
+      },
+      {
+        "role": "bench",
+        "spawns": 30,
+        "wallMs": 73
+      },
+      {
+        "role": "bench",
+        "spawns": 26,
         "wallMs": 62
       },
       {
         "role": "bench",
-        "spawns": 21,
-        "wallMs": 52
+        "spawns": 20,
+        "wallMs": 48
       },
       {
         "role": "bench",
-        "spawns": 21,
-        "wallMs": 52
-      },
-      {
-        "role": "bench",
-        "spawns": 21,
-        "wallMs": 55
-      },
-      {
-        "role": "bench",
-        "spawns": 21,
-        "wallMs": 57
-      },
-      {
-        "role": "bench",
-        "spawns": 21,
-        "wallMs": 57
-      },
-      {
-        "role": "bench",
-        "spawns": 21,
+        "spawns": 26,
         "wallMs": 63
       },
       {
         "role": "bench",
-        "spawns": 21,
-        "wallMs": 60
+        "spawns": 25,
+        "wallMs": 61
       },
       {
         "role": "bench",
-        "spawns": 21,
-        "wallMs": 57
+        "spawns": 35,
+        "wallMs": 81
       },
       {
         "role": "bench",
-        "spawns": 21,
-        "wallMs": 58
+        "spawns": 20,
+        "wallMs": 46
       },
       {
         "role": "bench",
-        "spawns": 21,
-        "wallMs": 53
+        "spawns": 28,
+        "wallMs": 67
+      },
+      {
+        "role": "bench",
+        "spawns": 22,
+        "wallMs": 52
       }
     ],
     "samples": [
       {
-        "worktree": "/tmp/octopus-diff-bench-yP73Sb/bench/bench-01",
+        "worktree": "/tmp/octopus-diff-bench-YfZ8DE/bench/bench-01",
         "role": "bench",
-        "sseMs": 40,
-        "uiMs": 59
+        "sseMs": 21,
+        "uiMs": 37
       },
       {
-        "worktree": "/tmp/octopus-diff-bench-yP73Sb/bench/worktrees/bench-01-wt1",
+        "worktree": "/tmp/octopus-diff-bench-YfZ8DE/bench/worktrees/bench-01-wt1",
         "role": "bench",
-        "sseMs": 29,
-        "uiMs": 39
-      },
-      {
-        "worktree": "/tmp/octopus-diff-bench-yP73Sb/bench/worktrees/bench-01-wt2",
-        "role": "bench",
-        "sseMs": 28,
+        "sseMs": 27,
         "uiMs": 40
       },
       {
-        "worktree": "/tmp/octopus-diff-bench-yP73Sb/bench/bench-02",
-        "role": "bench",
-        "sseMs": 28,
-        "uiMs": 45
-      },
-      {
-        "worktree": "/tmp/octopus-diff-bench-yP73Sb/bench/worktrees/bench-02-wt1",
+        "worktree": "/tmp/octopus-diff-bench-YfZ8DE/bench/worktrees/bench-01-wt2",
         "role": "bench",
         "sseMs": 30,
-        "uiMs": 46
+        "uiMs": 41
       },
       {
-        "worktree": "/tmp/octopus-diff-bench-yP73Sb/bench/worktrees/bench-02-wt2",
+        "worktree": "/tmp/octopus-diff-bench-YfZ8DE/bench/bench-02",
         "role": "bench",
-        "sseMs": 27,
-        "uiMs": 43
+        "sseMs": 25,
+        "uiMs": 36
       },
       {
-        "worktree": "/tmp/octopus-diff-bench-yP73Sb/bench/bench-03",
-        "role": "bench",
-        "sseMs": 27,
-        "uiMs": 47
-      },
-      {
-        "worktree": "/tmp/octopus-diff-bench-yP73Sb/bench/worktrees/bench-03-wt1",
-        "role": "bench",
-        "sseMs": 29,
-        "uiMs": 43
-      },
-      {
-        "worktree": "/tmp/octopus-diff-bench-yP73Sb/bench/worktrees/bench-03-wt2",
-        "role": "bench",
-        "sseMs": 29,
-        "uiMs": 43
-      },
-      {
-        "worktree": "/tmp/octopus-diff-bench-yP73Sb/bench/bench-04",
-        "role": "bench",
-        "sseMs": 30,
-        "uiMs": 44
-      },
-      {
-        "worktree": "/tmp/octopus-diff-bench-yP73Sb/bench/worktrees/bench-04-wt1",
-        "role": "bench",
-        "sseMs": 36,
-        "uiMs": 56
-      },
-      {
-        "worktree": "/tmp/octopus-diff-bench-yP73Sb/bench/worktrees/bench-04-wt2",
-        "role": "bench",
-        "sseMs": 29,
-        "uiMs": 43
-      },
-      {
-        "worktree": "/tmp/octopus-diff-bench-yP73Sb/bench/bench-05",
-        "role": "bench",
-        "sseMs": 28,
-        "uiMs": 49
-      },
-      {
-        "worktree": "/tmp/octopus-diff-bench-yP73Sb/bench/worktrees/bench-05-wt1",
-        "role": "bench",
-        "sseMs": 32,
-        "uiMs": 42
-      },
-      {
-        "worktree": "/tmp/octopus-diff-bench-yP73Sb/bench/worktrees/bench-05-wt2",
+        "worktree": "/tmp/octopus-diff-bench-YfZ8DE/bench/worktrees/bench-02-wt1",
         "role": "bench",
         "sseMs": 28,
         "uiMs": 48
+      },
+      {
+        "worktree": "/tmp/octopus-diff-bench-YfZ8DE/bench/worktrees/bench-02-wt2",
+        "role": "bench",
+        "sseMs": 29,
+        "uiMs": 43
+      },
+      {
+        "worktree": "/tmp/octopus-diff-bench-YfZ8DE/bench/bench-03",
+        "role": "bench",
+        "sseMs": 26,
+        "uiMs": 36
+      },
+      {
+        "worktree": "/tmp/octopus-diff-bench-YfZ8DE/bench/worktrees/bench-03-wt1",
+        "role": "bench",
+        "sseMs": 29,
+        "uiMs": 49
+      },
+      {
+        "worktree": "/tmp/octopus-diff-bench-YfZ8DE/bench/worktrees/bench-03-wt2",
+        "role": "bench",
+        "sseMs": 29,
+        "uiMs": 44
+      },
+      {
+        "worktree": "/tmp/octopus-diff-bench-YfZ8DE/bench/bench-04",
+        "role": "bench",
+        "sseMs": 24,
+        "uiMs": 34
+      },
+      {
+        "worktree": "/tmp/octopus-diff-bench-YfZ8DE/bench/worktrees/bench-04-wt1",
+        "role": "bench",
+        "sseMs": 31,
+        "uiMs": 46
+      },
+      {
+        "worktree": "/tmp/octopus-diff-bench-YfZ8DE/bench/worktrees/bench-04-wt2",
+        "role": "bench",
+        "sseMs": 29,
+        "uiMs": 50
+      },
+      {
+        "worktree": "/tmp/octopus-diff-bench-YfZ8DE/bench/bench-05",
+        "role": "bench",
+        "sseMs": 24,
+        "uiMs": 49
+      },
+      {
+        "worktree": "/tmp/octopus-diff-bench-YfZ8DE/bench/worktrees/bench-05-wt1",
+        "role": "bench",
+        "sseMs": 30,
+        "uiMs": 47
+      },
+      {
+        "worktree": "/tmp/octopus-diff-bench-YfZ8DE/bench/worktrees/bench-05-wt2",
+        "role": "bench",
+        "sseMs": 29,
+        "uiMs": 49
       }
     ]
   },
@@ -550,56 +532,56 @@
       "name": "projects",
       "path": "/api/projects",
       "status": 200,
-      "rawBytes": 101472,
-      "gzipBytes": 8559,
-      "wireEncoding": null,
-      "wireBytes": 101472,
-      "firstMs": 11.087886000008439,
-      "warmMs": 1.562078000002657
+      "rawBytes": 88347,
+      "gzipBytes": 8225,
+      "wireEncoding": "gzip",
+      "wireBytes": 9759,
+      "firstMs": 8.274441999994451,
+      "warmMs": 1.951321000000462
     },
     {
       "name": "inbox, working",
       "path": "/api/inbox?scope=working",
       "status": 200,
       "rawBytes": 197215,
-      "gzipBytes": 20997,
-      "wireEncoding": null,
-      "wireBytes": 197215,
-      "firstMs": 3.538392999995267,
-      "warmMs": 3.512546999991173
+      "gzipBytes": 20980,
+      "wireEncoding": "gzip",
+      "wireBytes": 24678,
+      "firstMs": 401.3870520000055,
+      "warmMs": 10.355644999974174
     },
     {
       "name": "inbox, review (To review)",
       "path": "/api/inbox?scope=review",
       "status": 200,
       "rawBytes": 197214,
-      "gzipBytes": 20988,
-      "wireEncoding": null,
-      "wireBytes": 197214,
-      "firstMs": 4.177700999993249,
-      "warmMs": 3.405049000008148
+      "gzipBytes": 20970,
+      "wireEncoding": "gzip",
+      "wireBytes": 24671,
+      "firstMs": 759.7734269999783,
+      "warmMs": 12.562796000012895
     },
     {
       "name": "inbox, branch + working (All on branch)",
       "path": "/api/inbox?scope=branch&working=1",
       "status": 200,
       "rawBytes": 197236,
-      "gzipBytes": 21005,
-      "wireEncoding": null,
-      "wireBytes": 197236,
-      "firstMs": 756.7075949999999,
-      "warmMs": 741.4192750000075
+      "gzipBytes": 20989,
+      "wireEncoding": "gzip",
+      "wireBytes": 24708,
+      "firstMs": 19.190197000018088,
+      "warmMs": 14.477408999984618
     },
     {
       "name": "files bench, working",
-      "path": "/api/worktrees/e51bf9635896c48d/files?scope=working",
+      "path": "/api/worktrees/ca847ac97a0ba323/files?scope=working",
       "status": 200,
       "rawBytes": 1359,
-      "gzipBytes": 447,
-      "wireEncoding": null,
-      "wireBytes": 1359,
-      "firstMs": 1.086715000012191,
-      "warmMs": 0.9575389999954496
+      "gzipBytes": 448,
+      "wireEncoding": "gzip",
+      "wireBytes": 453,
+      "firstMs": 0.8933979999856092,
+      "warmMs": 0.805940999998711
     }
   ],
   "targets": {
@@ -610,7 +592,6 @@
     "startupSpawnsPerWorktree": 8
   },
   "tracked": {
-    "warmReload": "#27 (cache the branch-scope inbox and files)",
     "startupSpawns": "#10 and #29 (compute each summary once; per-project git metadata)"
   },
   "strict": false,
@@ -618,7 +599,7 @@
     {
       "id": "firstPaint",
       "label": "Time to first paint (cold, `data-ready`)",
-      "actual": 1381.884948,
+      "actual": 141.91429100000005,
       "limit": 3000,
       "unit": "ms",
       "applies": true,
@@ -628,17 +609,17 @@
     {
       "id": "warmReload",
       "label": "Time to first paint (warm reload, median of 3)",
-      "actual": 851.9981779999998,
+      "actual": 85.74573200000032,
       "limit": 300,
       "unit": "ms",
       "applies": true,
-      "tracked": "#27 (cache the branch-scope inbox and files)",
-      "status": "tracked-fail"
+      "tracked": null,
+      "status": "pass"
     },
     {
       "id": "startupSpawns",
       "label": "Startup git spawns per worktree",
-      "actual": 15.866666666666667,
+      "actual": 8.222222222222221,
       "limit": 8,
       "unit": "spawns",
       "applies": true,
@@ -648,7 +629,7 @@
     {
       "id": "idleCpu",
       "label": "Idle CPU, daemon + git children (average)",
-      "actual": 0.3165765646287218,
+      "actual": 0.23323621312889958,
       "limit": 10,
       "unit": "%",
       "applies": true,
@@ -658,7 +639,7 @@
     {
       "id": "refreshSse",
       "label": "Refresh: write → SSE `worktree.changed` p95",
-      "actual": 40,
+      "actual": 31,
       "limit": 1000,
       "unit": "ms",
       "applies": true,
@@ -668,7 +649,7 @@
     {
       "id": "refreshUi",
       "label": "Refresh: write → UI sidebar update p95",
-      "actual": 59,
+      "actual": 50,
       "limit": 1000,
       "unit": "ms",
       "applies": true,

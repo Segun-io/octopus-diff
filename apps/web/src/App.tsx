@@ -263,12 +263,14 @@ function AppShell({ eventSourceFactory }: { eventSourceFactory?: EventSourceFact
   useAddJobWatcher();
   const focusWorktree =
     model.view.kind === 'worktree' ? model.view.worktreeId : (selected?.worktreeId ?? null);
-  useFocusReporting(focusWorktree);
+  // The project Overview opens its project too: the daemon computes review states on demand (#10).
+  useFocusReporting(focusWorktree, model.view.kind === 'project' ? model.view.projectId : null);
   useSelectionRepair();
 
   const projectsData = model.projects.data;
   const hasProjects = (projectsData?.projects.length ?? 0) > 0;
-  const ready = projectsData !== undefined && model.inbox.data !== undefined;
+  // First paint is the sidebar from `/api/projects` (#10); the inbox fills in afterwards.
+  const ready = projectsData !== undefined;
   useKeyboardShortcuts(commands, ready && hasProjects);
 
   const onSelectEntry = useCallback((entry: NavEntry) => commands.selectEntry(entry), [commands]);

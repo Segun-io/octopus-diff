@@ -24,7 +24,7 @@ arguments as they are (no `--` needed; a literal `--` is tolerated). Build first
 | Time to first paint, cold | < 3000 ms | small | enforced |
 | Idle CPU | < 10 % | small | enforced |
 | Edit → SSE and → UI, p95 | < 1000 ms | small | enforced |
-| Warm reload (median of 3) | < 300 ms | small at 30 × 3 | **tracked: #27** |
+| Warm reload (median of 3) | < 300 ms | small at 30 × 3 | enforced (#27 fixed it) |
 | Startup git spawns per worktree | ≤ 8 | every layout | **tracked: #10 / #29** |
 
 A *tracked* budget is known to fail today. It prints `FAIL (tracked: #n)` and does not turn the run red. When the

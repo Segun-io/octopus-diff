@@ -351,7 +351,7 @@ export function createApp(deps: AppDeps): Hono {
 
   route('inbox', async (c) => {
     const query = parseWith(InboxQuerySchema, c.req.query(), 'query');
-    return c.json(await core.inbox(query.scope, query.onlyUnreviewed));
+    return c.json(await core.inbox(query.scope, query.onlyUnreviewed, query.projectIds));
   });
 
   route('listFiles', async (c) => {
@@ -385,7 +385,7 @@ export function createApp(deps: AppDeps): Hono {
 
   route('setFocus', async (c) => {
     const request = parseWith(FocusRequestSchema, await readJson(c), 'request body');
-    core.setFocus(request.worktreeId);
+    core.setFocus(request.worktreeId, request.projectId ?? null);
     const body: OkResponse = { ok: true };
     return c.json(body);
   });

@@ -84,9 +84,16 @@ export interface MockBackendOptions {
   /**
    * Behave like a status-flow daemon (docs/STATUS-FLOW.md): summaries carry `review`, the review
    * scope lists the branch's committed files (until reviewed) plus the uncommitted ones, and a
-   * bulk review with `advanceBookmarks` moves the bookmark. Off by default (an older daemon).
+   * bulk review with `advanceBookmarks` moves the bookmark. Off by default: then `review` counts
+   * the unreviewed uncommitted files and no commits (what the sidebar used to derive from the
+   * `working` inbox before #10).
    */
   statusFlow?: boolean;
+  /**
+   * Like the daemon since #10: summaries carry no `review` until the worktree's project is
+   * opened (`PUT /api/focus` with its worktree or `projectId`), which emits `review.ready`.
+   */
+  reviewOnDemand?: boolean;
 }
 
 /** Soft limit: above this the patch is omitted unless `full=true`. Hard cap: patch is cut. */
@@ -181,6 +188,8 @@ export class MockBackend {
   readonly scanRoots: ScanRoot[] = [];
   readonly reviews = new Set<string>();
   focus: string | null = null;
+  /** Projects opened through `setFocus` (`reviewOnDemand`). */
+  readonly opened = new Set<string>();
   settings: AppSettings = structuredClone(DEFAULT_APP_SETTINGS);
   readonly overrides = new Map<string, ReviewOverride>();
   settingsRevision = 0;
@@ -684,7 +693,19 @@ export class MockBackend {
       stateHash,
       updatedAt: mw.updatedAt,
       activityAt: mw.activityAt,
-      ...(this.options.statusFlow ? { review: this.reviewOf(mp, mw) } : {}),
+      ...(this.options.reviewOnDemand && !this.opened.has(mp.project.id)
+        ? {}
+        : {
+            review: this.options.statusFlow
+              ? this.reviewOf(mp, mw)
+              : {
+                  bookmark: mw.worktree.headSha,
+                  base: mw.worktree.headSha,
+                  newCommits: 0,
+                  unreviewedFiles: files.filter((f) => !f.reviewed).length,
+                  historyRewritten: false,
+                },
+          }),
     };
   }
 
@@ -1100,13 +1121,15 @@ export class MockBackend {
     return { ok: true, restored };
   }
 
-  inbox(scope: DiffScope, onlyUnreviewed: boolean): InboxResponse {
+  inbox(scope: DiffScope, onlyUnreviewed: boolean, projectIds?: readonly string[]): InboxResponse {
     if (scope.kind === 'commit') {
       throw new MockApiError(400, 'bad_request', 'commit scope is not supported by the inbox');
     }
     const entries: InboxResponse['entries'] = [];
     const map = reviewOverrideMap([...this.overrides.values()]);
+    const only = projectIds ? new Set(projectIds) : null;
     for (const mp of this.projects) {
+      if (only && !only.has(mp.project.id)) continue;
       for (const mw of mp.worktrees) {
         if (mw.error || mw.worktree.missing) continue;
         const review = this.policyOf(mp, mw, map);
@@ -1199,8 +1222,18 @@ export class MockBackend {
     return { ok: true, reviewed: req.reviewed };
   }
 
-  setFocus(worktreeId: string | null): { ok: true } {
+  setFocus(worktreeId: string | null, projectId: string | null = null): { ok: true } {
     this.focus = worktreeId;
+    let opened = projectId;
+    if (worktreeId !== null) {
+      for (const mp of this.projects) {
+        if (mp.worktrees.some((w) => w.worktree.id === worktreeId)) opened = mp.project.id;
+      }
+    }
+    if (opened !== null && !this.opened.has(opened)) {
+      this.opened.add(opened);
+      if (this.options.reviewOnDemand) this.emit({ type: 'review.ready', projectId: opened });
+    }
     return { ok: true };
   }
 

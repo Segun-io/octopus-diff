@@ -11,8 +11,9 @@ test.describe('§8.7 keyboard', () => {
     const sink = findWorktree(manifest, 'kitchen-sink').worktree;
     await app.open(daemon.authUrl);
     await app.selectWorktree(sink.id);
+    // The file list loads after the click (review state is computed on demand since #10).
+    await expect.poll(async () => (await app.fileItems()).length).toBeGreaterThanOrEqual(4);
     const files = await app.fileItems();
-    expect(files.length).toBeGreaterThanOrEqual(4);
     await app.openFile(files[0]?.path ?? '');
     await app.focusApp();
     await app.press('j');
@@ -130,6 +131,7 @@ test.describe('§8.7 keyboard', () => {
     // Start on a reviewed file in a worktree whose files are all reviewed.
     const beta = findWorktree(manifest, 'beta').worktree;
     await app.selectWorktree(beta.id);
+    await expect.poll(async () => (await app.fileItems()).length).toBeGreaterThan(0);
     const betaFirst = (await app.fileItems())[0]?.path ?? '';
     await app.openFile(betaFirst);
     await expect(app.selectedFile).toHaveAttribute('data-reviewed', 'true');

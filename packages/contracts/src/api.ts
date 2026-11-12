@@ -224,8 +224,24 @@ export type DirsResponse = z.infer<typeof DirsResponseSchema>;
 
 // --- inbox, files, diff, commits -------------------------------------------------------------
 
+/** Most projects one `GET /api/inbox?projectIds=` names (a client filling the inbox in batches). */
+export const INBOX_PROJECTS_MAX = 200;
+
 export const InboxQuerySchema = z
-  .object({ ...scopeQueryShape, onlyUnreviewed: QueryBool.default(false) })
+  .object({
+    ...scopeQueryShape,
+    onlyUnreviewed: QueryBool.default(false),
+    /**
+     * Only these projects (comma-separated ids; unknown ids are ignored). Absent = every project.
+     * Lets a client fill the inbox in batches, first rows first (#10).
+     */
+    projectIds: z
+      .string()
+      .max(INBOX_PROJECTS_MAX * 17)
+      .transform((v) => [...new Set(v.split(',').filter((s) => s.length > 0))])
+      .pipe(z.array(IdSchema).min(1).max(INBOX_PROJECTS_MAX))
+      .optional(),
+  })
   .superRefine(refineScopeQuery)
   .transform(({ scope, base, sha, working, ...rest }) => ({
     ...rest,
@@ -324,7 +340,15 @@ export type ReviewResponse = z.infer<typeof ReviewResponseSchema>;
  * Tells the daemon which worktree the UI is looking at, so it can poll that one more often
  * (30 s focused vs 5 min for the rest). Null when nothing is focused or the tab is hidden.
  */
-export const FocusRequestSchema = z.object({ worktreeId: IdSchema.nullable() });
+/**
+ * `PUT /api/focus`: the worktree the user looks at (watch priority, null when the tab is hidden)
+ * and, optionally, the project they have open (its Overview, or the focused worktree's project).
+ * An open project gets its worktrees' review states computed (#10; `review.ready` follows).
+ */
+export const FocusRequestSchema = z.object({
+  worktreeId: IdSchema.nullable(),
+  projectId: IdSchema.nullable().optional(),
+});
 export type FocusRequest = z.infer<typeof FocusRequestSchema>;
 
 export { OkResponseSchema };

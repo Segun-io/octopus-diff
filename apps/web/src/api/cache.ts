@@ -210,6 +210,10 @@ export function collectEventEffects(
       effects.inbox = true;
       effects.worktrees.add(event.worktreeId);
       break;
+    case 'review.ready':
+      // First review states of an opened project (#10): only the sidebar's summaries change.
+      effects.projects = true;
+      break;
     case 'settings.changed': {
       // Skip the refetch when this revision is the one a response already applied.
       const cached = queryClient.getQueryData<{ revision: number } | null>(['settings']);

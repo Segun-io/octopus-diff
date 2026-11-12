@@ -145,20 +145,29 @@ export function useReviewMutation() {
   });
 }
 
-/** Tells the daemon which worktree is focused (null when the tab is hidden). */
-export function useFocusReporting(worktreeId: string | null) {
+/**
+ * Tells the daemon which worktree is focused (null when the tab is hidden) and which project is
+ * open (`projectId`: its Overview). An open project gets its review states computed (#10).
+ */
+export function useFocusReporting(worktreeId: string | null, projectId: string | null = null) {
   const api = useApi();
-  const last = useRef<string | null | undefined>(undefined);
+  const last = useRef<string | undefined>(undefined);
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const report = () => {
       const hidden = typeof document !== 'undefined' && document.visibilityState === 'hidden';
       const next = hidden ? null : worktreeId;
-      if (next === last.current) return;
+      const nextProject = hidden ? null : projectId;
+      const key = `${next ?? ''}\u0000${nextProject ?? ''}`;
+      if (key === last.current) return;
       if (timer !== undefined) clearTimeout(timer);
       timer = setTimeout(() => {
-        last.current = next;
-        api.setFocus({ worktreeId: next }).catch(() => {
+        last.current = key;
+        const request =
+          nextProject === null
+            ? { worktreeId: next }
+            : { worktreeId: next, projectId: nextProject };
+        api.setFocus(request).catch(() => {
           last.current = undefined;
         });
       }, 250);
@@ -169,7 +178,7 @@ export function useFocusReporting(worktreeId: string | null) {
       if (timer !== undefined) clearTimeout(timer);
       document.removeEventListener('visibilitychange', report);
     };
-  }, [api, worktreeId]);
+  }, [api, worktreeId, projectId]);
 }
 
 /** Resolved theme: follows prefers-color-scheme unless overridden. */

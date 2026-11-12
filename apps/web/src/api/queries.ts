@@ -4,9 +4,18 @@ import {
   createApiClient,
   type DiffResponse,
   type DiffScope,
+  INBOX_PROJECTS_MAX,
+  type InboxResponse,
+  type ProjectsResponse,
   scopeKey,
 } from '@octopus-diff/contracts';
-import { keepPreviousData, QueryClient, useQuery } from '@tanstack/react-query';
+import {
+  keepPreviousData,
+  QueryClient,
+  experimental_streamedQuery as streamedQuery,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query';
 import { createContext, useContext } from 'react';
 import type { FileRef } from '../lib/fileRef.ts';
 import { readToken } from './token.ts';
@@ -111,12 +120,166 @@ export function useProjectsQuery() {
   return useQuery({ queryKey: queryKeys.projects(), queryFn: () => api.listProjects() });
 }
 
+/**
+ * Inbox batches in flight at once. One: git-core runs four git processes in total, so batches in
+ * parallel only interleave and the first one lands late (30 × 3: first file at 973 ms with four
+ * in flight, 257 ms one at a time; the whole inbox 1.41 s vs 1.32 s).
+ */
+const INBOX_BATCH_PARALLEL = 1;
+/** About this many batches per inbox: big enough to stream, few enough to stay cheap. */
+const INBOX_BATCHES = 12;
+
+/**
+ * Inbox scopes that are still being filled in (more batches to come), by query key. Kept by key and
+ * not on the response object: cache patches (a review mark, an event patch) replace the data with a
+ * new object, and React Query's structural sharing does not keep the identity of what is written.
+ * The flag is cleared just before the last batch is written, so the render that shows the complete
+ * data already sees it clear.
+ */
+const partialInboxKeys = new Set<string>();
+
+/** True while a streamed inbox is still missing batches (bulk "all" must not act on it yet). */
+export function isPartialInbox(scope: DiffScope): boolean {
+  return partialInboxKeys.has(JSON.stringify(queryKeys.inbox(inboxScopeFor(scope))));
+}
+
+/** Marks `key` partial while `source` still has batches to give; always cleared when it ends. */
+async function* trackPartial(
+  key: string,
+  source: AsyncGenerator<{ response: InboxResponse; last: boolean }>,
+  streamed: boolean,
+): AsyncGenerator<{ response: InboxResponse; last: boolean }> {
+  if (streamed) partialInboxKeys.add(key);
+  try {
+    for await (const item of source) {
+      if (item.last) partialInboxKeys.delete(key);
+      yield item;
+    }
+  } finally {
+    partialInboxKeys.delete(key);
+  }
+}
+
+/**
+ * The projects split into inbox batches (#10): projects with uncommitted changes first, then the
+ * rest, in sidebar order, so the first rows land first. Null = one request for everything.
+ */
+export function inboxBatches(projects: ProjectsResponse | undefined): string[][] | null {
+  const items = (projects?.projects ?? []).filter((p) => p.worktrees.length > 0);
+  if (items.length < 2) return null;
+  const dirty = (p: (typeof items)[number]) =>
+    p.worktrees.some((w) => (w.summary?.changedFiles ?? 0) > 0);
+  const byName = (a: (typeof items)[number], b: (typeof items)[number]) =>
+    a.project.name.toLowerCase().localeCompare(b.project.name.toLowerCase());
+  const ordered = [
+    ...items.filter(dirty).sort(byName),
+    ...items.filter((p) => !dirty(p)).sort(byName),
+  ];
+  const size = Math.min(INBOX_PROJECTS_MAX, Math.max(1, Math.ceil(ordered.length / INBOX_BATCHES)));
+  const out: string[][] = [];
+  for (let i = 0; i < ordered.length; i += size) {
+    out.push(ordered.slice(i, i + size).map((p) => p.project.id));
+  }
+  return out;
+}
+
+/**
+ * The projects list to batch by: the cached one, or the request in flight (the sidebar's own on
+ * first load, or a refetch after a project was added), so no project is left out of the batches.
+ * Undefined when it cannot be had: the inbox is then one request.
+ */
+async function currentProjects(
+  api: ApiClient,
+  queryClient: QueryClient,
+): Promise<ProjectsResponse | undefined> {
+  const key = queryKeys.projects();
+  const state = queryClient.getQueryState<ProjectsResponse>(key);
+  if (state?.data !== undefined && state.fetchStatus === 'idle' && !state.isInvalidated) {
+    return state.data;
+  }
+  return queryClient
+    .fetchQuery({ queryKey: key, queryFn: () => api.listProjects(), staleTime: 0 })
+    .catch(() => undefined);
+}
+
+/** Inbox batches, a few in flight, yielded as each lands; `last` marks the final one. */
+async function* streamInbox(
+  api: ApiClient,
+  scope: DiffScope,
+  batches: string[][] | null,
+): AsyncGenerator<{ response: InboxResponse; last: boolean }> {
+  if (batches === null) {
+    yield { response: await api.inbox({ scope }), last: true };
+    return;
+  }
+  const pending = new Map<number, Promise<[number, InboxResponse]>>();
+  let next = 0;
+  const start = () => {
+    const i = next++;
+    const request = api
+      .inbox({ scope, projectIds: batches[i] ?? [] })
+      .then((r): [number, InboxResponse] => [i, r]);
+    // Rejections surface through `Promise.race`; a batch still in flight after one failed must
+    // not turn into an unhandled rejection.
+    request.catch(() => {});
+    pending.set(i, request);
+  };
+  while (next < batches.length && pending.size < INBOX_BATCH_PARALLEL) start();
+  while (pending.size > 0) {
+    const [i, response] = await Promise.race(pending.values());
+    pending.delete(i);
+    if (next < batches.length) start();
+    yield { response, last: pending.size === 0 };
+  }
+}
+
+/** Adds a batch's entries; a worktree already present (an event patched it) is replaced. */
+function mergeInbox(
+  acc: InboxResponse,
+  { response }: { response: InboxResponse; last: boolean },
+): InboxResponse {
+  const ids = new Set(response.entries.map((e) => e.worktree.id));
+  return {
+    scope: response.scope,
+    entries: [...acc.entries.filter((e) => !ids.has(e.worktree.id)), ...response.entries],
+    generatedAt: response.generatedAt,
+  };
+}
+
+/**
+ * The inbox in `scope`, filled in project batches after the first paint (#10): the first batches
+ * show while the rest load. A refetch replaces the data once all its batches are in.
+ */
+export function inboxQueryOptions(api: ApiClient, queryClient: QueryClient, scope: DiffScope) {
+  const inboxScope = inboxScopeFor(scope);
+  const queryKey = queryKeys.inbox(inboxScope);
+  return {
+    queryKey,
+    queryFn: streamedQuery({
+      streamFn: async () => {
+        // A refetch writes its result once at the end ('replace'): one request is enough.
+        if (queryClient.getQueryData(queryKey) !== undefined) {
+          return streamInbox(api, inboxScope, null);
+        }
+        const batches = inboxBatches(await currentProjects(api, queryClient));
+        return trackPartial(
+          JSON.stringify(queryKey),
+          streamInbox(api, inboxScope, batches),
+          batches !== null,
+        );
+      },
+      reducer: mergeInbox,
+      initialValue: { scope: inboxScope, entries: [], generatedAt: new Date(0).toISOString() },
+      refetchMode: 'replace',
+    }),
+  };
+}
+
 export function useInboxQuery(scope: DiffScope) {
   const api = useApi();
-  const inboxScope = inboxScopeFor(scope);
+  const queryClient = useQueryClient();
   return useQuery({
-    queryKey: queryKeys.inbox(inboxScope),
-    queryFn: () => api.inbox({ scope: inboxScope }),
+    ...inboxQueryOptions(api, queryClient, scope),
     placeholderData: keepPreviousData,
   });
 }

@@ -164,6 +164,9 @@ test.describe('UX-4/5/6 settings, themes and assets (UI)', () => {
     ui,
     page,
   }) => {
+    // Since #10 review states are computed on demand (a project is opened), not at startup. The To
+    // review inbox computes every one of them, so this test starts with them all in place.
+    await daemon.client.inbox({ scope: { kind: 'review' } });
     await ui.open(daemon.authUrl);
     const expected: Array<[string, RegExp]> = [
       ['/favicon.svg', /^image\/svg\+xml/],
@@ -208,6 +211,7 @@ test.describe('UX-4/5/6 settings, themes and assets (UI)', () => {
     await expect(svgIcon).toHaveAttribute('href', /^data:image\/svg\+xml/);
     const live = findWorktree(manifest, 'live').worktree;
     await ui.selectWorktree(live.id);
+    await expect.poll(async () => (await ui.filePaths()).length).toBeGreaterThan(0);
     const [first] = await ui.filePaths();
     if (!first) throw new Error('no files');
     await ui.openFile(first);

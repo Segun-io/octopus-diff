@@ -52,6 +52,9 @@ test.describe('status flow v2 (UI)', () => {
     daemon,
     app,
   }) => {
+    // Since #10 review states are computed on demand (a project is opened), not at startup. The To
+    // review inbox computes every one of them, so no row changes stage while the test watches.
+    await daemon.client.inbox({ scope: { kind: 'review' } });
     await app.open(daemon.authUrl);
     const before = await rowPlaces(app.allWorktreeItems());
     expect(before.length).toBeGreaterThan(3);

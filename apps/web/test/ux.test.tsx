@@ -72,7 +72,14 @@ function setup(
   });
   // The Settled shelf is closed by default; most tests read settled rows, so open it.
   const store = createUiStore(
-    { confirmBulk: false, settledOpen: true, scope: scopeForPref('review'), ...opts.store },
+    {
+      confirmBulk: false,
+      settledOpen: true,
+      // Without status flow the mock has no To review range; the app used to fall back to
+      // Uncommitted for such daemons before #10 made To review always available.
+      scope: scopeForPref(opts.statusFlow ? 'review' : 'working'),
+      ...opts.store,
+    },
     false,
   );
   const factory = () => {

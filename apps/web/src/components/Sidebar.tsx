@@ -343,6 +343,8 @@ const ROW_INDENT: Record<RowVariant, string> = {
 
 /** `2 commits · 3 files` (the To review text of the hover card). */
 function toReviewText(row: WorktreeRow): string {
+  // Review state not computed yet (#10): opening the worktree or its project computes it.
+  if (row.stage === 'changed') return 'changes (open to review)';
   const parts: string[] = [];
   if (row.newCommits > 0) parts.push(plural(row.newCommits, 'commit'));
   if (row.unreviewed > 0) parts.push(plural(row.unreviewed, 'file'));

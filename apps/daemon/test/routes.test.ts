@@ -349,6 +349,12 @@ describe('API routes (fake git-core)', () => {
     fake.setFiles(linkedOf(alpha), 'branch', [fakeFile('feature.ts')]);
     const branch = await api.inbox({ scope: { kind: 'branch' } });
     expect(branch.entries.map((e) => e.worktree.id)).toEqual([linkedOf(alpha)]);
+
+    // Only some projects (#10: the web fills the inbox in batches); unknown ids are ignored.
+    const onlyBeta = await api.inbox({ projectIds: [beta.projectId, 'ffffffffffffffff'] });
+    expect(onlyBeta.entries.map((e) => e.project.name)).toEqual(['beta']);
+    const bad = await http(daemon, '/api/inbox?projectIds=nope');
+    expect(bad.status).toBe(400);
   });
 
   it('lists commits with a validated limit', async () => {

@@ -112,6 +112,8 @@ export interface ScopeParams {
 
 export interface InboxParams extends ScopeParams {
   onlyUnreviewed?: boolean;
+  /** Only these projects (at most `INBOX_PROJECTS_MAX`); omitted = every project. */
+  projectIds?: readonly string[];
 }
 
 export interface DiffParams extends ScopeParams {
@@ -367,6 +369,7 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
     inbox: (params = {}) => {
       const query = scopeQuery(params.scope);
       if (params.onlyUnreviewed) query.set('onlyUnreviewed', 'true');
+      if (params.projectIds?.length) query.set('projectIds', params.projectIds.join(','));
       return request(InboxResponseSchema, 'GET', ROUTES.inbox.path, { query });
     },
     listFiles: (worktreeId, params = {}) =>

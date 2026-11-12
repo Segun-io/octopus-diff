@@ -51,8 +51,8 @@ function withReviewed(entries: InboxEntry[], reviewed: (f: ChangedFile) => boole
 
 describe('sidebar model', () => {
   it('sorts projects by name and worktrees by recent activity', () => {
-    const { projects, inbox } = demo();
-    const model = buildSidebar(projects, inbox.entries, NO_SIDEBAR_FILTERS);
+    const { projects } = demo();
+    const model = buildSidebar(projects, NO_SIDEBAR_FILTERS);
     expect(model.groups.map((g) => g.project.name)).toEqual([
       'docs-site',
       'infra',
@@ -101,13 +101,13 @@ describe('sidebar model', () => {
   });
 
   it('filters by picked projects and worktrees (a union), dirty and unreviewed', () => {
-    const { projects, inbox } = demo();
+    const { backend, projects, inbox } = demo();
     const cache = projects
       .flatMap((p) => p.worktrees)
       .find((w) => w.worktree.branch === 'fix/cache');
     const infra = projects.find((p) => p.project.name === 'infra');
     if (!cache || !infra) throw new Error('demo fixture changed');
-    const one = buildSidebar(projects, inbox.entries, {
+    const one = buildSidebar(projects, {
       ...NO_SIDEBAR_FILTERS,
       worktrees: [cache.worktree.id],
     });
@@ -115,7 +115,7 @@ describe('sidebar model', () => {
     // byId keeps every row: the dropdown lists what the filters hide.
     expect(one.byId.size).toBe(projects.flatMap((p) => p.worktrees).length);
 
-    const union = buildSidebar(projects, inbox.entries, {
+    const union = buildSidebar(projects, {
       ...NO_SIDEBAR_FILTERS,
       projects: [infra.project.id],
       worktrees: [cache.worktree.id],
@@ -126,29 +126,57 @@ describe('sidebar model', () => {
     );
     expect(union.order).toHaveLength(infra.worktrees.length + 1);
 
-    const dirty = buildSidebar(projects, inbox.entries, {
+    const dirty = buildSidebar(projects, {
       ...NO_SIDEBAR_FILTERS,
       onlyDirty: true,
     });
     expect(dirty.order).toHaveLength(inbox.entries.length);
     expect([...dirty.order].sort()).toEqual(inbox.entries.map((e) => e.worktree.id).sort());
 
-    const allReviewedApiMain = withReviewed(
-      inbox.entries,
-      (f) => f.path === 'README.md' || f.path === 'src/server/router.ts',
-    );
-    const unreviewed = buildSidebar(projects, allReviewedApiMain, {
+    // Every file of octopus-api's main reviewed: the summaries' `review` counts drop to 0 there.
+    for (const entry of inbox.entries) {
+      for (const f of entry.files) {
+        if (f.path !== 'README.md' && f.path !== 'src/server/router.ts') continue;
+        backend.setReview({
+          projectId: entry.project.id,
+          scopeKind: 'working',
+          path: f.path,
+          patchHash: f.patchHash,
+          reviewed: true,
+        });
+      }
+    }
+    const reviewedProjects = backend.listProjects().projects;
+    const unreviewed = buildSidebar(reviewedProjects, {
       ...NO_SIDEBAR_FILTERS,
       onlyUnreviewed: true,
     });
     expect(unreviewed.order).toHaveLength(inbox.entries.length - 1);
+
+    // Review states not computed yet (#10): the dirty rows show their changes and stay listed.
+    const pending = reviewedProjects.map((p) => ({
+      ...p,
+      worktrees: p.worktrees.map((w) => {
+        if (!w.summary) return w;
+        const { review: _review, ...summary } = w.summary;
+        return { ...w, summary };
+      }),
+    }));
+    const notYet = buildSidebar(pending, { ...NO_SIDEBAR_FILTERS, onlyUnreviewed: true });
+    expect(notYet.order).toHaveLength(inbox.entries.length);
+    const changed = [...notYet.byId.values()].filter((r) => r.stage === 'changed');
+    expect(changed.length).toBeGreaterThan(0);
+    for (const row of changed) {
+      expect(row.unreviewed).toBe(0);
+      expect(row.state).toBe('attention');
+    }
   });
 });
 
 describe('Overview helpers', () => {
   it('puts the default-branch worktree first and keeps the rest in order', () => {
-    const { projects, inbox } = demo();
-    const model = buildSidebar(projects, inbox.entries, NO_SIDEBAR_FILTERS);
+    const { projects } = demo();
+    const model = buildSidebar(projects, NO_SIDEBAR_FILTERS);
     const web = model.groups.find((g) => g.project.name === 'web-dashboard');
     if (!web) throw new Error('no web-dashboard');
     expect(web.allRows.map((r) => r.worktree.branch)).toEqual(['agent/codex-123', 'main']);
@@ -165,8 +193,8 @@ describe('Overview helpers', () => {
   });
 
   it('lists the branches no worktree has checked out', () => {
-    const { projects, inbox } = demo();
-    const model = buildSidebar(projects, inbox.entries, NO_SIDEBAR_FILTERS);
+    const { projects } = demo();
+    const model = buildSidebar(projects, NO_SIDEBAR_FILTERS);
     const web = model.groups.find((g) => g.project.name === 'web-dashboard');
     if (!web) throw new Error('no web-dashboard');
     const branches = [{ name: 'main' }, { name: 'old/x' }, { name: 'agent/codex-123' }];
@@ -182,6 +210,7 @@ describe('stages (docs/STATUS-FLOW.md §2.2)', () => {
   const summary = { ...base.summary, counts: { ...base.summary.counts, conflicted: 0 } };
   const worktree = base.worktree;
   const on = { enabled: true };
+  const off = { enabled: false };
 
   it('derives each stage', () => {
     expect(
@@ -204,6 +233,18 @@ describe('stages (docs/STATUS-FLOW.md §2.2)', () => {
       'reviewed',
     );
     expect(stageOf({ summary, worktree, unreviewed: 4, review: { enabled: false } })).toBe('off');
+    // No review state yet (#10): changes, under the project, not "to review"; clean = reviewed.
+    const { review: _review, ...pending } = summary;
+    expect(stageOf({ summary: { ...pending, changedFiles: 3 }, worktree, unreviewed: 0 })).toBe(
+      'changed',
+    );
+    expect(placeOf('changed')).toBe('attention');
+    expect(stageOf({ summary: { ...pending, changedFiles: 0 }, worktree, unreviewed: 0 })).toBe(
+      'reviewed',
+    );
+    expect(
+      stageOf({ summary: { ...pending, changedFiles: 3 }, worktree, unreviewed: 0, review: off }),
+    ).toBe('off');
     expect(stageOf({ summary: null, worktree, unreviewed: 0 })).toBe('off');
     expect(stageOf({ summary, worktree: { ...worktree, missing: true }, unreviewed: 1 })).toBe(
       'off',
@@ -313,8 +354,8 @@ describe('stages (docs/STATUS-FLOW.md §2.2)', () => {
         },
       ],
     ]);
-    const build = (settle: Parameters<typeof buildSidebar>[5] = []) =>
-      buildSidebar(projects, undefined, NO_SIDEBAR_FILTERS, undefined, [], settle, forges).byId.get(
+    const build = (settle: Parameters<typeof buildSidebar>[4] = []) =>
+      buildSidebar(projects, NO_SIDEBAR_FILTERS, undefined, [], settle, forges).byId.get(
         worktree.id,
       );
     const hidden = build();
@@ -368,9 +409,9 @@ describe('stages (docs/STATUS-FLOW.md §2.2)', () => {
   });
 
   it('the sidebar takes no scope: the same inputs give the same rows', () => {
-    const { projects: list, inbox } = demo();
-    const a = buildSidebar(list, inbox.entries, NO_SIDEBAR_FILTERS);
-    const b = buildSidebar(list, inbox.entries, NO_SIDEBAR_FILTERS);
+    const { projects: list } = demo();
+    const a = buildSidebar(list, NO_SIDEBAR_FILTERS);
+    const b = buildSidebar(list, NO_SIDEBAR_FILTERS);
     expect([...a.byId.values()].map((r) => [r.worktree.id, r.state, r.stage])).toEqual(
       [...b.byId.values()].map((r) => [r.worktree.id, r.state, r.stage]),
     );
