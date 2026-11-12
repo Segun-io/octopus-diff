@@ -77,7 +77,8 @@ project has a remote on a host**, so offline setups and the test fixtures never 
 One GraphQL query per repository and refresh, with each branch as an aliased connection
 (`b0: pullRequests(headRefName: $b0, first: 5, orderBy: UPDATED_AT DESC)`; GitLab:
 `mergeRequests(sourceBranches: [$b0], first: 5, sort: UPDATED_DESC)`), batches of 20 branches.
-Measured: 1 GitHub rate-limit point per repository per refresh.
+Cost on GitHub: 1 rate-limit point for up to 13 head branches, 2 from 14 to 20, then per chunk of 20 (arithmetic from
+GitHub's rule, "Rate limits" below; recorded responses with few branches reported `cost: 1`).
 
 - GitHub fields: number, title, url, state, isDraft, base/head ref, head oid, isCrossRepository,
   headRepository, author, reviewDecision, mergeable, totalCommentsCount, and the head commit's
@@ -88,19 +89,56 @@ Measured: 1 GitHub rate-limit point per repository per refresh.
   If a self-managed GitLab rejects unknown fields, the query is retried with a basic field set.
 - Only branches checked out in worktrees are asked about, never the default branch (forks reuse `main`).
 - When: on daemon start; 1.5 s after a worktree/project is added, removed or updated or a branch
-  changes; every 2 minutes; on "Check again" (`POST /api/forges/refresh`); on the Request tab's
-  "Refresh". At most once per 15 s per project unless forced or pushed (below). A failed fetch keeps the
-  last good data and reports `error`.
+  changes; on a poll (below); when a project comes into view; on "Check again" (`POST /api/forges/refresh`);
+  on the Request tab's "Refresh". At most once per 15 s per project unless forced or pushed (below). A failed
+  fetch keeps the last good data and reports `error`.
+- **Polling is adaptive** (DECISIONS #197). The web reports the focused worktree / open Overview with `PUT
+  /api/focus` (null when the tab is hidden) and again every 5 minutes while visible; the daemon counts a browser
+  as looking for 30 minutes after its last report (6 minutes after it starts). While someone looks, every
+  project is polled every 2 minutes and the project in view every 60 s; when nobody does, every 10 minutes. A
+  big fleet stretches the interval so polling stays near 1 000 points an hour (300 when nobody looks), at most
+  30 minutes. A project that comes into view with data older than 30 s is looked up at once, and the fleet poll
+  runs at once after a break: this is how a request created on another machine or on the forge's web page shows
+  up when you look, with no signal from git. Hidden tabs trigger nothing.
 - **A new request is picked up** by the 2-minute poll at the latest. Faster, from local signals: when a
   worktree event shows that a branch's upstream or push configuration changed (`git push -u`, which
   `gh pr create` runs first) the project is looked up at once, bypassing the 15 s spacing; and if that
   lookup finds no request for the pushed branch, it is looked up again 30 s and 90 s later (forced, 2
   extra points), because the request is usually created just after the push. A request created from
-  another machine or the forge's web page has no local signal and waits for the poll.
+  another machine or the forge's web page has no local signal: it shows up when someone looks (above) or at the
+  next poll. Only branches whose upstream or push destination changed count as pushed (a new worktree on a new
+  branch does not), and the second follow-up is skipped when the first one found the request.
+- **"Check again"** (Settings) re-probes the CLIs and fetches every project, but leaves a project fetched in the last
+  5 s alone and spends at most 150 points a call (the poll catches up with the rest).
 - **Forced means forced.** "Check again", the Request tab's "Refresh" and the Overview's "Refresh" never
   serve a cache and are not spaced: a lookup already running that was not forced is awaited and a new one
   follows (its answer may predate the click). The 15 s spacing is only for the unforced retries after a
   failure (DECISIONS #195).
+
+### 3a. Rate limits and the budget
+
+GitHub's GraphQL API allows **5 000 points an hour per user** (10 000 for some GitHub Enterprise Cloud
+apps), shared by everything that uses the same sign-in. A query's cost is the number of requests needed to fill
+every connection (a nested connection counts once per parent node, assuming full pages), divided by 100, rounded to
+the nearest whole number, minimum 1. Secondary limits: 100 concurrent requests, 2 000 points a minute, CPU time
+(the runner starts at most 2 processes per CLI). Primary-limit refusals come as HTTP 200 with an error message and
+`x-ratelimit-remaining: 0`. GitLab has no points; gitlab.com's per-user request rate is far above what we send.
+
+| Query | Connections (requests) | Points |
+|---|---|---|
+| Batch, `n` head branches | `11 n` (`n` pullRequests, 5 commits and 5 contexts under each) | 1 for n ≤ 13, 2 for 14–20; per chunk of 20 |
+| Detail | 8 | 1 |
+| Conversation | 53 (3 connections + 50 thread comment lists) | 1 |
+| Repository | 24 (4 + a commit list under each of the 20 newest requests) | 1 |
+
+`estimateQueryPoints` (`packages/forge/src/cost.ts`) is this table in code. The daemon's `ForgeBudget` keeps a
+per-host rolling-hour ledger of those estimates with three ceilings (background polling 1 500 points an hour,
+event-driven lookups 2 500, lookups the user asked for 4 000), follows the `remaining` / `resetAt` each GitHub
+response reports (under 500 left: only user-asked lookups; under 100: none), and on a refusal (rate-limit
+message, HTTP 429) stops asking that host until its reset, or 5 minutes doubling to an hour. Held-back
+lookups keep the last good data. `GET /api/forges` carries the state in `budgets`, Settings → Forges shows it.
+`docs/reports/forge-fetching.md` has every call path with its trigger, frequency and cost, and the fleet estimates
+(arithmetic and simulation, kept apart).
 
 ### 3b. Detail, conversation and repository queries
 
@@ -108,16 +146,17 @@ Each is one GraphQL query through the same runner and allowlist, fetched only wh
 
 | Data | Query | When fetched | Cache (daemon) | Cost |
 |---|---|---|---|---|
-| Chips, hover card, Overview rows | the batch above (now also `createdAt additions deletions changedFiles mergeStateStatus`; GitLab `createdAt`, `diffStatsSummary`) | daemon start, worktree events, every 2 min | as above | 1 pt per repository and refresh (measured, unchanged) |
+| Chips, hover card, Overview rows | the batch above (now also `createdAt additions deletions changedFiles mergeStateStatus`; GitLab `createdAt`, `diffStatsSummary`) | daemon start, worktree events, the adaptive poll, focus | as above | 1 pt (2 from 14 branches) per repository and refresh |
 | Request detail: summary, reviewers, labels, 100 checks, newest 100 commits, first 100 files | `OctopusDiffPullRequestDetail` / `OctopusDiffMergeRequestDetail` | when the Request tab opens | 60 s while open, 10 min when merged/closed; in-flight dedupe; key includes the batch's `updatedAt`, head and CI state | 1 pt |
 | Checks live refresh | the same detail query | every 45 s, only while a check runs, the tab is shown, the browser tab is visible and the user gave input in the last 20 min | same | 1 pt per 45 s per open tab |
 | Conversation: 50 comments, 50 reviews, 50 threads × 10 comments (GitLab: 50 discussions × 10 notes) | `OctopusDiffPullRequestConversation` / `OctopusDiffMergeRequestConversation` | when the Summary's Conversation or the Timeline is shown | 60 s / 10 min | 1 pt |
-| Repository facts + 20 newest open requests | `OctopusDiffRepository` / `OctopusDiffProject` | when the project Overview opens; "Refresh" | 10 min; also dropped when the batch's set of requests (number, state) changes | 1 pt |
+| Repository facts + 20 newest open requests | `OctopusDiffRepository` / `OctopusDiffProject` | when the project Overview opens; "Refresh"; reloaded in the background every 2 min while that Overview is in view | 10 min (2 min in view); also dropped when the batch's set of requests (number, state) changes | 1 pt |
 | Local repository facts | git only (`for-each-ref`, `log -1`, `rev-list --left-right --count`, the remote config read) | Overview mount (project and folder) | 30 s, dropped on any event naming the project | 0 |
 
-Every GitHub query asks for `rateLimit { cost remaining resetAt }`; the opt-in live test asserts `cost <= 1`. GitHub PR
+Every GitHub query asks for `rateLimit { cost remaining resetAt }`; the opt-in live test asserts `cost <= 1` for the single-object queries and the arithmetic cost for 1/13/14/20-branch batches. GitHub PR
 numbers are inlined in the query text (`pullRequest(number: 42)`): `gh api graphql --raw-field` cannot pass an
-`Int!` and `-F` stays banned. GitLab's `iid` is a `String!` variable. Errors keep the last good data (shown with a
+`Int!` and `-F` stays banned. GitLab's `iid` is a `String!` variable. The detail, conversation and repository caches keep the 64 most recently used entries per kind
+and drop entries unused for an hour. Errors keep the last good data (shown with a
 "Showing the last loaded data" note); a request that no longer exists answers `no-request`. A `basic` variant of
 each GitHub query without `mergeStateStatus` / `latestOpinionatedReviews` covers old GitHub Enterprise, and GitLab's
 `basic` variants drop newer fields (`mergeRequestInteraction`, `diffStatsSummary`, `languages`, ...); both are tried
@@ -190,7 +229,9 @@ The read-only guarantee (PLAN §5.5) is extended to the forge CLIs, in `packages
   worktrees[{ worktreeId, branch, changeRequest, sync }], fetchedAt }], generatedAt }`. Served from the
   cache joined with the live worktree list; never waits on the network.
 - `POST /api/forges/refresh { projectIds? }` → the same, after re-probing stale CLIs and refetching.
-- SSE `forge.updated { projectIds }` (empty list = only the CLI status changed).
+- SSE `forge.updated { projectIds }` (empty list = only the CLI status or a host's rate-limit state changed).
+- `ForgesResponse.budgets?` → per host the daemon queried: `state` (`ok | busy | low | backoff`),
+  `spentLastHour`, `backgroundLimit`, `hourlyLimit`, `remaining`, `resetAt`, `resumeAt`, `message`.
 - `AppSettings.forges { enabled (default true), hosts: { [host]: 'github' | 'gitlab' | 'none' } }`,
   patched through `PATCH /api/settings`.
 - `GitCore.readRemoteConfig?(project)` (optional on the interface, implemented by git-core).
