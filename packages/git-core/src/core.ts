@@ -12,6 +12,7 @@ import {
   type WatchTargets,
   type WorktreeLocator,
 } from '@octopus-diff/contracts';
+import { readBlob } from './blob.js';
 import { readBranchBase } from './branch-base.js';
 import { GitContext } from './context.js';
 import { createAttributeCache, type DiffDeps, getFileDiff, listChangedFiles } from './diff.js';
@@ -211,6 +212,7 @@ export const createGitCore: CreateGitCore = (options: GitCoreOptions = {}): GitC
     readFileOrigins: guard((worktree, originOptions) =>
       readFileOrigins(ctx, worktree, originOptions),
     ),
+    readBlob: guard((worktree, blobOptions) => readBlob(ctx, worktree, blobOptions)),
     dispose: async () => {
       disposed = true;
       reviewDeps.commitCache.clear();

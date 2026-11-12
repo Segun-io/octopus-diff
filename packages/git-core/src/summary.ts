@@ -3,7 +3,8 @@ import path from 'node:path';
 import {
   type InProgressOperation,
   isGitCoreError,
-  type ScopeOptions,
+  type SummaryOptions,
+  type SummaryResult,
   type WorktreeLocator,
   type WorktreeSummary,
 } from '@octopus-diff/contracts';
@@ -24,6 +25,7 @@ import { hashParts, STATE_HASH_LENGTH } from './hash.js';
 import { DiffOutputParser } from './parse/diff-output.js';
 import type { StatusEntry } from './parse/status.js';
 import { DIFF_PINS, resolveDefaultBranch } from './scope.js';
+import { buildSnapshot, emptySnapshot, snapshotCap } from './snapshot.js';
 import { absolutePathBuffer, inspectUntracked, nestedRepoHead } from './untracked.js';
 
 const STAT_CONCURRENCY = 32;
@@ -207,12 +209,16 @@ async function bareSummary(
 export async function getSummary(
   deps: DiffDeps,
   worktree: WorktreeLocator,
-  options: ScopeOptions | undefined,
-): Promise<WorktreeSummary> {
+  options: SummaryOptions | undefined,
+): Promise<SummaryResult> {
   const { ctx } = deps;
+  const snapshotLimit = snapshotCap(options);
   await ctx.ensureSupported();
   const repo = await ctx.repo(worktree.path);
-  if (repo.bare) return bareSummary(ctx, repo, worktree);
+  if (repo.bare) {
+    const summary = await bareSummary(ctx, repo, worktree);
+    return snapshotLimit === null ? summary : { ...summary, snapshot: emptySnapshot() };
+  }
 
   const status = await readStatus(ctx, repo);
   const { branch } = status;
@@ -330,6 +336,8 @@ export async function getSummary(
   let deletions = 0;
   const trackedPaths = new Set<string>();
   const numstatOutput = numstatResult?.output ?? '';
+  /** Per-path counts for the snapshot (only collected when one was asked for). */
+  const snapshotCounts = new Map<string, { added: number | null; deleted: number | null }>();
   if (numstatResult?.statusOnly) {
     // Degraded (F7): every tracked status entry counts as one changed file.
     for (const entry of status.entries) {
@@ -349,6 +357,9 @@ export async function getSummary(
       trackedPaths.add(entry.path);
       additions += entry.added ?? 0;
       deletions += entry.deleted ?? 0;
+      if (snapshotLimit !== null) {
+        snapshotCounts.set(entry.path, { added: entry.added, deleted: entry.deleted });
+      }
     }
   }
   let untrackedChanged = 0;
@@ -381,7 +392,7 @@ export async function getSummary(
     STATE_HASH_LENGTH,
   );
 
-  return {
+  const summary: WorktreeSummary = {
     worktreeId: worktree.worktreeId,
     projectId: worktree.projectId,
     branch: branchName,
@@ -403,5 +414,21 @@ export async function getSummary(
       ...stagedSigs.map(sigMtimeMs),
       ...untrackedInfos.map((info) => sigMtimeMs(info.statSig)),
     ]),
+  };
+  if (snapshotLimit === null) return summary;
+
+  // The signatures computed above for the stateHash and activityAt: no new lstat, no new git.
+  const signatureByKey = new Map<string, string>();
+  stagedOnlyKeys.forEach((key, i) => signatureByKey.set(key, stagedSigs[i] as string));
+  dirtyKeys.forEach((key, i) => signatureByKey.set(key, signatures[i] as string));
+  return {
+    ...summary,
+    snapshot: buildSnapshot({
+      entries: status.entries,
+      signatureOf: (key) => signatureByKey.get(key),
+      counts: snapshotCounts,
+      untracked: untrackedInfos,
+      cap: snapshotLimit,
+    }),
   };
 }

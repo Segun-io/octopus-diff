@@ -9,7 +9,10 @@ import { z } from 'zod';
 /** A full object id: 40 (sha1) or 64 (sha256) lowercase hex digits, never the all-zero null id. */
 export const GitObjectIdSchema = z
   .string()
-  .regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/, 'expected a full 40 or 64 digit lowercase hex object id')
+  .regex(
+    /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/,
+    'expected a full 40 or 64 digit lowercase hex object id',
+  )
   .refine((oid) => !/^0+$/.test(oid), 'the null object id is not an object');
 export type GitObjectId = z.infer<typeof GitObjectIdSchema>;
 
