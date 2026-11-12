@@ -143,3 +143,66 @@ None added or removed (`pnpm credits:check`: up to date).
   in `config.json` (#314).
 - Web: the row and context bar can show `summary.untrackedOmitted` too; `UntrackedOmittedNotice` takes the omission
   as a prop.
+
+## PR #91 review follow-up
+
+No P1; five P2 and two P3, all fixed (DECISIONS #315-#322; #307, #309, #310, #311, #313 amended). Tests were
+written from the repros first and failed before each fix.
+
+- **P2-1, fake "deleted" activity** (#319, `apps/daemon/src/activity.ts`): `git add` of a file inside an omitted
+  directory then `git reset` (or `git rm --cached`) made the feed say "deleted gen/f3.txt". While either snapshot
+  has omitted files, a never-committed index addition that leaves the snapshot is one coarse `bulk` entry, never
+  "deleted"; without omitted files nothing changed. Tests: the real-git repro for both commands
+  (`untracked-heavy.real-git.test.ts`), three `diffSnapshots` unit tests.
+- **P2-2, the plan could hide source** (#315, #316, `untracked-plan.ts`): dependency, cache and build-output
+  directories (outermost of a path, biggest first) are omitted before anything by size. New contract field
+  `UntrackedOmittedDirectory.generated`; the notice says "dependencies or build output" only for those. The
+  capped fuzz gets generated names at several depths, an ordinary `src/build` folder and a bidi name.
+- **P2-3, ignore lines broader than the directory** (#317): broadened lines (`name/` anywhere,
+  `/<path to a build-output component>/`) only when they cover no listed untracked file and no tracked file (one
+  `git ls-files -z` per index write, memoized, only when a line could be broadened); otherwise the exact
+  `/<dir>/`. Tested with `git check-ignore --no-index` on three real repositories.
+- **P2-4, Trojan Source in the notice** (#318): `ignoreLine` is null for names with control, bidi, zero-width or
+  other format characters; the web escapes every path and line with `escapeSuspicious` and offers no copy
+  button without a safe line. Tests in git-core (unit and a real directory named with U+202E) and web.
+- **P2-5, a "reviewed" row hiding omitted files** (#320): the stage logic and `data-stage` are unchanged; a
+  reviewed row with omitted files gets its own indicator (`notListed`: tick with a dot, warn colour, label
+  "reviewed, N untracked files not listed"), every row and the context bar show `+N not listed`
+  (`NotListedMarker.tsx`; title and screen-reader sentence explain), and the bulk toast says "N untracked files
+  are not listed and cannot be marked". The existing sidebar and e2e specs passed unchanged.
+- **P3-1, two numstats per commit** (#321): the speculative numstat guesses HEAD from the ref files, so a commit
+  with changes left costs one numstat, side by side. A commit during the status still reruns it (tested with a
+  wrapper holding the status).
+- **P3-2, notice text** (#322): each line next to its directory, "and N more" for the rest, and a cut-only
+  omission says what happened without a line.
+
+Mutation checks, all **killed**: no generated-first step; broadening without the listed or tracked check (both
+forms); the unsafe-character check reduced to C0 controls; the old-HEAD guess; no HEAD check; the `ls-files` scan
+without directory names; the activity fix off or without its coarse entry; the notice without escaping, with copy
+for suspicious lines, with "build output" on every directory, without the cut-only wording; the toast part; the
+merge of `untrackedOmitted`; the `notListed` indicator; the screen-reader text; the row marker. Not covered by a
+test: the marker on the context bar (same component as the row's).
+
+Verification (this machine, branch head):
+
+- `pnpm lint`, `pnpm typecheck`, `pnpm build`: exit 0 (lint: the same 4 warnings and 1 info in untouched files).
+- `pnpm test`: exit 0. contracts 107, forge 101 + 5 skipped, fixtures 58, web 455, git-core 369 + 1 skipped,
+  daemon 395 + 4 skipped, e2e unit 7, cli 139, scripts 34. git-core and daemon again: same counts. git-core with
+  `OCTOPUS_DIFF_TEST_FOLDS_CASE=1`: 364 passed + 6 skipped. The commit-race test passed 5 runs out of 5.
+- Capped fuzz with the plan shapes: 12 sweep seeds × caps 1 and 2 (`FUZZ_SEED`), 24 runs, all pass (equality at
+  every step, coverage thresholds met too); the three fixed capped seeds pass in the suite.
+- `pnpm test:e2e -- --workers=1`: 102 passed (3.1 min); read-only proof 12 control repos, 4602 lock polls,
+  0 violations. `perf:smoke`: exit 0.
+- `bench --layout large` (committed): untracked-heavy full summary **338 ms cold, 299-317 ms warm**, edits 55-57 ms,
+  working list 701 rows / 170.9 KiB (`GET /files` 182.8 KiB), inbox 546.6 KiB; main 524 / 414-422 ms; stale-index
+  2.4-2.5 s (git re-hashes every file). Later edits: 3 git processes to SSE (PASS), edit → SSE p95 78 ms; startup
+  spawns 4.7 per worktree (PASS); idle CPU 2.68 %. The untracked-heavy role's edit → SSE max was 268 ms on one
+  edit (75 ms p50), not traced. The faster summaries compared with the first run (523 / 479-492 ms) are within
+  this machine's run-to-run spread; nothing in this round should have made them faster.
+- Default bench (30 × 3, UI, committed): every budget passes: cold paint 142 ms, warm 67 ms, startup spawns 4.5,
+  idle CPU 0.33 %, edit → SSE p95 22 ms, → UI 33 ms, burst diff p95 45 ms, traffic per edit 1421 bytes, 0 projects
+  requests per edit.
+
+Known gaps added: a folder named `build`, `out`, `dist`, `target` or `coverage` that holds real source is omitted
+whole when the worktree is above the cap (#316); the `ls-files` scan for broadened lines costs one process per
+index write in capped worktrees with such directories (#317); the context bar's marker has no test of its own.

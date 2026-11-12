@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-11-12T19:15:21.960Z",
+  "generatedAt": "2026-11-12T20:13:33.504Z",
   "incremental": true,
   "environment": {
     "platform": "linux 6.18.58.1-microsoft-standard-WSL2",
@@ -17,114 +17,114 @@
     "rewriteLines": 300000,
     "description": "one monorepo, 100000 tracked files, 3 worktrees (main with a 300000-line rewrite, a stale index, 30400 untracked files)",
     "worktrees": 3,
-    "generationMs": 9696
+    "generationMs": 9907
   },
   "startup": {
-    "listeningMs": 171,
-    "allSummariesMs": 2913,
+    "listeningMs": 192,
+    "allSummariesMs": 3153,
     "gitSpawns": 14,
     "gitSpawnsPerWorktree": 4.7,
-    "gitWallMs": 5201,
+    "gitWallMs": 4973,
     "bySubcommand": {
       "diff": {
         "count": 3,
-        "totalMs": 3403,
-        "p50": 412,
-        "p95": 2612.2
+        "totalMs": 3322,
+        "p50": 489.8,
+        "p95": 2617.6
       },
       "status": {
         "count": 3,
-        "totalMs": 1752,
-        "p50": 510.4,
-        "p95": 938.5
+        "totalMs": 1606,
+        "p50": 428.7,
+        "p95": 881.2
       },
       "config": {
         "count": 2,
-        "totalMs": 6,
-        "p50": 2.5,
-        "p95": 3.6
+        "totalMs": 5,
+        "p50": 2.2,
+        "p95": 2.4
       },
       "check-attr": {
         "count": 2,
-        "totalMs": 31,
-        "p50": 12,
-        "p95": 19.1
+        "totalMs": 29,
+        "p50": 13.7,
+        "p95": 15.7
       },
       "--version": {
         "count": 1,
         "totalMs": 2,
-        "p50": 2.4,
-        "p95": 2.4
+        "p50": 2.3,
+        "p95": 2.3
       },
       "rev-parse": {
         "count": 1,
         "totalMs": 2,
-        "p50": 2.1,
-        "p95": 2.1
+        "p50": 1.7,
+        "p95": 1.7
       },
       "worktree": {
         "count": 1,
         "totalMs": 2,
-        "p50": 2.1,
-        "p95": 2.1
+        "p50": 2.2,
+        "p95": 2.2
       },
       "for-each-ref": {
         "count": 1,
-        "totalMs": 3,
-        "p50": 2.7,
-        "p95": 2.7
+        "totalMs": 5,
+        "p50": 5.1,
+        "p95": 5.1
       }
     }
   },
   "firstPaint": {
-    "coldMs": 179,
-    "warmMs": 56,
+    "coldMs": 166,
+    "warmMs": 53,
     "warmSamplesMs": [
-      64,
-      46,
-      56
+      66,
+      44,
+      53
     ],
-    "firstContentfulPaintMs": 100,
+    "firstContentfulPaintMs": 80,
     "spawns": {
       "coldPaint": {
         "spawns": 4,
-        "wallMs": 1150,
+        "wallMs": 1176,
         "bySub": {
           "diff": {
             "count": 3,
-            "totalMs": 1140,
-            "p50": 266.2,
-            "p95": 620.2
+            "totalMs": 1167,
+            "p50": 260.2,
+            "p95": 656.9
           },
           "log": {
             "count": 1,
             "totalMs": 10,
-            "p50": 9.5,
-            "p95": 9.5
+            "p50": 9.6,
+            "p95": 9.6
           }
         }
       },
       "warmReload1": {
-        "spawns": 1,
-        "wallMs": 2,
-        "bySub": {
-          "log": {
-            "count": 1,
-            "totalMs": 2,
-            "p50": 2.3,
-            "p95": 2.3
-          }
-        }
-      },
-      "warmReload2": {
         "spawns": 1,
         "wallMs": 3,
         "bySub": {
           "log": {
             "count": 1,
             "totalMs": 3,
-            "p50": 3,
-            "p95": 3
+            "p50": 3.1,
+            "p95": 3.1
+          }
+        }
+      },
+      "warmReload2": {
+        "spawns": 1,
+        "wallMs": 2,
+        "bySub": {
+          "log": {
+            "count": 1,
+            "totalMs": 2,
+            "p50": 2.4,
+            "p95": 2.4
           }
         }
       },
@@ -142,37 +142,13 @@
       },
       "settledReload1": {
         "spawns": 4,
-        "wallMs": 766,
+        "wallMs": 405,
         "bySub": {
           "diff": {
             "count": 2,
-            "totalMs": 346,
-            "p50": 14.5,
-            "p95": 331.1
-          },
-          "log": {
-            "count": 1,
-            "totalMs": 4,
-            "p50": 4,
-            "p95": 4
-          },
-          "status": {
-            "count": 1,
-            "totalMs": 417,
-            "p50": 416.7,
-            "p95": 416.7
-          }
-        }
-      },
-      "settledReload2": {
-        "spawns": 4,
-        "wallMs": 780,
-        "bySub": {
-          "diff": {
-            "count": 2,
-            "totalMs": 354,
-            "p50": 14.1,
-            "p95": 340.1
+            "totalMs": 166,
+            "p50": 15.7,
+            "p95": 150.7
           },
           "log": {
             "count": 1,
@@ -182,21 +158,45 @@
           },
           "status": {
             "count": 1,
-            "totalMs": 422,
-            "p50": 421.6,
-            "p95": 421.6
+            "totalMs": 234,
+            "p50": 234.2,
+            "p95": 234.2
+          }
+        }
+      },
+      "settledReload2": {
+        "spawns": 4,
+        "wallMs": 394,
+        "bySub": {
+          "diff": {
+            "count": 2,
+            "totalMs": 153,
+            "p50": 14.5,
+            "p95": 139
+          },
+          "log": {
+            "count": 1,
+            "totalMs": 4,
+            "p50": 3.6,
+            "p95": 3.6
+          },
+          "status": {
+            "count": 1,
+            "totalMs": 237,
+            "p50": 237.1,
+            "p95": 237.1
           }
         }
       },
       "settledReload3": {
         "spawns": 4,
-        "wallMs": 766,
+        "wallMs": 394,
         "bySub": {
           "diff": {
             "count": 2,
-            "totalMs": 347,
-            "p50": 14.8,
-            "p95": 332.1
+            "totalMs": 160,
+            "p50": 14.7,
+            "p95": 145.1
           },
           "log": {
             "count": 1,
@@ -206,24 +206,24 @@
           },
           "status": {
             "count": 1,
-            "totalMs": 415,
-            "p50": 415.2,
-            "p95": 415.2
+            "totalMs": 230,
+            "p50": 230.1,
+            "p95": 230.1
           }
         }
       }
     },
     "settledReloads": [
       {
-        "ms": 56,
+        "ms": 64,
         "spawns": 4
       },
       {
-        "ms": 65,
+        "ms": 77,
         "spawns": 4
       },
       {
-        "ms": 72,
+        "ms": 62,
         "spawns": 4
       }
     ],
@@ -231,10 +231,10 @@
   },
   "idleCpu": {
     "supported": true,
-    "durationMs": 60067,
-    "averagePercent": 3.8290346513086444,
-    "averageSelfPercent": 0.432847395365325,
-    "maxIntervalPercent": 117.81828602981713,
+    "durationMs": 60040,
+    "averagePercent": 2.6815555656801027,
+    "averageSelfPercent": 0.48301311431504956,
+    "maxIntervalPercent": 81.96546123001593,
     "intervals": [
       0,
       0,
@@ -253,15 +253,7 @@
       0,
       0,
       0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      117.82,
-      0,
+      81.97,
       0,
       0,
       0,
@@ -276,6 +268,20 @@
       0,
       0,
       0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      72.89,
+      5,
       0,
       0,
       0,
@@ -284,12 +290,6 @@
       0,
       0,
       1,
-      110.85,
-      0,
-      0,
-      0,
-      0,
-      0,
       0,
       0,
       0,
@@ -297,76 +297,77 @@
       0,
       0
     ],
-    "rssBytes": 233426944
+    "rssBytes": 231198720
   },
   "memory": {
-    "rssBytes": 230043648,
-    "peakRssBytes": 240762880
+    "rssBytes": 234844160,
+    "peakRssBytes": 249950208
   },
   "refresh": {
     "iterations": 15,
     "sse": {
       "count": 15,
       "min": 56,
-      "max": 82,
-      "mean": 64.46666666666667,
-      "p50": 59,
-      "p90": 77,
-      "p95": 82
+      "max": 268,
+      "mean": 77.6,
+      "p50": 61,
+      "p90": 78,
+      "p95": 268
     },
     "sseByRole": {
       "main": {
         "count": 5,
         "min": 57,
-        "max": 62,
-        "mean": 59.2,
-        "p50": 59,
-        "p90": 62,
-        "p95": 62
+        "max": 69,
+        "mean": 60.6,
+        "p50": 58,
+        "p90": 69,
+        "p95": 69
       },
       "stale-index": {
         "count": 5,
         "min": 56,
-        "max": 58,
-        "mean": 57.4,
-        "p50": 58,
-        "p90": 58,
-        "p95": 58
+        "max": 65,
+        "mean": 58.6,
+        "p50": 57,
+        "p90": 65,
+        "p95": 65
       },
       "untracked-heavy": {
         "count": 5,
-        "min": 74,
-        "max": 82,
-        "mean": 76.8,
-        "p50": 76,
-        "p90": 82,
-        "p95": 82
+        "min": 72,
+        "max": 268,
+        "mean": 113.6,
+        "p50": 75,
+        "p90": 268,
+        "p95": 268
       }
     },
     "ui": {
       "count": 15,
       "min": 59,
-      "max": 92,
-      "mean": 77.4,
-      "p50": 73,
-      "p90": 90,
-      "p95": 92
+      "max": 276,
+      "mean": 85.86666666666666,
+      "p50": 76,
+      "p90": 91,
+      "p95": 276
     },
     "spawnsPerEdit": [
       {
         "role": "main",
-        "spawns": 4,
-        "wallMs": 66,
-        "spawnsToSse": 3,
+        "spawns": 5,
+        "wallMs": 75,
+        "spawnsToSse": 4,
         "bySubToSse": {
           "diff": 2,
+          "config": 1,
           "status": 1
         }
       },
       {
         "role": "stale-index",
         "spawns": 4,
-        "wallMs": 63,
+        "wallMs": 75,
         "spawnsToSse": 3,
         "bySubToSse": {
           "diff": 2,
@@ -376,7 +377,37 @@
       {
         "role": "untracked-heavy",
         "spawns": 4,
+        "wallMs": 250,
+        "spawnsToSse": 3,
+        "bySubToSse": {
+          "diff": 2,
+          "status": 1
+        }
+      },
+      {
+        "role": "main",
+        "spawns": 4,
+        "wallMs": 68,
+        "spawnsToSse": 3,
+        "bySubToSse": {
+          "diff": 2,
+          "status": 1
+        }
+      },
+      {
+        "role": "stale-index",
+        "spawns": 4,
         "wallMs": 66,
+        "spawnsToSse": 3,
+        "bySubToSse": {
+          "diff": 2,
+          "status": 1
+        }
+      },
+      {
+        "role": "untracked-heavy",
+        "spawns": 4,
+        "wallMs": 68,
         "spawnsToSse": 3,
         "bySubToSse": {
           "diff": 2,
@@ -396,7 +427,7 @@
       {
         "role": "stale-index",
         "spawns": 4,
-        "wallMs": 65,
+        "wallMs": 67,
         "spawnsToSse": 3,
         "bySubToSse": {
           "diff": 2,
@@ -406,7 +437,7 @@
       {
         "role": "untracked-heavy",
         "spawns": 4,
-        "wallMs": 65,
+        "wallMs": 66,
         "spawnsToSse": 3,
         "bySubToSse": {
           "diff": 2,
@@ -416,7 +447,7 @@
       {
         "role": "main",
         "spawns": 4,
-        "wallMs": 66,
+        "wallMs": 68,
         "spawnsToSse": 3,
         "bySubToSse": {
           "diff": 2,
@@ -426,7 +457,7 @@
       {
         "role": "stale-index",
         "spawns": 4,
-        "wallMs": 65,
+        "wallMs": 66,
         "spawnsToSse": 3,
         "bySubToSse": {
           "diff": 2,
@@ -446,37 +477,7 @@
       {
         "role": "main",
         "spawns": 4,
-        "wallMs": 66,
-        "spawnsToSse": 3,
-        "bySubToSse": {
-          "diff": 2,
-          "status": 1
-        }
-      },
-      {
-        "role": "stale-index",
-        "spawns": 4,
         "wallMs": 65,
-        "spawnsToSse": 3,
-        "bySubToSse": {
-          "diff": 2,
-          "status": 1
-        }
-      },
-      {
-        "role": "untracked-heavy",
-        "spawns": 4,
-        "wallMs": 65,
-        "spawnsToSse": 3,
-        "bySubToSse": {
-          "diff": 2,
-          "status": 1
-        }
-      },
-      {
-        "role": "main",
-        "spawns": 4,
-        "wallMs": 67,
         "spawnsToSse": 3,
         "bySubToSse": {
           "diff": 2,
@@ -496,7 +497,7 @@
       {
         "role": "untracked-heavy",
         "spawns": 4,
-        "wallMs": 65,
+        "wallMs": 66,
         "spawnsToSse": 3,
         "bySubToSse": {
           "diff": 2,
@@ -508,7 +509,7 @@
       {
         "role": "main",
         "requests": 1,
-        "bytes": 23344,
+        "bytes": 23354,
         "projects": 0,
         "byPath": {
           "/api/inbox": 1
@@ -517,7 +518,7 @@
       {
         "role": "stale-index",
         "requests": 1,
-        "bytes": 23267,
+        "bytes": 23261,
         "projects": 0,
         "byPath": {
           "/api/inbox": 1
@@ -526,94 +527,7 @@
       {
         "role": "untracked-heavy",
         "requests": 3,
-        "bytes": 47147,
-        "projects": 0,
-        "byPath": {
-          "/api/worktrees/:id/activity": 1,
-          "/api/worktrees/:id/files": 1,
-          "/api/inbox": 1
-        }
-      },
-      {
-        "role": "main",
-        "requests": 1,
-        "bytes": 23341,
-        "projects": 0,
-        "byPath": {
-          "/api/inbox": 1
-        }
-      },
-      {
-        "role": "stale-index",
-        "requests": 1,
-        "bytes": 23263,
-        "projects": 0,
-        "byPath": {
-          "/api/inbox": 1
-        }
-      },
-      {
-        "role": "untracked-heavy",
-        "requests": 3,
-        "bytes": 47143,
-        "projects": 0,
-        "byPath": {
-          "/api/worktrees/:id/activity": 1,
-          "/api/worktrees/:id/files": 1,
-          "/api/inbox": 1
-        }
-      },
-      {
-        "role": "main",
-        "requests": 1,
-        "bytes": 23335,
-        "projects": 0,
-        "byPath": {
-          "/api/inbox": 1
-        }
-      },
-      {
-        "role": "stale-index",
-        "requests": 1,
-        "bytes": 23263,
-        "projects": 0,
-        "byPath": {
-          "/api/inbox": 1
-        }
-      },
-      {
-        "role": "untracked-heavy",
-        "requests": 3,
-        "bytes": 47143,
-        "projects": 0,
-        "byPath": {
-          "/api/worktrees/:id/activity": 1,
-          "/api/worktrees/:id/files": 1,
-          "/api/inbox": 1
-        }
-      },
-      {
-        "role": "main",
-        "requests": 1,
-        "bytes": 23345,
-        "projects": 0,
-        "byPath": {
-          "/api/inbox": 1
-        }
-      },
-      {
-        "role": "stale-index",
-        "requests": 1,
-        "bytes": 23265,
-        "projects": 0,
-        "byPath": {
-          "/api/inbox": 1
-        }
-      },
-      {
-        "role": "untracked-heavy",
-        "requests": 3,
-        "bytes": 47155,
+        "bytes": 47134,
         "projects": 0,
         "byPath": {
           "/api/worktrees/:id/activity": 1,
@@ -633,6 +547,93 @@
       {
         "role": "stale-index",
         "requests": 1,
+        "bytes": 23258,
+        "projects": 0,
+        "byPath": {
+          "/api/inbox": 1
+        }
+      },
+      {
+        "role": "untracked-heavy",
+        "requests": 3,
+        "bytes": 47137,
+        "projects": 0,
+        "byPath": {
+          "/api/worktrees/:id/activity": 1,
+          "/api/worktrees/:id/files": 1,
+          "/api/inbox": 1
+        }
+      },
+      {
+        "role": "main",
+        "requests": 1,
+        "bytes": 23345,
+        "projects": 0,
+        "byPath": {
+          "/api/inbox": 1
+        }
+      },
+      {
+        "role": "stale-index",
+        "requests": 1,
+        "bytes": 23266,
+        "projects": 0,
+        "byPath": {
+          "/api/inbox": 1
+        }
+      },
+      {
+        "role": "untracked-heavy",
+        "requests": 3,
+        "bytes": 47144,
+        "projects": 0,
+        "byPath": {
+          "/api/worktrees/:id/activity": 1,
+          "/api/worktrees/:id/files": 1,
+          "/api/inbox": 1
+        }
+      },
+      {
+        "role": "main",
+        "requests": 1,
+        "bytes": 23345,
+        "projects": 0,
+        "byPath": {
+          "/api/inbox": 1
+        }
+      },
+      {
+        "role": "stale-index",
+        "requests": 1,
+        "bytes": 23268,
+        "projects": 0,
+        "byPath": {
+          "/api/inbox": 1
+        }
+      },
+      {
+        "role": "untracked-heavy",
+        "requests": 3,
+        "bytes": 47144,
+        "projects": 0,
+        "byPath": {
+          "/api/worktrees/:id/activity": 1,
+          "/api/worktrees/:id/files": 1,
+          "/api/inbox": 1
+        }
+      },
+      {
+        "role": "main",
+        "requests": 1,
+        "bytes": 23340,
+        "projects": 0,
+        "byPath": {
+          "/api/inbox": 1
+        }
+      },
+      {
+        "role": "stale-index",
+        "requests": 1,
         "bytes": 23257,
         "projects": 0,
         "byPath": {
@@ -642,7 +643,7 @@
       {
         "role": "untracked-heavy",
         "requests": 3,
-        "bytes": 47136,
+        "bytes": 47128,
         "projects": 0,
         "byPath": {
           "/api/worktrees/:id/activity": 1,
@@ -653,109 +654,109 @@
     ],
     "samples": [
       {
-        "worktree": "/tmp/octopus-diff-bench-fxKRf0/mono",
+        "worktree": "/tmp/octopus-diff-bench-I79NDU/mono",
         "role": "main",
-        "sseMs": 62,
-        "uiMs": 70,
-        "sseAt": 1794510887790
+        "sseMs": 69,
+        "uiMs": 77,
+        "sseAt": 1794514380767
       },
       {
-        "worktree": "/tmp/octopus-diff-bench-fxKRf0/mono-stale-index",
+        "worktree": "/tmp/octopus-diff-bench-I79NDU/mono-stale-index",
+        "role": "stale-index",
+        "sseMs": 65,
+        "uiMs": 77,
+        "sseAt": 1794514381947
+      },
+      {
+        "worktree": "/tmp/octopus-diff-bench-I79NDU/mono-untracked-heavy",
+        "role": "untracked-heavy",
+        "sseMs": 268,
+        "uiMs": 276,
+        "sseAt": 1794514383334
+      },
+      {
+        "worktree": "/tmp/octopus-diff-bench-I79NDU/mono",
+        "role": "main",
+        "sseMs": 61,
+        "uiMs": 76,
+        "sseAt": 1794514384510
+      },
+      {
+        "worktree": "/tmp/octopus-diff-bench-I79NDU/mono-stale-index",
         "role": "stale-index",
         "sseMs": 57,
-        "uiMs": 72,
-        "sseAt": 1794510888967
+        "uiMs": 61,
+        "sseAt": 1794514385690
       },
       {
-        "worktree": "/tmp/octopus-diff-bench-fxKRf0/mono-untracked-heavy",
+        "worktree": "/tmp/octopus-diff-bench-I79NDU/mono-untracked-heavy",
         "role": "untracked-heavy",
-        "sseMs": 82,
-        "uiMs": 92,
-        "sseAt": 1794510890172
-      },
-      {
-        "worktree": "/tmp/octopus-diff-bench-fxKRf0/mono",
-        "role": "main",
-        "sseMs": 59,
-        "uiMs": 74,
-        "sseAt": 1794510891350
-      },
-      {
-        "worktree": "/tmp/octopus-diff-bench-fxKRf0/mono-stale-index",
-        "role": "stale-index",
-        "sseMs": 58,
-        "uiMs": 73,
-        "sseAt": 1794510892533
-      },
-      {
-        "worktree": "/tmp/octopus-diff-bench-fxKRf0/mono-untracked-heavy",
-        "role": "untracked-heavy",
-        "sseMs": 77,
+        "sseMs": 78,
         "uiMs": 90,
-        "sseAt": 1794510893735
+        "sseAt": 1794514386880
       },
       {
-        "worktree": "/tmp/octopus-diff-bench-fxKRf0/mono",
+        "worktree": "/tmp/octopus-diff-bench-I79NDU/mono",
         "role": "main",
-        "sseMs": 57,
-        "uiMs": 73,
-        "sseAt": 1794510894915
+        "sseMs": 58,
+        "uiMs": 61,
+        "sseAt": 1794514388058
       },
       {
-        "worktree": "/tmp/octopus-diff-bench-fxKRf0/mono-stale-index",
+        "worktree": "/tmp/octopus-diff-bench-I79NDU/mono-stale-index",
         "role": "stale-index",
         "sseMs": 58,
-        "uiMs": 73,
-        "sseAt": 1794510896100
-      },
-      {
-        "worktree": "/tmp/octopus-diff-bench-fxKRf0/mono-untracked-heavy",
-        "role": "untracked-heavy",
-        "sseMs": 76,
-        "uiMs": 89,
-        "sseAt": 1794510897302
-      },
-      {
-        "worktree": "/tmp/octopus-diff-bench-fxKRf0/mono",
-        "role": "main",
-        "sseMs": 59,
         "uiMs": 74,
-        "sseAt": 1794510898483
+        "sseAt": 1794514389226
       },
       {
-        "worktree": "/tmp/octopus-diff-bench-fxKRf0/mono-stale-index",
+        "worktree": "/tmp/octopus-diff-bench-I79NDU/mono-untracked-heavy",
+        "role": "untracked-heavy",
+        "sseMs": 75,
+        "uiMs": 78,
+        "sseAt": 1794514390424
+      },
+      {
+        "worktree": "/tmp/octopus-diff-bench-I79NDU/mono",
+        "role": "main",
+        "sseMs": 58,
+        "uiMs": 72,
+        "sseAt": 1794514391594
+      },
+      {
+        "worktree": "/tmp/octopus-diff-bench-I79NDU/mono-stale-index",
+        "role": "stale-index",
+        "sseMs": 57,
+        "uiMs": 60,
+        "sseAt": 1794514392773
+      },
+      {
+        "worktree": "/tmp/octopus-diff-bench-I79NDU/mono-untracked-heavy",
+        "role": "untracked-heavy",
+        "sseMs": 72,
+        "uiMs": 76,
+        "sseAt": 1794514393955
+      },
+      {
+        "worktree": "/tmp/octopus-diff-bench-I79NDU/mono",
+        "role": "main",
+        "sseMs": 57,
+        "uiMs": 60,
+        "sseAt": 1794514395123
+      },
+      {
+        "worktree": "/tmp/octopus-diff-bench-I79NDU/mono-stale-index",
         "role": "stale-index",
         "sseMs": 56,
         "uiMs": 59,
-        "sseAt": 1794510899664
+        "sseAt": 1794514396289
       },
       {
-        "worktree": "/tmp/octopus-diff-bench-fxKRf0/mono-untracked-heavy",
-        "role": "untracked-heavy",
-        "sseMs": 74,
-        "uiMs": 88,
-        "sseAt": 1794510900851
-      },
-      {
-        "worktree": "/tmp/octopus-diff-bench-fxKRf0/mono",
-        "role": "main",
-        "sseMs": 59,
-        "uiMs": 73,
-        "sseAt": 1794510902034
-      },
-      {
-        "worktree": "/tmp/octopus-diff-bench-fxKRf0/mono-stale-index",
-        "role": "stale-index",
-        "sseMs": 58,
-        "uiMs": 72,
-        "sseAt": 1794510903217
-      },
-      {
-        "worktree": "/tmp/octopus-diff-bench-fxKRf0/mono-untracked-heavy",
+        "worktree": "/tmp/octopus-diff-bench-I79NDU/mono-untracked-heavy",
         "role": "untracked-heavy",
         "sseMs": 75,
-        "uiMs": 89,
-        "sseAt": 1794510904417
+        "uiMs": 91,
+        "sseAt": 1794514397475
       }
     ]
   },
@@ -765,78 +766,78 @@
       "name": "projects",
       "path": "/api/projects",
       "status": 200,
-      "rawBytes": 3820,
-      "gzipBytes": 902,
+      "rawBytes": 3838,
+      "gzipBytes": 909,
       "wireEncoding": "gzip",
-      "wireBytes": 949,
-      "firstMs": 4.911898999998812,
-      "warmMs": 0.8925109999981942
+      "wireBytes": 960,
+      "firstMs": 4.702124999996158,
+      "warmMs": 0.902033999998821
     },
     {
       "name": "inbox, working",
       "path": "/api/inbox?scope=working",
       "status": 200,
-      "rawBytes": 559735,
-      "gzipBytes": 65885,
+      "rawBytes": 559753,
+      "gzipBytes": 65873,
       "wireEncoding": "gzip",
-      "wireBytes": 68900,
-      "firstMs": 520.3115010000038,
-      "warmMs": 5.40731800001231
+      "wireBytes": 68901,
+      "firstMs": 517.3443410000036,
+      "warmMs": 5.751361999995424
     },
     {
       "name": "inbox, review (To review)",
       "path": "/api/inbox?scope=review",
       "status": 200,
-      "rawBytes": 559734,
-      "gzipBytes": 65880,
+      "rawBytes": 559752,
+      "gzipBytes": 65869,
       "wireEncoding": "gzip",
       "wireBytes": 68896,
-      "firstMs": 5.7902199999953154,
-      "warmMs": 5.007210999989184
+      "firstMs": 5.502812999999151,
+      "warmMs": 5.519148999999743
     },
     {
       "name": "inbox, branch + working (All on branch)",
       "path": "/api/inbox?scope=branch&working=1",
       "status": 200,
-      "rawBytes": 559756,
-      "gzipBytes": 65901,
+      "rawBytes": 559774,
+      "gzipBytes": 65889,
       "wireEncoding": "gzip",
-      "wireBytes": 68922,
-      "firstMs": 6.796812999993563,
-      "warmMs": 6.255575999995926
+      "wireBytes": 68924,
+      "firstMs": 8.352148999998462,
+      "warmMs": 5.757540999999037
     },
     {
       "name": "files main, working",
-      "path": "/api/worktrees/ef0a19722153b396/files?scope=working",
+      "path": "/api/worktrees/419d6ac3c6410095/files?scope=working",
       "status": 200,
       "rawBytes": 184856,
-      "gzipBytes": 21390,
+      "gzipBytes": 21386,
       "wireEncoding": "gzip",
-      "wireBytes": 22210,
-      "firstMs": 2.2596469999989495,
-      "warmMs": 2.246452000006684
+      "wireBytes": 22204,
+      "firstMs": 2.140134000001126,
+      "warmMs": 2.093882000001031
     },
     {
       "name": "files stale-index, working",
-      "path": "/api/worktrees/fc388a7fde5c62bb/files?scope=working",
+      "path": "/api/worktrees/03e530d0158f53a2/files?scope=working",
       "status": 200,
       "rawBytes": 184592,
       "gzipBytes": 21308,
       "wireEncoding": "gzip",
-      "wireBytes": 22108,
-      "firstMs": 2.728363000001991,
-      "warmMs": 1.9660989999974845
+      "wireBytes": 22104,
+      "firstMs": 2.1633069999952568,
+      "warmMs": 1.9991209999861894
     },
     {
       "name": "files untracked-heavy, working",
-      "path": "/api/worktrees/dbc1b8b1636656f6/files?scope=working",
+      "path": "/api/worktrees/95d57f580c3a8223/files?scope=working",
       "status": 200,
-      "rawBytes": 187124,
-      "gzipBytes": 21465,
+      "rawBytes": 187142,
+      "gzipBytes": 21450,
       "wireEncoding": "gzip",
-      "wireBytes": 22370,
-      "firstMs": 2.354648000007728,
-      "warmMs": 2.1534890000039013
+      "wireBytes": 22371,
+      "firstMs": 2.4601200000033714,
+      "warmMs": 2.113293000002159
     }
   ],
   "summaryByRole": [
@@ -844,16 +845,16 @@
       "role": "main",
       "untracked": 400,
       "omitted": 0,
-      "coldMs": 446.9,
+      "coldMs": 523.8,
       "warmMs": [
-        342.2,
-        366,
-        379.5
+        421.8,
+        414.3,
+        416.2
       ],
       "editMs": [
-        42.4,
-        42,
-        39.8
+        40.7,
+        38.4,
+        37.7
       ],
       "listRows": 702,
       "listBytes": 172806
@@ -862,16 +863,16 @@
       "role": "stale-index",
       "untracked": 400,
       "omitted": 0,
-      "coldMs": 2736.4,
+      "coldMs": 2493.8,
       "warmMs": [
-        2924.1,
-        2534,
-        2500.8
+        2421.4,
+        2396.9,
+        2423.9
       ],
       "editMs": [
-        42.1,
-        40.1,
-        41.8
+        40.7,
+        39.1,
+        40.1
       ],
       "listRows": 701,
       "listBytes": 172559
@@ -880,16 +881,16 @@
       "role": "untracked-heavy",
       "untracked": 30400,
       "omitted": 30000,
-      "coldMs": 523.2,
+      "coldMs": 338.2,
       "warmMs": [
-        492,
-        492.1,
-        479.4
+        316.5,
+        299.4,
+        315.7
       ],
       "editMs": [
-        64,
-        59.8,
-        63
+        54.5,
+        56.8,
+        54.7
       ],
       "listRows": 701,
       "listBytes": 174959
@@ -914,7 +915,7 @@
     {
       "id": "firstPaint",
       "label": "Time to first paint (cold, `data-ready`)",
-      "actual": 179.25047099999938,
+      "actual": 165.60279099999934,
       "limit": 3000,
       "unit": "ms",
       "applies": false,
@@ -924,7 +925,7 @@
     {
       "id": "warmReload",
       "label": "Time to first paint (warm reload, median of 3)",
-      "actual": 56.161323999998785,
+      "actual": 53.34108500000002,
       "limit": 300,
       "unit": "ms",
       "applies": false,
@@ -944,7 +945,7 @@
     {
       "id": "steadyEditSse",
       "label": "Edit → SSE p95, later edits of a worktree (#40, 100k-file target)",
-      "actual": 77,
+      "actual": 78,
       "limit": 120,
       "unit": "ms",
       "applies": false,
@@ -964,7 +965,7 @@
     {
       "id": "idleCpu",
       "label": "Idle CPU, daemon + git children (average)",
-      "actual": 3.8290346513086444,
+      "actual": 2.6815555656801027,
       "limit": 10,
       "unit": "%",
       "applies": false,
@@ -974,7 +975,7 @@
     {
       "id": "refreshSse",
       "label": "Refresh: write → SSE `worktree.changed` p95",
-      "actual": 82,
+      "actual": 268,
       "limit": 1000,
       "unit": "ms",
       "applies": false,
@@ -994,7 +995,7 @@
     {
       "id": "editTraffic",
       "label": "Browser traffic per edit (worst edit, #51)",
-      "actual": 47155,
+      "actual": 47144,
       "limit": 102400,
       "unit": "bytes",
       "applies": false,
@@ -1014,7 +1015,7 @@
     {
       "id": "refreshUi",
       "label": "Refresh: write → UI sidebar update p95",
-      "actual": 92,
+      "actual": 276,
       "limit": 1000,
       "unit": "ms",
       "applies": false,
