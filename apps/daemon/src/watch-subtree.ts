@@ -117,8 +117,8 @@ export interface NewSubtreeWatchOptions {
 export class NewSubtreeWatch {
   readonly #opts: NewSubtreeWatchOptions;
   #created = new Set<string>();
-  /** The previous pass's creations. */
-  #recent: ReadonlySet<string> = new Set();
+  /** The previous pass's creations (minus what was deleted since, see `noteRemoved`). */
+  #recent = new Set<string>();
   #count = 0;
   #timer: NodeJS.Timeout | undefined;
   #burstStart = 0;
@@ -149,11 +149,26 @@ export class NewSubtreeWatch {
     this.#timer.unref();
   }
 
+  /**
+   * Forgets what is remembered about deleted paths and everything under them. A creation seen
+   * earlier at the same path is no proof that a directory created there now is watched: it was
+   * replaced (`a/b` created, `a` deleted, `a/b/deep` created in one go reports only `create a`).
+   */
+  noteRemoved(removedPaths: readonly string[]): void {
+    if (this.#disposed || removedPaths.length === 0) return;
+    for (const removed of removedPaths) {
+      const inside = removed + path.sep;
+      for (const set of [this.#created, this.#recent]) {
+        for (const p of set) if (p === removed || p.startsWith(inside)) set.delete(p);
+      }
+    }
+  }
+
   async #pass(): Promise<void> {
     const created = this.#created;
     const count = this.#count;
     const recent = this.#recent;
-    this.#recent = created;
+    this.#recent = new Set(created);
     this.#created = new Set();
     this.#count = 0;
     if (this.#disposed) return;

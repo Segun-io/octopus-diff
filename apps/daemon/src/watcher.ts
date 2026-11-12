@@ -493,8 +493,18 @@ export class WatcherService {
         async () => {
           if (this.#projects.get(projectId) !== created || !created.sub) return;
           await this.#enqueue(created, () => this.#subscribeProject(created));
-          // Changes made while the git dir had no subscription were missed.
-          if (created.sub) for (const id of created.worktreeIds) this.markDirty(id, 'git');
+          // Changes made while the git dir had no subscription were missed: status, and also an
+          // edit of `info/exclude`, whose event may have gone by while the old subscription was
+          // released. Forget the cached text and re-read every worktree's ignore rules, so a
+          // directory that stopped being excluded in the gap is watched again.
+          if (created.sub) {
+            created.exclude = null;
+            for (const id of created.worktreeIds) {
+              const st = this.#worktrees.get(id);
+              if (st) this.#scheduleIgnoreCheck(st);
+              this.markDirty(id, 'git');
+            }
+          }
         },
       );
       project = created;
@@ -823,8 +833,13 @@ export class WatcherService {
       async () => {
         if (this.#worktrees.get(info.worktreeId) !== st || !st.sub) return;
         await this.#enqueue(st, () => this.#subscribeWorktree(st));
-        // Files written while the tree was not subscribed were missed.
-        if (st.sub) this.markDirty(info.worktreeId, 'fs');
+        // Files written while the tree was not subscribed were missed, and so may an edit of a
+        // `.gitignore` (its event can go by while the old subscription is released).
+        if (st.sub) {
+          st.build.nested.clear();
+          this.#scheduleIgnoreCheck(st);
+          this.markDirty(info.worktreeId, 'fs');
+        }
       },
     );
     this.#worktrees.set(info.worktreeId, st);
@@ -1103,6 +1118,7 @@ export class WatcherService {
     const owners = new Set<WorktreeState>();
     const deferred: Array<{ owner: WorktreeState; path: string }> = [];
     const created = new Map<WorktreeState, string[]>();
+    const removed = new Map<WorktreeState, string[]>();
     let rootDeleted = false;
     for (const event of events) {
       if (event.path === st.info.root && event.type === 'delete') rootDeleted = true;
@@ -1114,9 +1130,16 @@ export class WatcherService {
         if (list) list.push(event.path);
         else created.set(owner, [event.path]);
       }
+      if (event.type === 'delete' && owner.subtrees) {
+        const list = removed.get(owner);
+        if (list) list.push(event.path);
+        else removed.set(owner, [event.path]);
+      }
       if (verdict === 'unknown') deferred.push({ owner, path: event.path });
       else owners.add(owner);
     }
+    // Deletions first: a path created again in this delivery must not be trusted from before.
+    for (const [owner, paths] of removed) owner.subtrees?.noteRemoved(paths);
     for (const [owner, paths] of created) owner.subtrees?.note(paths);
     if (rootDeleted) this.#onRootDeleted(st);
     this.#markOwnersDirty(owners, 'fs');
@@ -1363,9 +1386,11 @@ export class WatcherService {
       .map((id) => this.#worktrees.get(id))
       .filter((s): s is WorktreeState => s !== undefined);
     const created: string[] = [];
+    const removed: string[] = [];
     for (const event of events) {
       const p = event.path;
       if (event.type === 'create' && !isLockFile(p)) created.push(p);
+      if (event.type === 'delete' && !isLockFile(p)) removed.push(p);
       if (p === project.commonDir && event.type === 'delete') {
         // Same as a deleted worktree root (F1): the subscription is dead from here on.
         project.native = false;
@@ -1397,6 +1422,7 @@ export class WatcherService {
       }
       if (!matched && isSameOrInside(worktreesDir, p) && !relist) relist = true;
     }
+    project.subtrees?.noteRemoved(removed);
     project.subtrees?.note(created);
     if (relist) this.#scheduleListDirty(project);
     this.#markOwnersDirty(dirty, 'git');

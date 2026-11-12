@@ -1,4 +1,4 @@
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, rmSync } from 'node:fs';
 import { mkdir, symlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { WatchTargets } from '@octopus-diff/contracts';
@@ -9,7 +9,9 @@ import {
   burstThreshold,
   findUnwatchedSubdir,
   isIgnoredGitDirChild,
+  NewSubtreeWatch,
   ResubscribeGate,
+  type SubtreeCheck,
 } from '../src/watch-subtree.js';
 import { type DirtyReason, type SubscribeFn, WatcherService } from '../src/watcher.js';
 import { eventually, onCleanup, sleep, tempDir } from './helpers.js';
@@ -75,10 +77,13 @@ function setup() {
   /** Completed subscriptions per directory. */
   const subscribed: string[] = [];
   const callbacks = new Map<string, parcelWatcher.SubscribeCallback>();
+  /** Directories whose events are recorded but not handed to the watcher (a missed event). */
+  const dropped = new Set<string>();
   const subscribe: SubscribeFn = async (dir, fn, opts) => {
     const deliver: parcelWatcher.SubscribeCallback = (error, events) => {
       // Recorded before the watcher handles them: ordered by the stream.
       for (const e of events) raw.push({ dir, type: e.type, path: e.path, at: Date.now() });
+      if (dropped.has(dir)) return;
       fn(error, events);
     };
     const sub = await parcelWatcher.subscribe(dir, deliver, opts);
@@ -125,7 +130,18 @@ function setup() {
       50,
     );
   };
-  return { watcher, dirty, checks, raw, subscribed, callbacks, count, seen, writesUntilSeen };
+  return {
+    watcher,
+    dirty,
+    checks,
+    raw,
+    subscribed,
+    callbacks,
+    count,
+    seen,
+    writesUntilSeen,
+    dropped,
+  };
 }
 
 describe('new directories with subdirectories (issue #36)', { timeout: 30_000 }, () => {
@@ -174,35 +190,40 @@ describe('new directories with subdirectories (issue #36)', { timeout: 30_000 },
     await eventually(() => t.dirty.some((d) => d.at >= Math.min(event.at, written)), 10_000);
   });
 
-  it('does not re-subscribe for directories that were reported one by one', async () => {
-    const layout = await makeLayout();
-    const t = setup();
-    await t.watcher.setProject('p1', layout.common, [layout.worktree]);
-    // Each directory is created after the watcher reported the previous one: all are watched.
-    let from = t.raw.length;
-    const a = path.join(layout.root, 'one');
-    await mkdir(a);
-    await t.seen(a, from);
-    from = t.raw.length;
-    const b = path.join(a, 'two');
-    await mkdir(b);
-    await t.seen(b, from);
-    from = t.raw.length;
-    const c = path.join(b, 'three');
-    await mkdir(c);
-    await t.seen(c, from);
-    // The pass that looks at the last creation has run when it reports (inspected > 0).
-    await eventually(
-      () => t.checks.some((c) => c.target === 'worktree' && c.inspected > 0),
-      10_000,
-    );
-    await eventually(() => t.checks.length >= 1, 10_000);
-    // Negative check: there is no event for "nothing happened", so give a re-subscribe, which
-    // would follow a pass at once (gap 50 ms), time to show.
-    await sleep(400);
-    expect(t.count(layout.root)).toBe(1);
-    expect(t.checks.every((c) => c.reason === null)).toBe(true);
-  });
+  // inotify specific (one event per directory, each watched as it appears): FSEvents on macOS
+  // reports directories differently, so there is no equivalent to assert there.
+  it.skipIf(process.platform !== 'linux')(
+    'does not re-subscribe for directories that were reported one by one',
+    async () => {
+      const layout = await makeLayout();
+      const t = setup();
+      await t.watcher.setProject('p1', layout.common, [layout.worktree]);
+      // Each directory is created after the watcher reported the previous one: all are watched.
+      let from = t.raw.length;
+      const a = path.join(layout.root, 'one');
+      await mkdir(a);
+      await t.seen(a, from);
+      from = t.raw.length;
+      const b = path.join(a, 'two');
+      await mkdir(b);
+      await t.seen(b, from);
+      from = t.raw.length;
+      const c = path.join(b, 'three');
+      await mkdir(c);
+      await t.seen(c, from);
+      // The pass that looks at the last creation has run when it reports (inspected > 0).
+      await eventually(
+        () => t.checks.some((c) => c.target === 'worktree' && c.inspected > 0),
+        10_000,
+      );
+      await eventually(() => t.checks.length >= 1, 10_000);
+      // Negative check: there is no event for "nothing happened", so give a re-subscribe, which
+      // would follow a pass at once (gap 50 ms), time to show.
+      await sleep(400);
+      expect(t.count(layout.root)).toBe(1);
+      expect(t.checks.every((c) => c.reason === null)).toBe(true);
+    },
+  );
 
   it('ignores subdirectories the watcher skips by design (node_modules, ignored build dirs)', async () => {
     const layout = await makeLayout();
@@ -250,6 +271,44 @@ describe('new directories with subdirectories (issue #36)', { timeout: 30_000 },
       () => t.dirty.some((d) => d.id === 'main' && d.reason === 'git' && d.at >= event.at),
       10_000,
     );
+  });
+
+  it('after the git dir is subscribed again, an exclude edit made in the gap is read (PR #75 review)', async () => {
+    const layout = await makeLayout();
+    // `dist/` is excluded in info/exclude, so the worktree subscription ignores it.
+    const exclude = path.join(layout.common, 'info', 'exclude');
+    await writeFile(exclude, 'dist/\n');
+    await mkdir(path.join(layout.root, 'dist'), { recursive: true });
+    await writeFile(path.join(layout.root, 'dist', 'index.js'), 'v1');
+    const t = setup();
+    await t.watcher.setProject('p1', layout.common, [layout.worktree]);
+    expect(t.count(layout.root)).toBe(1);
+
+    // The exclude is edited while its event cannot reach the watcher (the old subscription is
+    // released during a re-subscribe): `dist` is no longer excluded, and nothing says so.
+    t.dropped.add(layout.common);
+    const from = t.raw.length;
+    await writeFile(exclude, '');
+    await t.seen(exclude, from);
+    t.dropped.delete(layout.common);
+
+    // The git dir is subscribed again (what a nested ref directory created in one go causes; the
+    // trigger here is the burst rule, which does not depend on a kernel race): that has to re-read
+    // the ignore rules of its worktrees as well.
+    const deliver = t.callbacks.get(layout.common);
+    if (!deliver) throw new Error('no git dir subscription');
+    deliver(
+      null,
+      Array.from({ length: burstThreshold() }, (_, i) => ({
+        type: 'create' as const,
+        path: path.join(layout.common, 'refs', 'heads', `gone-${i}`),
+      })),
+    );
+    await eventually(() => t.count(layout.common) >= 2, 10_000);
+    // `dist` is watched now: a write inside it is reported (the loop is the real condition, a
+    // write before the worktree is subscribed again is not).
+    await t.writesUntilSeen(path.join(layout.root, 'dist'));
+    expect(t.count(layout.root)).toBeGreaterThanOrEqual(2);
   });
 
   it('is off when watchNewSubtrees is false', async () => {
@@ -301,6 +360,63 @@ describe('findUnwatchedSubdir', () => {
     // A created file and a vanished path are nothing to watch.
     const missing = new Set([path.join(a, 'file.txt'), path.join(a, 'gone')]);
     expect(await findUnwatchedSubdir(missing, never)).toBe(false);
+  });
+});
+
+describe('NewSubtreeWatch: a replaced directory is not trusted from before (PR #75 review)', () => {
+  it('forgets creations under a deleted path, so a directory recreated in one go is found', async () => {
+    const base = await tempDir();
+    const a = path.join(base, 'a');
+    const b = path.join(a, 'b');
+    const checks: SubtreeCheck[] = [];
+    const unwatched: SubtreeCheck[] = [];
+    const watch = new NewSubtreeWatch({
+      debounceMs: 20,
+      maxWaitMs: 100,
+      burstThreshold: 100_000,
+      isIgnored: () => false,
+      onCheck: (c) => checks.push(c),
+      onUnwatched: (c) => unwatched.push(c),
+    });
+    onCleanup(() => watch.dispose());
+    // `a` and `a/b` were reported one by one: both are watched, nothing to do.
+    await mkdir(b, { recursive: true });
+    watch.note([a, b]);
+    await eventually(() => checks.length === 1, 5000);
+    expect(unwatched).toHaveLength(0);
+    // `a` is deleted (its deletion arrives) and recreated with `a/b/deep` in one go: only `create a`
+    // is reported, and `a/b` is a new, unwatched directory although its old path was reported.
+    rmSync(a, { recursive: true });
+    watch.noteRemoved([a]);
+    await mkdir(path.join(b, 'deep'), { recursive: true });
+    watch.note([a]);
+    await eventually(() => checks.length === 2, 5000);
+    expect(unwatched).toHaveLength(1);
+    expect(unwatched[0]?.reason).toBe('unwatched-subdir');
+  });
+
+  it('keeps trusting what was not deleted', async () => {
+    const base = await tempDir();
+    const a = path.join(base, 'a');
+    const b = path.join(a, 'b');
+    const unwatched: SubtreeCheck[] = [];
+    const checks: SubtreeCheck[] = [];
+    const watch = new NewSubtreeWatch({
+      debounceMs: 20,
+      maxWaitMs: 100,
+      burstThreshold: 100_000,
+      isIgnored: () => false,
+      onCheck: (c) => checks.push(c),
+      onUnwatched: (c) => unwatched.push(c),
+    });
+    onCleanup(() => watch.dispose());
+    await mkdir(b, { recursive: true });
+    watch.note([a, b]);
+    await eventually(() => checks.length === 1, 5000);
+    watch.noteRemoved([path.join(base, 'elsewhere')]);
+    watch.note([a]); // the subdirectory's own event came in an earlier delivery: still known
+    await eventually(() => checks.length === 2, 5000);
+    expect(unwatched).toHaveLength(0);
   });
 });
 
