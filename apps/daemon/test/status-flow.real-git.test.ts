@@ -66,6 +66,9 @@ describe.skipIf(!GIT_CORE_IMPLEMENTED)('status flow v2: bookmarks (real git)', (
       newCommits: 0,
       unreviewedFiles: 0,
       historyRewritten: false,
+      // #33: nothing to label, so no integrationRef; the counts are known (zero).
+      baseFiles: 0,
+      unreviewedOwnFiles: 0,
     });
     // An agent commits on the feature branch: the row has work even with a clean tree.
     await writeFile(path.join(feature, 'a.txt'), 'one\nTWO\n');

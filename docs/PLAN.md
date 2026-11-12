@@ -345,6 +345,12 @@ with an explicitly allowlisted stdin pipe). A file of the To review diff is revi
 uncommitted change and only reviewed commits touched it. `PUT /api/review/bookmark`, bulk `advanceBookmarks`,
 event `review.bookmark`. Removed projects drop their bookmarks and reviewed commits.
 
+Merge noise (DECISIONS #198-#204, STATUS-FLOW §2.4a): files of the To review, All on branch and Uncommitted lists
+carry `origin` (own / mixed / base) from git-core's `readFileOrigins`, cached per listed state and the default
+branch's commits, at most two computations at a time and never at startup. The summary adds `baseFiles` and
+`unreviewedOwnFiles` (the count to show); default-branch commits in a review range are neither counted in
+`newCommits` nor recorded as reviewed; bulk review never marks base files.
+
 ## 6. Work plan
 
 ### Phase 0 — Scaffold and contracts (sequential, the lead session does this, ≈ first hour)

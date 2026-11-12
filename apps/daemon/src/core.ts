@@ -6,11 +6,13 @@ import {
   API_VERSION,
   APP_NAME,
   type BulkReviewTarget,
+  type ChangedFile,
   type CommitInfo,
   type DiffQuery,
   type DiffResponse,
   type DiffScope,
   type EffectiveReviewPolicy,
+  type FileOriginInfo,
   type FilesResponse,
   type GitChangedFile,
   type GitCore,
@@ -40,9 +42,17 @@ import { Coalescer, settleWithin } from './coalesce.js';
 import { ApiError, type ApiErrorInfo, isShutdownError, notFound, toApiError } from './errors.js';
 import type { EventHub } from './events.js';
 import { hashId } from './ids.js';
+import { Limiter } from './limit.js';
 import { resolveInputPath } from './paths.js';
 import { policyInputFor, type ReviewPolicyProvider } from './review-policy.js';
-import { bookmarkKey, coveredByCommits, type ReviewComputed } from './review-state.js';
+import {
+  bookmarkKey,
+  coveredByCommits,
+  defaultBranchCommits,
+  isUncommitted,
+  pathKey,
+  type ReviewComputed,
+} from './review-state.js';
 import {
   type ProjectRow,
   REVIEW_TOUCH_INTERVAL_MS,
@@ -64,7 +74,68 @@ export const CORE_DEFAULTS = {
   scanProgressIntervalMs: 250,
   /** Max cached file lists (per worktree x scope). */
   filesCacheSize: 2000,
+  /**
+   * `readFileOrigins` calls in flight at once (#33). A fetch that moves `origin/main` relabels
+   * every worktree of the project; git-core has 4 process slots (per-repository round-robin), so
+   * this leaves half of them to interactive requests.
+   */
+  originsConcurrency: 2,
 } as const;
+
+/** A listed file with its origin attached (#33); `origin` absent = own. */
+export type LabeledFile = GitChangedFile & Pick<ChangedFile, 'origin' | 'originVia'>;
+
+/** A file list with its origins (`#labelFiles`). */
+interface Labels {
+  files: LabeledFile[];
+  /** The origins are known (computed, or all own by rule 1 without asking git-core). */
+  known: boolean;
+  integrationRef: string | null;
+  /** `N` (`FileOrigins.n`), null when unknown or not asked. */
+  n: string | null;
+}
+
+/**
+ * Where a list's committed part starts for `readFileOrigins` (`O`, #33), or undefined when the
+ * scope gets no origins. `review`: its base (the bookmark). `branch` against the default branch:
+ * HEAD, because the list is measured from `N` and `merge-base HEAD N` is `N` itself, so only the
+ * "same as the newest default-branch version" rule and the in-progress rule can apply (the
+ * default branch's own changes are not in the list at all, and a file both sides changed shows
+ * only this branch's patch there: own). `working`: nothing committed (the in-progress rule only).
+ * Not `staged` / `unstaged` (their flags do not come from the whole `git status`), not `commit`,
+ * not a `branch` scope with an explicit base (it is not measured from `N`).
+ */
+function originBaseOf(scope: DiffScope, head: string | null): string | null | undefined {
+  switch (scope.kind) {
+    case 'review':
+      return scope.base ?? null;
+    case 'branch':
+      return scope.base ? undefined : head;
+    case 'working':
+      return null;
+    default:
+      return undefined;
+  }
+}
+
+/** Copies non-own origins onto the files (absent = own); the same array when all are own. */
+function applyOrigins(
+  files: readonly GitChangedFile[],
+  origins: ReadonlyMap<string, FileOriginInfo>,
+): LabeledFile[] {
+  let labeled: LabeledFile[] | null = null;
+  files.forEach((file, i) => {
+    const info = origins.get(pathKey(file));
+    if (!info || info.origin === 'own') return;
+    labeled ??= files.slice();
+    labeled[i] = {
+      ...file,
+      origin: info.origin,
+      ...(info.via !== null ? { originVia: info.via } : {}),
+    };
+  });
+  return labeled ?? (files as LabeledFile[]);
+}
 
 export interface CoreOptions {
   gitCore: GitCore;
@@ -261,6 +332,18 @@ export class DaemonCore {
     { stateHash: string; base: string | null; attrs: string; files: GitChangedFile[] }
   >();
   readonly #filesInflight = new Map<string, Promise<GitChangedFile[]>>();
+  /**
+   * File origins (#33) per listed file array: `#gitFiles` hands out the same array while its
+   * cache entry (worktree, scope, stateHash, base, attributes) is current, so the array's identity
+   * already covers HEAD, the index, the working tree and the operation in progress. `key` adds
+   * what the labels also depend on: `O`, the default branch's name and both of its commits
+   * (local and `origin/<d>`, read fresh on every call, so a fetch is never served stale labels).
+   */
+  readonly #origins = new WeakMap<
+    readonly GitChangedFile[],
+    { key: string; run: Promise<Labels> }
+  >();
+  readonly #originsLimit = new Limiter(CORE_DEFAULTS.originsConcurrency);
   /** Identical inbox requests that overlap share one run (`inbox`), keyed by what it reads. */
   readonly #inboxInflight = new Map<string, Promise<InboxResponse>>();
   /** Worktree ids removed recently (id → time), to spot a path re-added soon after (F1). */
@@ -1276,6 +1359,72 @@ export class DaemonCore {
     return run;
   }
 
+  /**
+   * The files of a list with their origins (#33, `GitCore.readFileOrigins`), for the scopes that
+   * have them (`originBaseOf`). Cached per listed array and `key` (see `#origins`), single-flight,
+   * through `#originsLimit`: a repeat costs no git process. Without any committed file and with no
+   * operation in progress every file is own (rule 1) and git-core is not asked. `required`: ask
+   * even for an empty list (the review state wants `N` for its commits). On failure, or without
+   * `readFileOrigins`, the files come back as they are (all own) with `known: false`.
+   */
+  async #labelFiles(
+    project: ProjectEntry,
+    entry: WorktreeEntry,
+    scope: DiffScope,
+    files: GitChangedFile[],
+    required = false,
+  ): Promise<Labels> {
+    const plain: Labels = { files, known: false, integrationRef: null, n: null };
+    const read = this.#git.readFileOrigins;
+    const summary = entry.summary;
+    if (!read || !summary) return plain;
+    const base = originBaseOf(scope, summary.headSha);
+    if (base === undefined) return plain;
+    if (!required) {
+      const committed = base !== null && files.some((f) => !isUncommitted(f));
+      if (files.length === 0 || (!committed && summary.inProgress === null)) {
+        return { ...plain, known: true };
+      }
+    }
+    const refs = await this.#branchBase(project, DEFAULT_BASE_SCOPE);
+    const defaultBranch = this.#defaultBranch(project);
+    const key = [scopeKey(scope), base ?? '', defaultBranch ?? '', refs ?? ''].join('\u0000');
+    const cached = this.#origins.get(files);
+    if (cached && cached.key === key) return cached.run;
+    // The fallback is part of the cached promise: every caller that shares it gets the same answer,
+    // so an overlapping `/files` and `/inbox` request never sees the raw failure.
+    const run: Promise<Labels> = this.#originsLimit
+      .run(() => read.call(this.#git, this.#locator(entry), { base, defaultBranch, files }))
+      .then(
+        (result): Labels => ({
+          files: applyOrigins(files, result.origins),
+          known: true,
+          integrationRef: result.integrationRef,
+          n: result.n,
+        }),
+      )
+      .catch((error: unknown) => {
+        if (this.#origins.get(files)?.run === run) this.#origins.delete(files);
+        if (!isShutdownError(error)) {
+          this.#log.debug('file origins unavailable', { worktreeId: entry.worktree.id, error });
+        }
+        return plain;
+      });
+    // Unreadable default-branch refs: no identity to cache under (as `#gitFiles`).
+    if (refs !== null) this.#origins.set(files, { key, run });
+    return run;
+  }
+
+  /** `#gitFiles` with the origins attached (`#labelFiles`). */
+  async #labeledFiles(
+    project: ProjectEntry,
+    entry: WorktreeEntry,
+    scope: DiffScope,
+  ): Promise<LabeledFile[]> {
+    const files = await this.#gitFiles(project, entry, scope);
+    return (await this.#labelFiles(project, entry, scope, files)).files;
+  }
+
   #summaryOrThrow(entry: WorktreeEntry): string {
     if (entry.summary) return entry.summary.stateHash;
     if (entry.worktree.bare) return 'bare';
@@ -1287,7 +1436,7 @@ export class DaemonCore {
     await this.#ensureSummary(entry);
     const stateHash = this.#summaryOrThrow(entry);
     const resolved = await this.#resolveScope(project, entry, scope);
-    const files = await this.#gitFiles(project, entry, resolved.scope);
+    const files = await this.#labeledFiles(project, entry, resolved.scope);
     return {
       worktreeId,
       scope: resolved.scope,
@@ -1415,7 +1564,7 @@ export class DaemonCore {
       candidates.map(async (c): Promise<InboxEntry | null> => {
         try {
           const resolved = await this.#resolveScope(c.project, c.entry, scope);
-          const gitFiles = await this.#gitFiles(c.project, c.entry, resolved.scope);
+          const gitFiles = await this.#labeledFiles(c.project, c.entry, resolved.scope);
           let files = this.#attachReviewedFor(
             c.project.row.id,
             resolved.scope,
@@ -1589,14 +1738,37 @@ export class DaemonCore {
       bookmark = range.initial;
       this.#store.setBookmark(projectId, bk, bookmark, this.#nowIso());
     }
-    const { unreviewedCommits, uncovered } = await this.#commitCoverage(project, entry, range);
     const scope: DiffScope = range.base ? { kind: 'review', base: range.base } : { kind: 'review' };
     const nothing =
       summary.changedFiles === 0 && (range.base === null || range.base === range.head);
-    const files = nothing ? [] : await this.#gitFiles(project, entry, scope);
-    const marked = this.#attachReviewed(projectId, 'review', files);
+    // Commit coverage and the file list (then its origins) are independent reads.
+    const [coverage, labels] = await Promise.all([
+      this.#commitCoverage(project, entry, range),
+      nothing
+        ? null
+        : this.#gitFiles(project, entry, scope).then((files) =>
+            this.#labelFiles(project, entry, scope, files, true),
+          ),
+    ]);
+    const { uncovered } = coverage;
+    // Default-branch commits a merge or rebase brought in are not this branch's new work (#33):
+    // not counted here and never recorded as reviewed from here. Their paths stay in `uncovered`,
+    // so the files they touched are not taken as reviewed (`unreviewedFiles` keeps its meaning).
+    const baseCommits = defaultBranchCommits(range, labels?.n ?? null);
+    const unreviewedCommits = coverage.unreviewedCommits.filter((sha) => !baseCommits.has(sha));
+    const marked = this.#attachReviewed(projectId, 'review', labels?.files ?? []);
     let unreviewedFiles = 0;
-    for (const f of marked) if (!f.reviewed && !coveredByCommits(f, uncovered)) unreviewedFiles++;
+    let unreviewedOwnFiles = 0;
+    let baseFiles = 0;
+    for (const f of marked) {
+      const base = f.origin === 'base';
+      if (base) baseFiles++;
+      if (f.reviewed || coveredByCommits(f, uncovered)) continue;
+      unreviewedFiles++;
+      if (!base) unreviewedOwnFiles++;
+    }
+    // Known when there was nothing to label, or when the labels were computed.
+    const known = this.#git.readFileOrigins !== undefined && (labels === null || labels.known);
     return {
       key,
       bookmarkKey: bk,
@@ -1604,12 +1776,16 @@ export class DaemonCore {
       scope,
       uncovered,
       unreviewedCommits,
+      baseCommits,
+      integrationBase: labels?.n ?? null,
       info: {
         bookmark,
         base: range.base,
         newCommits: unreviewedCommits.length,
         unreviewedFiles,
         historyRewritten: !firstSight && range.head !== null && !range.bookmarkReachable,
+        ...(known ? { baseFiles, unreviewedOwnFiles } : {}),
+        ...(labels?.integrationRef ? { integrationRef: labels.integrationRef } : {}),
       },
     };
   }
@@ -1723,6 +1899,10 @@ export class DaemonCore {
    * Records the commits a bookmark move passes as reviewed (§2.4): each commit by id and
    * patch-id, plus the whole range's patch-id as `<base>..<to>` (a squash merge of it has the
    * same one). Only when `to` is HEAD (Review all), where the range is the review range itself.
+   * Default-branch commits in the range (`ReviewComputed.baseCommits`, #33) are not recorded: they
+   * were shown as noise here, and recording them would make the default branch's own worktree
+   * take them as reviewed. With such commits the whole-range patch-id is the branch's own part,
+   * `N..<to>` (what a squash merge of the branch onto the default branch carries).
    */
   async #recordReviewed(
     project: ProjectEntry,
@@ -1731,19 +1911,26 @@ export class DaemonCore {
   ): Promise<string[]> {
     const review = await this.#reviewOf(project, entry);
     const range = review?.range;
-    if (!range || range.head !== to || range.base === null || range.base === to) return [];
-    const commits = range.commits;
-    const details = this.#git.describeCommits
-      ? await this.#git.describeCommits(
-          this.#locator(entry),
-          commits.map((c) => c.sha),
-        )
-      : [];
+    if (!review || !range || range.head !== to || range.base === null || range.base === to) {
+      return [];
+    }
+    const noise = review.baseCommits;
+    const commits = range.commits.filter((c) => !noise.has(c.sha));
+    const details =
+      this.#git.describeCommits && commits.length > 0
+        ? await this.#git.describeCommits(
+            this.#locator(entry),
+            commits.map((c) => c.sha),
+          )
+        : [];
     const rows = commits.map((c, i) => ({ sha: c.sha, patchId: details[i]?.patchId ?? null }));
-    const whole = this.#git.rangePatchId
-      ? await this.#git.rangePatchId(this.#locator(entry), range.base, to)
-      : null;
-    if (whole !== null) rows.push({ sha: `${range.base}..${to}`, patchId: whole });
+    const from =
+      noise.size > 0 && review.integrationBase !== null ? review.integrationBase : range.base;
+    const whole =
+      this.#git.rangePatchId && from !== to
+        ? await this.#git.rangePatchId(this.#locator(entry), from, to)
+        : null;
+    if (whole !== null) rows.push({ sha: `${from}..${to}`, patchId: whole });
     return this.#store.transaction(() =>
       this.#store.addReviewedCommits(project.row.id, rows, this.#nowIso()),
     );
@@ -1871,7 +2058,7 @@ export class DaemonCore {
       changedFiles: async (worktreeId, scope) => {
         const { project, entry } = this.#requireWorktree(worktreeId);
         const resolved = await this.#resolveScope(project, entry, scope);
-        return this.#gitFiles(project, entry, resolved.scope);
+        return this.#labeledFiles(project, entry, resolved.scope);
       },
       moveBookmark: (worktreeId, to) => this.moveBookmark(worktreeId, to),
       restoreBookmark: (move) => this.restoreBookmark(move),

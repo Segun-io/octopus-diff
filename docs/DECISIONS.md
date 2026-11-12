@@ -2484,3 +2484,82 @@ Numbers: #198 and up (#197 is used by the forge-fetching branch for #8; renumber
        identical content; then the old path makes it `mixed`.
      - A fetch that moves `origin/main` invalidates every worktree of the project (3 spawns each, more if `N`
        moved): #33 should call it with `mapLimit` off first paint, as the issue says.
+
+## Daemon: file origins, own/base counts and bulk-review fixes (session, 2026-11-12; roadmap #33, step 12)
+
+Numbers: #201 and up (the next free ones after the file-origins branch).
+
+201. **Where the daemon attaches origins, and what `O` is per scope.** `ChangedFile.origin` / `originVia` come from
+     `GitCore.readFileOrigins` (#32) with the listed files passed in (`files`), copied only for `base` and `mixed`
+     (absent = own, as #198 says). Scopes and their `O` (`originBaseOf` in `apps/daemon/src/core.ts`):
+     - **`review`** (To review): its base, the bookmark (or the fallback after a rewrite).
+     - **`branch` against the default branch** (All on branch, with or without `includeWorking`): **HEAD**. The list is
+       measured from `N`, so the default branch's own changes are not in it, and a file both sides changed shows
+       only this branch's patch there: own. With `O = HEAD`, `M0 = merge-base HEAD N = N`, so only rule 3 ("same as
+       the newest default-branch version": cherry-picks, squash-landed work) and rule 1 (in progress) can apply.
+       git-core skips that `merge-base` (`base === head` → `M0 = N`, one line in `file-origins.ts`, test
+       `O = HEAD` with a mutation check). So a file can be `mixed` in To review and own in All on branch, by design:
+       All on branch is #34's "only this branch's changes" view.
+     - **`working`**: `base: null` (rule 1 only: staged files of a merge or cherry-pick of `main` in progress).
+     - Not `staged` / `unstaged` (their `staged`/`unstaged` flags do not come from the whole `git status`, which
+       rule 1 needs), not `commit`, not a `branch` scope with an explicit base (not measured from `N`). `FileDiff`
+       (one file's diff) gets no origin: the contract has none there and the list already says it.
+     - **No call** when a list has no committed file and no operation is in progress (`summary.inProgress`): rule 1
+       makes every file own, so the common dirty-worktree inbox costs nothing.
+     **Cache (a repeat = 0 spawns, 0 calls).** Per listed array in a `WeakMap`: `#gitFiles` hands out the same array
+     while its entry (worktree, scope, `stateHash`, base, attributes) is current, so the array already stands for
+     HEAD, the index, the working tree and the operation in progress (`stateHash` covers the status output with
+     the index object ids and the operation kind). The entry's key adds `O`, the default branch's name and both of its
+     commits (`ref=oid+origin/<d>=oid`, read fresh from the ref files on every call, no process, as #166/#196), so a
+     fetch is never served stale labels even before the watcher notices (test with the watcher off; it fails without
+     the refs in the key). Single-flight (the promise is cached); failures are not cached and fall back to "all own".
+     Not cached when the default branch's refs cannot be read (as `#gitFiles`). Not covered: `OP_HEAD`'s id itself
+     (aborting a merge and starting another one with an identical index); the next index change refreshes it.
+     **Bounded and off first paint.** Every call goes through a 2-slot `Limiter` (`apps/daemon/src/limit.ts`;
+     git-core has 4 process slots served round-robin per repository, so origin work leaves half of them to
+     interactive requests). A fetch that moves `origin/main` relabels every worktree of the project, at most 2 at a
+     time (asserted: peak 2 with 5 worktrees; 100 slots fail the test). Nothing calls it at startup: review states
+     are computed on demand (#183), and lists only label when they are asked for (asserted: 0 calls after startup
+     and `GET /api/projects`).
+202. **Review counts: `baseFiles`, `unreviewedOwnFiles`, `integrationRef`, and `newCommits` without the default
+     branch's commits.** `#computeReview` lists the To review files, labels them (the same cached labels `/files` and
+     `/inbox` serve, so the three agree; asserted per scenario), and counts `baseFiles` (base, reviewed or not) and
+     `unreviewedOwnFiles` (not reviewed and not base: own and mixed). `unreviewedFiles` keeps its meaning (it still
+     counts base files). Both new counts are set whenever the daemon knows the origins (also `0` when there is
+     nothing to review); absent without `readFileOrigins` or when it failed (the web then uses `unreviewedFiles`).
+     `integrationRef` comes from the same call; it is absent when there was nothing to label (no files and no
+     commits: no call is made), as well as when no default branch is known.
+     **`newCommits` excludes default-branch commits** that a merge or rebase brought into the range: before, a merge
+     of `main` added every one of main's commits to the branch's `N commits`, and the row went back to To review with
+     nothing of its own to review. They are `N` (`FileOrigins.n`) and its ancestors inside the range, walked in memory
+     over the range's parent links (`defaultBranchCommits` in `review-state.ts`, no process; the issue planned "+1
+     `rev-list`"). It equals "reachable from the local default branch or `origin/<d>`" whenever that merge base is
+     unique: every common ancestor of HEAD and the two refs is then an ancestor of `N`, and a path from `N` to one of
+     them stays inside `base..HEAD`. With several best merge bases (criss-cross) git picks one, as for the labels
+     (#200), so counts and labels stay consistent. `n` is null for the default branch's own worktree and a detached
+     HEAD (#199: all own), so nothing changes there. This narrows what `newCommits` counts without changing its shape:
+     those commits are reviewed on the default branch's own worktree (STATUS-FLOW §2.5: work carried to `main` is
+     counted there), so they are not "this branch's commits to review". Their paths stay in `uncovered`, so the files
+     they touched are not taken as reviewed (the `reviewed` flag and `unreviewedFiles` are unchanged).
+203. **`#recordReviewed` excludes default-branch commits; the merge commit itself still counts.** A bookmark move to
+     HEAD ("Review all", `PUT /api/review/bookmark`) records the range's commits minus `ReviewComputed.baseCommits`
+     (#202): reviewing a feature branch that merged `main` no longer records main's commits, and the `main` worktree
+     no longer inherits them (test: main keeps `newCommits: 1`; it showed 0 before). The whole-range patch-id row is
+     then `N..<to>` (the branch's own part, what a squash merge of it onto the default branch carries) instead of
+     `<base>..<to>` (which included main's changes). For the default branch's own worktree and a detached HEAD
+     everything is recorded as before: their commits were shown as own, so reviewing them is real (consistent rule:
+     what is counted is what gets recorded). No git-core read was needed (the issue's "+1 `rev-list`").
+     **Known gap:** a merge commit of `main` that merged a file both sides changed counts as one new commit
+     (`describeCommits` lists a merge's paths with `--cc --name-only`, which names every file that differs from all
+     parents; it cannot tell an automatic merge of both sides from a hand resolution, which is real own work). The
+     file count is unchanged (mixed is own). Telling them apart needs the combined patch (`--cc` hunks), a costlier
+     read; left for later.
+204. **Bulk review never marks or unmarks base files.** `POST /api/review/bulk` drops `origin: 'base'` files
+     (`ownWork` in `bulk-review.ts`) in every target (worktree, project, folder, all) and in both directions, even when
+     `paths` names them: they are not this worktree's work, and #34 counts "Review N shown" over own and mixed files
+     too. `changed` / `worktrees` count what was marked. "Review all" (`advanceBookmarks`) still moves the bookmark to
+     HEAD, which takes the base files out of the To review list (asserted: the list is empty afterwards and undo
+     restores it). A base file can still be marked one at a time (`PUT /api/review`, the `r` key). The inbox keeps base
+     files (labelled; #34 wraps them in a collapsed group, "do not hide"), also under `onlyUnreviewed`: a worktree
+     whose only unreviewed files are base still has an entry there; its review counts (`unreviewedOwnFiles`,
+     `newCommits`) say 0.

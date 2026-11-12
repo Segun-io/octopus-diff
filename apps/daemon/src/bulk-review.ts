@@ -3,6 +3,7 @@ import {
   BULK_UNDO_MAX_ENTRIES,
   BULK_UNDO_TTL_MS,
   type BulkReviewTarget,
+  type ChangedFile,
   type DiffScope,
   type GitChangedFile,
   type ScopeKind,
@@ -40,8 +41,11 @@ export interface ReviewSource extends TargetRegistry {
    * `not_found` for an unknown project, scan root or worktree.
    */
   worktrees(target: BulkReviewTarget): Promise<BulkWorktree[]>;
-  /** Changed files of a worktree in a scope (the same list `GET .../files` returns). */
-  changedFiles(worktreeId: string, scope: DiffScope): Promise<GitChangedFile[]>;
+  /**
+   * Changed files of a worktree in a scope (the same list `GET .../files` returns), with their
+   * origins where the scope has them (#33; `origin` absent = own).
+   */
+  changedFiles(worktreeId: string, scope: DiffScope): Promise<BulkFile[]>;
   /** The worktree's current summary `stateHash`, or null when it has none right now. */
   currentStateHash(worktreeId: string): string | null;
   /** Status flow v2 (optional so test doubles need not provide it): move a review bookmark. */
@@ -50,6 +54,18 @@ export interface ReviewSource extends TargetRegistry {
   restoreBookmark?(move: BookmarkMove): boolean;
   /** Review marks changed in these projects (review states recompute). */
   reviewChanged?(projectIds: Iterable<string>): void;
+}
+
+/** A listed file as bulk review sees it. */
+export type BulkFile = GitChangedFile & Pick<ChangedFile, 'origin'>;
+
+/**
+ * The files a bulk call acts on: never the default branch's (`origin: 'base'`, #33). They are
+ * shown (grouped) but are not this worktree's work to review; "Review all" still moves the
+ * bookmark past them, which takes them out of the To review list. Own and mixed files count.
+ */
+export function ownWork<T extends Pick<ChangedFile, 'origin'>>(files: readonly T[]): T[] {
+  return files.filter((f) => f.origin !== 'base');
 }
 
 /** Same prefilter the inbox uses: can this worktree have files in `scope` at all? */
