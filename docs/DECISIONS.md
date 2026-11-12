@@ -2725,3 +2725,21 @@ branches also use #213+: renumber at merge.
      pending,backoff,error` and `POST /api/__mock/forge-sim?...` (no parameters resets). `scripts/shots.ts` has
      `wait-forge`, `rate-limit`, `rate-limit-stale`, `stale-request`. No e2e was added: the e2e run the real daemon,
      whose forge and local answers cannot be slowed on demand without timing-dependent tests.
+## Live view: activity ring and `/activity` route (session, 2026-11-12; roadmap #38, step 19)
+
+Numbers: #212 and up (#209-#211 are on `main`; other open branches may use the same numbers, renumber at merge).
+
+212. **contracts (additive, `packages/contracts/src/activity.ts`, `contracts:` commit).** `ActivityEntrySchema` is one flat
+     object (`id`, `seq`, `kind`, `at`, `updatedAt`, `count` plus optional per-kind fields) rather than a discriminated
+     union, because coalescing updates an entry in place and later kinds can add fields without a new variant. Kinds:
+     `added | modified | deleted | restored | commit | head | bulk`; `head` has `op` (`checkout | merge | rebase | reset |
+     cherry-pick | revert | am | bisect | moved`, clients tolerate more). `id` is the sequence number an entry was created
+     with and never changes; `seq` is that of its latest update, so `?after=<seq>` also returns entries that were
+     coalesced since. Routes: `GET /api/worktrees/:worktreeId/activity?after=<seq>` -> `ActivityResponse = { worktreeId,
+     entries, seq, dropped, live, watch: { mode: native | polling | disabled, pollMs } }` (`live` false until the
+     baseline exists; `watch` lets the UI say "polling every N s"), and `GET /api/worktrees/:worktreeId/blob/:oid?maxBytes=`
+     -> `{ worktreeId, blob: BlobRead }` (oid = `GitObjectIdSchema`, `maxBytes` <= `ACTIVITY_BLOB_MAX_BYTES` = 1 MiB).
+     `WorktreeChangedEvent.activitySeq?` (positive int, absent while the feed is empty): no new SSE event, so no extra
+     traffic. `ChangeCounts.deleted?`: uncommitted tracked deletions, state-based, set by the daemon only (git-core's own
+     summary leaves it out). API client: `getActivity`, `getBlob`. Constants: ring 200, global 20000, coalesce 10 s,
+     bulk threshold 50, 20 listed paths per commit/head/bulk entry.

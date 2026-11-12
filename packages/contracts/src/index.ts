@@ -4,6 +4,7 @@
  * Browser-safe: this package must not import Node built-ins. Evolve it additively; breaking
  * changes need a lead decision logged in docs/DECISIONS.md.
  */
+export * from './activity.js';
 export * from './api.js';
 export * from './client.js';
 export * from './common.js';
