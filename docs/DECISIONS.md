@@ -3540,9 +3540,13 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      - **The journal names what the watcher named.** An incremental summary's entry holds its whole region (hint,
        rename candidates, missed signatures) besides the changed records, so a path the watcher saw is re-diffed by
        every cached list even when its record came back. A full summary's entry is **blind** (it cannot know).
-     - **Lists remember what they read.** Every cached list keeps its diff region with each path's lstat signature
-       taken just before the diff (`late`; a full list reads everything: `lateAll`). After a blind entry, the paths
-       whose file moved since are re-diffed (a directory always is), and a full list is seeded again.
+     - **Lists remember what they read.** Every cached list keeps an lstat signature, taken just before the diff, of
+       each path it read that the state does not sign itself (a file that differs between base and HEAD, or one a
+       hint named, clean in the worktree; a changed file's signature is in its records already) (`late`; a full list
+       reads everything: `lateAll`). An update keeps the signatures of the rows it keeps and replaces only its
+       region's (#301). After a blind entry, the paths whose file moved since are re-diffed (a directory always is),
+       and a full list is seeded again. A list that would keep more than 20 000 signatures is served, not cached
+       (#304).
      - **Rows the state does not explain are re-checked on every use** (`recheck`): a tracked row whose path is no
        status path and, against another base than HEAD, no base..HEAD path; an untracked row the state does not list.
        This repairs a lost event before the reconciliation. A full summary also drops the worktree's lists it does not
@@ -3573,3 +3577,48 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      per-step equality checks, asserts that no refresh was incremental, and runs 40 steps per seed on darwin
      (120 elsewhere). Linux assertions are unchanged. `OCTOPUS_DIFF_TEST_FOLDS_CASE=1` makes the probe report
      folding on any machine (test-only: it can only turn incremental refreshes off), so the macOS mode is run here.
+
+### Incremental summary: second review (PR #89, 2026-11-12)
+
+301. **A list update keeps the read signatures of the rows it keeps (F1, P1).** The update kept only the signatures of
+     its own region, so a row it carried over (a committed file read mid-edit by the seed, clean in the worktree,
+     never named by a hint) lost its signature, and the next blind summary could no longer see that the file had
+     moved: the row stayed wrong. The new entry now starts from the old one's `late` (minus the region, minus paths the
+     state signs) and overwrites the region's. Test: the reviewer's repro (`incremental-review2.test.ts`), failing first.
+     The fuzz now lets hints name more paths than a step touched (extra files and directories) or fewer (each path
+     kept with p = 0.4), has silent edits and silent restores to HEAD's content whose events are lost entirely, seeds
+     review lists against random bases while the state is behind, and after every reconciliation (a blind full
+     summary) compares every recently seeded base with a full list; comparisons pause while the state is behind. With
+     the fix removed, the fuzz catches it on 2 of 22 seed runs (424242, 88): the sequence (a mid-edit seed of a
+     committed-clean path, an update elsewhere, a lost revert, then a blind summary) is rare at random; the repro is
+     the guard.
+302. **Lists are stored only for the track they read; versions are never reused (F2, P2).** `forgetState` (and an
+     eviction from the 256-track store) started a new track at version 1, while a list in flight still held the old
+     track and stored itself at its version N with the old HEAD: below N every request seeded and could not store,
+     and at exactly N the journal looked empty and served stale rows. Now summary versions come from one counter per
+     store (strictly increasing for every worktree, across forgets and evictions), each journal entry names the
+     version it follows (`from`), `changedSince` needs an unbroken chain from the list's version, and both list
+     paths store a list only while `deps.tracks.get(cwd)` is still the track they read. Test: the reviewer's repro
+     with a slow `-p` diff (a git wrapper) across a `forgetState`, failing first. Either layer alone prevents it
+     (mutations removing one survive); removing both is killed.
+303. **The gitlink scan cannot be made to hang or read without end (F3, P2).** `indexHasGitlinks` read the untrusted
+     `.git/index` with `stat` + `readFile`: a FIFO blocked `open(2)` for ever (no timeout, a libuv thread held, the
+     summary never settled), a symlink to `/dev/zero` passed the size check. Now it `lstat`s the path and requires a
+     regular file (a symlinked index answers "may hold a gitlink"), opens it with `O_NOFOLLOW | O_NONBLOCK`, `fstat`s
+     the handle, requires a regular file within 256 MB, and reads at most that many bytes from the handle; any failure
+     answers true (a full refresh). With `incremental: false` nothing is stamped at all (no index scan, no stat of
+     config files): the kill switch gives the old calls exactly (#293 now holds for file reads too). Tests: a FIFO, a
+     symlink to a FIFO and to `/dev/zero` answer at once; `getSummary` settles on a repository whose index is a FIFO
+     (git itself is ended by the runner's timeout, as before this PR), with and without incremental refreshes; no stamp
+     is read with `incremental: false`. Failing first; mutations (back to `readFile`, the stamp with the kill switch)
+     killed.
+304. **Fewer read signatures, and a bound (F4, P3).** A seed signed every path of its region, dirty ones included, and
+     again after every blind summary. Only paths the state does not sign are signed now, and a list needing more than
+     20 000 signatures (`listLimits.maxLateSignatures`) is served uncached and its old entry dropped. A seed's region is
+     already capped at 1000 pathspecs (`MAX_PATHSPECS`; above, the list is a full one without signatures), so the
+     20 000 bound is for the signatures an update carries over (#301). Measured on the 100k layout (stale-index
+     worktree, review scope against a base 650 committed paths back, 298 status paths): signing 947 → 650 paths,
+     43.8 → 25.1 ms; a whole seed 692-737 → 681-715 ms (5 runs each). Tests: a cap of one still caches a list whose only
+     unsigned path is committed-clean (dirty ones are not signed); above the cap the list is served, counted
+     `uncached`, and the next request seeds again. Mutations killed.
+

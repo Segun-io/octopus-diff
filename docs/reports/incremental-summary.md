@@ -194,3 +194,32 @@ on darwin. `OCTOPUS_DIFF_TEST_FOLDS_CASE=1` emulates folding on Linux. Runs here
 - Folding mode first failed two list tests (repro B's intermediate step, the full-summary drop). Both checked
   incremental mechanics: with every summary full, the stale list is dropped and the list of s3 is seeded from s3, where
   the reverted file is clean. Every final list still equals a full one; no list bug on macOS.
+
+## Second review (PR #89)
+
+- **F1 (P1)** (DECISIONS #301): a list update dropped the read signatures of the rows it kept, so a committed-clean file
+  read mid-edit by the seed and changed back without any hint stayed wrong after a blind summary. Updates now carry
+  them over. Test: the reviewer's repro, failing first. The fuzz now has hints with more or fewer paths than a step
+  touched, silent edits and restores (events lost), seeds while the state is behind, and checks every seeded base
+  after each reconciliation; it catches the bug on 2 of 22 seed runs, so the repro is the guard.
+- **F2 (P2)** (#302): a list in flight across `forgetState` (or a track eviction) stored itself at the old version and
+  could be served for the new track. Versions are now never reused, journal entries name the version they follow, and
+  lists are stored only for the track they read. Test: the reviewer's repro with a slow diff wrapper, failing first;
+  each layer alone prevents it, removing both is caught.
+- **F3 (P2)** (#303): the gitlink scan reads the index only as a regular, non-symlinked file opened with `O_NOFOLLOW |
+  O_NONBLOCK` and fstat-bounded; a FIFO or `/dev/zero` answers "full refresh" at once, and `incremental: false` reads
+  no stamp at all. Tests with a real FIFO, a symlink to one and to `/dev/zero`, and `getSummary` on a FIFO index in
+  both modes; failing first.
+- **F4 (P3)** (#304): only paths the state does not sign are signed, and more than 20 000 signatures means served,
+  not cached. 100k layout seed with 650 committed paths: signing 43.8 → 25.1 ms, seed 692-737 → 681-715 ms (seeds are
+  already capped at 1000 pathspecs).
+- Verification (this machine): `pnpm lint`, `pnpm typecheck`, `pnpm build` exit 0; `pnpm test` exit 0 (contracts 107,
+  forge 101 + 5 skipped, fixtures 58, web 446, git-core 346 + 1 skipped, daemon 388 + 4 skipped, e2e unit 7, cli 139,
+  scripts 34); git-core and daemon again: same counts; git-core with `OCTOPUS_DIFF_TEST_FOLDS_CASE=1`: 342 passed + 5
+  skipped. Fuzz at 250 steps: the 16 sweep seeds and the reviewer's five (90211 31337 777001 424242 5150) all pass.
+  `pnpm test:e2e` (1 worker): 102 passed (3.1 min), read-only proof 12 control repos, 4636 lock polls, 0 violations.
+  `perf:smoke`: exit 0. Bench 30 × 3: every budget passes (cold paint 143 ms, warm 68 ms, edit → SSE p95 23 ms, burst
+  diff p95 42 ms, idle CPU 0.25 %). 100k files, `--no-ui`, 15 edits: later edits main 54-57 ms, stale-index 54-62 ms,
+  untracked-heavy 93-98 ms (p95 98 ms), 3 git processes to SSE; first edits 567 / 253 / 298 ms (the first review
+  state). The fuzz's hint-used threshold now counts steps whose hint names a path (lost-event steps send empty hints,
+  full by design).
