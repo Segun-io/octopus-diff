@@ -2969,3 +2969,61 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      before) and never into the query string. An aborted request rejects with the existing `ApiClientError` code
      `aborted` (it was already in `ApiClientErrorCode`, used by `subscribe`), not `network`; an already-aborted
      signal rejects without fetching. Nothing renamed or removed.
+235. **Two lanes in the runner, starvation bounded by a count, no reserved slot.** `FairScheduler` became
+     `LaneScheduler`: an `interactive` and a `background` `FairQueue` (each the old per-key round-robin), one global
+     limit. A free slot goes to queued interactive work first; after `INTERACTIVE_BURST` (4) interactive starts in a
+     row while background work waits, the next start is a background one, so under any interactive load the
+     background lane still gets at least one start in five (deterministic, testable; an age rule would need clocks in
+     the scheduler for no gain at human request rates). No slot is reserved for either lane: `concurrency` keeps
+     meaning "git processes overall" (a reserved slot would cut background throughput by a quarter at the default 4,
+     and the 2026-11-11 measurements showed more processes do not help). Interactive work therefore waits for the
+     next process to finish, never behind a queue; between two of its own processes (it schedules the next one only
+     after parsing the previous output) a background job may take the free slot. Daemon requests in the interactive
+     lane: `/files` (of the worktree asked for), `/diff`, `/commits`, `/blob`. Everything else stays background:
+     summaries and refreshes, relists, the inbox, review states, origins started by the inbox, forge-related git reads.
+236. **Cancellation in the runner.** `GitRunOptions.signal` (default: the running `GitCore` call's, below). A queued
+     job whose signal fires leaves its queue and rejects with `aborted` at once; it never spawns (the scheduler
+     refuses an already-aborted job too). A running process gets SIGTERM (its process group), and SIGKILL after
+     `ABORT_GRACE_MS` (500 ms) if the group is still there; the run settles, and its slot frees, only when the
+     process has exited, so the limit stays true. Timeouts and dispose keep their immediate SIGKILL (a timeout or
+     dispose during an abort's grace period escalates). The subcommand allowlist and every safety flag are untouched.
+     **The signal reaches the runner through `AsyncLocalStorage`** (`runner/call-context.ts`): `createGitCore`'s
+     guard runs each call inside `withCall({ lane, signal })`, so the dozens of internal functions between a
+     `GitCore` method and `runner.run` need no new parameter. The guard also races the call against its signal, so
+     the caller is answered at once even while it waits on work it shares (below), and refuses an already-aborted
+     call before starting anything.
+237. **Shared work is cancelled only when its last waiter leaves.** git-core's single-flight reads (repository
+     discovery `repo()`, `cachedConfigRead`, `memo`, the `for-each-ref` ahead/behind batch) are `Flight`s, the
+     daemon's `#gitFiles` in-flight lists (`FlightMap`) and file origins (`SharedFlight`) the same idea with explicit
+     signals. Each caller joins with its own signal: one leaving rejects only that caller; when every waiter has left,
+     the run's own signal fires (its processes stop, queued ones never start) and the entry is dropped first, so a
+     later caller starts afresh instead of joining a cancelled run, and a cancelled run fills no cache. A waiter
+     without a signal (background work) pins the run. The version probe stays pinned (`shared()`: never cancelled).
+     A shared run keeps the lane of the call that started it: a `/files` request that joins a list the inbox started
+     waits in the background lane (no priority inheritance; rare, the inbox and the open file list differ in scope or
+     come at different times; logged as a gap). There is no diff cache in the daemon yet (#41), so `/diff` has no
+     single-flight to protect; #41 should build its cache on `FlightMap`.
+238. **An aborted request gets no body.** When the HTTP request's signal has fired and the error is `aborted`, the
+     daemon's `onError` answers 499 with an empty body and logs at debug level (it was an error log with a 503
+     body). `toApiError` keeps mapping `aborted` to `internal`/503 for other cancellations (shutdown).
+     `@hono/node-server` aborts `c.req.raw.signal` when the client's connection closes before the answer is written.
+239. **Web: React Query's signal on the file, diff, commit, activity and blob requests.** React Query already cancels a
+     fetch that is superseded (an invalidation while it is in flight cancels it with `cancelRefetch`, the default)
+     or unobserved, but without the signal reaching `fetch` the cancelled request kept running on the wire and in
+     git. Now it is aborted, the daemon sees the client go away and stops the git work. **The duplicate `files`
+     fetch per edit:** within one event flush there is one request since #170 (its unit test still holds). The
+     duplicate that can remain comes from React Query's own behaviour: a second `worktree.changed` for the same
+     worktree while the first refetch is in flight cancels that refetch and starts another, and the cancelled request
+     used to run to the end. Now it is aborted (unit test in `apps/web/test/cache.test.ts`). Inferred from the code;
+     not reproduced in a browser. The inbox (`streamedQuery` batches) and the projects list do not pass
+     the signal: the daemon does not cancel inbox work, and a cancelled batch would leave a partial inbox.
+240. **Bench: a diff opened during a 60-edit burst.** `e2e/bench/burst.ts`, run by `bench` on the small layout after
+     the refresh loop: 7 diff probes on the quiet daemon, then 60 appends over 60 other worktrees **back to back**,
+     with a diff probe (one at a time) every 100 ms until 2 s after the last edit (the probes spawn git themselves,
+     so the phase waits for a quiet daemon only after they stop). Budget `burstDiff`: p95 under the burst below
+     100 ms (enforced on the small layout; a phase that never gets quiet counts as a failure). Control runs on this
+     machine (30 × 3, `--no-ui`, 3 runs each): with the lane p95 26 / 27 / 28 ms, with every request forced into one
+     lane 214 / 218 / 221 ms (quiet p50 8 ms both). With the edits 20 ms apart the queue never builds here and both
+     variants measured 24-69 ms, so that spacing could not tell them apart; hence back to back. The primary proof
+     of the lane is the gated-runner tests (`packages/git-core/test/lanes.test.ts`); the bench number is secondary
+     (machine-dependent).
