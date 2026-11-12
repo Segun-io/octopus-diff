@@ -10,6 +10,12 @@ import { listRefreshCounts } from '../src/diff.js';
 import { createGitCore } from '../src/index.js';
 import { locator } from './helpers/core.js';
 import { createFixture, type Fixture, lines } from './helpers/fixture.js';
+import { FOLDING_SKIP, worktreesFoldCase } from './helpers/folds.js';
+
+/** macOS / `OCTOPUS_DIFF_TEST_FOLDS_CASE=1`: hinted refreshes are full (#277); lists must still be right. */
+const FOLDS = await worktreesFoldCase();
+/** A skipped test's title says why. */
+const skipped = (title: string): string => (FOLDS ? `${title} [skipped: ${FOLDING_SKIP}]` : title);
 
 let fx: Fixture;
 let reference: GitCore;
@@ -56,7 +62,7 @@ describe('P1: no phantom rows in cached lists', () => {
       ]);
       writeFileSync(a, original); // reverted
       const s2 = await core.getSummary(wt, { changedPaths: ['a.txt'] });
-      expect(s2.refresh?.mode).toBe('incremental');
+      expect(s2.refresh?.mode).toBe(FOLDS ? 'full' : 'incremental');
       const got = await core.listChangedFiles(
         wt,
         { kind: 'working' },
@@ -90,7 +96,10 @@ describe('P1: no phantom rows in cached lists', () => {
       writeFileSync(a, original);
       const s3 = await core.getSummary(wt, { changedPaths: ['a.txt'] });
       writeFileSync(a, `${original}edit again\n`); // pending: the list re-diffs a.txt
-      expect(shape(await list(s3.stateHash))).toContain('modified a.txt');
+      const mid = shape(await list(s3.stateHash));
+      // Incremental: s3 journals a.txt, the update reads the pending edit. Folding (s3 is full):
+      // the stale list is dropped and seeded from s3, where a.txt is clean. Both are lists of s3.
+      if (!FOLDS) expect(mid).toContain('modified a.txt');
       writeFileSync(a, original);
       const s4 = await core.getSummary(wt, { changedPaths: ['a.txt'] });
       expect(shape(await list(s4.stateHash))).toEqual(await fullList(repo));
@@ -137,7 +146,7 @@ describe('P1: no phantom rows in cached lists', () => {
       // The watcher lost a.txt's events; only b.txt is named.
       appendFileSync(path.join(repo, 'b.txt'), 'more\n');
       const s2 = await core.getSummary(wt, { changedPaths: ['b.txt'] });
-      expect(s2.refresh?.mode).toBe('incremental');
+      expect(s2.refresh?.mode).toBe(FOLDS ? 'full' : 'incremental');
       const got = await core.listChangedFiles(
         wt,
         { kind: 'working' },
@@ -193,31 +202,36 @@ describe('P1: no phantom rows in cached lists', () => {
     }
   });
 
-  it('a full summary drops a cached list it does not explain (the next list is seeded)', async () => {
-    const { repo, a, original } = repoAB('drop-stale');
-    const core = createGitCore(fx.coreOptions());
-    try {
-      const wt = locator(repo);
-      const list = (state: string) =>
-        core.listChangedFiles(wt, { kind: 'working' }, { summaryState: state });
-      await core.getSummary(wt);
-      writeFileSync(a, `${original}edit\n`);
-      const s2 = await core.getSummary(wt, { changedPaths: ['a.txt'] });
-      await list(s2.stateHash);
-      writeFileSync(a, original);
-      const s3 = await core.getSummary(wt, { changedPaths: ['a.txt'] });
-      writeFileSync(a, `${original}edit again\n`); // pending: the update re-diffs a.txt
-      await list(s3.stateHash); // cached at s3 with a row s3 does not explain
-      writeFileSync(a, original);
-      const s4 = await core.getSummary(wt); // full: a.txt is clean, the cached row is not
-      const seeded = listRefreshCounts.seeded;
-      const got = await list(s4.stateHash);
-      expect(listRefreshCounts.seeded).toBe(seeded + 1);
-      expect(shape(got)).toEqual(await fullList(repo));
-    } finally {
-      await core.dispose();
-    }
-  });
+  // Needs an unexplained row cached by an incremental update: none arise when every summary is
+  // full (a case-folding filesystem).
+  it.skipIf(FOLDS)(
+    skipped('a full summary drops a cached list it does not explain (the next list is seeded)'),
+    async () => {
+      const { repo, a, original } = repoAB('drop-stale');
+      const core = createGitCore(fx.coreOptions());
+      try {
+        const wt = locator(repo);
+        const list = (state: string) =>
+          core.listChangedFiles(wt, { kind: 'working' }, { summaryState: state });
+        await core.getSummary(wt);
+        writeFileSync(a, `${original}edit\n`);
+        const s2 = await core.getSummary(wt, { changedPaths: ['a.txt'] });
+        await list(s2.stateHash);
+        writeFileSync(a, original);
+        const s3 = await core.getSummary(wt, { changedPaths: ['a.txt'] });
+        writeFileSync(a, `${original}edit again\n`); // pending: the update re-diffs a.txt
+        await list(s3.stateHash); // cached at s3 with a row s3 does not explain
+        writeFileSync(a, original);
+        const s4 = await core.getSummary(wt); // full: a.txt is clean, the cached row is not
+        const seeded = listRefreshCounts.seeded;
+        const got = await list(s4.stateHash);
+        expect(listRefreshCounts.seeded).toBe(seeded + 1);
+        expect(shape(got)).toEqual(await fullList(repo));
+      } finally {
+        await core.dispose();
+      }
+    },
+  );
 
   for (const [reader, next] of [
     ['seeded', 'incremental'],
@@ -254,7 +268,7 @@ describe('P1: no phantom rows in cached lists', () => {
           next === 'incremental'
             ? await core.getSummary(wt, { changedPaths: ['c.txt'] })
             : await core.getSummary(wt);
-        expect(s2.refresh?.mode).toBe(next);
+        expect(s2.refresh?.mode).toBe(FOLDS ? 'full' : next);
         const got = await core.listChangedFiles(wt, scope, { summaryState: s2.stateHash });
         expect(got).toEqual(await reference.listChangedFiles(wt, scope));
       } finally {
@@ -327,7 +341,11 @@ describe('P2: embedded repositories (a gitlink without .gitmodules)', () => {
       await core.getSummary(wt);
       writeFileSync(path.join(inner, 'i.txt'), 'i2\n');
       const got = await core.getSummary(wt, { changedPaths: ['vendor/inner/i.txt'] });
-      expect(got.refresh).toMatchObject({ mode: 'full', reason: 'nested-repository' });
+      // The ancestor check comes after the case probe.
+      expect(got.refresh).toMatchObject({
+        mode: 'full',
+        reason: FOLDS ? 'case-insensitive' : 'nested-repository',
+      });
     } finally {
       await core.dispose();
     }

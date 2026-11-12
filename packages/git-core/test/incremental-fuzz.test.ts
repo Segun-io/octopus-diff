@@ -30,8 +30,18 @@ import { parseStatusV2 } from '../src/parse/status.js';
 import { canonicalStatusOutput } from '../src/summary.js';
 import { locator } from './helpers/core.js';
 import { createFixture, type Fixture } from './helpers/fixture.js';
+import { FOLDING_SKIP, worktreesFoldCase } from './helpers/folds.js';
 
-const STEPS = Number(process.env.FUZZ_STEPS ?? 120);
+/** A case-folding filesystem gets full refreshes only (#277): equality still holds, trivially. */
+const FOLDS = await worktreesFoldCase();
+/** A skipped test's title says why. */
+const skipped = (title: string): string => (FOLDS ? `${title} [skipped: ${FOLDING_SKIP}]` : title);
+
+/**
+ * macOS runs fewer steps: every refresh is full there (#277), so the check is cheap to make but
+ * each step costs more git, and the macOS job has a 25-minute budget for every package.
+ */
+const STEPS = Number(process.env.FUZZ_STEPS ?? (process.platform === 'darwin' ? 40 : 120));
 const SEEDS = process.env.FUZZ_SEED
   ? [Number(process.env.FUZZ_SEED)]
   : [0x5eed01, 0x5eed02, 0x5eed03, 0x5eed04];
@@ -475,15 +485,21 @@ describe('incremental summary fuzz', () => {
   for (const seed of SEEDS) {
     it(`seed 0x${seed.toString(16)}: incremental == full after every step`, async () => {
       const { incremental } = await runSeed(seed);
-      // The hint must actually be used most of the time, or the test proves nothing.
-      expect(incremental).toBeGreaterThan(STEPS / 5);
+      // The hint must actually be used most of the time, or the test proves nothing; on a
+      // folding filesystem it must never be (the equality checks above still ran every step).
+      if (FOLDS) expect(incremental).toBe(0);
+      else expect(incremental).toBeGreaterThan(STEPS / 5);
     }, 120_000);
   }
 
-  it('core.ignorecase=true on a case-sensitive filesystem', async () => {
-    const { incremental } = await runSeed(0xca5e, [['core.ignorecase', 'true']]);
-    expect(incremental).toBeGreaterThan(STEPS / 5);
-  }, 120_000);
+  it.skipIf(FOLDS)(
+    skipped('core.ignorecase=true on a case-sensitive filesystem'),
+    async () => {
+      const { incremental } = await runSeed(0xca5e, [['core.ignorecase', 'true']]);
+      expect(incremental).toBeGreaterThan(STEPS / 5);
+    },
+    120_000,
+  );
 
   it('the directory tree used by the fuzz exists', () => {
     // Guards the helpers above against silently doing nothing (an empty universe).

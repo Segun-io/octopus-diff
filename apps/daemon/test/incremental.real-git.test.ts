@@ -5,10 +5,10 @@
  * Spawns are counted by pointing git-core at a wrapper script that logs its argv.
  */
 import { chmodSync, readFileSync, writeFileSync } from 'node:fs';
-import { appendFile } from 'node:fs/promises';
+import { appendFile, mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import type { ServerEventOf, WorktreeSummary } from '@octopus-diff/contracts';
-import { createGitCore } from '@octopus-diff/git-core';
+import { createGitCore, foldsCase } from '@octopus-diff/git-core';
 import parcelWatcher from '@parcel/watcher';
 import { describe, expect, it } from 'vitest';
 import { type DaemonInternals, startDaemon } from '../src/daemon.js';
@@ -26,6 +26,21 @@ import {
 import { makeRealGitFixture, makeRealRepo, type RealGitFixture } from './real-git-fixture.js';
 
 type Changed = ServerEventOf<'worktree.changed'>;
+
+/**
+ * macOS (APFS folds case) and `OCTOPUS_DIFF_TEST_FOLDS_CASE=1`: git-core refreshes every worktree
+ * in full by design (DECISIONS #277), asked through the same probe. The tests that need an
+ * incremental refresh are skipped there; the fallback is asserted instead.
+ */
+/** Shown in a skipped test's title on a case-folding filesystem. */
+const FOLDING_SKIP = 'case-folding filesystem: every refresh is full by design (DECISIONS #277)';
+const FOLDS = await (async () => {
+  const dir = await tempDir('octopus-diff-fold-');
+  await mkdir(path.join(dir, '.git'));
+  return foldsCase(dir);
+})();
+/** A skipped test's title says why. */
+const skipped = (title: string): string => (FOLDS ? `${title} [skipped: ${FOLDING_SKIP}]` : title);
 
 async function startCounting(fx: RealGitFixture, internal: DaemonInternals = {}) {
   const log = path.join(await tempDir(), 'spawns.log');
@@ -127,53 +142,57 @@ const sameState = (got: WorktreeSummary | null | undefined, want: WorktreeSummar
 };
 
 describe('incremental refresh in the daemon (#40)', () => {
-  it('an edit costs at most 3 git processes, limited to the edited path', async () => {
-    const s = await setup();
-    const { daemon, spawns } = await startCounting(s.fx);
-    const api = client(daemon);
-    const events = recordEvents(daemon);
-    await events.opened;
-    await api.addProject({ path: s.repo });
-    await quiet(spawns);
-    // A first change: the review state is wanted from then on (it changed after startup).
-    let mark = events.events.length;
-    await appendFile(path.join(s.repo, 'c d.txt'), 'warm up\n');
-    await changedAfter(events, mark, s.repoId);
-    await quiet(spawns);
-
-    const perEdit: string[][][] = [];
-    for (let i = 0; i < 3; i++) {
-      mark = events.events.length;
-      const before = spawns().length;
-      await appendFile(path.join(s.repo, 'a.txt'), `edit ${i}\n`);
-      const event = await changedAfter(events, mark, s.repoId);
+  // Skipped on a case-folding filesystem (see FOLDS): there every refresh is full.
+  it.skipIf(FOLDS)(
+    skipped('an edit costs at most 3 git processes, limited to the edited path'),
+    async () => {
+      const s = await setup();
+      const { daemon, spawns } = await startCounting(s.fx);
+      const api = client(daemon);
+      const events = recordEvents(daemon);
+      await events.opened;
+      await api.addProject({ path: s.repo });
       await quiet(spawns);
-      perEdit.push(spawns().slice(before));
-      sameState(event.summary, await fullSummary(s.fx, s.repo));
-    }
-    if (process.env.OCTOPUS_PRINT_SPAWNS) console.log(JSON.stringify(perEdit));
-    for (const list of perEdit) {
-      const subs = list.map((argv) => argv[0]);
-      // status + numstat for the summary, one diff for the review list.
-      expect(list.length, subs.join(', ')).toBeLessThanOrEqual(3);
-      for (const argv of list) {
-        if (argv[0] !== 'status' && argv[0] !== 'diff') continue;
-        // Limited to the edited file (no rename candidates in this worktree).
-        expect(argv.slice(argv.indexOf('--')), argv.join(' ')).toEqual(['--', 'a.txt']);
-      }
-    }
-    // The file lists the UI reads are what a full listing says.
-    const reference = createGitCore({ env: s.fx.env, incremental: false });
-    onCleanup(() => reference.dispose());
-    const { files } = await api.listFiles(s.repoId, { scope: { kind: 'working' } });
-    const want = await reference.listChangedFiles(
-      { projectId: 'p', worktreeId: 'w', path: s.repo },
-      { kind: 'working' },
-    );
-    expect(files.map(({ reviewed: _r, origin: _o, ...f }) => f)).toEqual(want);
-  });
+      // A first change: the review state is wanted from then on (it changed after startup).
+      let mark = events.events.length;
+      await appendFile(path.join(s.repo, 'c d.txt'), 'warm up\n');
+      await changedAfter(events, mark, s.repoId);
+      await quiet(spawns);
 
-  it('a lost event is repaired by the reconciliation refresh', async () => {
+      const perEdit: string[][][] = [];
+      for (let i = 0; i < 3; i++) {
+        mark = events.events.length;
+        const before = spawns().length;
+        await appendFile(path.join(s.repo, 'a.txt'), `edit ${i}\n`);
+        const event = await changedAfter(events, mark, s.repoId);
+        await quiet(spawns);
+        perEdit.push(spawns().slice(before));
+        sameState(event.summary, await fullSummary(s.fx, s.repo));
+      }
+      if (process.env.OCTOPUS_PRINT_SPAWNS) console.log(JSON.stringify(perEdit));
+      for (const list of perEdit) {
+        const subs = list.map((argv) => argv[0]);
+        // status + numstat for the summary, one diff for the review list.
+        expect(list.length, subs.join(', ')).toBeLessThanOrEqual(3);
+        for (const argv of list) {
+          if (argv[0] !== 'status' && argv[0] !== 'diff') continue;
+          // Limited to the edited file (no rename candidates in this worktree).
+          expect(argv.slice(argv.indexOf('--')), argv.join(' ')).toEqual(['--', 'a.txt']);
+        }
+      }
+      // The file lists the UI reads are what a full listing says.
+      const reference = createGitCore({ env: s.fx.env, incremental: false });
+      onCleanup(() => reference.dispose());
+      const { files } = await api.listFiles(s.repoId, { scope: { kind: 'working' } });
+      const want = await reference.listChangedFiles(
+        { projectId: 'p', worktreeId: 'w', path: s.repo },
+        { kind: 'working' },
+      );
+      expect(files.map(({ reviewed: _r, origin: _o, ...f }) => f)).toEqual(want);
+    },
+  );
+
+  it.skipIf(FOLDS)(skipped('a lost event is repaired by the reconciliation refresh'), async () => {
     const s = await setup();
     // The native watcher, minus every event for `lost.txt`.
     const dropping: SubscribeFn = (dir, fn, opts) =>
@@ -220,46 +239,77 @@ describe('incremental refresh in the daemon (#40)', () => {
     sameState(repaired.summary, truth);
   });
 
-  it('Refresh is a full refresh that forgets the kept state, whatever the watcher has pending', async () => {
-    const s = await setup();
-    const dropping: SubscribeFn = (dir, fn, opts) =>
-      parcelWatcher.subscribe(
-        dir,
-        (error, evts) =>
-          fn(
-            error,
-            evts.filter((e) => !e.path.endsWith('lost.txt')),
-          ),
-        opts,
-      );
-    // No reconciliation during the test: only Refresh can repair the lost event.
-    const { daemon, spawns } = await startCounting(s.fx, {
-      subscribe: dropping,
-      incremental: { reconcileMs: 600_000 },
-    });
-    const api = client(daemon);
-    const events = recordEvents(daemon);
-    await events.opened;
-    await api.addProject({ path: s.repo });
-    await quiet(spawns);
-    const mark = events.events.length;
-    await appendFile(path.join(s.repo, 'lost.txt'), 'nobody saw me\n');
-    await sleep(50);
-    await appendFile(path.join(s.repo, 'a.txt'), 'seen\n');
-    const first = await changedAfter(events, mark, s.repoId);
-    const truth = await fullSummary(s.fx, s.repo);
-    expect(first.summary?.counts.untracked).toBe(truth.counts.untracked - 1);
-    await quiet(spawns);
-    // An edit whose paths the watcher still holds when the user presses Refresh.
-    daemon.core.watcher.markDirty(s.repoId, 'fs', ['a.txt']);
-    const before = spawns().length;
-    const { summary } = await api.refreshWorktree(s.repoId);
-    sameState(summary, await fullSummary(s.fx, s.repo));
-    const statuses = spawns()
-      .slice(before)
-      .filter((argv) => argv[0] === 'status');
-    expect(statuses.some((argv) => !argv.includes('--'))).toBe(true);
-  });
+  it.skipIf(FOLDS)(
+    skipped(
+      'Refresh is a full refresh that forgets the kept state, whatever the watcher has pending',
+    ),
+    async () => {
+      const s = await setup();
+      const dropping: SubscribeFn = (dir, fn, opts) =>
+        parcelWatcher.subscribe(
+          dir,
+          (error, evts) =>
+            fn(
+              error,
+              evts.filter((e) => !e.path.endsWith('lost.txt')),
+            ),
+          opts,
+        );
+      // No reconciliation during the test: only Refresh can repair the lost event.
+      const { daemon, spawns } = await startCounting(s.fx, {
+        subscribe: dropping,
+        incremental: { reconcileMs: 600_000 },
+      });
+      const api = client(daemon);
+      const events = recordEvents(daemon);
+      await events.opened;
+      await api.addProject({ path: s.repo });
+      await quiet(spawns);
+      const mark = events.events.length;
+      await appendFile(path.join(s.repo, 'lost.txt'), 'nobody saw me\n');
+      await sleep(50);
+      await appendFile(path.join(s.repo, 'a.txt'), 'seen\n');
+      const first = await changedAfter(events, mark, s.repoId);
+      const truth = await fullSummary(s.fx, s.repo);
+      expect(first.summary?.counts.untracked).toBe(truth.counts.untracked - 1);
+      await quiet(spawns);
+      // An edit whose paths the watcher still holds when the user presses Refresh.
+      daemon.core.watcher.markDirty(s.repoId, 'fs', ['a.txt']);
+      const before = spawns().length;
+      const { summary } = await api.refreshWorktree(s.repoId);
+      sameState(summary, await fullSummary(s.fx, s.repo));
+      const statuses = spawns()
+        .slice(before)
+        .filter((argv) => argv[0] === 'status');
+      expect(statuses.some((argv) => !argv.includes('--'))).toBe(true);
+    },
+  );
+
+  it.runIf(FOLDS)(
+    'a case-folding filesystem: every edit refreshes in full, the event is a full summary',
+    async () => {
+      const s = await setup();
+      const { daemon, spawns } = await startCounting(s.fx);
+      const api = client(daemon);
+      const events = recordEvents(daemon);
+      await events.opened;
+      await api.addProject({ path: s.repo });
+      await quiet(spawns);
+      for (let i = 0; i < 2; i++) {
+        const mark = events.events.length;
+        const before = spawns().length;
+        await appendFile(path.join(s.repo, 'a.txt'), `edit ${i}\n`);
+        const event = await changedAfter(events, mark, s.repoId);
+        await quiet(spawns);
+        sameState(event.summary, await fullSummary(s.fx, s.repo));
+        const statuses = spawns()
+          .slice(before)
+          .filter((argv) => argv[0] === 'status');
+        expect(statuses.length).toBeGreaterThan(0);
+        for (const argv of statuses) expect(argv).not.toContain('--');
+      }
+    },
+  );
 
   it('incremental: false runs every status over the whole worktree', async () => {
     const s = await setup();
