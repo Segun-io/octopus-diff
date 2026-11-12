@@ -3813,3 +3813,23 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      with every refresh in full. It now takes the run's `incremental` setting, records the refresh mode of each edit
      (shown in the table) and the heading says when the run was `--no-incremental`. Unit test in `e2e/support`
      (both settings; on a case-folding filesystem both are full by design).
+
+### A file list and its summary fields describe one state (2026-11-12; #43 follow-up, Greptile on PR #91)
+
+339. **Responses that pair a list with summary fields take both from one summary.** `GET /files` read `stateHash`
+     and `untrackedOmitted` before awaiting the review scope's resolution, while `#gitFiles` read the summary again
+     afterwards (and git-core's state hash later still), so a refresh landing meanwhile, for example one that took
+     the worktree across the untracked cap, could pair a newly capped list with no notice, or an old count with
+     files now listed. Now `#gitFilesAt` reads the summary and git-core's state hash once, before anything is
+     awaited, lists (and caches) for that state only and returns the summary it used. `#listedAt` resolves the scope
+     and lists; if the summary moved during either, it does both once more, and the result is always labelled with
+     the summary the list was built for (a client that sees a `stateHash` other than the current one fetches again).
+     The same applies to inbox rows (a row's `summary` is its files' one) and bulk review (the reported
+     `untrackedOmitted`, the HEAD "Review all" moves the bookmark to, and the `expectedStateHashes` check also
+     against the listed state). `/diff` returns no summary field; event deltas read the files cache by the event's
+     `stateHash`, whose entries are now always of that state. Tests (`files-snapshot.real-git.test.ts`, a gate that
+     holds one git-core call): all seven fail on the previous code. Mutations killed: no retry; labels or notice
+     read from the current summary; inbox rows with the earlier summary; bulk omission and bookmark HEAD from the
+     earlier summary. Survivors, by design: the bulk check of the listed state against `expectedStateHashes`
+     (redundant unless a state hash comes back to an earlier value) and reading git-core's state hash after the
+     awaits (no test can land a refresh inside `#gitFiles` before the list starts without a gate there).

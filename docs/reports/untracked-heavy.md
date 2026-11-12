@@ -264,3 +264,12 @@ Verification (this machine, branch head):
   `incremental` true gives incremental edits, false gives full ones (folding-aware); the mutation dropping the
   setting is killed. Not re-run as a large `--no-incremental` bench (its stale-index edits take about two minutes
   each, #40's A/B); the unit test is the check.
+
+## Follow-up: list and notice from one state (branch `fix/files-omission-snapshot`)
+
+Greptile's last, non-blocking comment on PR #91: `GET /files` took `stateHash` and `untrackedOmitted` from the
+summary before the review scope's resolution and the list from the summary after it, so a refresh in between
+(crossing the untracked cap, either way) mixed two states. The list, its labels, inbox rows and bulk review now come
+from the one summary the list was built for, with one retry when it moved meanwhile (DECISIONS #339). Seven
+real-git tests with a gate on git-core calls, all failing on the previous code; mutations killed except two
+redundant layers named there.
