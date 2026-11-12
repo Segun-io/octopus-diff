@@ -125,3 +125,7 @@ None added or removed (`pnpm credits` not needed; `pnpm lint` runs `credits:chec
 ## Also fixed here: a macOS flake in the git-core snapshot spawn test
 
 The macOS job failed on `live-snapshot.test.ts` "costs no extra git process" (merged in #70): `expected [diff, status] to equal [config, diff, status]`. Same weakness as #71: the config scan git-core reuses is not stored while a config file is younger than 2 s (the racy guard, DECISIONS #191), and the fixture had just written config, so the first measured call included one `config` read the next ones did not. The test now warms up until a call no longer reads the config (bounded loop) before it counts.
+
+### The one-by-one test was timing dependent (Node 24 CI failure)
+
+"does not re-subscribe for directories that were reported one by one" failed once on the Linux Node 24 job (`eventually: timed out`). It created each directory as soon as the previous one's event had been handed to the watcher, but parcel adds the watch of a new directory while it handles the directory's own event, which can lag behind on a busy machine: a child created before that is exactly the unwatched case this feature repairs, so the test's premise (no repair needed) did not hold. It now proves the parent is watched (a write inside it is reported) before it creates the child. 8 of 8 passes.

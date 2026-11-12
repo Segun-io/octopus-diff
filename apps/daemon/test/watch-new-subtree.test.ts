@@ -198,15 +198,20 @@ describe('new directories with subdirectories (issue #36)', { timeout: 30_000 },
       const layout = await makeLayout();
       const t = setup();
       await t.watcher.setProject('p1', layout.common, [layout.worktree]);
-      // Each directory is created after the watcher reported the previous one: all are watched.
+      // Each directory is created only after the previous one is proven watched (a write inside it is
+      // reported): parcel adds the watch of a new directory while it handles the directory's own
+      // event, which can lag behind the event being handed over on a busy machine, and a child
+      // created before that is exactly the unwatched case this feature repairs.
       let from = t.raw.length;
       const a = path.join(layout.root, 'one');
       await mkdir(a);
       await t.seen(a, from);
+      await t.writesUntilSeen(a);
       from = t.raw.length;
       const b = path.join(a, 'two');
       await mkdir(b);
       await t.seen(b, from);
+      await t.writesUntilSeen(b);
       from = t.raw.length;
       const c = path.join(b, 'three');
       await mkdir(c);
