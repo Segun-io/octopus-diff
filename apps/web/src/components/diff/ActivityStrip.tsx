@@ -268,7 +268,7 @@ function ActivityRow({
             {meta.label}
           </span>
           <span
-            className={`min-w-0 truncate font-mono ${deleted ? 'text-del' : ''} ${present ? '' : 'line-through decoration-faint'}`}
+            className={`min-w-0 truncate font-mono ${deleted ? 'text-del' : ''} ${present ? '' : 'opacity-70'}`}
             title={present ? entry.path : `${entry.path} (no longer in the list)`}
           >
             {escapeSuspicious(label)}

@@ -34,7 +34,7 @@ import {
   watchNote,
 } from '../src/lib/activity.ts';
 import type { WorktreeRow } from '../src/lib/model.ts';
-import { scopeForPref } from '../src/state/prefs.ts';
+import { DEFAULT_PREFS, scopeForPref } from '../src/state/prefs.ts';
 import { createUiStore, type UiStore } from '../src/state/ui.tsx';
 
 vi.mock('../src/components/diff/DiffRenderer.tsx', () => ({
@@ -207,6 +207,40 @@ describe('the "N deleted" chip', () => {
   });
 });
 
+// --- the mock routes the UI runs against -----------------------------------------------------
+
+describe('the mock live-view routes (shaped like the daemon)', () => {
+  it('serve the feed, validate the oid, 404 a blob that is not in the feed', async () => {
+    const backend = new MockBackend({ dataset: 'demo' });
+    const fetch = createMockFetch(backend);
+    const id = backend.projects[0]?.worktrees[0]?.worktree.id as string;
+    const get = (path: string) => fetch(`http://mock.local${path}`);
+    const empty = (await (await get(`/api/worktrees/${id}/activity`)).json()) as ActivityResponse;
+    expect(empty).toMatchObject({
+      entries: [],
+      seq: 0,
+      dropped: false,
+      live: true,
+      run: 'mock-run-1',
+    });
+    backend.mutate(id, 'delete');
+    const after = (await (
+      await get(`/api/worktrees/${id}/activity?after=0`)
+    ).json()) as ActivityResponse;
+    const gone = after.entries.find((e) => e.kind === 'deleted');
+    expect(gone?.oid).toMatch(/^[0-9a-f]{40}$/);
+    expect((await get(`/api/worktrees/${id}/blob/${gone?.oid}`)).status).toBe(200);
+    expect((await get(`/api/worktrees/${id}/blob/${'1'.repeat(40)}`)).status).toBe(404);
+    expect((await get(`/api/worktrees/${id}/blob/not-an-oid`)).status).toBe(400);
+    expect((await get(`/api/worktrees/${id}/blob/${gone?.oid}?maxBytes=0`)).status).toBe(400);
+    // A cursor from another run is stale.
+    const stale = (await (
+      await get(`/api/worktrees/${id}/activity?after=1&run=other`)
+    ).json()) as ActivityResponse;
+    expect(stale.dropped).toBe(true);
+  });
+});
+
 // --- the app ----------------------------------------------------------------------------------
 
 class FakeEventSource implements EventSourceLike {
@@ -301,6 +335,13 @@ async function agent(
 }
 
 describe('the Activity strip', () => {
+  it('starts collapsed for a new browser (the diff comes first)', async () => {
+    const h = setup({ activityOpen: DEFAULT_PREFS.activityOpen });
+    expect(h.store.getState().activityOpen).toBe(false);
+    await open('feat/auth');
+    expect((await screen.findByTestId(ACTIVITY_TEST_IDS.strip)).dataset.open).toBe('false');
+  });
+
   it('is collapsed by default, only in a worktree, and fetches nothing before one is open', async () => {
     const h = setup({ activityOpen: false });
     await waitFor(() => expect(app().getAttribute('data-ready')).toBe('true'));

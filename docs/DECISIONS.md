@@ -2911,3 +2911,42 @@ Numbers: #225-#228 (after #218-#224 of `feat/daemon-activity`, which merges firs
      timeout (10 s per edit in the edit loop, 30 s after the live fetch). It now counts git processes only. Also: `argv` (every argument, cut) in each trace line,
      and `--keep-trace <dir>` keeps the raw trace and the phase windows after the run for diagnosis.
 ||||||| ed407f8
+
+## Live view: Activity strip and "N deleted" chip (session, 2026-11-12; roadmap #39, step 20)
+
+Numbers: #229-#232 (after #225-#228; other open branches may use these numbers). Report: `docs/reports/web-activity.md`.
+
+229. **The strip lives under the diff, collapsed by default, for the open worktree only.** It is the `ActivityStrip` at
+     the bottom of the diff pane (not a tab: a tab would hide the diff, and the point is to watch the diff and the
+     feed together). "Open worktree" is `view.kind === 'worktree'`; the Inbox mixes worktrees, so it has no strip and
+     fetches nothing. `activityOpen` is a persisted preference (default off: the diff comes first; the collapsed bar
+     still shows the newest entry and a count). "Follow latest change" is `followLatest`, **transient and off by
+     default** (a reload starts without it; a setting that moves the selection by itself should not survive by
+     accident). When it is on it selects the newest *file* entry that is in the current file list, once per update.
+230. **One incremental React Query per worktree.** `['activity', worktreeId]` holds an `ActivityFeed` (entries oldest first,
+     `seq`, `run`, `watch`). Its `queryFn` reads the held feed when the request is made and asks
+     `getActivity(id, { after: feed.seq, run: feed.run })`, then `mergeActivity`: entries replace earlier versions by
+     `id` (a coalesced entry comes back with a new `seq`), a `dropped` answer, a foreign `run` or no held feed
+     replaces the list, and at most `ACTIVITY_RING_SIZE` entries are kept. No timers fetch: `collectEventEffects`
+     adds the worktree to `effects.activity` for every `worktree.changed` with `activitySeq` (decided **before** the
+     stateHash short-circuit, because the projects list may already hold the new hash) and `flushEffects`
+     invalidates `['activity', id]`; only an observed query (the strip on screen) refetches, the others are marked
+     stale and fetch incrementally when next opened. A reconnect (`hello`) already invalidates everything. The only
+     timer is a 10 s re-render so "12s" keeps counting; it makes no request. The diff and file queries are not
+     touched by it, so the selection and the diff's scroll position are exactly as before (PLAN §4.2); the strip has
+     a fixed height (list scrolls inside), so new rows never resize the diff.
+231. **Deleted rows.** Red (`bg-del-soft`, `text-del`) with the entry's `deleted` line count; "View content" reads the
+     entry's `oid` through `getBlob` only when clicked (`['blob', worktreeId, oid]`, never refetched) and shows text
+     (suspicious characters escaped, SEC-05), "Binary file" or "Too large" by `BlobRead.kind`; a 404 says the content
+     is no longer available (aged out of the feed or pruned); `untracked` or `oid: null` says "content unavailable"
+     with no button; the panel says it is the last *staged or committed* content, not unsaved edits. A row is a
+     button (selects the file) only while the file is in the current list (`data-present`); otherwise it is dimmed.
+     Bulk and commit rows list their (at most 20) paths behind a button, with "… and N more".
+232. **The "N deleted" chip** is `DeletedChip` in `RowChips` (so on sidebar rows and the context bar), from
+     `WorktreeSummary.counts.deleted`: shown while it is above 0, hidden at 0 and when absent (an older daemon), so it
+     is state-based by construction. (A deletion is a changed file, so the row's meta line, which is omitted only when
+     there is no chip and no file count, is never empty while the chip is there.)
+     **Mock:** `mock/activity.ts` (`MockActivity`: rings, one sequence, `run`, coalescing, blob allow-list,
+     `setWatch`, `restart`), the two routes, `counts.deleted` in every mock summary, and `MockBackend.mutate` actions
+     `delete` (blob kept), `delete-untracked`, `commit` next to `edit | add | revert`; `POST
+     /api/__mock/mutate?action=` and `/api/__mock/activity?mode=polling&pollMs=5000` / `?restart=1` drive them.

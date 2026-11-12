@@ -38,7 +38,7 @@ import { useFolderStart } from './FolderBrowser.tsx';
 import { Wordmark } from './Mark.tsx';
 import { SidebarFilter } from './SidebarFilter.tsx';
 import { FloatPill, FloatSlot, StaleNote } from './WaitNote.tsx';
-import { DefaultBranchChip, deletedCount, RowChips } from './WorktreeChips.tsx';
+import { DefaultBranchChip, RowChips } from './WorktreeChips.tsx';
 
 /**
  * The sidebar (DECISIONS "UX round 4", status flow v2 in docs/STATUS-FLOW.md): the Inbox;
@@ -205,8 +205,7 @@ function RowMeta({ row }: { row: WorktreeRow }) {
   const hasChip =
     (worktree.isMain && worktree.branch !== project.defaultBranch) ||
     (!worktree.isMain && worktreeSource(worktree.path) !== null) ||
-    summary?.inProgress ||
-    deletedCount(row) > 0;
+    summary?.inProgress;
   if (!hasChip && !facts.files && !facts.lines && !facts.sync) return null;
   return (
     <span className="flex min-w-0 items-center gap-1.5 overflow-hidden font-mono text-[11px] whitespace-nowrap text-muted">

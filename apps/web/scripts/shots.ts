@@ -52,6 +52,32 @@ const STATES: Record<string, Step> = {
     await page.locator('[data-testid="from-main-chip"]').click();
     await page.waitForTimeout(400);
   },
+  // Live view (#39): a simulated agent edits, deletes (tracked and untracked) and commits in
+  // feat/auth; the strip is opened and the deleted file's content shown. The mock's feed is
+  // shared, so run it once per server start.
+  activity: async (page) => {
+    const id = await page
+      .locator('[data-testid="worktree-item"][data-branch="feat/auth"]')
+      .getAttribute('data-worktree-id');
+    await page.locator('[data-testid="worktree-item"][data-branch="feat/auth"]').click();
+    await page.locator('[data-testid="activity-strip"]').waitFor();
+    const act = async (action: string, path = '') => {
+      const q = `worktreeId=${id}&action=${action}${path ? `&path=${encodeURIComponent(path)}` : ''}`;
+      await page.request.post(`${base}/api/__mock/mutate?${q}`);
+      await page.waitForTimeout(250);
+    };
+    await act('edit', 'src/auth/token.ts');
+    await act('delete-untracked', 'notes/todo.md');
+    await act('delete', 'src/auth/session.ts');
+    await page.request.post(
+      `${base}/api/__mock/activity?worktreeId=${id}&mode=polling&pollMs=5000`,
+    );
+    await act('edit', 'src/auth/token.ts');
+    await page.locator('[data-testid="activity-toggle"]').click();
+    await page.locator('[data-testid="activity-view-content"]').first().click();
+    await page.locator('[data-testid="activity-content"]').waitFor();
+    await page.waitForTimeout(400);
+  },
   settings: async (page) => {
     await page.keyboard.press(',');
     await page.waitForTimeout(300);
