@@ -5,7 +5,14 @@
  * directories (no network). Each test classifies the "To review" list the daemon would show: the
  * review range's base (`O`) and `listChangedFiles({ kind: 'review', base: O })`.
  */
-import { chmodSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  writeFileSync,
+} from 'node:fs';
 import path from 'node:path';
 import { type GitCore, isGitCoreError } from '@octopus-diff/contracts';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -291,6 +298,36 @@ describe('readFileOrigins: committed history', () => {
       expected,
     );
   });
+
+  it.skipIf(!RAW_NAMES_SUPPORTED)(
+    'an own rename of a file with a non-UTF-8 name that main changed is mixed, with and without files (PR #64 review)',
+    async () => {
+      const s = scenario();
+      const raw = Buffer.from([0x62, 0x6f, 0x74, 0x68, 0xff, 0x2e, 0x74, 0x78, 0x74]); // both\xff.txt
+      // The file exists on main before the branch starts.
+      fx.git(s.other, ['pull', '-q', '--ff-only']);
+      fx.writeRaw(s.other, raw, lines(20));
+      fx.commitAll(s.other, 'add the raw-named file');
+      fx.git(s.other, ['push', '-q', 'origin', 'main']);
+      syncMain(s);
+      fx.git(s.work, ['reset', '-q', '--hard', 'origin/main']);
+      const start = rev(s.work, 'HEAD');
+      // The branch renames it; main changes it afterwards; the branch merges main.
+      renameSync(Buffer.concat([Buffer.from(`${s.work}/`), raw]), path.join(s.work, 'renamed.txt'));
+      fx.commitAll(s.work, 'own rename');
+      fx.writeRaw(s.other, raw, lines(20).replace('line 18', 'theirs'));
+      fx.commitAll(s.other, 'their change');
+      fx.git(s.other, ['push', '-q', 'origin', 'main']);
+      syncMain(s);
+      merge(s.work, 'main');
+      expect(readFileSync(path.join(s.work, 'renamed.txt'), 'utf8')).toContain('theirs');
+      const expected = { 'renamed.txt': 'mixed:merge' };
+      expect((await classify(core, s.work, { bookmark: start })).origins).toEqual(expected);
+      expect((await classify(core, s.work, { bookmark: start, withFiles: false })).origins).toEqual(
+        expected,
+      );
+    },
+  );
 
   it("own work reverted after the bookmark stays own (HEAD has N's version, main never touched it)", async () => {
     const s = scenario({ 'x.txt': 'x\n' });

@@ -365,9 +365,18 @@ export async function readFileOrigins(
   let vsTip: ReadonlySet<string> = EMPTY;
   let baseSide: ReadonlySet<string> = EMPTY;
   let via: FileOriginVia | null = null;
-  const touchedByBase = (f: FileOriginInput): boolean =>
-    baseSide.has(inputKey(f)) || (f.oldPath !== null && baseSide.has(f.oldPath));
+  // `oldPath` of a listed file is a display string (lossy for a non-UTF-8 name), but the sets above
+  // hold review-mark keys: the old name's key comes from the committed rename pairs themselves.
+  let renames: ReadonlyMap<string, string> = new Map();
+  const oldKeyOf = (f: FileOriginInput): string | null =>
+    f.oldPath === null ? null : (renames.get(inputKey(f)) ?? f.oldPath);
+  const touchedByBase = (f: FileOriginInput): boolean => {
+    const old = oldKeyOf(f);
+    return baseSide.has(inputKey(f)) || (old !== null && baseSide.has(old));
+  };
   if (committed.length > 0 && base !== null) {
+    if (committed.some((f) => f.oldPath !== null))
+      renames = await committedRenames(ctx, repo, base, head);
     const m0 = await mergeBase(ctx, repo, base, n);
     const [a, b, c] = await Promise.all([
       changedPaths(ctx, repo, n, head),
