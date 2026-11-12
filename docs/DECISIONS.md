@@ -2439,3 +2439,48 @@ Numbers: #198 and up (#197 is used by the forge-fetching branch for #8; renumber
      (the branch's version equals the newest default-branch version), so all are `same-as-base` (decision 5 of
      #25: "same as main"). The value stays for a later, costlier detection (patch-ids); clients must tolerate it.
      Old daemons and clients still parse: every field is optional (`packages/contracts/test/file-origins.test.ts`).
+
+199. **git-core `readFileOrigins` (#32): the issue's algorithm, with four conservative refinements.**
+     `packages/git-core/src/file-origins.ts`. Per listed file: (1) uncommitted: untracked, unstaged or unmerged ->
+     own; during a merge or cherry-pick, staged-only and not in `diff --cached --name-only -z OP_HEAD` -> base
+     (`in-progress`), else mixed; any other uncommitted change -> own; (2) not in `diff-tree N HEAD` -> base; (3)
+     not in `diff-tree TIP HEAD` -> base `same-as-base`; (4) in `diff-tree M0 N` (`M0 = merge-base O N`; a rename's
+     old path counts too) -> mixed; (5) own. Name-only diffs use `-r -z --no-renames`; every committed diff is
+     between two commits (memoized by their ids, the history stamp in the key, as #193), never the working tree.
+     `via` per worktree: `update` when HEAD = `N`, `merge` when `O..HEAD` has a merge commit (the review range's
+     memoized `rev-list`, shared with `readReviewRange`; also when it is truncated), else `rebase`.
+     Refinements, each covered by a test that fails without it:
+     - **Rule 2 needs the default branch to have changed the file** (`p` in `M0..N`). Otherwise HEAD has `N`'s
+       version only because own work changed it and changed it back after the bookmark (a revert); that is own.
+     - **The default branch's own worktree and a detached HEAD are all own** (decision 4 of #25: after a pull,
+       upstream work cannot be told from own work that was pushed; a detached HEAD gets the same "bookmark
+       starts at HEAD" treatment as in `readReviewRange`, which includes a rebase in progress).
+     - **An operation in progress counts only when `OP_HEAD` is default-branch history** (`merge-base
+       --is-ancestor OP_HEAD TIP`, or the local ref; memoized): a merge or cherry-pick of a sibling branch is own
+       (decision 6). A **revert** in progress is own: its staged content is the reverted commit's parent, never
+       `REVERT_HEAD`'s version, so the issue's rule would always say "mixed". An octopus merge uses the first
+       `MERGE_HEAD`.
+     - **No remote is not "everything own"**: with a local default branch and no `origin/<d>`, `U` is the local
+       branch alone (as #196), so a merge of local `main` is still noise (the bench and most scratch repos have
+       no remote). Everything is own when there is no default branch, no shared history, or an unborn branch.
+     `integrationRef` is `TIP`'s name, the remote's when local and remote are the same commit.
+     **Cost** (asserted in `test/file-origins.test.ts`, with `readReviewRange` called first as the daemon does):
+     first call 5 (3 `merge-base`: TIP, N, M0; 2 `diff-tree`), nothing moved 0, a new own commit 2, merging main
+     again 5, a fetch that moves `origin/main` 3, a merge in progress +1 index-only `diff --cached` per call (not
+     cached: the index changes). `TIP = N` (the usual case after a merge) skips `diff-tree TIP HEAD`.
+200. **Merge-noise edge cases, documented and not solved (#32).**
+     - **Stale remote-tracking refs**: the daemon never fetches; until someone runs `git fetch`, files merged
+       from a newer `origin/main` some other way (a pull into a feature branch from a URL) are own.
+     - **`cherry-pick --no-commit`** leaves no `CHERRY_PICK_HEAD`: the staged files are own until committed;
+       committed, rule 3 makes them `same-as-base` if main still has that version.
+     - **`git checkout main -- file`** (or copying main's file by hand): no operation, so own while uncommitted;
+       once committed, rule 3 says `same-as-base` (its version is main's), which is right.
+     - **Criss-cross merges**: `merge-base` returns one best base, so `N` and `M0` can differ by which one git
+       picks; files can flip between own and mixed. No `--all` handling.
+     - A conflict resolved as **ours** is `mixed` (main changed the file, HEAD differs from `N`), although the
+       combined patch only shows own changes. A file edited and staged by hand during a merge in progress is
+       `mixed` (it differs from `OP_HEAD`), as the issue says.
+     - Rename pairing in the listing (`--find-renames` against `O`) can pair a file with a main-side deletion of
+       identical content; then the old path makes it `mixed`.
+     - A fetch that moves `origin/main` invalidates every worktree of the project (3 spawns each, more if `N`
+       moved): #33 should call it with `mapLimit` off first paint, as the issue says.
