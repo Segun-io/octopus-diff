@@ -133,3 +133,7 @@ None added or removed (`pnpm credits` not needed; `pnpm credits:check` runs in `
 - #30 (integration base incl. the remote default ref) should change `resolveRefName` / `resolveDefaultBranch`
   only: `readBranchBase`, the scope and the summary already share it.
 - The `startupSpawns` budget is enforced on every layout; if #10 changes the startup window, re-run the bench.
+
+## Combined with #10 (stacked, measured after the rebase)
+
+`pnpm --filter @octopus-diff/e2e bench` on this branch stacked on `perf/startup-once` (#10), 30 x 3, exit 0, `docs/bench/results.*` regenerated: startup git spawns **415 for 90 worktrees (4.6 per worktree, budget <= 8 PASS)**, which meets the "under 450" target that the branch alone (626) did not; all summaries ready 862 ms (target ~1.0 s), cold paint 152 ms, warm reload 71 ms, edit -> SSE p95 20 ms, idle CPU 0.23 %. `pnpm check` exit 0 on the stack (git-core 200, daemon 222, web 248 tests).
