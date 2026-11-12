@@ -149,9 +149,9 @@ async function measure(base: string) {
           });
         })
         .catch((e: unknown) => `(cannot read the page: ${e instanceof Error ? e.message : e})`);
-    const waitStep = async (what: string, wait: Promise<unknown>) => {
+    const waitStep = async <T>(what: string, wait: Promise<T>): Promise<T> => {
       try {
-        await wait;
+        return await wait;
       } catch (e) {
         throw new Error(
           `${what}: ${e instanceof Error ? e.message.split('\n')[0] : e}\n  page state: ${await pageState()}`,
@@ -308,32 +308,37 @@ async function measure(base: string) {
     const refreshRequests: number[] = [];
     for (let i = 0; i < ITER.refreshes; i++) {
       const requestsBefore = apiRequests.length;
-      const elapsed = await page.evaluate(async () => {
-        const indicator = document.querySelector('[data-testid="refresh-indicator"]');
-        if (!indicator) throw new Error('no refresh indicator');
-        let sawRefreshing = false;
-        const settled = new Promise<number>((resolve, reject) => {
-          const timer = setTimeout(
-            () =>
-              reject(
-                new Error(`refresh indicator stuck in "${indicator.getAttribute('data-state')}"`),
-              ),
-            10_000,
-          );
-          new MutationObserver((_, observer) => {
-            if (indicator.getAttribute('data-state') === 'refreshing') sawRefreshing = true;
-            else if (sawRefreshing && indicator.getAttribute('data-state') === 'idle') {
-              clearTimeout(timer);
-              observer.disconnect();
-              resolve(performance.now());
-            }
-          }).observe(indicator, { attributes: true, attributeFilter: ['data-state'] });
-        });
-        const t = performance.now();
-        const res = await fetch('/api/__mock/mutate?action=edit', { method: 'POST' });
-        if (!res.ok) throw new Error(`mutate failed: ${res.status}`);
-        return (await settled) - t;
-      });
+      // Wrapped like every other wait: a stuck refresh prints the scope, the current worktree, the
+      // file counts and the viewer state, not only the indicator's.
+      const elapsed = await waitStep(
+        `live refresh ${i + 1} of ${ITER.refreshes}`,
+        page.evaluate(async () => {
+          const indicator = document.querySelector('[data-testid="refresh-indicator"]');
+          if (!indicator) throw new Error('no refresh indicator');
+          let sawRefreshing = false;
+          const settled = new Promise<number>((resolve, reject) => {
+            const timer = setTimeout(
+              () =>
+                reject(
+                  new Error(`refresh indicator stuck in "${indicator.getAttribute('data-state')}"`),
+                ),
+              10_000,
+            );
+            new MutationObserver((_, observer) => {
+              if (indicator.getAttribute('data-state') === 'refreshing') sawRefreshing = true;
+              else if (sawRefreshing && indicator.getAttribute('data-state') === 'idle') {
+                clearTimeout(timer);
+                observer.disconnect();
+                resolve(performance.now());
+              }
+            }).observe(indicator, { attributes: true, attributeFilter: ['data-state'] });
+          });
+          const t = performance.now();
+          const res = await fetch('/api/__mock/mutate?action=edit', { method: 'POST' });
+          if (!res.ok) throw new Error(`mutate failed: ${res.status}`);
+          return (await settled) - t;
+        }),
+      );
       refreshTimes.push(elapsed);
       refreshRequests.push(
         apiRequests.slice(requestsBefore).filter((r) => !r.url.includes('/__mock/')).length,

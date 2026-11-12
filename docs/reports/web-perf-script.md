@@ -123,3 +123,7 @@ inside `pnpm lint`).
   the README section stand on their own.
 - DECISIONS #212 (renumbered from #209 when #70 took #209-#211).
 - `PERF_OUT` must be an absolute path (pnpm runs the script from `apps/web`).
+
+## PR review round 1 (Greptile on #72)
+
+- **The live-refresh timeout omitted the page details** (valid). The refresh measurement ran its `page.evaluate` outside `waitStep`, so a stuck refresh printed only the indicator's state, unlike every other wait. It is now wrapped the same way (`waitStep` also returns the wrapped value): a stuck refresh prints which refresh it was, the scope, the current worktree, the file and group counts and the viewer state. Checked by forcing the in-page timeout to 1 ms: `perf: live refresh 1 of 3: ... stuck in "idle"` followed by `page state: {"scope":"working","files":46,"groups":30,...}`; the normal smoke still passes.
