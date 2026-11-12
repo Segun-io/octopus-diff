@@ -175,6 +175,11 @@ export interface SummaryOptions extends ScopeOptions {
    * many paths, ...). Absent: a full refresh. Ignored when `GitCoreOptions.incremental` is false.
    */
   changedPaths?: readonly string[];
+  /**
+   * Drop git-core's kept state and file lists of this worktree first, then refresh in full (an
+   * explicit refresh by the user; PR #89 review). Default false.
+   */
+  forgetState?: boolean;
 }
 
 /** How a summary was computed (#40): diagnostics, tests and the daemon's reconciliation timer. */

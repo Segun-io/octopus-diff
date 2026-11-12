@@ -3384,3 +3384,9 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      daemon session, which seeds its list with one diff of every changed file (patches are what a review state is
      made of: 247 ms on the stale-index worktree, 525 ms on the one with a 300k-line rewrite). The event still waits
      for that first review state (#265); announcing before it is a possible follow-up.
+
+### Incremental summary: review follow-up (PR #89, 2026-11-12)
+
+285. **Contract (additive): `SummaryOptions.forgetState?: boolean`.** git-core drops the worktree's kept summary state
+     and its cached file lists, then refreshes in full (`SummaryRefresh.reason` `forget`). The daemon's explicit
+     Refresh passes it. Nothing is renamed or removed.
