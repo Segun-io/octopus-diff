@@ -125,3 +125,10 @@ None added or removed (`pnpm credits:check` up to date).
   `apps/web/src/api/queries.ts`.
 - Web edits are limited to `apps/web/src/api`, plus one test in `apps/web/test/cache.test.ts`. Nothing under
   `components/` was touched.
+
+## PR #81 review (Greptile)
+
+- **Helpers that outlive git:** the forced SIGKILL of an aborted run's process group stays armed after git itself exits on the SIGTERM (it was cleared on exit), so a trusted filter or hook that ignores SIGTERM does not outlive the request. Test: a stand-in git whose leader dies on SIGTERM and whose helper ignores it; fails without the change.
+- **No duplicate shared work:** the shared in-flight tables (`memo`, config reads, ahead/behind batch) drop an entry when the flight settles or loses its last waiter (`Flight`'s `onCancel`), not when the first caller stops waiting, so a third caller joins the run that others still wait on. Test on `GitContext.memo`; fails without the change.
+- **Burst bench:** a failed edit is observed at once, stops the probe loop and is rethrown (`e2e/bench/burst.ts`); test in `e2e/support/burst.test.ts` (without the change the probe loop never ends).
+

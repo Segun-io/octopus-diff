@@ -279,11 +279,13 @@ export class GitContext {
       },
     );
     this.immutableRuns.set(key, run);
-    try {
-      return (await run.join()) as T | undefined;
-    } finally {
+    // Dropped when the work settles or loses its last waiter (`onCancel`), not when this caller
+    // stops waiting: other calls may still be joined to it, and a third must join them, not start
+    // the same git work again.
+    void run.settled.then(() => {
       if (this.immutableRuns.get(key) === run) this.immutableRuns.delete(key);
-    }
+    });
+    return (await run.join()) as T | undefined;
   }
 
   /** Stores an immutable fact found as a by-product (e.g. one row of a batched query). */
@@ -477,13 +479,12 @@ export class GitContext {
       flight,
     };
     this.configReadRuns.set(key, run);
-    try {
-      const { value, includes } = (await run.flight.join()) as { value: T; includes: boolean };
-      if (!includes && !signature.racy) this.configReads.set(key, { at, value });
-      return value;
-    } finally {
+    void flight.settled.then(() => {
       if (this.configReadRuns.get(key) === run) this.configReadRuns.delete(key);
-    }
+    });
+    const { value, includes } = (await run.flight.join()) as { value: T; includes: boolean };
+    if (!includes && !signature.racy) this.configReads.set(key, { at, value });
+    return value;
   }
 
   /**

@@ -242,9 +242,9 @@ async function batchAheadBehind(
     },
   );
   table.set(runKey, run);
-  try {
-    await run.join();
-  } finally {
+  // Dropped when the work settles or loses its last waiter, not when this caller stops waiting.
+  void run.settled.then(() => {
     if (table.get(runKey) === run) table.delete(runKey);
-  }
+  });
+  await run.join();
 }

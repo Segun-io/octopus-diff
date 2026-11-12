@@ -6,7 +6,9 @@ import { chmodSync, existsSync, readFileSync, rmSync, writeFileSync } from 'node
 import path from 'node:path';
 import { isGitCoreError } from '@octopus-diff/contracts';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { GitContext } from '../src/context.js';
 import { ABORT_GRACE_MS, createGitCore, GitRunner, INTERACTIVE_BURST } from '../src/index.js';
+import { withCall } from '../src/runner/call-context.js';
 import { createFixture, type Fixture } from './helpers/fixture.js';
 
 let fx: Fixture;
@@ -34,6 +36,8 @@ beforeAll(() => {
       'case "$FAKE_MODE" in',
       "  stubborn) trap '' TERM; sleep 30 ;;",
       '  hang) sleep 30 ;;',
+      // The leader dies on SIGTERM, a helper (a filter) ignores it and keeps running.
+      `  helper) sh -c 'trap "" TERM; echo $$ > "${gates}/helper.pid"; exec sleep 30' & sleep 30 ;;`,
       'esac',
       `while [ -e "${gates}/$last" ]; do sleep 0.01; done`,
       'exit 0',
@@ -229,6 +233,29 @@ describe('cancellation', () => {
     // SIGKILL after the grace period, not the (much later) timeout.
     expect(took).toBeLessThan(ABORT_GRACE_MS + 2_000);
     await expectGone(pid);
+    await runner.dispose();
+  });
+
+  it('kills a helper that outlives git: git exits on SIGTERM, the group is still killed after the grace period', async () => {
+    writeFileSync(log, '');
+    rmSync(path.join(gates, 'helper.pid'), { force: true });
+    const runner = new GitRunner({
+      gitBinary: fakeGit,
+      env: { FAKE_MODE: 'helper' },
+      timeoutMs: 60_000,
+    });
+    const controller = new AbortController();
+    const run = runner
+      .run(job('helper'), { cwd: fx.root, signal: controller.signal })
+      .catch((e: unknown) => e);
+    await until(() => existsSync(path.join(gates, 'helper.pid')));
+    const helper = Number(readFileSync(path.join(gates, 'helper.pid'), 'utf8').trim());
+    expect(alive(helper)).toBe(true);
+    controller.abort();
+    expect(isGitCoreError(await run, 'aborted')).toBe(true);
+    // The leader is gone; the helper ignored SIGTERM and is still there until the grace period ends.
+    expect(alive(helper)).toBe(true);
+    await until(() => !alive(helper), ABORT_GRACE_MS + 3_000);
     await runner.dispose();
   });
 
@@ -468,6 +495,34 @@ describe('GitCore calls with a signal and a lane (real git behind a gated wrappe
       release();
       await core.dispose();
     }
+  });
+
+  it('a shared memo stays joinable after its first caller aborts (no duplicate work, PR #81 review)', async () => {
+    // The runner and settings are not used by `memo` itself.
+    const ctx = new GitContext({} as never, {} as never);
+    let computes = 0;
+    let finish: (value: string) => void = () => {};
+    const compute = (): Promise<string> => {
+      computes += 1;
+      return new Promise<string>((resolve) => {
+        finish = resolve;
+      });
+    };
+    const controller = new AbortController();
+    const first = withCall({ lane: 'background', signal: controller.signal }, () =>
+      ctx.memo('k', compute),
+    ).catch((e: unknown) => e);
+    // A second call joins and does not abort (it keeps the work alive).
+    const second = withCall({ lane: 'background' }, () => ctx.memo('k', compute));
+    controller.abort();
+    expect(isGitCoreError(await first, 'aborted')).toBe(true);
+    // A third call arrives after the first one left: it joins the same run, it does not start one.
+    const third = withCall({ lane: 'background' }, () => ctx.memo('k', compute));
+    expect(computes).toBe(1);
+    finish('done');
+    expect(await second).toBe('done');
+    expect(await third).toBe('done');
+    expect(computes).toBe(1);
   });
 
   it('an interactive diff is not queued behind background summaries of other repositories', async () => {

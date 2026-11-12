@@ -73,14 +73,22 @@ export async function diffDuringBurst(options: BurstOptions): Promise<BurstResul
   const t0 = performance.now();
   let burstDone = false;
   let stopAt = Number.POSITIVE_INFINITY;
+  // A failed edit (a full disk, a removed worktree) is observed here, at once: the probe loop stops
+  // and the error is rethrown after it, instead of an unhandled rejection that nothing awaits.
+  let burstError: unknown;
   const burst = (async () => {
-    for (let i = 0; i < edits; i++) {
-      const wt = options.editTargets[i % options.editTargets.length];
-      if (wt) await appendFile(join(wt.path, 'README.md'), `burst edit ${i}\n`);
-      await sleep(intervalMs);
+    try {
+      for (let i = 0; i < edits; i++) {
+        const wt = options.editTargets[i % options.editTargets.length];
+        if (wt) await appendFile(join(wt.path, 'README.md'), `burst edit ${i}\n`);
+        await sleep(intervalMs);
+      }
+      burstDone = true;
+      stopAt = performance.now() + (options.tailMs ?? 2_000);
+    } catch (error) {
+      burstError = error;
+      stopAt = 0;
     }
-    burstDone = true;
-    stopAt = performance.now() + (options.tailMs ?? 2_000);
   })();
   const probes: Array<{ atMs: number; ms: number }> = [];
   while (performance.now() < stopAt) {
@@ -89,6 +97,7 @@ export async function diffDuringBurst(options: BurstOptions): Promise<BurstResul
     await sleep(probeEveryMs);
   }
   await burst;
+  if (burstError !== undefined) throw burstError;
   const settled = await options.quiet();
   const burstMs = Math.round(performance.now() - t0);
   const underBurst = summarize(probes.map((p) => p.ms));

@@ -452,11 +452,11 @@ export class GitRunner {
 
       let exited = false;
       let aborting = false;
-      let graceTimer: NodeJS.Timeout | undefined;
       child.once('exit', () => {
         exited = true;
-        clearTimeout(graceTimer);
-        // An aborted run settles once its process is gone (its slot stays taken until then).
+        // An aborted run settles once its process is gone (its slot stays taken until then). The
+        // forced cleanup of its process group (`onAbort`) stays armed: a filter or hook that
+        // ignored SIGTERM may outlive git.
         if (aborting && failure) finish(failure);
       });
 
@@ -485,9 +485,12 @@ export class GitRunner {
           return;
         }
         killTree(child, 'SIGTERM');
-        graceTimer = setTimeout(() => {
-          if (!exited) killTree(child);
-        }, ABORT_GRACE_MS);
+        // SIGKILL for the whole group after the grace period, also when git itself exited on the
+        // SIGTERM: helpers that ignore it (a trusted filter) must not outlive the request. Not
+        // cleared by `finish` or the exit; unref'd so it never holds the process open. A group that
+        // is already gone makes the kill a no-op.
+        const forced = setTimeout(() => killTree(child), ABORT_GRACE_MS);
+        forced.unref();
       };
       signal?.addEventListener('abort', onAbort, { once: true });
       if (options.input && child.stdin) {
@@ -509,7 +512,6 @@ export class GitRunner {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
-        clearTimeout(graceTimer);
         signal?.removeEventListener('abort', onAbort);
         this.children.delete(child);
         const elapsed = Math.round(performance.now() - startedAt);
