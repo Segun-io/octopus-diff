@@ -3625,7 +3625,7 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
 
 ## File diffs from the summary state (session, 2026-11-12; roadmap #41, step 24)
 
-305. **`getFileDiff` reads the file's patch alone when the kept summary state vouches for it.** Opening one file's diff
+330. **`getFileDiff` reads the file's patch alone when the kept summary state vouches for it.** Opening one file's diff
      ran a whole-repository `git status` and `git diff --raw` to identify the file, then its patch (3-4 git processes,
      346-398 ms on the 100k layout's main worktree, 804-832 ms on the stale-index one; not cached). The summary track git-core
      already keeps per worktree (#285) now answers the identification (`diffFromSummary` in `diff.ts`): a tracked file
@@ -3638,7 +3638,7 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      base, `branch` + working); against another base only a modification or an untracked file that the commits since
      the base left alone (`diff-tree`, memoized with the lists': #290). `staged`, `unstaged`, `branch` and `commit`
      scopes and every other base are the whole route's.
-306. **When the state vouches (every other case is the whole route's, with a reason: `fileDiffRoutes.reasons`).**
+331. **When the state vouches (every other case is the whole route's, with a reason: `fileDiffRoutes.reasons`).**
      Checked in this order, all with stat calls and ref files, no git process: `incremental` on (#293: the kill switch
      gives the old calls exactly, no stamp is read); the filesystem does not fold case (#288); a track exists and is the
      state the caller holds (`DiffOptions.summaryState`, a hint the daemon passes from `entry.gitStateHash`; a mismatch is
@@ -3654,7 +3654,7 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      untracked file is, in the whole scope, still a deleted path (`diff` reports it against HEAD or the base; the list
      hides the untracked file for it), so the summary route answering "untracked" differed. It is now `rename-source`,
      with a golden test.
-307. **Races: the file is read as it is, and the state only decides which route is safe.** Everything the answer
+332. **Races: the file is read as it is, and the state only decides which route is safe.** Everything the answer
      contains (status letter, modes, counts, patch, `patchHash`) comes from git's output about the file at the moment it
      read, never from the track. The track's record is a precondition. The checks run **beside** the read, not before
      it: the stamp, HEAD and the file's lstat signature (the inspection's `statSig` for an untracked file) are read
@@ -3677,7 +3677,7 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      gave a p95 of 74-79 ms, because under a burst each round of file system calls waits its turn in the 4-thread pool
      behind the summaries' stats (about 8 rounds); beside the read with only the signature after it, **33 ms** (the old
      route: 34-42 ms; quiet daemon: p50 5-6 ms; no re-check at all: 27 ms).
-308. **Known windows and one internal addition.** (a) An untracked file is ignored or not by the `.gitignore` files above
+333. **Known windows and one internal addition.** (a) An untracked file is ignored or not by the `.gitignore` files above
      it, which no stamp covers: `Stamp.at` (wall clock before git ran, an internal field of the kept track; not part of
      `stampChange`) lets the route refuse an untracked file whose ancestor `.gitignore` has a ctime or mtime within 100 ms
      of it or later (`ignore-rules`; the clock margin covers the kernel's coarse timestamps). (b) Whether an untracked

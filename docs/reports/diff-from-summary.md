@@ -10,7 +10,7 @@
   `contextLines` other than 3) a tracked file is two (canonical for the hash, then the view). Images add their `cat-file`s as before.
 - **One description path.** Both routes end in `describeTracked` / `describeUntracked` (extracted from `getFileDiff`), so identity,
   patch text, `patchHash`, `images`, `byteLength` cannot differ by construction; the tests prove it.
-- **When the state vouches** (DECISIONS #306): `incremental` on; no case-folding filesystem; a track exists and is the state the caller holds
+- **When the state vouches** (DECISIONS #331): `incremental` on; no case-folding filesystem; a track exists and is the state the caller holds
   (`DiffOptions.summaryState`, new use of the existing field, `contracts:` doc comment only; the daemon passes `entry.gitStateHash`);
   `trackBlocker` empty (no conflicts, submodules, gitlinks, nested repositories, sparse checkout, unreadable files); valid UTF-8 path;
   stamp and HEAD as the state saw them; then the file's own record: a modification (`M.`, `.M`, `MM`), a deletion while no path is added
@@ -18,7 +18,7 @@
   only a modification or untracked file the commits since the base left alone (`diff-tree`, memoized with the lists'). The lstat
   signature (the inspection's `statSig` when untracked) must equal the state's before the read and after it; for an untracked file the
   ancestors' `.gitignore` files must be older than the state (`Stamp.at`, an internal field). The checks (stamp, HEAD, signature) run
-  **beside** the one `git diff`, in one round of file system calls, and the file's signature is read once more after it (DECISIONS #307);
+  **beside** the one `git diff`, in one round of file system calls, and the file's signature is read once more after it (DECISIONS #332);
   doing them one after the other made a diff opened during a 60-edit burst cost 74-79 ms at p95 instead of 33 ms, because under load each
   round waits in the 4-thread pool behind the summaries' stats. Anything else, and a failed `git diff`, falls back to the old whole
   route with a reason (`fileDiffRoutes.reasons`, process-wide counters for tests and diagnostics).
@@ -63,13 +63,13 @@ times carry some noise).
   and against HEAD, branch + working) and random other paths are asked under random view options of the fast core and the reference core,
   byte for byte; the summary route answers about a quarter to two fifths of them: seeds 0xd1ff01-3: 109/401, 70/372, 199/445).
   Sweep: 11 extra seeds x 100 steps (11 22 33 44 55 66 77 88 99 1234 5678) pass; the fuzz found the rename-source case on its first run
-  (DECISIONS #306), now a golden test. Daemon: `diff-from-summary.real-git.test.ts` (3: one `diff` for a tracked file, none for an untracked
+  (DECISIONS #331), now a golden test. Daemon: `diff-from-summary.real-git.test.ts` (3: one `diff` for a tracked file, none for an untracked
   one, same bytes and the list's `patchHash`; opened right after an edit, before the summary has seen it; `incremental: false` runs `diff,
   status, diff`).
 - Mutation checks (each makes a test fail unless noted): track blocker, stamp, HEAD, both signature checks, rename partner, rename source,
   `.gitignore` check, committed-since-base, base-deletion rule, tracked-and-untracked, kill switch, `summaryState`, untracked `statSig`,
   content-read clause, git-failure fallback, added files vouched, renames vouched: all killed; case probe killed with
-  `OCTOPUS_DIFF_TEST_FOLDS_CASE=1`. **Survivors, by design** (DECISIONS #308 d): the predicted-status check, the one-raw-entry check and the
+  `OCTOPUS_DIFF_TEST_FOLDS_CASE=1`. **Survivors, by design** (DECISIONS #333 d): the predicted-status check, the one-raw-entry check and the
   stat-only check are defense in depth behind the signature checks; reaching them needs a file whose size, mtime, ctime and inode all
   stayed the same.
 - Bench, `packages/git-core/test/bench/diff-open.bench.ts`, 15 rounds, summary state held, median (first call in brackets):
@@ -92,9 +92,9 @@ times carry some noise).
 
 ## Decisions
 
-DECISIONS #305-#308: the route and its scopes (#305); when the state vouches, and the rename-source case the fuzz found (#306); races and
-consistency with the list and the review marks (#307); the `.gitignore` window and `Stamp.at`, the untracked content-read regime, defense in
-depth and mutation results (#308). PLAN §5.6 has a bullet.
+DECISIONS #330-#333: the route and its scopes (#330); when the state vouches, and the rename-source case the fuzz found (#331); races and
+consistency with the list and the review marks (#332); the `.gitignore` window and `Stamp.at`, the untracked content-read regime, defense in
+depth and mutation results (#333). PLAN §5.6 has a bullet.
 
 ## Contract changes
 
@@ -118,12 +118,12 @@ None added or removed (`pnpm credits:check`: up to date).
 - **Windows (a different filesystem model), macOS and other case-folding filesystems** never take the route (#288); not measured on macOS.
 - **`.gitignore` just before the state** (within 100 ms) sends an untracked file the whole way; `core.excludesFile` / `core.attributesFile`
   outside the stamp are as in #285. An untracked file's content is read or not by the state's untracked count, as the lists' hashes are
-  (#308 b).
+  (#333 b).
 - **A 300k-line patch** still costs git's own diff (288 ms).
 
 ## Notes for integration
 
-- Rebase onto `main` and renumber DECISIONS #305-#308 if other work landed. The `contracts:` commit is separate and comment-only.
+- Rebase onto `main` and renumber DECISIONS #330-#333 if other work landed. The `contracts:` commit is separate and comment-only.
 - `apps/web` is untouched. `GET /diff`'s response shape is unchanged. The web's refetch-on-`patchHash` logic (#51) compares the diff's hash
   with the list's: both come from the same bytes.
 - The read-only allowlist and every flag are unchanged: the route issues the `diff` the whole route's narrowed run already issued, and no

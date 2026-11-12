@@ -348,7 +348,7 @@ All git access goes through **one runner** in `packages/git-core`:
   events, re-subscribes, directories, ignore/attribute/submodule files, conflicts, submodules, sparse checkouts,
   case-folding filesystems, too many paths) refreshes in full, and a full refresh reconciles 30 s after the first
   incremental one. Kill switch: `OCTOPUS_DIFF_INCREMENTAL=0` (or `git.incremental: false`).
-- File diffs from the summary state (DECISIONS #305-#308): `GET /diff` of a file the kept summary state vouches for
+- File diffs from the summary state (DECISIONS #330-#333): `GET /diff` of a file the kept summary state vouches for
   (a plain modification, a deletion with no rename partner, an untracked file; usable state, same index, config and
   HEAD, same lstat signature before and after the read) is one `git diff <base> -- <path>` (none for an untracked
   file) instead of the whole-repository `status` and `diff --raw`; patch text and `patchHash` are the whole route's,
