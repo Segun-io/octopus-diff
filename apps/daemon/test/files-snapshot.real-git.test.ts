@@ -297,7 +297,9 @@ describe('GET /files describes one summary state (#43 follow-up)', { timeout: 60
     expectOneState(await api.listFiles(id, { scope: { kind: 'working' } }), last);
   });
 
-  it('an inbox row overtaken on every attempt is left out, never paired with another summary', async () => {
+  // Greptile P1 on PR #95: an overtaken row must never look like "no changes" (a first load whose
+  // events came before the response would never ask again).
+  it('an inbox row overtaken on every attempt is kept and marked, and the next request has its files', async () => {
     const fx = await makeRealGitFixture();
     const dir = await repoWith(fx, 3);
     const id = hashId(dir);
@@ -306,8 +308,20 @@ describe('GET /files describes one summary state (#43 follow-up)', { timeout: 60
       api.inbox({ scope: { kind: 'working' } }),
     );
     const row = result.entries.find((e) => e.worktree.id === id);
-    if (row) expect(row.summary.stateHash).toBe(last.stateHash);
-    expect(row).toBeUndefined();
+    expect(row).toMatchObject({ listing: 'overtaken', files: [] });
+    // Its summary is the latest (nothing to pair the empty list with).
+    expect(row?.summary.stateHash).toBe(last.stateHash);
+    // Editing stopped: one more request for the row gives it with its files, one state.
+    const again = await api.inbox({ scope: { kind: 'working' }, worktreeIds: [id] });
+    const next = again.entries.find((e) => e.worktree.id === id);
+    if (!next) throw new Error('the worktree has changes');
+    expect(next.listing).toBeUndefined();
+    expect(next.summary.stateHash).toBe(last.stateHash);
+    const untracked = next.files.filter((f) => f.status === 'untracked').length;
+    expect(untracked + (next.summary.untrackedOmitted?.count ?? 0)).toBe(
+      next.summary.counts.untracked,
+    );
+    expect(next.files.length).toBeGreaterThan(0);
   });
 
   it('bulk review overtaken on every attempt marks nothing and reports the worktree stale', async () => {

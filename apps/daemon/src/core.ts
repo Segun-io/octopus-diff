@@ -366,6 +366,8 @@ function isCacheableScope(scope: DiffScope): boolean {
 export const listsRetried = { count: 0 };
 /** Lists returned as of no held summary, every attempt overtaken (`#listedAt`; tests). */
 export const listsUnlabelled = { count: 0 };
+/** Inbox rows sent as `listing: 'overtaken'` (tests). */
+export const inboxOvertaken = { count: 0 };
 
 /** Attempts `#listedAt` makes before it labels a list with the state git-core says it is of. */
 export const LIST_ATTEMPTS = 3;
@@ -2205,13 +2207,23 @@ export class DaemonCore {
       candidates.map(async (c): Promise<InboxEntry | null> => {
         try {
           const listed = await this.#listedAt(c.project, c.entry, scope);
-          // A list of no held summary cannot be a row (a row is a summary with its files): the
-          // refresh that overtook it announces the worktree, and the client asks for its row.
+          // A list of no held summary cannot be paired with one, but leaving the row out would read
+          // as "no changes" (Greptile P1 on PR #95: a first load whose events came before the
+          // answer would never ask again). The row comes with its latest summary, no files, and
+          // `listing: 'overtaken'`: the client asks for it again shortly.
           if (listed.summary === null && !c.entry.worktree.bare) {
             this.#log.debug('inbox: row overtaken by refreshes', {
               worktreeId: c.entry.worktree.id,
             });
-            return null;
+            inboxOvertaken.count++;
+            return {
+              project: this.#toProject(c.project.row),
+              worktree: c.entry.worktree,
+              summary: c.entry.summary ?? c.summary,
+              files: [],
+              ...(c.review ? { review: c.review } : {}),
+              listing: 'overtaken',
+            };
           }
           const resolved = listed.resolved;
           const gitFiles = listed.files;
