@@ -206,6 +206,19 @@ describe('forge service (fake git-core, fake gh/glab)', () => {
     expect(count()).toBe(before + 1);
   });
 
+  it('reports the rate-limit budget per host in GET /api/forges (#8)', async () => {
+    await eventually(async () => (await state(alpha))?.status === 'ok');
+    const body: ForgesResponse = ForgesResponseSchema.parse(await api.getForges());
+    expect(body.budgets?.find((b) => b.host === 'github.com')).toMatchObject({
+      kind: 'github',
+      state: 'ok',
+      spentLastHour: expect.any(Number),
+      backgroundLimit: 1500,
+      hourlyLimit: 4000,
+    });
+    expect(body.budgets?.find((b) => b.host === 'github.com')?.spentLastHour).toBeGreaterThan(0);
+  });
+
   it('reports signed-out CLIs, fetch errors and the disabled setting, with forge.updated events', async () => {
     await eventually(async () => (await state(alpha))?.status === 'ok');
     const events = recordEvents(daemon);

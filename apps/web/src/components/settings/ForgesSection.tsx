@@ -8,7 +8,7 @@ import { type FormEvent, useId, useState } from 'react';
 import { useForgesQuery, useRefreshForges } from '../../api/forges.ts';
 import { useProjectsQuery } from '../../api/queries.ts';
 import { useSettingsQuery, useUpdateSettings } from '../../api/settings.ts';
-import { projectStatusLine } from '../../lib/forge.ts';
+import { budgetLine, projectStatusLine } from '../../lib/forge.ts';
 import { Select, SettingRow, SmallButton, Switch, Where } from './controls.tsx';
 
 const OVERRIDE_LABELS: Record<ForgeHostOverride, string> = {
@@ -160,6 +160,28 @@ export function ForgesSection() {
           </ul>
         )}
       </div>
+
+      {(data.budgets?.length ?? 0) > 0 && (
+        <div className="border-b border-line py-2.5">
+          <p className="text-xs font-medium">Rate limit</p>
+          <ul className="mt-2 space-y-1">
+            {data.budgets?.map((budget) => {
+              const line = budgetLine(budget);
+              return (
+                <li key={budget.host} className="text-xs" data-budget-state={budget.state}>
+                  <span className="font-mono">{budget.host}</span>{' '}
+                  <span className={line.warn ? 'text-warn' : 'text-muted'}>{line.text}</span>
+                </li>
+              );
+            })}
+          </ul>
+          <p className="mt-1 text-[11px] text-faint">
+            GitHub allows 5,000 points an hour per sign-in, shared with every other tool that uses
+            it. octopus-diff stops automatic lookups well before that and slows down when nobody is
+            looking.
+          </p>
+        </div>
+      )}
 
       <div className="border-b border-line py-2.5">
         <p className="text-xs font-medium">Repositories</p>
