@@ -8,7 +8,7 @@ import { CheckIcon } from './bits.tsx';
 
 interface FilterOption {
   id: string;
-  group: 'Status' | 'Projects' | 'Worktrees';
+  group: 'Status' | 'Folders' | 'Projects' | 'Worktrees';
   label: string;
   /** Faint text after the label (a project's worktree count, a worktree's project). */
   hint?: string;
@@ -26,13 +26,14 @@ function toggled(list: readonly string[], id: string): string[] {
 
 /**
  * The sidebar filter: a trigger that says what is filtered, and a dropdown with a search field
- * over the status options, the projects and the worktrees (multi-select, a listbox; DECISIONS
- * "Sidebar filter dropdown"). Picked projects and worktrees are one union; status narrows it.
+ * over the status options, the folders, the projects and the worktrees (multi-select, a listbox; DECISIONS
+ * "Sidebar filter dropdown"). Picked folders, projects and worktrees are one union; status narrows it.
  * Keyboard: `/` opens it, arrows move, Enter toggles, Escape clears the search, then closes.
  */
 export function SidebarFilter() {
   const store = useUiStore();
   const open = useUi((s) => s.filterOpen);
+  const folders = useUi((s) => s.filterFolders);
   const projects = useUi((s) => s.filterProjects);
   const worktrees = useUi((s) => s.filterWorktrees);
   const onlyDirty = useUi((s) => s.onlyDirty);
@@ -75,6 +76,17 @@ export function SidebarFilter() {
       toggle: () => store.setState({ onlyUnreviewed: !onlyUnreviewed }),
       testId: TEST_IDS.onlyUnreviewedToggle,
     },
+    ...sidebar.folderOptions.map<FilterOption>((f) => ({
+      id: `folder-${f.id}`,
+      group: 'Folders',
+      label: f.label,
+      hint: String(f.worktrees),
+      text: f.label,
+      selected: folders.includes(f.id),
+      toggle: () => store.setState((s) => ({ filterFolders: toggled(s.filterFolders, f.id) })),
+      testId: TEST_IDS.sidebarFilterOption,
+      data: { 'data-kind': 'folder', 'data-folder-id': f.id },
+    })),
     ...[...projectRows].map<FilterOption>(([id, p]) => ({
       id: `project-${id}`,
       group: 'Projects',
@@ -107,7 +119,7 @@ export function SidebarFilter() {
   const q = query.trim();
   // Groups keep their order; inside a group the best matches come first while searching.
   const options = q
-    ? (['Status', 'Projects', 'Worktrees'] as const).flatMap((group) =>
+    ? (['Status', 'Folders', 'Projects', 'Worktrees'] as const).flatMap((group) =>
         all
           .filter((o) => o.group === group)
           .map((o) => ({ o, m: fuzzyMatch(q, o.text) }))
@@ -120,6 +132,7 @@ export function SidebarFilter() {
 
   // Known names only: an id whose project or worktree is gone does not filter anything visible.
   const parts = [
+    ...folders.flatMap((id) => sidebar.folderOptions.find((f) => f.id === id)?.label ?? []),
     ...projects.flatMap((id) => projectRows.get(id)?.name ?? []),
     ...worktrees.flatMap((id) => {
       const row = sidebar.byId.get(id);
@@ -128,7 +141,8 @@ export function SidebarFilter() {
     ...(onlyDirty ? ['dirty'] : []),
     ...(onlyUnreviewed ? ['unreviewed'] : []),
   ];
-  const filtering = projects.length + worktrees.length > 0 || onlyDirty || onlyUnreviewed;
+  const filtering =
+    folders.length + projects.length + worktrees.length > 0 || onlyDirty || onlyUnreviewed;
   const summary =
     parts.length === 0
       ? filtering
@@ -146,6 +160,7 @@ export function SidebarFilter() {
   };
   const clear = () =>
     store.setState({
+      filterFolders: [],
       filterProjects: [],
       filterWorktrees: [],
       onlyDirty: false,
@@ -198,7 +213,7 @@ export function SidebarFilter() {
           aria-expanded={open}
           aria-keyshortcuts="/"
           aria-label={`Filter worktrees: ${summary}`}
-          title="Filter by status, project or worktree (/)"
+          title="Filter by status, folder, project or worktree (/)"
           onClick={() => (open ? close(false) : store.setState({ filterOpen: true }))}
           className="od-input flex min-w-0 flex-1 items-center gap-1.5 text-left"
         >
@@ -236,8 +251,8 @@ export function SidebarFilter() {
             aria-expanded="true"
             aria-controls={listId}
             aria-activedescendant={options.length > 0 ? `${listId}-${current}` : undefined}
-            aria-label="Search projects and worktrees"
-            placeholder="Search projects and worktrees"
+            aria-label="Search folders, projects and worktrees"
+            placeholder="Search folders, projects and worktrees"
             value={query}
             onChange={(e) => {
               setQuery(e.target.value);
@@ -325,7 +340,7 @@ export function SidebarFilter() {
               ];
             })}
             {options.length === 0 && (
-              <p className="px-2 py-2 text-faint">No project or worktree matches “{q}”.</p>
+              <p className="px-2 py-2 text-faint">No folder, project or worktree matches “{q}”.</p>
             )}
           </div>
           {filtering && (

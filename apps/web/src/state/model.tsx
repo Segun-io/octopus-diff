@@ -105,13 +105,20 @@ export function AppModelProvider({ children }: { children: ReactNode }) {
 function useBuildAppModel(): AppModel {
   const view = useUi((s) => s.view);
   const scope = useUi((s) => s.scope);
+  const filterFolders = useUi((s) => s.filterFolders);
   const filterProjects = useUi((s) => s.filterProjects);
   const filterWorktrees = useUi((s) => s.filterWorktrees);
   const onlyDirty = useUi((s) => s.onlyDirty);
   const onlyUnreviewed = useUi((s) => s.onlyUnreviewed);
   const filters = useMemo<SidebarFilters>(
-    () => ({ projects: filterProjects, worktrees: filterWorktrees, onlyDirty, onlyUnreviewed }),
-    [filterProjects, filterWorktrees, onlyDirty, onlyUnreviewed],
+    () => ({
+      folders: filterFolders,
+      projects: filterProjects,
+      worktrees: filterWorktrees,
+      onlyDirty,
+      onlyUnreviewed,
+    }),
+    [filterFolders, filterProjects, filterWorktrees, onlyDirty, onlyUnreviewed],
   );
   const showReviewed = useUi((s) => s.showReviewed);
   const showsReviewed = listsReviewed(showReviewed, scope.kind);

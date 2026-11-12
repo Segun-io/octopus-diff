@@ -65,6 +65,8 @@ export interface UiState extends Prefs {
   selected: FileRef | null;
   scope: DiffScope;
   /** Sidebar filter dropdown: picked project and worktree ids (a union; empty = all). */
+  /** Picked folders (scan root ids, or `DIRECT_FOLDER_ID`): the filter's first tier. */
+  filterFolders: string[];
   filterProjects: string[];
   filterWorktrees: string[];
   /** The filter dropdown is open (`/` opens it). */
@@ -123,6 +125,7 @@ export const DEFAULT_UI_STATE: UiState = {
   view: { kind: 'inbox' },
   selected: null,
   scope: DEFAULT_SCOPE,
+  filterFolders: [],
   filterProjects: [],
   filterWorktrees: [],
   filterOpen: false,

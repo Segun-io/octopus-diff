@@ -104,10 +104,13 @@ describe('app shell', () => {
   it('renders the inbox, sidebar items and opens the first file', async () => {
     setup();
     await ready();
-    const inbox = screen.getByTestId(TEST_IDS.inboxItem);
-    expect(inbox.getAttribute('data-count')).toBe('5');
-    expect(inbox.getAttribute('aria-current')).toBe('true');
-    expect(screen.getAllByTestId(TEST_IDS.projectItem)).toHaveLength(5);
+    // #13: no Inbox entry and no project or folder headers in the sidebar, just worktree rows;
+    // the landing view is still the cross-worktree list of changed files (5 dirty worktrees).
+    expect(screen.queryByTestId(TEST_IDS.inboxItem)).toBeNull();
+    expect(screen.queryByTestId(TEST_IDS.projectItem)).toBeNull();
+    expect(
+      screen.getAllByTestId(TEST_IDS.worktreeItem).filter((el) => el.dataset.dirty === 'true'),
+    ).toHaveLength(5);
     const auth = screen
       .getAllByTestId(TEST_IDS.worktreeItem)
       .find((el) => el.getAttribute('data-branch') === 'feat/auth');
@@ -135,9 +138,7 @@ describe('app shell', () => {
     await user.type(input, '/home/dev/code/fresh');
     await user.click(screen.getByTestId(TEST_IDS.addProjectSubmit));
     await ready();
-    expect(screen.getAllByTestId(TEST_IDS.projectItem)[0]?.getAttribute('data-project-name')).toBe(
-      'fresh',
-    );
+    expect(screen.getAllByTestId(TEST_IDS.worktreeItem)[0]?.dataset.projectName).toBe('fresh');
   });
 
   describe('folder picker', () => {
@@ -178,9 +179,9 @@ describe('app shell', () => {
       await listed('/home/dev/code');
       await user.click(within(row('side-project')).getByTestId(TEST_IDS.folderPickerEntryAdd));
       await ready();
-      expect(
-        screen.getAllByTestId(TEST_IDS.projectItem)[0]?.getAttribute('data-project-name'),
-      ).toBe('side-project');
+      expect(screen.getAllByTestId(TEST_IDS.worktreeItem)[0]?.dataset.projectName).toBe(
+        'side-project',
+      );
     });
 
     it('filters as you type, completes with Tab and watches with Enter', async () => {
@@ -342,7 +343,7 @@ describe('app shell', () => {
 
 describe('keyboard', () => {
   it('j/k move between files and J/K between worktrees; g i returns to the inbox', async () => {
-    const { user } = setup();
+    const { user, store } = setup();
     await ready();
     await press(user, 'j');
     expect(viewerPath()).toBe('README.md');
@@ -351,17 +352,21 @@ describe('keyboard', () => {
     await press(user, 'k');
     expect(viewerPath()).toBe('README.md');
 
-    await press(user, 'J'); // first row of the first folder: docs-site (detached, mid-rebase)
+    // J/K walk the sidebar's flat list, top to bottom (most recent activity first).
+    const order = screen
+      .getAllByTestId(TEST_IDS.worktreeItem)
+      .map((el) => el.dataset.worktreeId as string);
     const current = () =>
-      document.querySelector(`[data-testid="${TEST_IDS.worktreeItem}"][aria-current="true"]`);
-    await waitFor(() => expect(current()?.getAttribute('data-branch')).toBe(''));
-    await press(user, 'J'); // next project in the folder: octopus-api, its main checkout first
-    await waitFor(() => expect(current()?.getAttribute('data-branch')).toBe('main'));
+      document
+        .querySelector(`[data-testid="${TEST_IDS.worktreeItem}"][aria-current="true"]`)
+        ?.getAttribute('data-worktree-id');
+    await press(user, 'J');
+    await waitFor(() => expect(current()).toBe(order[0]));
+    await press(user, 'J');
+    await waitFor(() => expect(current()).toBe(order[1]));
     await press(user, 'K');
     await press(user, 'K');
-    await waitFor(() =>
-      expect(screen.getByTestId(TEST_IDS.inboxItem).getAttribute('aria-current')).toBe('true'),
-    );
+    await waitFor(() => expect(store.getState().view.kind).toBe('inbox'));
 
     fireEvent.click(
       screen
@@ -370,9 +375,7 @@ describe('keyboard', () => {
     );
     await waitFor(() => expect(viewerPath()).toBe('src/lib/cache.ts'));
     await press(user, 'gi');
-    await waitFor(() =>
-      expect(screen.getByTestId(TEST_IDS.inboxItem).getAttribute('aria-current')).toBe('true'),
-    );
+    await waitFor(() => expect(store.getState().view.kind).toBe('inbox'));
     // Selection survives the view change because the file is in the inbox too.
     expect(viewerPath()).toBe('src/lib/cache.ts');
   });
@@ -530,7 +533,7 @@ describe('scopes and placeholders', () => {
   });
 
   it('changes scope and requests the matching files', async () => {
-    const { requests } = setup();
+    const { requests, user } = setup();
     await ready();
     const select = screen.getByTestId(TEST_IDS.scopeSelect) as HTMLSelectElement;
     fireEvent.change(select, { target: { value: 'staged' } });
@@ -555,8 +558,9 @@ describe('scopes and placeholders', () => {
     await waitFor(() =>
       expect(requests.some((r) => /files\?scope=commit&sha=/.test(r))).toBe(true),
     );
-    // Going back to the inbox resets commit scope to working.
-    fireEvent.click(screen.getByTestId(TEST_IDS.inboxItem));
+    // Going back to the inbox (`g i`; the sidebar has no Inbox entry any more) resets commit
+    // scope to working.
+    await press(user, 'gi');
     await waitFor(() => expect(select.getAttribute('data-scope')).toBe('working'));
   });
 

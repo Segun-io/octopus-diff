@@ -86,14 +86,16 @@ describe('event stream over fetch (auth v2)', () => {
     const app = () => screen.getByTestId(TEST_IDS.app);
     await waitFor(() => expect(app().getAttribute('data-ready')).toBe('true'));
     await waitFor(() => expect(store.getState().connection).toBe('open'));
-    const inbox = () => screen.getByTestId(TEST_IDS.inboxItem).getAttribute('data-count');
-    const before = Number(inbox());
+    const dirty = () =>
+      screen.getAllByTestId(TEST_IDS.worktreeItem).filter((el) => el.dataset.dirty === 'true')
+        .length;
+    const before = dirty();
     const clean = backend.listProjects().projects.flatMap((p) => p.worktrees)[0];
     expect(clean).toBeDefined();
     act(() => {
       backend.mutate(clean?.worktree.id ?? '', 'add');
     });
-    await waitFor(() => expect(Number(inbox())).toBeGreaterThanOrEqual(before));
+    await waitFor(() => expect(dirty()).toBeGreaterThanOrEqual(before));
     const events = requests.filter((r) => r.url.includes('/api/events'));
     expect(events).toHaveLength(1);
     expect(requests.length).toBeGreaterThan(1);

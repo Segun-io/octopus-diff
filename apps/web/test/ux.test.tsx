@@ -119,12 +119,9 @@ function bodyOf<T>(request: Harness['requests'][number] | undefined): T {
 }
 
 function worktreeOf(projectName: string, branch: string): HTMLElement {
-  const project = screen
-    .getAllByTestId(TEST_IDS.projectItem)
-    .find((p) => p.dataset.projectName === projectName);
   const el = screen
     .getAllByTestId(TEST_IDS.worktreeItem)
-    .find((e) => e.dataset.branch === branch && e.dataset.projectId === project?.dataset.projectId);
+    .find((e) => e.dataset.branch === branch && e.dataset.projectName === projectName);
   if (!el) throw new Error(`no worktree ${projectName} ${branch}`);
   return el;
 }
@@ -455,31 +452,49 @@ describe('F2: review marks what is displayed', () => {
 });
 
 describe('folder tier, overview and palette', () => {
-  it('indexes projects under their folder with an "Added directly" group, collapses and persists', async () => {
-    const { store } = setup();
+  it('lists every worktree in one flat list, newest activity first, each with its repo (#13)', async () => {
+    const { backend } = setup();
     await ready();
     const sidebar = screen.getByTestId(TEST_IDS.sidebar);
-    const folders = [...sidebar.querySelectorAll<HTMLElement>('[data-folder-id]')];
-    expect(folders.map((f) => f.textContent?.includes('Added directly'))).toEqual([false, true]);
-    const code = folders[0] as HTMLElement;
-    expect(
-      within(code)
-        .getAllByTestId(TEST_IDS.projectItem)
-        .map((p) => p.dataset.projectName),
-    ).toEqual(['docs-site', 'octopus-api', 'web-dashboard']);
+    // No Inbox entry, no folder or project headers: only worktree rows (and, later, "Hidden").
+    expect(screen.queryByTestId(TEST_IDS.inboxItem)).toBeNull();
+    expect(screen.queryByTestId(TEST_IDS.projectItem)).toBeNull();
+    expect(sidebar.querySelector('[data-folder-id]')).toBeNull();
+    expect(within(sidebar).queryByLabelText(/^(Collapse|Expand) (folder|project)$/)).toBeNull();
+
+    // The order is the summaries' `activityAt`, newest first, across every project; rows without
+    // one come last (ties: project name, then main checkout first).
+    const rows = [...sidebar.querySelectorAll<HTMLElement>('[data-testid="worktree-item"]')];
+    const all = backend.listProjects().projects.flatMap((p) => p.worktrees);
+    const at = (id: string) => {
+      const iso = all.find((w) => w.worktree.id === id)?.summary?.activityAt;
+      return iso ? Date.parse(iso) : null;
+    };
+    expect(rows).toHaveLength(all.length);
+    const times = rows.map((r) => at(r.dataset.worktreeId ?? ''));
+    const known = times.filter((t): t is number => t !== null);
+    expect(known.length).toBeGreaterThan(3);
+    expect(known).toEqual([...known].sort((a, b) => b - a));
+    expect(times.slice(0, known.length).every((t) => t !== null)).toBe(true);
+    // Not grouped by repository: projects interleave.
+    const projectsInOrder = rows.map((r) => r.dataset.projectName);
+    expect(projectsInOrder.join('|')).not.toBe([...projectsInOrder].sort().join('|'));
+
+    // Every row names its repository, so a flat list stays readable.
+    for (const row of rows) {
+      expect(within(row).getByTestId('row-repo').textContent).toBe(row.dataset.projectName);
+    }
     // main vs linked and the source chip
     expect(worktreeItem('feat/auth').dataset).toMatchObject({ main: 'false', source: 't3' });
     expect(worktreeItem('fix/cache').dataset).toMatchObject({ main: 'false', source: 'claude' });
-    expect(worktreeItem('main').dataset.main).toBe('true');
-    // collapse the folder: its project rows disappear from the index, the pref persists
-    fireEvent.click(within(code).getByLabelText('Collapse folder'));
-    expect(within(code).queryAllByTestId(TEST_IDS.projectItem)).toHaveLength(0);
-    expect(store.getState().collapsed).toEqual([code.dataset.folderId]);
-    fireEvent.click(within(code).getByLabelText('Expand folder'));
-    expect(within(code).queryAllByTestId(TEST_IDS.projectItem)).toHaveLength(3);
+    expect(worktreeOf('web-dashboard', 'main').dataset.main).toBe('true');
+    // Nothing is hidden by default, so there is no Hidden section either.
+    expect(within(sidebar).queryByLabelText(/hidden$/i)).toBeNull();
+    // A worktree that needs no review has no special state (no "clean", no "reviewed").
+    expect(worktreeItem('trunk').textContent).not.toMatch(/clean|reviewed/);
   });
 
-  it('lists open worktrees under their project; settled ones move to a closed shelf', async () => {
+  it('Hidden is the closed section of what was hidden by hand; nothing else is hidden', async () => {
     const { store, backend } = setup('demo', { store: { settledOpen: false } });
     await ready();
     const sidebar = screen.getByTestId(TEST_IDS.sidebar);
@@ -489,79 +504,71 @@ describe('folder tier, overview and palette', () => {
           `li[data-section="${name}"] [data-testid="worktree-item"]`,
         ),
       ].map((el) => el.dataset.branch);
-    const project = (name: string) =>
-      screen
-        .getAllByTestId(TEST_IDS.projectItem)
-        .find((p) => p.dataset.projectName === name) as HTMLElement;
     const rowActions = (branch: string) =>
       within(worktreeItem(branch).parentElement as HTMLElement);
+    const total = backend.listProjects().projects.flatMap((p) => p.worktrees).length;
+    expect(section('flat')).toHaveLength(total);
 
-    // under the projects, in folder order: docs-site (mid-rebase), octopus-api (most recent
-    // first: main, the conflicted feat/auth, fix/cache), web-dashboard (main); the clean,
-    // review-off, failed and missing worktrees are settled and the shelf is closed
-    expect(section('folder')).toEqual(['', 'main', 'feat/auth', 'fix/cache', 'main']);
-    expect(section('settled')).toEqual([]);
-    expect(within(sidebar).getByLabelText('Expand hidden').textContent).toContain('5');
-    // a project whose worktrees all settled says so instead of listing them
-    expect(project('infra').textContent).toContain('hidden');
-    expect(project('octopus-api').textContent).not.toContain('hidden');
-
-    // opening the shelf lists them, one word each, folder order; the pref persists
-    fireEvent.click(within(sidebar).getByLabelText('Expand hidden'));
-    expect(section('settled')).toEqual([
-      '',
-      'agent/codex-123',
-      'trunk',
-      'master',
-      'old-experiment',
-    ]);
-    expect(store.getState().settledOpen).toBe(true);
-    expect(worktreeItem('trunk').textContent).toContain('clean');
+    // Reviewed, merged-free, review-off, failed and missing rows all stay in the list.
     expect(worktreeItem('agent/codex-123').dataset.state).toBe('settled');
+    expect(worktreeItem('agent/codex-123').dataset.hidden).toBe('false');
     expect(
       within(worktreeItem('agent/codex-123')).getByTestId(TEST_IDS.reviewOffBadge).dataset.source,
     ).toBe('branch');
 
-    // a closed shelf still shows the selected worktree
-    const trunkId = worktreeItem('trunk').dataset.worktreeId as string;
-    fireEvent.click(within(sidebar).getByLabelText('Collapse hidden'));
-    expect(section('settled')).toEqual([]);
-    store.setState({ view: { kind: 'worktree', worktreeId: trunkId } });
-    await waitFor(() => expect(section('settled')).toEqual(['trunk']));
-    expect(store.getState().settledOpen).toBe(false);
-    fireEvent.click(within(sidebar).getByLabelText('Expand hidden'));
-
-    // hide until it changes: the row leaves its project for the shelf, pinned to the state hash
+    // Hide until it changes: the row leaves the list for the closed Hidden section, pinned to the
+    // state hash.
     fireEvent.click(rowActions('fix/cache').getByLabelText('Hide until it changes'));
-    await waitFor(() => expect(worktreeItem('fix/cache').dataset.state).toBe('settled'));
-    expect(section('folder')).not.toContain('fix/cache');
-    expect(section('settled')).toContain('fix/cache');
-    const cacheId = worktreeItem('fix/cache').dataset.worktreeId as string;
+    await waitFor(() => expect(section('flat')).not.toContain('fix/cache'));
+    expect(section('hidden')).toEqual([]); // closed
+    expect(within(sidebar).getByLabelText('Expand hidden').textContent).toContain('1');
+    const cacheId = backend
+      .listProjects()
+      .projects.flatMap((p) => p.worktrees)
+      .find((w) => w.worktree.branch === 'fix/cache')?.worktree.id as string;
     expect(store.getState().settle).toMatchObject([{ worktreeId: cacheId, state: 'settled' }]);
-    // the next change to the worktree un-settles it (the override expires with the hash)
-    backend.mutate(cacheId, 'add');
-    await waitFor(() => expect(worktreeItem('fix/cache').dataset.state).toBe('attention'));
-    await waitFor(() => expect(store.getState().settle).toEqual([]));
-    expect(section('folder')).toContain('fix/cache');
 
-    // keep a clean worktree under its project by hand: it comes back with its word
-    fireEvent.click(rowActions('trunk').getByLabelText('Keep under its project'));
-    await waitFor(() => expect(worktreeItem('trunk').dataset.state).toBe('active'));
-    expect(section('folder')).toContain('trunk');
-    expect(worktreeItem('trunk').textContent).toContain('clean');
-    expect(project('infra').textContent).not.toContain('settled');
-    fireEvent.click(rowActions('trunk').getByLabelText('Hide until it changes'));
-    await waitFor(() => expect(worktreeItem('trunk').dataset.state).toBe('settled'));
+    // Opening the section lists it (the pref persists), and "Show again" brings it back.
+    fireEvent.click(within(sidebar).getByLabelText('Expand hidden'));
+    expect(section('hidden')).toEqual(['fix/cache']);
+    expect(store.getState().settledOpen).toBe(true);
+    expect(worktreeItem('fix/cache').dataset).toMatchObject({ hidden: 'true' });
+    fireEvent.click(rowActions('fix/cache').getByLabelText('Show again'));
+    await waitFor(() => expect(section('flat')).toContain('fix/cache'));
     expect(store.getState().settle).toEqual([]);
 
-    // blocked work is never hidden: no action on the row, the menu item is disabled
-    expect(rowActions('').queryByLabelText('Hide until it changes')).toBeNull();
-    fireEvent.contextMenu(worktreeItem(''));
+    // Hide it again; the next change to the worktree brings it back (the hide expires with the hash).
+    fireEvent.click(rowActions('fix/cache').getByLabelText('Hide until it changes'));
+    await waitFor(() => expect(section('hidden')).toEqual(['fix/cache']));
+    backend.mutate(cacheId, 'add');
+    await waitFor(() => expect(section('flat')).toContain('fix/cache'));
+    await waitFor(() => expect(store.getState().settle).toEqual([]));
+
+    // A closed section still shows the selected worktree, so J/K and palette jumps have a row.
+    fireEvent.click(rowActions('trunk').getByLabelText('Hide until it changes'));
+    await waitFor(() => expect(section('hidden')).toEqual(['trunk']));
+    const trunkId = worktreeItem('trunk').dataset.worktreeId as string;
+    fireEvent.click(within(sidebar).getByLabelText('Collapse hidden'));
+    expect(section('hidden')).toEqual([]);
+    act(() => store.setState({ view: { kind: 'worktree', worktreeId: trunkId } }));
+    await waitFor(() => expect(section('hidden')).toEqual(['trunk']));
+    expect(store.getState().settledOpen).toBe(false);
+    fireEvent.click(within(sidebar).getByLabelText('Expand hidden'));
+    fireEvent.click(rowActions('trunk').getByLabelText('Show again'));
+    await waitFor(() => expect(section('flat')).toContain('trunk'));
+
+    // Blocked work is never hidden: no action on the row, the menu item is disabled.
+    const blocked = worktreeOf('docs-site', '');
+    expect(blocked.dataset.state).toBe('blocked');
+    expect(
+      within(blocked.parentElement as HTMLElement).queryByLabelText('Hide until it changes'),
+    ).toBeNull();
+    fireEvent.contextMenu(blocked);
     const blockedItem = await screen.findByRole('menuitem', { name: 'Hide (blocked)' });
     expect(blockedItem.getAttribute('aria-disabled')).toBe('true');
     fireEvent.keyDown(blockedItem, { key: 'Escape' });
 
-    // marking every file of fix/cache reviewed moves it to the shelf too, and it says "reviewed"
+    // Marking every file of fix/cache reviewed does not hide it: it stays in the list, quietly.
     const files = backend.listFiles(cacheId, { kind: 'working' }).files;
     for (const f of files) {
       backend.setReview({
@@ -572,22 +579,17 @@ describe('folder tier, overview and palette', () => {
         reviewed: true,
       });
     }
-    await waitFor(() => expect(worktreeItem('fix/cache').dataset.state).toBe('settled'));
-    expect(worktreeItem('fix/cache').textContent).toContain('reviewed');
-    expect(worktreeItem('fix/cache').dataset.stage).toBe('reviewed');
+    await waitFor(() => expect(worktreeItem('fix/cache').dataset.stage).toBe('reviewed'));
+    expect(section('flat')).toContain('fix/cache');
+    expect(worktreeItem('fix/cache').dataset.unreviewed).toBe('0');
+    expect(worktreeItem('fix/cache').textContent).not.toMatch(/reviewed|clean/);
 
-    // pin it: listed first under "Pinned", whatever its state
+    // Pin it: listed first, whatever its activity.
     fireEvent.contextMenu(worktreeItem('fix/cache'));
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Pin to the top' }));
-    await waitFor(() => expect(section('pinned')).toEqual(['fix/cache']));
+    await waitFor(() => expect(section('flat')[0]).toBe('fix/cache'));
     expect(store.getState().pinned).toEqual([cacheId]);
-    expect(section('settled')).not.toContain('fix/cache');
-
-    // a project collapses on its own; the pref persists next to the folder ids
-    fireEvent.click(within(project('octopus-api')).getByLabelText('Collapse project'));
-    expect(section('folder')).toEqual(['', 'main']);
-    expect(store.getState().collapsed).toEqual([project('octopus-api').dataset.projectId]);
-    expect(project('octopus-api').textContent).toContain('4');
+    expect(worktreeItem('fix/cache').dataset.pinned).toBe('true');
   });
 
   it('status flow: To review is the default; rows say N commits; Review all moves the bookmark', async () => {
@@ -706,15 +708,18 @@ describe('folder tier, overview and palette', () => {
     }
   });
 
-  it('selecting a folder or project shows the Overview; the view registry routes it', async () => {
+  it("a row's menu opens the folder and project Overviews; the view registry routes them", async () => {
     const { store } = setup();
     await ready();
-    const sidebar = screen.getByTestId(TEST_IDS.sidebar);
-    const code = sidebar.querySelector<HTMLElement>('[data-folder-id]') as HTMLElement;
-    fireEvent.click(within(code).getByTitle('/home/dev/code (depth 3)'));
-    expect(store.getState().view).toEqual({ kind: 'folder', scanRootId: code.dataset.folderId });
-    const heading = await screen.findByRole('heading', { level: 1, name: '~/code' });
-    expect(heading).toBeTruthy();
+    // The sidebar has no folder or project headers (#13): the Overviews open from a row's menu.
+    fireEvent.contextMenu(worktreeOf('web-dashboard', 'main'));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Overview of web-dashboard' }));
+    await screen.findByRole('heading', { level: 1, name: 'web-dashboard' });
+    expect(store.getState().view.kind).toBe('project');
+    fireEvent.contextMenu(worktreeOf('octopus-api', 'main'));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Overview of folder ~/code' }));
+    expect(store.getState().view).toMatchObject({ kind: 'folder' });
+    expect(await screen.findByRole('heading', { level: 1, name: '~/code' })).toBeTruthy();
     expect(screen.queryByTestId(TEST_IDS.diffViewer)).toBeNull();
     // project rows navigate to the project overview, worktree rows to changes
     fireEvent.click(screen.getByText('octopus-api', { selector: 'td button' }));
@@ -766,26 +771,25 @@ describe('folder tier, overview and palette', () => {
     await waitFor(() => expect(document.documentElement.dataset.theme).toBe('octopus-contrast'));
   });
 
-  it('context menu on a project offers bulk and policy actions', async () => {
+  it('context menu on a row offers bulk and policy actions', async () => {
     const { backend } = setup();
     await ready();
-    const project = screen
-      .getAllByTestId(TEST_IDS.projectItem)
-      .find((p) => p.dataset.projectName === 'web-dashboard') as HTMLElement;
-    fireEvent.contextMenu(within(project).getByText('web-dashboard'));
+    const overridesBefore = backend.overrides.size;
+    const row = worktreeOf('web-dashboard', 'main');
+    fireEvent.contextMenu(row);
     const menu = await screen.findByRole('menu');
+    expect(within(menu).getByRole('menuitem', { name: 'Mark all reviewed' })).toBeTruthy();
     const off = within(menu)
       .getAllByTestId(TEST_IDS.reviewPolicyItem)
-      .find((i) => i.dataset.state === 'off');
+      .find((i) => i.dataset.target === 'worktree' && i.dataset.state === 'off');
     fireEvent.click(off as HTMLElement);
-    await waitFor(() => expect(backend.overrides.size).toBe(3));
+    await waitFor(() => expect(backend.overrides.size).toBe(overridesBefore + 1));
     await waitFor(() =>
-      expect(within(worktreeItem('main')).queryByTestId(TEST_IDS.reviewOffBadge)).toBeNull(),
+      expect(
+        within(worktreeOf('web-dashboard', 'main')).getByTestId(TEST_IDS.reviewOffBadge).dataset
+          .source,
+      ).toBe('worktree'),
     );
-    const web = screen
-      .getAllByTestId(TEST_IDS.worktreeItem)
-      .filter((w) => w.dataset.projectId === project.dataset.projectId);
-    expect(web.every((w) => within(w).queryByTestId(TEST_IDS.reviewOffBadge) !== null)).toBe(true);
   });
 });
 

@@ -62,6 +62,25 @@ export function compareByActivity(
   return compareWorktrees(a.worktree, b.worktree);
 }
 
+/**
+ * The flat sidebar's order (#13): pinned first, then most recent activity first across every
+ * project, ties by project name and then `compareWorktrees`.
+ */
+export function compareRows(
+  a: Pick<WorktreeRow, 'pinned' | 'worktree' | 'summary' | 'project'>,
+  b: Pick<WorktreeRow, 'pinned' | 'worktree' | 'summary' | 'project'>,
+): number {
+  if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
+  const am = activityMs(a.summary);
+  const bm = activityMs(b.summary);
+  if (am !== bm) {
+    if (am === null) return 1;
+    if (bm === null) return -1;
+    return bm - am;
+  }
+  return compareProjects(a.project, b.project) || compareWorktrees(a.worktree, b.worktree);
+}
+
 export function compareFiles(a: ChangedFile, b: ChangedFile): number {
   return cmp(a.path, b.path) || cmp(a.rawPath ?? '', b.rawPath ?? '');
 }
@@ -102,11 +121,13 @@ export function sortFilesTreeOrder(files: readonly ChangedFile[]): ChangedFile[]
 // --- sidebar --------------------------------------------------------------------------------
 
 /**
- * The sidebar filter dropdown's selection. Picked projects and worktrees are one union (a row
- * shows when its project or the row itself is picked; nothing picked = every row); the status
- * options narrow that further.
+ * The sidebar filter dropdown's selection. Picked folders, projects and worktrees are one union (a
+ * row shows when its folder, its project or the row itself is picked; nothing picked = every
+ * row); the status options narrow that further.
  */
 export interface SidebarFilters {
+  /** Picked folders (scan root ids, `DIRECT_FOLDER_ID` for "Added directly"). Absent = none. */
+  folders?: readonly string[];
   projects: readonly string[];
   worktrees: readonly string[];
   onlyDirty: boolean;
@@ -114,6 +135,7 @@ export interface SidebarFilters {
 }
 
 export const NO_SIDEBAR_FILTERS: SidebarFilters = {
+  folders: [],
   projects: [],
   worktrees: [],
   onlyDirty: false,
@@ -122,6 +144,7 @@ export const NO_SIDEBAR_FILTERS: SidebarFilters = {
 
 export function hasSidebarFilters(filters: SidebarFilters): boolean {
   return (
+    (filters.folders?.length ?? 0) > 0 ||
     filters.projects.length > 0 ||
     filters.worktrees.length > 0 ||
     filters.onlyDirty ||
@@ -153,7 +176,12 @@ export interface WorktreeRow {
   state: RowState;
   /** The user hid ("Hide until it changes") or un-hid this worktree and that still holds. */
   settledBy: 'auto' | 'user';
-  /** Pinned on this device: listed at the top under "Pinned", whatever its state. */
+  /**
+   * Hidden by hand (and the hide still holds, see `SettleOverride`): the row sits in the closed
+   * "Hidden" section at the end of the sidebar instead of the flat list. Nothing else hides a row.
+   */
+  hidden: boolean;
+  /** Pinned on this device: listed first in the flat list, whatever its state. */
   pinned: boolean;
   /** The worktree's matched pull/merge request (forges on), or null. */
   request: ChangeRequest | null;
@@ -271,18 +299,15 @@ export function autoRowState(row: StageInput): RowState {
 }
 
 /**
- * The override the row's Hide / Show action sets (`null` removes it), or `undefined` when the
- * row cannot be hidden (blocked, or no summary yet). Works from the row's own `stage`, which
- * already includes the forge data: a `WorktreeRow` carries that as `request`, not `forge`, so
- * `autoRowState(row)` would miss a merged/closed PR and get the automatic place wrong.
+ * The override the row's Hide / Show action sets: `'settled'` hides a visible row, `null` removes
+ * the override of a hidden one. `undefined` when the row cannot be hidden (blocked, or no summary
+ * yet, so there is no state hash to pin the hide to).
  */
-export function settleToggle(
-  row: Pick<WorktreeRow, 'stage' | 'state' | 'summary'>,
-): 'settled' | 'active' | null | undefined {
-  if (!row.summary || row.state === 'blocked') return undefined;
-  const auto = placeOf(row.stage, row.summary.changedFiles > 0);
-  if (row.state === 'settled') return auto === 'settled' ? 'active' : null;
-  return auto === 'settled' ? null : 'settled';
+export function hideToggle(
+  row: Pick<WorktreeRow, 'stage' | 'summary' | 'hidden'>,
+): 'settled' | null | undefined {
+  if (!row.summary || row.stage === 'blocked') return undefined;
+  return row.hidden ? null : 'settled';
 }
 
 /** True while an override still applies to the worktree's current state. */
@@ -337,8 +362,6 @@ export interface ProjectGroup {
   project: Project;
   /** Rows that pass the filters, in worktree order. */
   rows: WorktreeRow[];
-  /** Visible rows listed under the project: not pinned, not settled. */
-  active: WorktreeRow[];
   /** All rows of the project, filters ignored (for aggregates and bulk targets). */
   allRows: WorktreeRow[];
 }
@@ -362,17 +385,31 @@ export interface FolderNode {
 }
 
 export interface SidebarModel {
+  /**
+   * The flat list (#13): every worktree that passes the filters and was not hidden by hand,
+   * across all projects and folders, pinned rows first, then most recent activity first.
+   */
+  flat: WorktreeRow[];
+  /** The rows hidden by hand ("Hide until it changes"), same order: the closed section at the end. */
+  hidden: WorktreeRow[];
+  /** Per project, for the Overviews (filters applied). Not a sidebar structure any more. */
   groups: ProjectGroup[];
-  /** Folder tier: scan roots (sorted by path) then "Added directly", only non-empty ones. */
+  /** Per folder, for the Overviews and the palette: scan roots (by path) then "Added directly". */
   folders: FolderNode[];
-  /** Pinned rows (filters applied), listed first, in project and worktree order. */
-  pinned: WorktreeRow[];
-  /** The Settled shelf, in project and worktree order. Filters applied. */
-  settled: WorktreeRow[];
-  /** Visible worktree ids in display order: pinned, then folders, then settled (for J/K). */
+  /** Visible worktree ids in display order: the flat list, then the hidden ones (for J/K). */
   order: string[];
   /** Every worktree row by id, regardless of filters. */
   byId: Map<string, WorktreeRow>;
+  /** Every folder that holds a project, regardless of filters, for the filter picker. */
+  folderOptions: FolderOption[];
+}
+
+/** A folder the filter picker offers. */
+export interface FolderOption {
+  id: string;
+  label: string;
+  /** Worktrees in it, filters ignored. */
+  worktrees: number;
 }
 
 export function emptyStats(): NodeStats {
@@ -468,9 +505,21 @@ export function isDirtySummary(summary: WorktreeSummary | null): boolean {
   return summary !== null && summary.changedFiles > 0;
 }
 
+/** The id of the folder a project belongs to: its scan root, else `DIRECT_FOLDER_ID`. */
+export function folderIdOf(project: Pick<Project, 'scanRootId'>): string {
+  return project.scanRootId ?? DIRECT_FOLDER_ID;
+}
+
 function matchesPicked(row: WorktreeRow, filters: SidebarFilters): boolean {
-  if (filters.projects.length === 0 && filters.worktrees.length === 0) return true;
-  return filters.projects.includes(row.project.id) || filters.worktrees.includes(row.worktree.id);
+  const folders = filters.folders ?? [];
+  if (folders.length === 0 && filters.projects.length === 0 && filters.worktrees.length === 0) {
+    return true;
+  }
+  return (
+    folders.includes(folderIdOf(row.project)) ||
+    filters.projects.includes(row.project.id) ||
+    filters.worktrees.includes(row.worktree.id)
+  );
 }
 
 /**
@@ -540,6 +589,7 @@ export function buildSidebar(
         stage,
         state,
         settledBy,
+        hidden: state === 'settled' && settledBy === 'user',
         pinned: pinnedSet.has(wt.worktree.id),
         request: input.forge?.changeRequest ?? null,
       };
@@ -552,22 +602,53 @@ export function buildSidebar(
       groups.push({
         project: item.project,
         rows,
-        active: rows.filter((r) => !r.pinned && r.state !== 'settled'),
         allRows,
       });
     }
   }
   const folders = buildFolders(groups, scanRoots);
-  // Folder order (not the global project sort), so the shelf reads like the tree above it.
-  const inFolderOrder = folders.flatMap((f) => f.groups.flatMap((g) => g.rows));
-  const pinnedRows = inFolderOrder.filter((r) => r.pinned);
-  const settled = inFolderOrder.filter((r) => !r.pinned && r.state === 'settled');
-  const order = [
-    ...pinnedRows,
-    ...folders.flatMap((f) => f.groups.flatMap((g) => g.active)),
-    ...settled,
-  ].map((r) => r.worktree.id);
-  return { groups, folders, pinned: pinnedRows, settled, order, byId };
+  // The flat list: every visible row across projects, newest activity first (pinned rows on top).
+  // Only a row hidden by hand leaves it; a pinned row stays up top even then.
+  const visibleRows = groups.flatMap((g) => g.rows).sort(compareRows);
+  const flat = visibleRows.filter((r) => r.pinned || !r.hidden);
+  const hidden = visibleRows.filter((r) => !r.pinned && r.hidden);
+  const order = [...flat, ...hidden].map((r) => r.worktree.id);
+  return {
+    flat,
+    hidden,
+    groups,
+    folders,
+    order,
+    byId,
+    folderOptions: folderOptionsOf(byId, scanRoots),
+  };
+}
+
+function folderOptionsOf(
+  byId: ReadonlyMap<string, WorktreeRow>,
+  scanRoots: readonly ScanRoot[] | undefined,
+): FolderOption[] {
+  const counts = new Map<string, number>();
+  for (const row of byId.values()) {
+    const id = folderIdOf(row.project);
+    counts.set(id, (counts.get(id) ?? 0) + 1);
+  }
+  const options: FolderOption[] = [];
+  for (const root of [...(scanRoots ?? [])].sort((a, b) => cmp(a.path, b.path))) {
+    const worktrees = counts.get(root.id);
+    if (worktrees === undefined) continue;
+    counts.delete(root.id);
+    options.push({ id: root.id, label: shortHome(root.path), worktrees });
+  }
+  for (const [id, worktrees] of counts) {
+    if (id === DIRECT_FOLDER_ID) continue;
+    options.push({ id, label: `folder ${id.slice(0, 6)}`, worktrees });
+  }
+  const direct = counts.get(DIRECT_FOLDER_ID);
+  if (direct !== undefined) {
+    options.push({ id: DIRECT_FOLDER_ID, label: 'Added directly', worktrees: direct });
+  }
+  return options;
 }
 
 /** Inbox entries sorted like the sidebar (project name, then most recent activity first). */
