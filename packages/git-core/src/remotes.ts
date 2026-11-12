@@ -110,14 +110,51 @@ export function parseRemoteConfig(output: string): GitRemoteConfig {
   return { remotes: list, branches: { ...branches }, pushDefault };
 }
 
+/**
+ * What `readRemoteConfig` asks git for: the keys above plus `include.*` / `includeIf.*`, whose
+ * presence means the answer depends on files the config cache does not stat (#74). The parser
+ * ignores those keys.
+ */
+const REMOTE_CONFIG_READ_REGEX = `${REMOTE_CONFIG_REGEX}|^include\\.|^includeif\\.`;
+const INCLUDE_RECORD = /^include(if)?\./;
+/**
+ * How long a remote config read is reused while no config file we stat changed. Longer than the
+ * config scan's 60 s: what it bounds is a change to a trusted file in a place we do not stat (a
+ * packager's system config), and for remotes that can only mean a forge lookup with an old URL
+ * rewrite for a few minutes, while the forge service's poll (every 2 min while someone looks)
+ * would otherwise spawn one read per project on every round.
+ */
+const REMOTE_CONFIG_TTL_MS = 10 * 60_000;
+
+/**
+ * Read through the config cache (`GitContext.cachedConfigRead`, the rules of the config scan:
+ * reused while no config file git reads changed and none is younger than two seconds, never with
+ * `include*`, at most `REMOTE_CONFIG_TTL_MS`), so the forge service's per-project reads on every focus, poll and
+ * git change cost no process while the config is unchanged (#74). Every caller gets its own copy.
+ */
 export async function readRemoteConfig(
   ctx: GitContext,
   project: ProjectLocator,
 ): Promise<GitRemoteConfig> {
   const repo = await projectRepoFor(ctx, project);
-  const result = await ctx.git(repo, ['config', '--null', '--get-regexp', REMOTE_CONFIG_REGEX], {
-    // 1 = no matching key (no remotes at all).
-    okExitCodes: [0, 1],
-  });
-  return parseRemoteConfig(result.stdout.toString('utf8'));
+  const config = await ctx.cachedConfigRead(
+    repo,
+    'remote',
+    async (onSpawn) => {
+      const result = await ctx.git(
+        repo,
+        ['config', '--null', '--get-regexp', REMOTE_CONFIG_READ_REGEX],
+        {
+          // 1 = no matching key (no remotes at all).
+          okExitCodes: [0, 1],
+          onSpawn,
+        },
+      );
+      const output = result.stdout.toString('utf8');
+      const includes = output.split('\u0000').some((record) => INCLUDE_RECORD.test(record));
+      return { value: parseRemoteConfig(output), includes };
+    },
+    REMOTE_CONFIG_TTL_MS,
+  );
+  return structuredClone(config);
 }

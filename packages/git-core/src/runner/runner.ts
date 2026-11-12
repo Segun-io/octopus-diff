@@ -45,6 +45,11 @@ export interface GitRunOptions {
    * `check-attr --stdin` and `patch-id` may get input (`assertStdinAllowed`).
    */
   input?: Buffer;
+  /**
+   * Called right before the git process is spawned (after any wait for a free slot), so a caller
+   * can tell whether the process that will read the repository has started yet.
+   */
+  onSpawn?: () => void;
 }
 
 export interface GitLocation {
@@ -314,6 +319,7 @@ export class GitRunner {
         return;
       }
       try {
+        options.onSpawn?.();
         child = spawn(binary, argv, {
           cwd,
           env,
