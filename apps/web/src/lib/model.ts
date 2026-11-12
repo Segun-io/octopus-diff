@@ -358,6 +358,85 @@ export function settledWord(
   return isDirtySummary(row.summary) ? 'reviewed' : 'clean';
 }
 
+/** Counts in a sidebar row stop at 99 (`99+`): the exact number is in the tooltip and the hover card. */
+export const COUNT_CLAMP = 99;
+
+export function countLabel(n: number): string {
+  return n > COUNT_CLAMP ? `${COUNT_CLAMP}+` : String(n);
+}
+
+/**
+ * What a sidebar row's state indicator shows (#14), one kind per look, so a test can walk every
+ * status and the row never has to guess. Shapes differ per kind (colour is never the only signal)
+ * and `label` is the sentence screen readers and the tooltip get.
+ *
+ * - `missing`, `error`, `loading`: the worktree could not be read (yet).
+ * - `conflicts`, `operation`: blocked work (`operation` = a rebase, merge, ... without conflicts).
+ * - `merged`, `closed`: the request is finished for this HEAD.
+ * - `reviewOff`: outside the review loop by policy.
+ * - `review`: unreviewed own files (never merge noise); `changed`: changes whose review state is
+ *   not computed yet; `request`: an open request with nothing new to review.
+ * - `reviewed`: changes, all reviewed; `clean`: nothing changed. Neither has a word on the row:
+ *   the indicator is a tick or a faint dot (informative without saying "clean").
+ */
+export type RowIndicatorKind =
+  | 'missing'
+  | 'error'
+  | 'loading'
+  | 'conflicts'
+  | 'operation'
+  | 'merged'
+  | 'closed'
+  | 'reviewOff'
+  | 'review'
+  | 'changed'
+  | 'request'
+  | 'reviewed'
+  | 'clean';
+
+export interface RowIndicator {
+  kind: RowIndicatorKind;
+  label: string;
+}
+
+function countOf(n: number, one: string, many = `${one}s`): string {
+  return `${n} ${n === 1 ? one : many}`;
+}
+
+export function rowIndicator(
+  row: Pick<
+    WorktreeRow,
+    'summary' | 'worktree' | 'error' | 'review' | 'stage' | 'unreviewed' | 'newCommits' | 'request'
+  >,
+): RowIndicator {
+  const { summary, stage } = row;
+  if (row.worktree.missing) return { kind: 'missing', label: 'missing: the folder is gone' };
+  if (row.error) return { kind: 'error', label: `error: ${row.error.message}` };
+  if (!summary) return { kind: 'loading', label: 'loading' };
+  const conflicts = summary.counts.conflicted;
+  if (conflicts > 0) return { kind: 'conflicts', label: countOf(conflicts, 'conflict') };
+  if (summary.inProgress) return { kind: 'operation', label: `${summary.inProgress} in progress` };
+  if (stage === 'merged') return { kind: 'merged', label: 'request merged' };
+  if (stage === 'closed') return { kind: 'closed', label: 'request closed' };
+  if (!row.review.enabled) return { kind: 'reviewOff', label: 'review off' };
+  if (row.unreviewed > 0) {
+    return { kind: 'review', label: `${countOf(row.unreviewed, 'unreviewed file')} to review` };
+  }
+  if (stage === 'changed') return { kind: 'changed', label: 'changes, open to review' };
+  if (stage === 'inPR') {
+    return {
+      kind: 'request',
+      label:
+        row.request?.review === 'changes_requested'
+          ? 'open request, changes requested'
+          : 'open request, nothing new to review',
+    };
+  }
+  return isDirtySummary(summary)
+    ? { kind: 'reviewed', label: 'reviewed' }
+    : { kind: 'clean', label: 'no changes' };
+}
+
 export interface ProjectGroup {
   project: Project;
   /** Rows that pass the filters, in worktree order. */

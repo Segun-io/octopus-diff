@@ -26,6 +26,29 @@ const ready = async (page: Page) => {
   await page.waitForTimeout(400);
 };
 
+/**
+ * The sidebar gallery (#14): every look a row has, from the mock's `gallery` dataset. Start the
+ * server with it, e.g. `MOCK_DATASET=gallery WEB_PORT=5391 pnpm --filter @octopus-diff/web dev:mock`,
+ * then `BASE_URL=http://127.0.0.1:5391 STATES=sidebar-gallery,sidebar-gallery-narrow,... pnpm shots`.
+ * These states screenshot the sidebar alone (see `CLIPS`) in a tall viewport so the whole list shows.
+ */
+const GALLERY_HEIGHT = 1500;
+
+const galleryReady = async (page: Page) => {
+  await page.setViewportSize({ width: page.viewportSize()?.width ?? 1440, height: GALLERY_HEIGHT });
+  const row = page.locator('[data-testid="worktree-item"][data-branch="feat/one-thousand-files"]');
+  await row.waitFor({ timeout: 10_000 }).catch(() => {
+    throw new Error('the gallery states need the mock with MOCK_DATASET=gallery');
+  });
+  await page.waitForTimeout(300);
+};
+
+/** Sets the width of the sidebar's grid cell (the app gives it 200 to 260 px). */
+const sidebarWidth = (page: Page, px: number) =>
+  page.addStyleTag({
+    content: `[data-testid="sidebar"] { width: ${px}px; }`,
+  });
+
 /** The `activity` state seeds the agent's changes once (see the state). */
 let activitySeeded = false;
 let activityWorktree: string | null = null;
@@ -159,6 +182,30 @@ const STATES: Record<string, Step> = {
     await page.locator('[data-testid="sidebar-filter"]').click();
     await page.waitForTimeout(300);
   },
+  'sidebar-gallery': async (page) => {
+    await galleryReady(page);
+  },
+  'sidebar-gallery-narrow': async (page) => {
+    await galleryReady(page);
+    await sidebarWidth(page, 200);
+  },
+  // Hover (the hide action shows), keyboard focus (the same) and selection, on three rows.
+  'sidebar-gallery-states': async (page) => {
+    await galleryReady(page);
+    await page.locator('[data-testid="worktree-item"][data-branch="feat/nine"]').click();
+    await page.locator('[data-testid="worktree-item"][data-branch="feat/ninety-nine"]').focus();
+    await page.keyboard.press('Tab');
+    await page.locator('[data-testid="worktree-item"][data-branch="feat/pr-open"]').hover();
+    await page.waitForTimeout(200);
+  },
+  'sidebar-gallery-hidden': async (page) => {
+    await galleryReady(page);
+    const row = page.locator('[data-testid="worktree-item"][data-branch="feat/reviewed"]');
+    await row.hover();
+    await row.locator('xpath=..').getByRole('button', { name: 'Hide until it changes' }).click();
+    await page.getByRole('button', { name: 'Expand hidden' }).click();
+    await page.waitForTimeout(300);
+  },
   'project-branches': async (page) => {
     await STATES.project?.(page);
     await page.locator('[data-testid="overview-tab"][data-tab="branches"]').click();
@@ -244,6 +291,14 @@ const STATES: Record<string, Step> = {
  */
 const MUTATING_STATES = new Set(['activity']);
 
+/** States whose shot is one element, not the page (a selector). */
+const CLIPS: Record<string, string> = {
+  'sidebar-gallery': '[data-testid="sidebar"]',
+  'sidebar-gallery-narrow': '[data-testid="sidebar"]',
+  'sidebar-gallery-states': '[data-testid="sidebar"]',
+  'sidebar-gallery-hidden': '[data-testid="sidebar"]',
+};
+
 /** States that change the mock's shared forge state (each resets it when its shot is done). */
 const SIMULATED_STATES = new Set(['rate-limit', 'rate-limit-stale', 'stale-request']);
 
@@ -299,7 +354,9 @@ async function main() {
               console.warn(`state ${state} failed on ${theme.id}: ${String(err).split('\n')[0]}`);
             }
             const file = path.join(out, `${theme.id}-${size.w}-${state}.png`);
-            await page.screenshot({ path: file });
+            const clip = CLIPS[state];
+            if (clip) await page.locator(clip).screenshot({ path: file });
+            else await page.screenshot({ path: file });
             console.log(file, errors.length ? `errors: ${errors.join(' | ')}` : '');
           } finally {
             // The mock server is shared by every shot and a fresh browser context does not reset it:

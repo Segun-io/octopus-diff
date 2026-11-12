@@ -582,7 +582,11 @@ describe('folder tier, overview and palette', () => {
     await waitFor(() => expect(worktreeItem('fix/cache').dataset.stage).toBe('reviewed'));
     expect(section('flat')).toContain('fix/cache');
     expect(worktreeItem('fix/cache').dataset.unreviewed).toBe('0');
-    expect(worktreeItem('fix/cache').textContent).not.toMatch(/reviewed|clean/);
+    // Quiet: no word on the row (its tick and the screen-reader sentence say "reviewed", #14).
+    const visible = worktreeItem('fix/cache').cloneNode(true) as HTMLElement;
+    for (const hiddenFromSight of visible.querySelectorAll('.sr-only')) hiddenFromSight.remove();
+    expect(visible.textContent).not.toMatch(/reviewed|clean/);
+    expect(worktreeItem('fix/cache').dataset.indicator).toBe('reviewed');
 
     // Pin it: listed first, whatever its activity.
     fireEvent.contextMenu(worktreeItem('fix/cache'));
