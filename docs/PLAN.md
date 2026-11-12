@@ -269,12 +269,14 @@ GET    /api/projects                           → Project[] (+ worktrees + summ
 POST   /api/projects        { path }           → add repo (path may be a linked worktree)
 DELETE /api/projects/:id
 GET    /api/scan-roots   POST /api/scan-roots {path, depth}   DELETE /api/scan-roots/:id
-GET    /api/inbox?scope=...&onlyUnreviewed=    → [{project, worktree, summary, files[]}]  (dirty only)
+GET    /api/inbox?scope=...&onlyUnreviewed=    → [{project, worktree, summary, files[]}]  (dirty only;
+                                                &projectIds= / &worktreeIds= narrow it, DECISIONS #249)
 GET    /api/worktrees/:id/files?scope=...      → ChangedFile[]
 GET    /api/worktrees/:id/diff?scope=...&path= → { patch: string, truncated, binary, ... } raw unified diff
 GET    /api/worktrees/:id/commits?limit=       → recent commits (for the commit scope picker)
 PUT    /api/review      { projectId, scope, path, patchHash, reviewed }   (app state only)
-GET    /api/events                              SSE: worktree.changed {worktreeId, stateHash},
+GET    /api/events                              SSE: worktree.changed {worktreeId, stateHash, + the worktree's
+                                                row and changed paths, DECISIONS #249-#256},
                                                 project.added|removed, worktree.added|removed, scan.progress
 ```
 
@@ -327,7 +329,9 @@ All git access goes through **one runner** in `packages/git-core`:
 - Leading-edge refresh (DECISIONS `review/perf` P3): a quiet worktree refreshes on its first event; later
   events in the window use the trailing debounce below.
 - Debounce 150–300 ms per worktree, coalesce bursts, then recompute the summary; emit `worktree.changed`
-  only if `stateHash` changed. `stateHash` covers git's state of the worktree and the default branch's
+  only if `stateHash` changed; the event carries the worktree's `/api/projects` row and the changed paths the daemon
+  already listed for that state (no git process of its own; DECISIONS #249-#256), so a client applies it instead of
+  refetching the projects list. `stateHash` covers git's state of the worktree and the default branch's
   commit (DECISIONS #168): a branch scope's diff follows both. File lists (every scope, `branch` included) are cached
   by `(worktree, scope, stateHash, base commit)` and single-flight (DECISIONS #166–#169). Fallback poll (30 s focused / 5 min others) in case watchers miss events.
 - Must degrade gracefully on inotify limits (WSL, big trees): log a clear warning and fall back to polling.
