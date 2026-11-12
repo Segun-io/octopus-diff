@@ -81,14 +81,8 @@ export function ScopeSelect() {
       ? { kind: scope.kind, files: currentFiles }
       : undefined,
   );
-  // To review needs a status-flow daemon (summaries carry `review`); older ones fall back.
-  const projectItems = model.projects.data?.projects;
-  const reviewSupported =
-    projectItems === undefined ||
-    projectItems.some((p) => p.worktrees.some((w) => w.summary?.review !== undefined));
-  useEffect(() => {
-    if (scope.kind === 'review' && !reviewSupported) store.setState({ scope: { kind: 'working' } });
-  }, [scope.kind, reviewSupported, store]);
+  // To review is always available: the daemon that serves this app computes review states on
+  // demand (#10), so summaries without `review` are not an older daemon any more.
 
   const commitList = commits.data?.commits;
   // A commit scope always needs a sha: when entering commit scope, default to HEAD.
@@ -135,10 +129,7 @@ export function ScopeSelect() {
           <option
             key={kind}
             value={kind}
-            disabled={
-              (kind === 'commit' && (worktreeId === null || !commitList?.length)) ||
-              (kind === 'review' && !reviewSupported)
-            }
+            disabled={kind === 'commit' && (worktreeId === null || !commitList?.length)}
           >
             {SCOPE_LABELS[kind]}
             {worktreeId !== null ? countLabel(counts[kind], listsReviewed(showReviewed, kind)) : ''}

@@ -57,7 +57,9 @@ function setup(dataset: MockDataset = 'demo', opts: { token?: string } = {}): Ha
     },
   });
   // The Settled shelf is closed by default; these tests read settled rows, so open it.
-  const store = createUiStore({ settledOpen: true, scope: scopeForPref('review') }, false);
+  // An older (non status-flow) mock has no To review range: the tests use Uncommitted, which the
+  // app used to fall back to for such daemons before #10 made To review always available.
+  const store = createUiStore({ settledOpen: true, scope: scopeForPref('working') }, false);
   const factory = () => {
     const es = new FakeEventSource();
     backend.subscribe((e) => es.dispatch(e));

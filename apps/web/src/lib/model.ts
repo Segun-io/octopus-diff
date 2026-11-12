@@ -134,13 +134,13 @@ export interface WorktreeRow {
   error: WorktreeListItem['error'];
   /**
    * Unreviewed files of what the worktree has to review (docs/STATUS-FLOW.md §2.1), never the
-   * toolbar scope: `summary.review.unreviewedFiles` from daemons that send it, else the
-   * unreviewed uncommitted files (the sidebar's own fixed inbox). 0 when out of the review loop.
+   * toolbar scope: `summary.review.unreviewedFiles`. 0 when out of the review loop, and while the
+   * daemon has not computed the review state yet (stage `changed`, #10).
    */
   unreviewed: number;
-  /** Unreviewed commits after the review bookmark (0 from older daemons or review off). */
+  /** Unreviewed commits after the review bookmark (0 without a review state or review off). */
   newCommits: number;
-  /** Files the sidebar's fixed status source lists for the worktree (reviewed or not). */
+  /** Changed files of the worktree (uncommitted, from the summary). */
   scopeFiles: number;
   /** Effective review policy (absent from older daemons = enabled by default). */
   review: EffectiveReviewPolicy;
@@ -159,10 +159,20 @@ export interface WorktreeRow {
 /**
  * The review stage of a worktree (docs/STATUS-FLOW.md §2.2), computed from a fixed source and
  * never from the toolbar scope. `blocked`: a conflict or an operation in progress. `review`:
- * unreviewed files or commits. `reviewed`: nothing new. `inPR` / `merged` / `closed`: from the
- * forge (step 4). `off`: review off, missing, failed or still loading (outside the loop).
+ * unreviewed files or commits. `changed`: uncommitted changes whose review state the daemon has
+ * not computed yet (#10: computed when the project is opened, not inherited at startup).
+ * `reviewed`: nothing new. `inPR` / `merged` / `closed`: from the forge (step 4). `off`: review
+ * off, missing, failed or still loading (outside the loop).
  */
-export type Stage = 'blocked' | 'review' | 'reviewed' | 'inPR' | 'merged' | 'closed' | 'off';
+export type Stage =
+  | 'blocked'
+  | 'review'
+  | 'changed'
+  | 'reviewed'
+  | 'inPR'
+  | 'merged'
+  | 'closed'
+  | 'off';
 
 /**
  * A worktree's place in the sidebar (DECISIONS "UX round 4", status flow v2). `blocked` and
@@ -185,6 +195,7 @@ export interface SettleOverride {
 export interface StageInput {
   summary: WorktreeSummary | null;
   worktree: Worktree;
+  /** Unreviewed files; ignored while the summary carries no `review` (stage `changed`). */
   unreviewed: number;
   newCommits?: number;
   review?: Pick<EffectiveReviewPolicy, 'enabled'>;
@@ -222,6 +233,9 @@ export function stageOf(row: StageInput): Stage {
   // or because only reviewed commits touched it) there is nothing left, bookmark moved or not.
   if (row.unreviewed > 0) return 'review';
   if (finished) return finished;
+  // No review state yet (#10): uncommitted changes are shown as changes, not as "to review"
+  // inherited from whatever the repository held at startup. Opening the project computes it.
+  if (!s.review && s.changedFiles > 0) return 'changed';
   // An open, non-draft request with nothing new: In PR, under its project. A draft is Reviewed.
   const cr = row.forge?.changeRequest;
   if (cr && cr.state === 'open' && !cr.draft) return 'inPR';
@@ -237,6 +251,7 @@ export function placeOf(stage: Stage, uncommittedLeft = false): RowState {
     case 'blocked':
       return 'blocked';
     case 'review':
+    case 'changed':
       return 'attention';
     case 'inPR':
       return 'active';
@@ -457,26 +472,24 @@ function matchesPicked(row: WorktreeRow, filters: SidebarFilters): boolean {
 
 export function rowVisible(row: WorktreeRow, filters: SidebarFilters): boolean {
   if (filters.onlyDirty && !isDirtySummary(row.summary)) return false;
-  if (filters.onlyUnreviewed && row.unreviewed === 0) return false;
+  // A row with changes whose review state is not computed yet (#10) may well have something to
+  // review: it stays listed (blocked ones included).
+  const pending =
+    row.review.enabled && !!row.summary && !row.summary.review && row.summary.changedFiles > 0;
+  if (filters.onlyUnreviewed && row.unreviewed === 0 && !pending) return false;
   return matchesPicked(row, filters);
 }
 
 export function buildSidebar(
   projects: readonly ProjectListItem[],
-  inbox: readonly InboxEntry[] | undefined,
   filters: SidebarFilters,
   scanRoots?: readonly ScanRoot[],
   pinned: readonly string[] = [],
   settle: readonly SettleOverride[] = [],
   forges?: ReadonlyMap<string, Pick<WorktreeForge, 'changeRequest' | 'sync'>>,
 ): SidebarModel {
-  // Status never depends on the toolbar scope: `inbox` is the sidebar's own fixed source.
-  const inboxStats = new Map<string, { unreviewed: number; files: number }>();
-  for (const entry of inbox ?? []) {
-    let unreviewed = 0;
-    for (const f of entry.files) if (!f.reviewed) unreviewed++;
-    inboxStats.set(entry.worktree.id, { unreviewed, files: entry.files.length });
-  }
+  // Status never depends on the toolbar scope, nor on any inbox: only on the projects list
+  // (summaries with their `review`), so the sidebar paints before the inbox (#10).
   const pinnedSet = new Set(pinned);
   const overrides = new Map(settle.map((o) => [o.worktreeId, o]));
   const groups: ProjectGroup[] = [];
@@ -487,15 +500,10 @@ export function buildSidebar(
     const allRows: WorktreeRow[] = [];
     const worktrees = [...item.worktrees].sort(compareByActivity);
     for (const wt of worktrees) {
-      const stats = inboxStats.get(wt.worktree.id);
       const review = effectivePolicy(wt.review);
-      // Status flow v2 daemons send `summary.review`; older ones: the fixed inbox's count.
+      // `summary.review` is computed on demand (#10); without it the row shows its changes.
       const fromDaemon = wt.summary?.review;
-      const unreviewed = !review.enabled
-        ? 0
-        : fromDaemon
-          ? fromDaemon.unreviewedFiles
-          : (stats?.unreviewed ?? 0);
+      const unreviewed = review.enabled && fromDaemon ? fromDaemon.unreviewedFiles : 0;
       const newCommits = review.enabled && fromDaemon ? fromDaemon.newCommits : 0;
       const input: StageInput = {
         summary: wt.summary,
@@ -515,7 +523,7 @@ export function buildSidebar(
         error: wt.error,
         unreviewed,
         newCommits,
-        scopeFiles: stats?.files ?? 0,
+        scopeFiles: wt.summary?.changedFiles ?? 0,
         review,
         stage,
         state,
