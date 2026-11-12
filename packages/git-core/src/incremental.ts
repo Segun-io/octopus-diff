@@ -1,4 +1,5 @@
-import { lstat, readFile, stat } from 'node:fs/promises';
+import { constants as fsConstants } from 'node:fs';
+import { lstat, open, stat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { bstrFromUtf8, compareBstr, isValidUtf8 } from './bstr.js';
@@ -115,6 +116,8 @@ export interface SummaryTrack {
   fullAt: number;
   /** Paths whose records changed, per version (null: unknown, e.g. HEAD moved). */
   journal: Array<{
+    /** The version this entry follows (null: the first state of a track, nothing before it). */
+    from: number | null;
     version: number;
     paths: Set<string> | null;
     /**
@@ -358,10 +361,14 @@ function outsideFiles(envValue: (name: string) => string | undefined): {
  * `core.attributesFile`, or a config `include`, are not followed: the config file naming them
  * is, and their own edits are picked up by the daemon's reconciliation.
  */
+/** Stamps read, process-wide (tests: `incremental: false` must read none). */
+export const stampReads = { count: 0 };
+
 export async function readStamp(
   repo: RepoInfo,
   envValue: (name: string) => string | undefined,
 ): Promise<Stamp> {
+  stampReads.count++;
   const root = repo.toplevel ?? repo.cwd;
   const outside = outsideFiles(envValue);
   const configFiles = [
@@ -416,19 +423,45 @@ export async function indexHasGitlinks(
   if (signature === 'none') return false;
   const known = gitlinkScans.get(file);
   if (known?.signature === signature) return known.result;
-  let result = true;
-  try {
-    const info = await stat(file);
-    if (info.size <= MAX_INDEX_SCAN_BYTES) result = scanIndex(await readFile(file), objectFormat);
-  } catch {
-    result = true;
-  }
+  const result = await readIndexForGitlinks(file, objectFormat);
   gitlinkScans.set(file, { signature, result });
   if (gitlinkScans.size > MAX_TRACKS) {
     const oldest = gitlinkScans.keys().next().value;
     if (oldest !== undefined) gitlinkScans.delete(oldest);
   }
   return result;
+}
+
+/**
+ * The index is repository content, so untrusted (PR #89 F3): a FIFO would block `open(2)` for
+ * ever (no timeout, a libuv thread held), a symlink to `/dev/zero` would pass a size check and
+ * read until memory runs out. Only a regular file, not a symlink, opened without following one
+ * and without blocking, read through its own handle up to its `fstat` size (and the cap). Any
+ * doubt answers true: "may hold a gitlink", a full refresh, which is always right.
+ */
+async function readIndexForGitlinks(file: string, objectFormat: string): Promise<boolean> {
+  let handle: Awaited<ReturnType<typeof open>> | null = null;
+  try {
+    if (!(await lstat(file)).isFile()) return true;
+    handle = await open(
+      file,
+      fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK,
+    );
+    const info = await handle.stat();
+    if (!info.isFile() || info.size > MAX_INDEX_SCAN_BYTES) return true;
+    const buf = Buffer.alloc(info.size);
+    let read = 0;
+    while (read < buf.length) {
+      const { bytesRead } = await handle.read(buf, read, buf.length - read, read);
+      if (bytesRead === 0) break;
+      read += bytesRead;
+    }
+    return scanIndex(buf.subarray(0, read), objectFormat);
+  } catch {
+    return true;
+  } finally {
+    await handle?.close().catch(() => {});
+  }
 }
 
 /** True when an entry has mode 160000, or the index is not one this parser understands. */
@@ -508,6 +541,13 @@ export function foldsCase(root: string): Promise<boolean> {
 /** The kept states, one per worktree root, with one summary at a time per worktree. */
 export class TrackStore {
   private readonly tracks = new Map<string, SummaryTrack>();
+  /** Summary versions of every worktree come from here: strictly increasing, never reused. */
+  private lastVersion = 0;
+
+  nextVersion(): number {
+    this.lastVersion += 1;
+    return this.lastVersion;
+  }
   private readonly queues = new Map<string, Promise<unknown>>();
 
   get(key: string): SummaryTrack | undefined {
@@ -627,7 +667,7 @@ export function nextJournal(
   untrackedCandidates: Iterable<string> | null = null,
   region: Region | null = null,
 ): SummaryTrack['journal'] {
-  if (!previous) return [{ version: next.version, paths: null, blind: true }];
+  if (!previous) return [{ from: null, version: next.version, paths: null, blind: true }];
   const journal = previous.journal.slice(-(MAX_JOURNAL - 1));
   let paths = changedKeys(previous, next, untrackedCandidates);
   if (paths !== null && region !== null) {
@@ -635,7 +675,7 @@ export function nextJournal(
     for (const spec of region.specs) paths.add(spec);
     if (paths.size > MAX_JOURNAL_PATHS) paths = null;
   }
-  journal.push({ version: next.version, paths, blind: region === null });
+  journal.push({ from: previous.version, version: next.version, paths, blind: region === null });
   return journal;
 }
 
@@ -648,13 +688,13 @@ export function changedSince(
   since: number,
 ): { paths: Set<string>; blind: boolean } | null {
   if (since === track.version) return { paths: new Set(), blind: false };
-  if (since > track.version) return null;
-  const first = track.journal[0];
-  if (!first || first.version > since + 1) return null;
+  // Versions come from one counter per store and never repeat (PR #89 F2): a list of another
+  // track (one forgotten or evicted since) finds no entry that follows its version.
+  const start = track.journal.findIndex((entry) => entry.from === since);
+  if (start < 0) return null;
   const out = new Set<string>();
   let blind = false;
-  for (const entry of track.journal) {
-    if (entry.version <= since) continue;
+  for (const entry of track.journal.slice(start)) {
     if (entry.paths === null) return null;
     blind ||= entry.blind;
     for (const key of entry.paths) out.add(key);

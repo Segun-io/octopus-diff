@@ -238,6 +238,16 @@ async function bareSummary(
   };
 }
 
+/** The stamp of a summary that keeps no state (`incremental: false`): never compared. */
+const UNSTAMPED: Stamp = {
+  index: 'unstamped',
+  ignore: 'unstamped',
+  config: 'unstamped',
+  sparse: true,
+  submodules: true,
+  gitlinks: true,
+};
+
 /** Everything a summary is computed from: a full status, or the last state with a hint merged in. */
 interface Collected {
   mode: 'full' | 'incremental';
@@ -322,7 +332,9 @@ async function collectFull(
   previous: SummaryTrack | undefined,
 ): Promise<Collected> {
   const { ctx } = deps;
-  const stamp = await readStamp(repo, envOf(ctx));
+  // Without incremental refreshes nothing is kept, so nothing is stamped either: the kill switch
+  // gives the old calls exactly (no index scan, PR #89 F3).
+  const stamp = deps.incremental ? await readStamp(repo, envOf(ctx)) : UNSTAMPED;
   const status = await readStatus(ctx, repo);
   const { tracked, untracked } = splitEntries(status.entries);
   const numstat = new Map<string, NumstatRecord[]>();
@@ -843,7 +855,7 @@ async function finish(
     infosByKey.set(info.key, { info, attribute: untracked.attributes.get(info.key) ?? '' });
   }
   const track: SummaryTrack = {
-    version: (previous?.version ?? 0) + 1,
+    version: deps.tracks.nextVersion(),
     stateHash,
     stamp: c.stamp,
     header: c.header,

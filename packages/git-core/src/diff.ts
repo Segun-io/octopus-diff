@@ -825,7 +825,13 @@ export interface ListEntry {
 export type ListCache = LruCache<string, ListEntry>;
 
 /** How file lists of worktree-reading scopes were computed, process-wide (tests, diagnostics). */
-export const listRefreshCounts = { incremental: 0, seeded: 0, full: 0 };
+export const listRefreshCounts = { incremental: 0, seeded: 0, full: 0, uncached: 0 };
+
+/**
+ * Read signatures one cached list keeps at most (`ListEntry.late`): above, the list is served
+ * but not cached (each full summary would check that many files).
+ */
+export const listLimits = { maxLateSignatures: 20_000 };
 
 export function createListCache(): ListCache {
   return new LruCache<string, ListEntry>(64);
@@ -1089,8 +1095,11 @@ async function listFromSummary(
   // Nothing tracked can differ (a seed of a clean tree, or only untracked files changed).
   const region = specs.size === 0 ? new Region([]) : regionOfKeys(specs);
   if (!region) return null;
-  // Signatures before the diff reads the files: a write during it shows as a move later.
-  const lateSigs = await mapLimit(region.specs, 32, (k) => readSignature(repo.cwd, k));
+  // Signatures before the diff reads the files: a write during it shows as a move later. Only of
+  // paths the state does not sign itself (a changed file's signature is in its records already):
+  // a file that differs between base and HEAD or was named by a hint, clean in the worktree.
+  const toSign = region.specs.filter((k) => !track.signatures.has(k));
+  const lateSigs = await mapLimit(toSign, 32, (k) => readSignature(repo.cwd, k));
   if (region.size > 0) {
     let run: DiffRun;
     try {
@@ -1153,20 +1162,38 @@ async function listFromSummary(
   const rows = mergeRows(kept, sortRows([...fresh, ...untrackedRows(infos)]));
   if (update) listRefreshCounts.incremental++;
   else listRefreshCounts.seeded++;
+  // The rows kept from the cached list keep what was known about how they were read (PR #89 F1);
+  // the region's paths get the signatures just taken.
+  const late = new Map<string, string>();
+  if (update) {
+    for (const [k, sig] of cached.late) {
+      if (!region.has(k) && !track.signatures.has(k)) late.set(k, sig);
+    }
+  }
+  for (const [i, k] of toSign.entries()) late.set(k, lateSigs[i] as string);
   const latest = deps.lists.get(key);
-  if (!latest || latest.version <= track.version) {
+  // Stored only for the track it was built from: a summary (or a forgetState) during the list
+  // makes it a list of no current state (PR #89 F2).
+  if (deps.tracks.get(repo.cwd) !== track) return rows.map((row) => row.file);
+  if (late.size > listLimits.maxLateSignatures) {
+    // Too many paths to check after every full summary: served, not kept.
+    deps.lists.delete(key);
+    listRefreshCounts.uncached++;
+  } else if (!latest || latest.version <= track.version) {
     const committed = (await committedOf(ctx, repo, plan, headSha)) ?? null;
-    deps.lists.set(key, {
-      version: track.version,
-      headSha,
-      readContent: inspect.readContent,
-      rows,
-      keys: rows.map((row) => row.key),
-      recheck: unexplainedKeys(track, rows, committed),
-      committed,
-      late: new Map(region.specs.map((k, i) => [k, lateSigs[i] as string])),
-      lateAll: false,
-    });
+    if (deps.tracks.get(repo.cwd) === track) {
+      deps.lists.set(key, {
+        version: track.version,
+        headSha,
+        readContent: inspect.readContent,
+        rows,
+        keys: rows.map((row) => row.key),
+        recheck: unexplainedKeys(track, rows, committed),
+        committed,
+        late,
+        lateAll: false,
+      });
+    }
   }
   return rows.map((row) => row.file);
 }
@@ -1262,7 +1289,8 @@ export async function listChangedFiles(
       // Read from the files as they are now, which may be past the state: rows that state does
       // not explain are re-checked on every later use.
       const committed = await committedOf(ctx, repo, plan, track.branch.oid);
-      if (committed !== undefined) {
+      // Only for the track it read (see listFromSummary).
+      if (committed !== undefined && deps.tracks.get(repo.cwd) === track) {
         deps.lists.set(key, {
           version,
           headSha: track.branch.oid,
