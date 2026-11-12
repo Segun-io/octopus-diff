@@ -206,3 +206,48 @@ Verification (this machine, branch head):
 Known gaps added: a folder named `build`, `out`, `dist`, `target` or `coverage` that holds real source is omitted
 whole when the worktree is above the cap (#316); the `ls-files` scan for broadened lines costs one process per
 index write in capped worktrees with such directories (#317); the context bar's marker has no test of its own.
+
+## Greptile review (PR #91)
+
+- **P1, edits vanished from the totals** (DECISIONS #323, #324; #311, #321 amended): numstat alongside the status is
+  no snapshot. Paths the kept state signs are signed before numstat starts; once both are done, every signed path is
+  trusted only if its signature did not move or its ctime predates the summary's start by 2 s (never a gitlink).
+  Unproven paths get a numstat limited to them and the rename candidates, after the status (the whole numstat where
+  limited runs are not equivalent: conflicts, submodules, sparse checkouts; the fuzz found the conflict case on the
+  first try). The kept state stores a sentinel for any path whose signature moved after those reads, so the next
+  incremental refresh diffs it again. Tests (failing first, a git wrapper that holds numstat or the status): an edit
+  after the early numstat read and before the status, then an incremental refresh of another file; an edit during a
+  numstat after the status with its event lost; a submodule commit during the status with the margin off; 8 rounds
+  of edits while summaries run. Mutations killed: trusting the early result; trusting every known path; trusting
+  every ctime; no sentinel; limited reruns where they are not equivalent; gitlinks trusted by ctime.
+- **P2, directory counts above the total** (#325): omitted paths counted as tracked changes leave the directory
+  counts too. The capped fuzz checks after every step that the counts never add up to more than the total and that
+  each equals the untracked rows an uncapped list has under the directory. Mutations killed: no dedupe; empty
+  directories still reported.
+- **What the fix costs**: measured on the 100k layout's untracked-heavy worktree, a full summary with nothing edited
+  in the last 2 s 416-446 ms, with a file edited just before 423-430 ms (one numstat limited to it, about 10 ms;
+  afterwards that path is trusted by its signature). A daemon's **first** summaries of worktrees whose files were
+  written seconds before rerun a numstat limited to their changed paths: in the large bench (fixture generated just
+  before) startup took 6 `diff` processes for 3 worktrees instead of 3, 5.7 spawns per worktree instead of 4.7
+  (budget ≤ 8, PASS). Serial status then a limited numstat of all 300 changed paths would have cost about 200 ms on
+  every full summary, so the overlap stays.
+
+Verification (this machine, branch head):
+
+- `pnpm lint`, `pnpm typecheck`, `pnpm build`: exit 0 (lint: 4 warnings and 1 info, in untouched files).
+- `pnpm test`: exit 0. contracts 107, forge 101 + 5 skipped, fixtures 58, web 455, git-core 373 + 1 skipped,
+  daemon 395 + 4 skipped, e2e unit 7, cli 139, scripts 34. git-core and daemon again: same counts. git-core with
+  `OCTOPUS_DIFF_TEST_FOLDS_CASE=1`: 368 passed + 6 skipped. The race and side-by-side tests: 3 more runs, all pass.
+- Capped fuzz (plan shapes and the new count invariants): 12 sweep seeds × caps 1 and 2, 24 runs, all pass; the
+  four main seeds pass again after the conflict fix.
+- `pnpm test:e2e -- --workers=1`: 102 passed (3.7 min); read-only proof 12 control repos, 5064 lock polls,
+  0 violations. `perf:smoke`: exit 0.
+- `bench --layout large` (committed): untracked-heavy full summary **424 ms cold, 404-423 ms warm** (< 600 ms),
+  edits 55-59 ms, `GET /files` 182.8 KiB, inbox 546.6 KiB; main 383 / 273-282 ms; stale-index 2.5 s. Later edits:
+  3 git processes to SSE (PASS), edit → SSE p95 78 ms (untracked-heavy 77 / 81 ms); startup spawns 5.7 per worktree
+  (PASS, see the cost above); idle CPU 3.37 %. Three runs of this bench on this branch gave 523/479-492,
+  338/299-317 and 424/404-423 ms for the untracked-heavy worktree: the spread between runs is larger than what the
+  check adds.
+- Default bench (30 × 3, UI, committed): every budget passes: cold paint 143 ms, warm 64 ms, startup spawns 4.5,
+  idle CPU 0.27 %, edit → SSE p95 25 ms, → UI 41 ms, burst diff p95 38 ms, traffic per edit 1421 bytes, 0 projects
+  requests per edit.

@@ -3635,7 +3635,7 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      not mark). All optional and absent when nothing is omitted, so every existing payload is unchanged
      below the cap. Nothing is renamed or removed; `counts`, `changedFiles`, `additions` keep their
      meaning (see #306).
-306. **What a summary says about omitted untracked files (#43).** `counts.untracked` and `changedFiles` stay exact
+306. **What a summary says about omitted untracked files (#43).** (Amended by #325: directory counts dedupe too.) `counts.untracked` and `changedFiles` stay exact
      (git status lists every file; a path that is also a tracked change counts once, as before). `additions` never
      includes them: their line counts are unknown and are not invented (above 2000 untracked files they were already
      0, `maxUntrackedFiles`). The state hash still hashes every untracked status line, so a file appearing or
@@ -3686,7 +3686,8 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      caps are unchanged. Event deltas (`worktree.changed.paths`, 200 files) are built from the list, so they never
      name an omitted file; the event's `summary` carries `untrackedOmitted`.
 311. **A full summary runs numstat alongside its status when that is likely needed (#43).** (Amended by #321: the
-     guess is HEAD from the ref files.) In a 100k-file worktree
+     guess is HEAD from the ref files; by #323 and #324: its result is checked against the files, unproven paths are
+     diffed again after the status.) In a 100k-file worktree
      `status` and `diff --numstat` each refresh the index (300-400 ms); in sequence they were 680 ms of git per
      full summary, over the 600 ms target alone. Now numstat starts with the status at the last state's HEAD when the
      kept state had tracked changes, or, on a first summary (no kept state), when the index is at least 4 MiB
@@ -3752,7 +3753,7 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      (`NotListedMarker.tsx`, the title explains, the row's screen-reader sentence includes it). The bulk toast adds
      "N untracked files are not listed and cannot be marked" from `BulkReviewResponse.untrackedOmitted` (summed over
      the responses of one action).
-321. **A commit costs one numstat (PR #91 P3-1; amends #311).** The speculative numstat of a full summary with a kept
+321. **A commit costs one numstat (PR #91 P3-1; amends #311; see #323 for the check that follows).** The speculative numstat of a full summary with a kept
      state now uses HEAD as the ref files say (the kept state's when they cannot tell: reftable, odd refs), so after
      a commit it runs at the new commit: one numstat, side by side. A commit that leaves the tree clean still costs
      one discarded numstat. The status header check stays: a HEAD that moves during the status reruns it (tested
@@ -3762,3 +3763,40 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      line next to the directory it ignores), "(dependencies or build output)" only for `generated` ones, and "and N
      more" for the rest. A cut-only omission (no directory) says the last ones in path order were left out and
      suggests no line.
+
+### Untracked-heavy worktrees: Greptile review (PR #91, 2026-11-12)
+
+323. **The early numstat is checked against the files (Greptile P1 on PR #91; amends #311 and #321).** Numstat and the
+     status run side by side, so they read each file at different moments: a file edited after numstat read it and
+     before the status did was dirty in the status with no (or old) numstat record, its counts vanished from
+     `changedFiles` / `additions` / `deletions`, and the kept signature already showed the edit, so incremental
+     refreshes of other files kept the wrong totals. Now, with a kept state: the paths the kept state signs are
+     lstat-signed before numstat starts, and every path the summary signs (worktree-dirty, fully staged, rename
+     sources) is signed again once both are done. A path is trusted when its signature did not move, or when its
+     ctime (for a missing path, its nearest existing directory's) is older than the summary's start minus
+     `summaryLimits.settleMs` (2 s: coarse ctime granularity, small clock steps; a later change would have moved
+     it); a gitlink never by ctime (a commit inside it leaves the directory alone). Unproven paths get one numstat
+     limited to them and every rename candidate, after the status, whose records replace the early ones inside that
+     region; where limited runs are not equivalent (conflicts, submodules or gitlinks, sparse checkouts, #287-#289;
+     the fuzz found the conflict case) or the region is too big, the whole numstat runs again after the status.
+     Measured on the 100k layout's untracked-heavy worktree: a full summary with nothing edited in the last 2 s
+     416-446 ms, with one file edited just before 423-430 ms (one numstat limited to it, about 10 ms; known paths are
+     then trusted by signature). Serial status then a limited numstat of the 300 changed paths would have cost about
+     200 ms more (pathspec matching over 100k entries), so the overlap stays. Limits: a filesystem whose ctime runs
+     ahead of this machine's clock by more than the margin (a network mount) could trust a changed file; the event of
+     that change still refreshes it.
+324. **The kept state never holds a signature newer than its reads (Greptile P1).** A full refresh with a kept state
+     records each signed path's signature right after the status (before the numstat whose records it keeps); if the
+     signature `finish` measures for the state hash differs, the file changed after those reads and the kept state
+     stores `unsettled` for it instead, so the next incremental refresh sees a moved signature and diffs it again,
+     even when its event was lost. The summary's own state hash and snapshot use the measured signature, so a full
+     and an incremental refresh still hash the same bytes. Tests (git wrapper holding numstat): an edit after the
+     early numstat and before the status; an edit during a numstat after the status; a submodule commit during the
+     status with the margin off; 8 rounds of edits while summaries run, each followed by an incremental refresh of
+     another file, all equal to a full summary.
+325. **Directory counts leave out what the total leaves out (Greptile P2 on PR #91; amends #306).** An omitted path that
+     is also a tracked change (`git rm --cached` of a file in an omitted directory) was left out of
+     `untrackedOmitted.count` but not of its directory's `count`, so the notice could say 25 files are not listed and
+     then 26 in `build/`. Directory counts drop the same paths before the biggest ones are picked; a directory left
+     with none is not reported. The capped fuzz checks after every step that directory counts never add up to more
+     than the total and that each equals the untracked rows an uncapped list has under it.
