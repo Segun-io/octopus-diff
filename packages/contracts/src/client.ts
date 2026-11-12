@@ -177,7 +177,7 @@ export interface ApiClient {
   /** The worktree's matched request in detail (Request tab). */
   getChangeRequest(worktreeId: string): Promise<ChangeRequestDetailResponse>;
   getChangeRequestConversation(worktreeId: string): Promise<ChangeRequestConversationResponse>;
-  /** Refetches detail and conversation (at most every 15 s per request). */
+  /** Refetches the project batch, then detail and conversation: always a fresh fetch (no spacing). */
   refreshChangeRequest(worktreeId: string): Promise<ChangeRequestDetailResponse>;
   /** Forge facts and open requests of a project's repository (project Overview). */
   getRepositoryForge(projectId: string): Promise<RepositoryForgeResponse>;
