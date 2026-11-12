@@ -2279,3 +2279,47 @@ needed.
      dirtying of a project's worktrees to the forge service (`onGitChange` -> `ForgeService.gitChanged`), whose
      debounced refresh reads the push configuration; and a forced project refresh shares a forced batch fetch
      already running (`inflightForced`), as details do.
+## Integration base: the branch scope includes the remote default ref (session, 2026-11-11; roadmap #30, step 09)
+
+Numbers: #196 is the next free one on `main`; another session uses #195 on a parallel branch (renumber at
+merge if they collide).
+
+196. **The branch scope and "All on branch" diff against `N`, the newest default-branch commit HEAD has
+     absorbed.** Problem (existing bug): `detectDefaultBranchRef` prefers local `main`; after `git fetch` +
+     `git merge origin/main` into the feature branch, local `main` is stale, so `merge-base HEAD main` is old
+     and other people's `origin/main` files show up as the branch's own change. Now `U` = local default branch
+     (`refs/heads/<d>`) + its remote-tracking ref (`refs/remotes/origin/<d>`), and
+     `N = merge-base HEAD <local> <remote>` (git merges the two tips hypothetically, so this is the newest
+     commit of either history that HEAD contains; checked on scratch repos against the pair-wise answer).
+     `packages/git-core/src/integration-base.ts`; `planScope` uses it for `branch` and `branch+working`.
+     - **Cost.** Both oids come from the ref files (`resolveRefName`, #189; the per-project `for-each-ref` of #29
+       is only the fallback when the files cannot tell), so nothing is added per worktree. `N` is one
+       `merge-base` per (HEAD, local, remote), memoized by commit ids like the other commit facts (#193); no
+       spawn at all when HEAD *is* one of the two refs (the default branch's own worktree: `N = HEAD`, an empty
+       branch scope as before) or when the two refs are the same commit. No new git subcommand, so the
+       allowlist, the read-only proof harness and the hostile-config tests are untouched.
+     - **Unchanged on purpose.** No remote, or no `refs/remotes/origin/<d>`: plain `merge-base HEAD <local>`.
+       An explicit scope `base` is taken as given (it is a user's choice, not "the default branch"). A
+       configured `defaultBranch` is the default branch under another name: `main`/`develop` get the same
+       pairing with `origin/<name>`; a remote-tracking or tag name has nothing to pair and is used as before.
+       A remote-tracking ref whose object is missing (pruned, shallow) falls back to the local-only merge base
+       instead of failing the scope. The summary's ahead/behind base, the review range's merge base and
+       `readRepositoryInfo` still use the local default branch (ahead/behind of a stale-main feature branch
+       still counts origin's commits; the review range is #32/#31's territory).
+     - **`TIP`** (`resolveTip`): the newer of the two refs by `merge-base --is-ancestor` (the remote when they
+       have diverged: the shared line; the local-only commits are the user's own). Not used by any scope yet; it
+       is the second default-branch point #32 needs. One memoized spawn, internal to git-core.
+     - **Cache identity (the one contract change).** The daemon's branch-scope file cache and the summary's
+       `stateHash` use `readBranchBase`, which only knew the local ref; `N` also depends on the remote-tracking
+       ref, so a `fetch` would have served stale lists. `BranchBase` gets an **additive optional** `remote:
+       {name, ref, oid}` (a `contracts:` commit; unavoidable: HEAD is not part of `readBranchBase`'s input, so
+       `N` itself cannot be the identity, and both refs must be). It is set only for the default branch (no
+       explicit `base`) when the remote-tracking ref exists. The daemon's key is `ref=oid` or
+       `ref=oid+remoteRef=remoteOid`. #31 owns the contract change for origins and is not blocked by this: it
+       adds fields elsewhere. A daemon test fails without the key change.
+     - **Known limits.** The daemon never fetches: a stale remote-tracking ref (nobody ran `git fetch`) leaves
+       `N` where it was. Only `origin` is paired; a fork workflow whose default lives on `upstream` keeps the
+       old behaviour. A squash-merge of the default branch into the feature branch (no merge commit) is not
+       "absorbed" in the ancestry sense; that is what the cherry-pick/patch-id work of #32 is for. Criss-cross
+       merge bases: git picks one best base; the result can differ by which one.
+

@@ -74,7 +74,9 @@ The scope select becomes a filter with live counts and never moves rows:
 
 - **To review** (new default; replaces pref `defaultScope: 'working'`): the commits after the bookmark as
   one range diff, then the unreviewed uncommitted files, with small section headers.
-- **All on branch**: working tree vs merge-base with the default branch (committed + uncommitted).
+- **All on branch**: working tree vs the integration base of the default branch (committed + uncommitted):
+  the newest default-branch commit HEAD has absorbed, from local `main` or `origin/main` (DECISIONS #196), so
+  a `fetch` + `merge origin/main` does not turn other people's files into the branch's own change.
 - **Uncommitted**: today's Working tree. Staged / Unstaged move into a secondary menu or stay as options.
 - **Commit…**: as today.
 - One verb: **Reviewed**. `r` toggles a file; **Review all (`⇧R`)** marks everything shown reviewed and,

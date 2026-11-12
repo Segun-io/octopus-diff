@@ -239,6 +239,51 @@ describe('branch-scope inbox cache (#27)', () => {
     expect(listings()).toBeGreaterThan(listed);
   });
 
+  it('a move of the remote-tracking ref invalidates too (#30: the base follows both refs)', async () => {
+    const s = await setup();
+    // Watcher off: the summaries stay as they were; only a ref file changes, as `git fetch` does.
+    const { daemon, listings } = await startCounting(s.fx, { watch: false });
+    const mainHead = s.fx.git(s.repo, 'rev-parse', 'main').trim();
+    s.fx.git(s.repo, 'update-ref', 'refs/remotes/origin/main', mainHead);
+    const api = client(daemon);
+    await api.addProject({ path: s.repo });
+    const first = await api.inbox({ scope: BRANCH_ALL });
+    expect(pathsOf(first, s.featureId)).toEqual(['a.txt', 'f.txt']);
+    const listed = listings();
+    await api.inbox({ scope: BRANCH_ALL });
+    expect(listings()).toBe(listed); // cached: nothing moved
+
+    // origin/main advances to the commit the feature branch is at (a fetch after someone else
+    // merged it): local `main` is untouched, but the newest default-branch commit the feature
+    // has absorbed is now its own HEAD, so `f.txt` is no longer "on the branch".
+    const featureHead = s.fx.git(s.feature, 'rev-parse', 'HEAD').trim();
+    s.fx.git(s.repo, 'update-ref', 'refs/remotes/origin/main', featureHead);
+    const after = await api.inbox({ scope: BRANCH_ALL });
+    expect(pathsOf(after, s.featureId)).toEqual(['a.txt']);
+    expect(listings()).toBeGreaterThan(listed);
+  });
+
+  it("stale local main: origin/main-only files are not the branch's own change (#30)", async () => {
+    const s = await setup();
+    const { daemon } = await startCounting(s.fx, { watch: false });
+    // Someone else's commit lands on origin/main; the feature branch merges it; local main stays.
+    const scratch = path.join(s.fx.root, 'repo-theirs');
+    s.fx.git(s.repo, 'worktree', 'add', '-q', '-b', 'theirs', scratch, 'main');
+    await writeFile(path.join(scratch, 'theirs.txt'), 'theirs\n');
+    s.fx.git(scratch, 'add', '-A');
+    s.fx.git(scratch, 'commit', '-q', '-m', 'theirs');
+    s.fx.git(s.repo, 'update-ref', 'refs/remotes/origin/main', 'theirs');
+    s.fx.git(s.repo, 'worktree', 'remove', '--force', scratch);
+    s.fx.git(s.repo, 'branch', '-D', 'theirs');
+    s.fx.git(s.feature, 'merge', '-q', '--no-edit', 'origin/main');
+    const api = client(daemon);
+    await api.addProject({ path: s.repo });
+    const all = await api.inbox({ scope: BRANCH_ALL });
+    expect(pathsOf(all, s.featureId)).toEqual(['a.txt', 'f.txt']);
+    const committed = await api.inbox({ scope: { kind: 'branch' } });
+    expect(pathsOf(committed, s.featureId)).toEqual(['f.txt']);
+  });
+
   it('a default-branch move announces worktree.changed (the UI refetches)', async () => {
     const s = await setup();
     const { daemon } = await startCounting(s.fx);

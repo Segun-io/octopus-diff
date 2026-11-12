@@ -53,6 +53,30 @@ export async function mergeBase(
   return sha ?? null;
 }
 
+/**
+ * `merge-base <head> <tip>...` (git's "hypothetical merge of the tips"): the newest commit that
+ * `head` shares with the history of any of the tips. Null when there is none (or an object is
+ * missing). Memoized like `mergeBase`.
+ */
+export async function mergeBaseOfTips(
+  ctx: GitContext,
+  repo: RepoInfo,
+  head: string,
+  tips: readonly string[],
+): Promise<string | null> {
+  if (tips.length === 0) return null;
+  const stamp = await ctx.historyStamp(repo);
+  const key = `merge-base-tips${NUL}${repo.commonDir}${NUL}${stamp}${NUL}${head}${NUL}${tips.join(NUL)}`;
+  const sha = await memoIf(ctx, full(head, ...tips), key, async () => {
+    const result = await ctx.git(repo, ['merge-base', '--end-of-options', head, ...tips], {
+      okExitCodes: [0, 1, 128],
+    });
+    const out = result.stdout.toString('utf8').trim();
+    return result.exitCode === 0 && out ? out : undefined;
+  });
+  return sha ?? null;
+}
+
 /** `merge-base --is-ancestor`: exit 0 yes, 1 no; a missing object (128) counts as no. */
 export async function isAncestor(
   ctx: GitContext,
