@@ -136,6 +136,13 @@ export interface BranchBase {
   ref: string;
   /** The commit (or tag object) the ref points to. */
   oid: string;
+  /**
+   * The default branch's remote-tracking ref (`origin/<name>`, `refs/remotes/origin/<name>`),
+   * when the base is the default branch (not an explicit `base`) and that ref exists. A branch
+   * scope is measured against the newest default-branch commit HEAD has absorbed from either ref
+   * (#30), so the cache identity of its file list is both commits (`ref`/`oid` and this).
+   */
+  remote?: { name: string; ref: string; oid: string };
 }
 
 export interface ReviewRangeOptions extends ScopeOptions {
