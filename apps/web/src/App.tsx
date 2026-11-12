@@ -40,7 +40,13 @@ import { Sidebar } from './components/Sidebar.tsx';
 import { SkeletonLines, StaleNote, WaitNote } from './components/WaitNote.tsx';
 import { useFaviconDot } from './lib/favicon.ts';
 import { toFileRef } from './lib/fileRef.ts';
-import { hasSidebarFilters, type NavEntry, repairSelection } from './lib/model.ts';
+import {
+  hasSidebarFilters,
+  type NavEntry,
+  repairSelection,
+  type WorktreeRow,
+  worktreeLabel,
+} from './lib/model.ts';
 import { useDocumentTitle } from './lib/title.ts';
 import { useDelayedFlag } from './lib/useWait.ts';
 import { LOCAL_WAIT } from './lib/wait.ts';
@@ -244,10 +250,20 @@ function EmptyState() {
 }
 
 /**
- * The main pane when the projects are there but no row is: every worktree is filtered out of the
- * list (a folder with no repository left is the onboarding screen). Says what to do.
+ * The main pane when the open worktree is not in the list the sidebar shows (#83). `empty`: the
+ * list has no row at all (every worktree is filtered out or gone; no project at all is the
+ * onboarding screen). `hidden`: rows are listed but the filters leave the open worktree out; it
+ * stays the open view, so clearing the filters brings its pane back. Says what to do.
  */
-function NoWorktree() {
+function NoWorktree({
+  reason,
+  open,
+  first,
+}: {
+  reason: 'empty' | 'hidden';
+  open?: WorktreeRow;
+  first?: WorktreeRow;
+}) {
   const store = useUiStore();
   const filtered = useUi((s) =>
     hasSidebarFilters({
@@ -258,39 +274,57 @@ function NoWorktree() {
       onlyUnreviewed: s.onlyUnreviewed,
     }),
   );
+  const clear = () =>
+    store.setState({
+      filterFolders: [],
+      filterProjects: [],
+      filterWorktrees: [],
+      onlyDirty: false,
+      onlyUnreviewed: false,
+    });
   return (
-    <div data-testid="no-worktree" className="mx-auto mt-[8vh] w-[min(480px,92vw)] p-4 text-sm">
-      <h1 className="mb-2 text-base font-semibold">No worktree to show</h1>
+    <div
+      data-testid="no-worktree"
+      data-reason={reason}
+      className="mx-auto mt-[8vh] w-[min(480px,92vw)] p-4 text-sm"
+    >
+      <h1 className="mb-2 text-base font-semibold">
+        {reason === 'hidden' ? 'The open worktree is hidden by the filters' : 'No worktree to show'}
+      </h1>
       <p className="mb-4 text-muted">
-        {filtered
-          ? 'The filters in the sidebar hide every worktree. Clear them to see the list again, or add a folder to watch.'
-          : 'Add a folder to watch: every repository inside it shows up in the list.'}
+        {reason === 'hidden' && open
+          ? `${open.project.name} ${worktreeLabel(open.worktree)} is not in the list the sidebar shows. Clear the filters to see it again, or open the first worktree in the list.`
+          : filtered
+            ? 'The filters in the sidebar hide every worktree. Clear them to see the list again, or add a folder to watch.'
+            : 'Add a folder to watch: every repository inside it shows up in the list.'}
       </p>
-      <div className="flex gap-2">
+      <div className="flex flex-wrap gap-2">
         {filtered && (
+          <button type="button" className="od-btn" onClick={clear}>
+            Clear filters
+          </button>
+        )}
+        {reason === 'hidden' && first && (
           <button
             type="button"
             className="od-btn"
             onClick={() =>
-              store.setState({
-                filterFolders: [],
-                filterProjects: [],
-                filterWorktrees: [],
-                onlyDirty: false,
-                onlyUnreviewed: false,
-              })
+              actions.setView(store, { kind: 'worktree', worktreeId: first.worktree.id })
             }
           >
-            Clear filters
+            Open the first worktree in the list ({first.project.name}{' '}
+            {worktreeLabel(first.worktree)})
           </button>
         )}
-        <button
-          type="button"
-          className="od-btn"
-          onClick={() => store.setState({ addProjectOpen: true })}
-        >
-          Add repositories…
-        </button>
+        {reason === 'empty' && (
+          <button
+            type="button"
+            className="od-btn"
+            onClick={() => store.setState({ addProjectOpen: true })}
+          >
+            Add repositories…
+          </button>
+        )}
       </div>
     </div>
   );
@@ -434,16 +468,24 @@ function AppShell({ eventSourceFactory }: { eventSourceFactory?: EventSourceFact
         </div>
       </div>
     );
-  } else if (model.view.kind === 'none') {
-    // Nothing is open: the landing effect opens a worktree as soon as the list has one; until
-    // then (or when the filters hide every row) the pane says what to do.
+  } else if (model.view.kind === 'none' || !model.viewListed) {
+    // Nothing is open, or the open worktree is not a row of the list the sidebar shows (the
+    // filters leave it out, or it is gone): the pane says so instead of keeping a stale worktree
+    // on screen. The landing effect opens a row as soon as there is one to open.
+    const open =
+      model.view.kind === 'worktree' ? model.sidebar.byId.get(model.view.worktreeId) : null;
+    const first = model.sidebar.byId.get(model.sidebar.order[0] ?? '');
     body = (
       <div className="grid h-full min-h-0 grid-cols-[minmax(200px,260px)_1fr]">
         <div className="min-h-0">
           <Sidebar />
         </div>
         <div className="min-h-0 min-w-0 bg-canvas">
-          {model.sidebar.order.length > 0 ? null : <NoWorktree />}
+          {first === undefined ? (
+            <NoWorktree reason="empty" />
+          ) : open ? (
+            <NoWorktree reason="hidden" open={open} first={first} />
+          ) : null}
         </div>
       </div>
     );

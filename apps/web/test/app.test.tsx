@@ -43,6 +43,10 @@ interface Harness {
   store: UiStore;
   user: ReturnType<typeof userEvent.setup>;
   requests: string[];
+  /** The JSON bodies of the bulk review requests sent so far. */
+  bulkBodies: { target: { kind: string }; expectedStateHashes: Record<string, string> }[];
+  /** Holds the GETs of `/api/inbox` (the review data) while `held`, so a test can order two fetches. */
+  inboxGate: { held: boolean; hold: () => void; release: () => void };
 }
 
 function setup(
@@ -55,10 +59,36 @@ function setup(
     ...(opts.latencyMs ? { latencyMs: opts.latencyMs } : {}),
   });
   const requests: string[] = [];
+  const bulkBodies: Harness['bulkBodies'] = [];
+  let opened: Promise<void> = Promise.resolve();
+  let open: () => void = () => undefined;
+  const inboxGate = {
+    held: false,
+    hold() {
+      inboxGate.held = true;
+      opened = new Promise<void>((resolve) => {
+        open = resolve;
+      });
+    },
+    release() {
+      inboxGate.held = false;
+      open();
+    },
+  };
   const api = createApiClient({
     baseUrl: 'http://mock.local',
-    fetch: (input, init) => {
+    fetch: async (input, init) => {
       requests.push(`${init?.method ?? 'GET'} ${input}`);
+      if (String(input).endsWith('/api/review/bulk') && typeof init?.body === 'string') {
+        bulkBodies.push(JSON.parse(init.body));
+      }
+      if (
+        inboxGate.held &&
+        (init?.method ?? 'GET') === 'GET' &&
+        String(input).includes('/api/inbox')
+      ) {
+        await opened;
+      }
       return mockFetch(input, init);
     },
   });
@@ -87,7 +117,7 @@ function setup(
       eventSourceFactory={factory}
     />,
   );
-  return { backend, store, user: userEvent.setup(), requests };
+  return { backend, store, user: userEvent.setup(), requests, inboxGate, bulkBodies };
 }
 
 const app = () => screen.getByTestId(TEST_IDS.app);
@@ -181,36 +211,131 @@ describe('app shell', () => {
     expect(again.store.getState().view).toMatchObject({ worktreeId: other.dataset.worktreeId });
   });
 
-  it('shows an empty state that says what to do when the filters hide every worktree (#83)', async () => {
+  /** Narrows the sidebar the way a user does: `/`, a search, a click on the worktree's option. */
+  async function pickWorktreeInFilter(user: Harness['user'], text: string) {
+    await press(user, '/');
+    const search = screen.getByTestId(TEST_IDS.sidebarFilterSearch);
+    await user.type(search, text);
+    const option = screen
+      .getAllByTestId(TEST_IDS.sidebarFilterOption)
+      .find((o) => o.dataset.kind === 'worktree' && o.textContent?.includes(text));
+    if (!option) throw new Error(`no filter option for ${text}`);
+    await user.click(option);
+    await press(user, '{Escape}');
+    await press(user, '{Escape}');
+  }
+
+  it('shows the empty state when the filters leave no row, with the open worktree still set (#83)', async () => {
     const { store, user } = setup();
     await ready();
+    const open = currentWorktree();
     expect(screen.queryByTestId('no-worktree')).toBeNull();
-    // Nothing is open once the landing ran and the list is empty: close the worktree, then filter.
-    act(() => {
-      store.setState({ view: { kind: 'none' }, filterWorktrees: ['nothing-matches'] });
-    });
-    // A filter that matches no worktree id leaves no row to land on.
-    const empty = await screen.findByTestId('no-worktree');
-    expect(empty.textContent).toContain('hide every worktree');
+    // Normal filter changes: only dirty worktrees, and only the clean `trunk` one: nothing is left.
+    await press(user, '/');
+    await user.click(screen.getByTestId(TEST_IDS.onlyDirtyToggle));
+    await press(user, '{Escape}');
+    await pickWorktreeInFilter(user, 'trunk');
     expect(screen.queryByTestId(TEST_IDS.worktreeItem)).toBeNull();
-    // The way back: "Clear filters" lists the worktrees again and lands on the top row.
+    // The sidebar shows no row, so the pane must not keep showing a worktree the list does not.
+    const empty = await screen.findByTestId('no-worktree');
+    expect(empty.dataset.reason).toBe('empty');
+    expect(empty.textContent).toContain('hide every worktree');
+    expect(screen.queryByTestId(TEST_IDS.fileGroup)).toBeNull();
+    expect(screen.queryByTestId(TEST_IDS.diffViewer)).toBeNull();
+    // The open worktree is still the view: clearing the filters brings the same pane back.
+    expect(store.getState().view).toMatchObject({ kind: 'worktree', worktreeId: open });
     await user.click(within(empty).getByRole('button', { name: 'Clear filters' }));
     await waitFor(() => expect(screen.queryByTestId('no-worktree')).toBeNull());
-    await waitFor(() =>
-      expect(currentWorktree()).toBe(
-        screen.getAllByTestId(TEST_IDS.worktreeItem)[0]?.dataset.worktreeId,
-      ),
-    );
-    // And the other button opens the folder picker.
-    act(() => {
-      store.setState({ view: { kind: 'none' }, filterWorktrees: ['nothing-matches'] });
-    });
+    await waitFor(() => expect(currentWorktree()).toBe(open));
+    await waitFor(() => expect(screen.getAllByTestId(TEST_IDS.fileGroup)).toHaveLength(1));
+    // The other button opens the folder picker.
+    await press(user, '/');
+    await user.click(screen.getByTestId(TEST_IDS.onlyDirtyToggle));
+    await press(user, '{Escape}');
+    await pickWorktreeInFilter(user, 'trunk');
     await user.click(
       within(await screen.findByTestId('no-worktree')).getByRole('button', {
         name: /Add repositories/,
       }),
     );
     expect(store.getState().addProjectOpen).toBe(true);
+  });
+
+  it('shows the empty state when "only unreviewed" leaves nothing unreviewed (#83)', async () => {
+    const { user, store } = setup();
+    await ready();
+    const open = currentWorktree();
+    // Everything reviewed through the product's own bulk command, then the status filter.
+    store.setState({ confirmBulk: false });
+    await press(user, '{Control>}k{/Control}');
+    const palette = await screen.findByTestId(TEST_IDS.commandPalette);
+    await user.type(within(palette).getByTestId(TEST_IDS.commandPaletteInput), 'worktrees in the');
+    fireEvent.click(
+      within(palette)
+        .getAllByTestId(TEST_IDS.commandPaletteItem)
+        .find((i) => i.dataset.id === 'cmd:markEveryVerified') as HTMLElement,
+    );
+    await screen.findByTestId(TEST_IDS.bulkReviewToast);
+    await waitFor(() =>
+      expect(
+        screen
+          .getAllByTestId(TEST_IDS.worktreeItem)
+          .every((el) => Number(el.dataset.unreviewed ?? 0) === 0),
+      ).toBe(true),
+    );
+    await press(user, '/');
+    await user.click(screen.getByTestId(TEST_IDS.onlyUnreviewedToggle));
+    await press(user, '{Escape}');
+    expect(screen.queryByTestId(TEST_IDS.worktreeItem)).toBeNull();
+    expect((await screen.findByTestId('no-worktree')).dataset.reason).toBe('empty');
+    expect(screen.queryByTestId(TEST_IDS.diffViewer)).toBeNull();
+    expect(store.getState().view).toMatchObject({ worktreeId: open });
+  });
+
+  it('says the open worktree is hidden by the filters when other rows are listed, and acts on nothing (#83)', async () => {
+    const { user, store, requests } = setup();
+    await ready();
+    const open = currentWorktree();
+    const cache = rowOf('fix/cache').dataset.worktreeId;
+    await pickWorktreeInFilter(user, 'fix/cache');
+    await waitFor(() => expect(screen.getAllByTestId(TEST_IDS.worktreeItem)).toHaveLength(1));
+    // The list shows fix/cache only; the pane does not keep showing the worktree it filtered out.
+    const note = await screen.findByTestId('no-worktree');
+    expect(note.dataset.reason).toBe('hidden');
+    expect(screen.queryByTestId(TEST_IDS.diffViewer)).toBeNull();
+    // Keys act on what is shown: Shift+R, r and j/k do nothing to the hidden worktree.
+    const before = store.getState().selected;
+    await press(user, 'R');
+    await press(user, 'r');
+    await press(user, 'j');
+    expect(requests.some((r) => r.includes('/api/review'))).toBe(false);
+    expect(store.getState().selected).toBe(before);
+    expect(store.getState().view).toMatchObject({ worktreeId: open });
+    // "Open the first worktree in the list" opens what the sidebar shows.
+    await user.click(within(note).getByRole('button', { name: /Open .*first worktree/i }));
+    await waitFor(() => expect(currentWorktree()).toBe(cache));
+    await waitFor(() => expect(screen.queryByTestId('no-worktree')).toBeNull());
+    await waitFor(() => expect(viewerPath()).toBe('src/lib/cache.ts'));
+  });
+
+  it('shows the empty state when the open worktree is removed and every other row is filtered out (#83)', async () => {
+    const { user, store, backend } = setup();
+    await ready();
+    // Open a worktree of one project, filter to a worktree of the same project.
+    fireEvent.click(rowOf('fix/cache'));
+    await waitFor(() => expect(viewerPath()).toBe('src/lib/cache.ts'));
+    const project = rowOf('fix/cache').dataset.projectId as string;
+    await pickWorktreeInFilter(user, 'feat/auth');
+    await waitFor(() => expect(screen.getAllByTestId(TEST_IDS.worktreeItem)).toHaveLength(1));
+    act(() => {
+      backend.removeProject(project);
+    });
+    await waitFor(() => expect(screen.queryByTestId(TEST_IDS.worktreeItem)).toBeNull());
+    const empty = await screen.findByTestId('no-worktree');
+    expect(empty.dataset.reason).toBe('empty');
+    expect(screen.queryByTestId(TEST_IDS.diffViewer)).toBeNull();
+    expect(screen.queryByTestId(TEST_IDS.fileGroup)).toBeNull();
+    void store;
   });
 
   it('lands again on the top row when the open worktree disappears (#83)', async () => {
@@ -625,6 +750,71 @@ describe('keyboard', () => {
     expect(screen.getByTestId(TEST_IDS.helpDialog)).toBeTruthy();
     await press(user, '{Escape}');
     expect(screen.queryByTestId(TEST_IDS.helpDialog)).toBeNull();
+  });
+});
+
+describe('bulk review across worktrees takes one snapshot (#83 review)', () => {
+  /**
+   * The open worktree's file list refreshes on its own, so it can be newer than the review data
+   * (`/api/inbox`) the plan counted. The plan's hashes must be the review data's: the daemon then
+   * reports the worktree as changed meanwhile, instead of accepting a new hash for old paths.
+   */
+  async function staleScenario(filtered: boolean) {
+    const h = setup();
+    await ready();
+    h.store.setState({ confirmBulk: false });
+    const { backend, user, store, inboxGate, bulkBodies } = h;
+    await waitFor(() =>
+      expect(screen.getByTestId(TEST_IDS.refreshIndicator).dataset.state).toBe('idle'),
+    );
+    const id = currentWorktree() as string;
+    const summaryOf = () =>
+      backend
+        .listProjects()
+        .projects.flatMap((p) => p.worktrees)
+        .find((w) => w.worktree.id === id)?.summary;
+    const oldHash = summaryOf()?.stateHash;
+    if (filtered) store.setState({ filterWorktrees: [id] });
+    // The review data stays as it was; the open worktree's own file list moves on.
+    inboxGate.hold();
+    const patch = viewer().getAttribute('data-patch-hash');
+    act(() => {
+      backend.mutate(id, 'edit', viewerPath() ?? undefined);
+    });
+    await waitFor(() => expect(viewer().getAttribute('data-patch-hash')).not.toBe(patch));
+    const newHash = summaryOf()?.stateHash;
+    expect(newHash).not.toBe(oldHash);
+    await press(user, '{Control>}k{/Control}');
+    const palette = await screen.findByTestId(TEST_IDS.commandPalette);
+    await user.type(within(palette).getByTestId(TEST_IDS.commandPaletteInput), 'worktrees in the');
+    fireEvent.click(
+      within(palette)
+        .getAllByTestId(TEST_IDS.commandPaletteItem)
+        .find((i) => i.dataset.id === 'cmd:markEveryVerified') as HTMLElement,
+    );
+    const toast = await screen.findByTestId(TEST_IDS.bulkReviewToast);
+    inboxGate.release();
+    return { bulkBodies, id, oldHash, newHash, toast, backend };
+  }
+
+  it('unfiltered: the `all` request carries the review data row hash, so the daemon skips the moved worktree', async () => {
+    const { bulkBodies, id, oldHash, newHash, toast } = await staleScenario(false);
+    expect(bulkBodies).toHaveLength(1);
+    expect(bulkBodies[0]?.target.kind).toBe('all');
+    expect(bulkBodies[0]?.expectedStateHashes[id]).toBe(oldHash);
+    expect(bulkBodies[0]?.expectedStateHashes[id]).not.toBe(newHash);
+    expect(toast.textContent).toContain('changed meanwhile');
+  });
+
+  it('filtered to the open worktree: the per-worktree request carries the review data row hash', async () => {
+    const { bulkBodies, id, oldHash, newHash, toast, backend } = await staleScenario(true);
+    expect(bulkBodies).toHaveLength(1);
+    expect(bulkBodies[0]?.target.kind).toBe('worktree');
+    expect(bulkBodies[0]?.expectedStateHashes[id]).toBe(oldHash);
+    expect(bulkBodies[0]?.expectedStateHashes[id]).not.toBe(newHash);
+    // Nothing was marked: the old paths are not accepted under a new hash.
+    expect(toast.textContent).toContain('changed meanwhile');
+    expect(backend.reviews.size).toBe(0);
   });
 });
 

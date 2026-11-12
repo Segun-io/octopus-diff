@@ -81,8 +81,21 @@ export interface AppModel {
   unreviewedTotal: number;
   /** Worktrees whose review policy is disabled. */
   disabledWorktrees: ReadonlySet<string>;
-  /** Current `stateHash` per worktree (from the projects list), for bulk `expectedStateHashes`. */
+  /**
+   * The `stateHash` a bulk request for a worktree's own file list expects: the state of the files
+   * it acts on (the open file list's, then the review data's row, then the sidebar's).
+   */
   stateHashes: ReadonlyMap<string, string>;
+  /**
+   * The `stateHash` of each review data row (`inboxEntries`): the one snapshot `allGroups` /
+   * `allEntries` were built from, so a plan over those files expects exactly their state.
+   */
+  inboxStateHashes: ReadonlyMap<string, string>;
+  /**
+   * The open worktree is a row of the list the sidebar shows (the filters apply). False for a
+   * worktree the filters leave out, or that is gone: its pane is not shown and keys do not act on it.
+   */
+  viewListed: boolean;
   /** No sidebar filter and no hidden file: a bulk on every worktree is one `all` request. */
   allUnfiltered: boolean;
   /** Effective policy of the selected worktree view (null outside a worktree). */
@@ -229,6 +242,17 @@ function useBuildAppModel(): AppModel {
     return out;
   }, [sidebar, inboxEntries, filesData]);
 
+  const inboxStateHashes = useMemo(() => {
+    const out = new Map<string, string>();
+    for (const entry of inboxEntries) out.set(entry.worktree.id, entry.summary.stateHash);
+    return out;
+  }, [inboxEntries]);
+
+  const viewListed = useMemo(
+    () => view.kind !== 'worktree' || sidebar.order.includes(view.worktreeId),
+    [view, sidebar.order],
+  );
+
   // While its batches are still landing (#10) the data covers less than an "all" request does.
   const allUnfiltered =
     !isPartialInbox(scope) &&
@@ -325,6 +349,8 @@ function useBuildAppModel(): AppModel {
     unreviewedTotal,
     disabledWorktrees,
     stateHashes,
+    inboxStateHashes,
+    viewListed,
     allUnfiltered,
     viewPolicy,
     inboxEntries,

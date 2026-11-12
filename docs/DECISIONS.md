@@ -3346,3 +3346,27 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      `docs/reports/web-no-inbox.md`). `apps/web/scripts/perf.ts` measures the landing worktree's 200-file list; its load
      wait is the indicator going idle (the review data complete) and `J` starts at the landing row. `shots.ts` /
      `browser-check.ts` / `screenshots.ts` name the first state `landing`, not `inbox`.
+
+### Inbox removal: review follow-up (PR #86, 2026-11-12)
+
+279. **The pane shows only a worktree the sidebar lists.** The sidebar displays `sidebar.order` (the filtered rows:
+     flat, then the Hidden section; it does *not* keep a filtered-out selected row, only the closed Hidden section keeps
+     the selected one). The main pane now follows that list: when the open worktree is not in it (`model.viewListed`
+     false: `view` is a worktree and `!sidebar.order.includes(id)`), the pane is the `no-worktree` state instead of a
+     stale worktree. Two reasons, `data-reason`: `empty` (no row at all: every worktree filtered out, or the open one was
+     removed with nothing else to land on; "Clear filters" when filters are on, "Add repositories…") and `hidden` (rows
+     are listed but the filters leave the open worktree out: it is named, with "Clear filters" and "Open the first
+     worktree in the list"). The view is **not** changed: it stays the open worktree, so clearing the filters brings its
+     pane back (an e2e that filters and clears relies on it). The earlier condition (`view.kind === 'none'` only) missed
+     both cases: filtering never set `none`, and `sidebar.byId` keeps every row. A removed open worktree with other rows
+     listed still lands on the top row (#272); with none, the empty state. Keys act on what is shown: with the open
+     worktree unlisted, `j`/`k`, `r` and the open-worktree bulk plan do nothing (`Shift+R` says "Nothing to mark here"),
+     so nothing is marked that the user cannot see. `n` and `J`/`K` still move to a worktree.
+280. **A bulk plan has one snapshot.** `markEvery` took its paths and counts from `allEntries` (the review data's rows)
+     but its `expectedStateHashes` from `stateHashes`, which prefers the open worktree's own file query; the two refresh
+     in parallel, so a newer file list put a new hash on old paths and the daemon accepted it (a filtered request marked
+     only the old paths, a request without `paths` could mark more than the preview counted). The every-worktree plan now
+     reads `inboxStateHashes` (the `summary.stateHash` of the same inbox rows `allGroups`/`allEntries` come from), so a
+     worktree that moved on is reported "changed meanwhile". The open worktree's own plan (`markAll`, files from its file
+     query) keeps `stateHashes` (that query's hash first): files and hash are one response. Overview bulks
+     (`markAllFor`) send no paths and keep `stateHashes`.

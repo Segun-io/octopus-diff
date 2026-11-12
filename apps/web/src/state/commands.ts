@@ -119,13 +119,17 @@ export function useCommands(model: AppModel, resolvedTheme: 'light' | 'dark'): C
     };
     const plan = (reviewed: boolean, every = false): BulkPlan => {
       const m = latest.current.model;
+      // The hashes come from the same snapshot as the files and counts: the review data's rows for
+      // every worktree (its file query refreshes on its own and may be newer), the open file
+      // list's own state for the open worktree. A worktree the list does not show is not marked.
+      const shown = every || m.viewListed;
       return planBulk({
         scope: m.scope,
         reviewed,
-        groups: every ? m.allGroups : m.groups,
-        entries: every ? m.allEntries : m.entries,
+        groups: every ? m.allGroups : shown ? m.groups : [],
+        entries: every ? m.allEntries : shown ? m.entries : [],
         visible: m.visible,
-        stateHashes: m.stateHashes,
+        stateHashes: every ? m.inboxStateHashes : m.stateHashes,
         disabled: m.disabledWorktrees,
         allUnfiltered: every && m.allUnfiltered,
       });
@@ -146,10 +150,12 @@ export function useCommands(model: AppModel, resolvedTheme: 'light' | 'dark'): C
     return {
       nextFile() {
         const m = latest.current.model;
+        if (!m.viewListed) return;
         select(stepFile(m.entries, m.selectedKey, 1, m.visible));
       },
       prevFile() {
         const m = latest.current.model;
+        if (!m.viewListed) return;
         select(stepFile(m.entries, m.selectedKey, -1, m.visible));
       },
       nextWorktree() {
@@ -171,7 +177,7 @@ export function useCommands(model: AppModel, resolvedTheme: 'light' | 'dark'): C
         const m = latest.current.model;
         const entry = m.selectedEntry;
         const selected = store.getState().selected;
-        if (!entry || !selected) return;
+        if (!entry || !selected || !m.viewListed) return;
         if (m.disabledWorktrees.has(entry.worktreeId)) {
           actions.notice(store, 'Review is off for this worktree.');
           return;

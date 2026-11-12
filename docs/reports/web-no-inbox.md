@@ -41,10 +41,10 @@ Run from the repo root on this machine (Node 26):
 - `pnpm lint`: pass (credits up to date; no dependency changed, `pnpm credits` not needed). One `info` from the daemon
   test file `apps/daemon/test/file-origins.real-git.test.ts` (another session's, not touched).
 - `pnpm typecheck`: pass (all packages incl. `e2e`).
-- `pnpm --filter @octopus-diff/web test`: **30 files, 423 tests pass** (before this work: 30 files / 416 tests).
+- `pnpm --filter @octopus-diff/web test`: **30 files, 428 tests pass (after the PR #86 follow-up; 423 before it)** (before this work: 30 files / 416 tests).
 - `pnpm build`: pass.
 - `pnpm test:e2e` (full, `workers: 1`): first run 101 passed, 1 failed (`15-ui-status-flow` "a commit keeps the work out
-  of the shelf", a real race, below); after the fix, final run **102 passed, 0 failed** (3.2 min).
+  of the shelf", a real race, below); after the fix, final run **102 passed, 0 failed** (3.2 min; re-run after the PR #86 follow-up: 102 passed).
 - `pnpm --filter @octopus-diff/web perf:smoke`: all checks ok, 0 page errors (landing list 5200 px, 1 file group, `J` 7 of 7,
   one `/api/inbox` request per refresh and never `/api/projects`). Full `perf` run also ok; baseline rewritten.
 - CI-only steps (`.github/workflows/ci.yml`): `pnpm test:scripts` 34 passed; the CLI smoke (`node apps/cli/dist/index.js
@@ -126,3 +126,17 @@ None (`pnpm credits` not needed; `pnpm lint` confirms the credits are current).
 
 Rebase onto main may touch `docs/DECISIONS.md` numbering (#272+) and `apps/web/src/App.tsx`, `state/commands.ts`,
 `state/model.tsx`, `components/FileList.tsx`. `docs/bench/web-perf.json` was regenerated on this machine.
+
+## Review follow-up (PR #86, two P1 comments)
+
+1. *Stale pane when the list is empty* (#279): the pane now follows the sidebar's list (`viewListed`); both cases
+   (filters leave no row, including `onlyUnreviewed` with nothing unreviewed; the open worktree removed with every
+   other row filtered out) and the "open worktree filtered out, other rows listed" case show `no-worktree`
+   (`data-reason` `empty` | `hidden`), the view is kept, keys do not act on the hidden worktree. Tests drive the real
+   filter dropdown (`/`, status toggles, worktree options), the product's own bulk command and `backend.removeProject`.
+2. *Bulk marks with mismatched states* (#280): `inboxStateHashes` for the every-worktree plan. Tests hold
+   `/api/inbox`, edit the open worktree so its file query is newer than the review data, run the palette command and
+   assert the request carries the review data row's hash and the toast says "changed meanwhile" (unfiltered `all`, and
+   filtered per-worktree with paths: nothing marked).
+Mutation checks: pane ignoring `viewListed` (4 fail), no `hidden` reason (1), keys acting on the hidden worktree
+(`shown` plan, `r`, `j`: 1 each), hashes from the file query again (2), `viewListed` from `byId` (3).
