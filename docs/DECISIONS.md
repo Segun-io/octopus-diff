@@ -3622,3 +3622,16 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      unsigned path is committed-clean (dirty ones are not signed); above the cap the list is served, counted
      `uncached`, and the next request seeds again. Mutations killed.
 
+
+## Untracked-heavy worktrees (session, 2026-11-12; roadmap #43, step 25)
+
+305. **Contract (additive): untracked files above a cap are counted, not inspected or listed.**
+     `GitCoreOptions.maxListedUntracked` (default `UNTRACKED_LISTED_DEFAULT` = 2000, the same number as
+     `maxUntrackedFiles`), `WorktreeSummary.untrackedOmitted?: UntrackedOmission` (`count`, `limit`, the
+     ten biggest omitted `directories` with their `count` and a copyable `ignoreLine`),
+     `FilesResponse.untrackedOmitted?` (the summary's, for scopes that list untracked files),
+     `SummarySnapshot.untrackedOmitted?` / `omittedPlan?` (the count, and an opaque identity of the
+     omitted set for the activity feed), `BulkReviewResponse.untrackedOmitted?` (files a bulk call could
+     not mark). All optional and absent when nothing is omitted, so every existing payload is unchanged
+     below the cap. Nothing is renamed or removed; `counts`, `changedFiles`, `additions` keep their
+     meaning (see #306).

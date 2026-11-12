@@ -87,6 +87,20 @@ export const SummarySnapshotSchema = z.object({
    * refs (the upstream, the default branch): it moves only when a file of this worktree changes.
    */
   contentHash: z.string().optional(),
+  /**
+   * Untracked files above git-core's cap (#43, `WorktreeSummary.untrackedOmitted`): counted in
+   * `total`, never in `entries`, and not what `truncated` is about (`truncated` says the cap of
+   * entries cut listed paths off). Their paths are in `contentHash` (appearing or disappearing
+   * moves it); their contents are not. Absent when nothing was omitted.
+   */
+  untrackedOmitted: z.number().int().positive().optional(),
+  /**
+   * Opaque identity of which untracked files were omitted (the omitted directories and the cut in
+   * path order), present with `untrackedOmitted`. Two snapshots with the same value omit the same
+   * paths, so a listed untracked path missing from the later one is gone; with different values a
+   * path may have moved between listed and omitted (compare coarsely).
+   */
+  omittedPlan: z.string().min(1).optional(),
 });
 export type SummarySnapshot = z.infer<typeof SummarySnapshotSchema>;
 
