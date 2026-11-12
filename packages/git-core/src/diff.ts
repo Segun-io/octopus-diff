@@ -28,8 +28,10 @@ import { hashParts, PATCH_HASH_LENGTH, PatchHasher, STATE_HASH_LENGTH } from './
 import { imageComparison } from './images.js';
 import {
   changedSince,
+  readStamp,
   regionOfKeys,
   type SummaryTrack,
+  stampChange,
   type TrackStore,
   trackBlocker,
 } from './incremental.js';
@@ -887,6 +889,10 @@ async function updateList(
   const cached = deps.lists.get(key);
   if (!track || !cached || cached.version < 0 || cached.headSha !== track.branch.oid) return null;
   if (trackBlocker(track)) return null;
+  // The summary's state is what the list is updated to: an index, ignore, config or attributes
+  // file that changed since (no summary yet) means another state.
+  const stamp = await readStamp(repo, (name) => ctx.runner.envValue(name) || undefined);
+  if (stampChange(track.stamp, stamp)) return null;
   const changed = changedSince(track, cached.version);
   if (changed === null) return null;
   if (changed.size === 0) return cached.rows.map((row) => row.file);
