@@ -89,19 +89,17 @@ export class Flight<T> {
   #waiting = 0;
   #pinned = false;
   #done = false;
+  /** Settles (never rejects) when the work does; waiting on it pins nothing. */
+  readonly settled: Promise<void>;
 
   constructor(compute: () => Promise<T>, onCancel?: () => void) {
     this.#onCancel = onCancel;
     const lane = storage.getStore()?.lane ?? 'background';
     this.#promise = storage.run({ lane, signal: this.#controller.signal }, compute);
-    this.#promise.then(
-      () => {
-        this.#done = true;
-      },
-      () => {
-        this.#done = true;
-      },
-    );
+    const done = (): void => {
+      this.#done = true;
+    };
+    this.settled = this.#promise.then(done, done);
   }
 
   /** True once every waiter left and the work was told to stop. */

@@ -376,6 +376,35 @@ describe('GitCore calls with a signal and a lane (real git behind a gated wrappe
     }
   });
 
+  it('shared work is cancelled when its only waiter aborts', async () => {
+    const wt = dirtyRepo('lone-discovery');
+    const core = createGitCore(fx.coreOptions({ gitBinary: wrapper }));
+    await core.version();
+    writeFileSync(wlog, '');
+    const release = hold('rev-parse@lone-discovery');
+    try {
+      const controller = new AbortController();
+      const call = core
+        .getFileDiff(wt, { kind: 'working' }, { path: 'a.txt' }, { signal: controller.signal })
+        .catch((e: unknown) => e);
+      await until(() => spawned().some((s) => s.sub === 'rev-parse'));
+      const pid = spawned().find((s) => s.sub === 'rev-parse')?.pid as number;
+      controller.abort();
+      expect(isGitCoreError(await call, 'aborted')).toBe(true);
+      // Nobody else wanted the discovery: its process is stopped, although still held.
+      await until(() => !groupAlive(pid), ABORT_GRACE_MS + 1_000);
+      release();
+      // A later call starts a fresh discovery instead of joining the cancelled one.
+      expect((await core.listChangedFiles(wt, { kind: 'working' })).map((f) => f.path)).toEqual([
+        'a.txt',
+      ]);
+      expect(spawned().filter((s) => s.sub === 'rev-parse')).toHaveLength(2);
+    } finally {
+      release();
+      await core.dispose();
+    }
+  });
+
   it('an already-aborted call starts nothing, not even shared reads', async () => {
     const wt = dirtyRepo('pre-aborted');
     const core = createGitCore(fx.coreOptions({ gitBinary: wrapper }));

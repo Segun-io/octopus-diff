@@ -184,10 +184,9 @@ export class GitContext {
       );
       run = flight;
       this.resolving.set(cwd, flight);
-      void flight.join().then(
-        () => this.resolving.get(cwd) === flight && this.resolving.delete(cwd),
-        () => this.resolving.get(cwd) === flight && this.resolving.delete(cwd),
-      );
+      void flight.settled.then(() => {
+        if (this.resolving.get(cwd) === flight) this.resolving.delete(cwd);
+      });
     }
     return { ...(await run.join()) };
   }
