@@ -3,8 +3,12 @@ import { realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import {
+  ACTIVITY_BLOB_MAX_BYTES,
+  type ActivityResponse,
+  type ActivityWatch,
   API_VERSION,
   APP_NAME,
+  type BlobResponse,
   type BulkReviewTarget,
   type ChangedFile,
   type CommitInfo,
@@ -29,6 +33,7 @@ import {
   type ReviewResponse,
   type ScanRoot,
   type ScopeKind,
+  type SummarySnapshot,
   scopeKey,
   type UpdateProjectRequest,
   type WatchOptions,
@@ -37,6 +42,17 @@ import {
   type WorktreeLocator,
   type WorktreeSummary,
 } from '@octopus-diff/contracts';
+import {
+  ActivityStore,
+  classifyHead,
+  countDeleted,
+  diffSnapshots,
+  HEAD_CLASSIFY_COMMITS,
+  headDiffers,
+  needsCommits,
+  type OriginLabel,
+  snapshotState,
+} from './activity.js';
 import type { BulkWorktree, ReviewSource } from './bulk-review.js';
 import { Coalescer, settleWithin } from './coalesce.js';
 import { ApiError, type ApiErrorInfo, isShutdownError, notFound, toApiError } from './errors.js';
@@ -172,6 +188,8 @@ export interface CoreOptions {
    * The forge service paces its polling by it (DECISIONS #197).
    */
   onFocus?: (visible: boolean, projectId: string | null, overview: boolean) => void;
+  /** The activity rings (#38; tests pass one with small caps). */
+  activity?: ActivityStore;
 }
 
 interface WorktreeEntry {
@@ -344,6 +362,8 @@ export class DaemonCore {
     { key: string; run: Promise<Labels> }
   >();
   readonly #originsLimit = new Limiter(CORE_DEFAULTS.originsConcurrency);
+  /** The live view's activity rings (#38): memory only, never written to the store. */
+  readonly #activity: ActivityStore;
   /** Identical inbox requests that overlap share one run (`inbox`), keyed by what it reads. */
   readonly #inboxInflight = new Map<string, Promise<InboxResponse>>();
   /** Worktree ids removed recently (id → time), to spot a path re-added soon after (F1). */
@@ -377,6 +397,7 @@ export class DaemonCore {
     this.#initialWaitMs = options.initialSummaryWaitMs ?? CORE_DEFAULTS.initialSummaryWaitMs;
     this.#gcIntervalMs = options.gcIntervalMs ?? CORE_DEFAULTS.gcIntervalMs;
     this.#reviewPolicy = options.reviewPolicy ?? null;
+    this.#activity = options.activity ?? new ActivityStore();
     const watch = options.watch ?? {};
     this.#relistMs = options.relistMs ?? 60_000;
     const watcherOptions: ConstructorParameters<typeof WatcherService>[0] = {
@@ -565,6 +586,7 @@ export class DaemonCore {
     const id = entry.row.id;
     this.#projects.delete(id);
     this.#invalidateFiles(entry);
+    for (const worktreeId of entry.worktrees.keys()) this.#activity.forget(worktreeId);
     if (options.exclude && entry.row.scanRootId && this.#scanRoots.has(entry.row.scanRootId)) {
       this.#store.addScanExclusion(entry.row.scanRootId, id, this.#nowIso());
     }
@@ -821,6 +843,7 @@ export class DaemonCore {
         changed = true;
         this.#invalidateWorktreeFiles(id);
         this.#rememberRemoved(id);
+        this.#activity.forget(id);
       }
     }
     entry.worktrees = next;
@@ -886,6 +909,8 @@ export class DaemonCore {
       const e = project.worktrees.get(worktreeId);
       if (!e) continue;
       e.checkGitDir = true;
+      // Another folder may now sit at this path: its first snapshot is a new baseline.
+      this.#activity.resetBaseline(worktreeId);
       void this.#syncWatcher(project);
       return;
     }
@@ -1061,16 +1086,23 @@ export class DaemonCore {
         message: `worktree path no longer exists: ${entry.worktree.path}`,
       };
       entry.attempted = true;
+      this.#activity.resetBaseline(entry.worktree.id);
       this.#announce(entry, 'missing');
       return;
     }
     try {
-      const gitSummary = await this.#git.getSummary(this.#locator(entry), {
+      // The snapshot (#37) is a reshaping of what the summary reads anyway: no extra git process.
+      // It feeds the activity ring only and never reaches an API payload.
+      const { snapshot, ...gitSummary } = await this.#git.getSummary(this.#locator(entry), {
         defaultBranch: this.#defaultBranch(project),
+        snapshot: true,
       });
       // The state hash also covers the default branch's commit (#27): a branch scope's diff
       // follows it (the merge base moves) while the worktree itself stays as it was.
       const summary = withBase(gitSummary, await this.#branchBase(project, DEFAULT_BASE_SCOPE));
+      if (snapshot) {
+        summary.counts = { ...summary.counts, deleted: countDeleted(snapshot) };
+      }
       if (this.#closed || project.worktrees.get(entry.worktree.id) !== entry) return;
       entry.summary = summary;
       entry.error = null;
@@ -1094,6 +1126,10 @@ export class DaemonCore {
       // wanted; at startup it is not (#10): the summary alone (status + numstat) is enough.
       if (this.#reviewWanted(project, entry)) {
         await this.#reviewOf(project, entry);
+        if (this.#closed || project.worktrees.get(entry.worktree.id) !== entry) return;
+      }
+      if (snapshot) {
+        await this.#recordActivity(entry, summary, snapshot);
         if (this.#closed || project.worktrees.get(entry.worktree.id) !== entry) return;
       }
       this.#announce(entry, summary.stateHash);
@@ -1145,15 +1181,56 @@ export class DaemonCore {
     }
   }
 
+  /**
+   * Diffs this refresh's snapshot against the previous one into the activity ring (#38). The first
+   * snapshot is the baseline. A HEAD move on the same branch reads the newest commits once
+   * (`listCommits`, one `git log`) to tell a commit from a reset or a pull; nothing else spawns.
+   */
+  async #recordActivity(
+    entry: WorktreeEntry,
+    summary: WorktreeSummary,
+    snapshot: SummarySnapshot,
+  ): Promise<void> {
+    const id = entry.worktree.id;
+    const cur = snapshotState(summary, snapshot);
+    const prev = this.#activity.previous(id);
+    if (prev === null) {
+      this.#activity.observe(id, cur, [], this.#now());
+      return;
+    }
+    let head = null;
+    if (headDiffers(prev.head, cur.head)) {
+      let commits: CommitInfo[] | null = null;
+      if (needsCommits(prev.head, cur.head)) {
+        try {
+          commits = await this.#git.listCommits(this.#locator(entry), {
+            limit: HEAD_CLASSIFY_COMMITS,
+          });
+        } catch (error) {
+          if (isShutdownError(error)) return;
+          this.#log.debug('activity: commits unavailable', { worktreeId: id, error });
+        }
+      }
+      head = classifyHead(prev.head, cur.head, commits);
+    }
+    // Only an unchanged review state's labels apply (they describe this summary's files).
+    const review = entry.review;
+    const origins = review?.key.startsWith(`${summary.stateHash}\u0000`) ? review.origins : null;
+    const drafts = diffSnapshots(prev, cur, head, origins);
+    this.#activity.observe(id, cur, drafts, this.#now());
+  }
+
   /** Emits `worktree.changed` only when the state hash actually changed (PLAN §5.6). */
   #announce(entry: WorktreeEntry, stateHash: string): void {
     if (entry.lastHash === stateHash) return;
     entry.lastHash = stateHash;
+    const activitySeq = this.#activity.seqOf(entry.worktree.id);
     this.#hub.emit({
       type: 'worktree.changed',
       projectId: entry.projectId,
       worktreeId: entry.worktree.id,
       stateHash,
+      ...(activitySeq > 0 ? { activitySeq } : {}),
     });
   }
 
@@ -1222,6 +1299,47 @@ export class DaemonCore {
       project?.row.id ?? null,
       projectId !== null,
     );
+  }
+
+  // --- live view (#38) ---------------------------------------------------------------------------
+
+  /** The worktree's activity feed after `after` (memory only; see `activity.ts`). */
+  activity(worktreeId: string, after: number): ActivityResponse {
+    this.#requireWorktree(worktreeId);
+    const read = this.#activity.read(worktreeId, after);
+    const watch: ActivityWatch = this.#watcher.liveness(worktreeId);
+    return { worktreeId, ...read, watch };
+  }
+
+  /**
+   * A blob of the worktree's feed: only an oid the ring or the current snapshot holds for this
+   * worktree (so the route cannot read arbitrary objects of the repository), only through
+   * `readBlob`, capped at `ACTIVITY_BLOB_MAX_BYTES`.
+   */
+  async readBlob(worktreeId: string, oid: string, maxBytes?: number): Promise<BlobResponse> {
+    const { entry } = this.#requireWorktree(worktreeId);
+    const read = this.#git.readBlob;
+    if (!read) throw new ApiError('internal', 'blob reads are not available', { status: 501 });
+    if (!this.#activity.allowsBlob(worktreeId, oid)) {
+      throw new ApiError('not_found', "blob not in this worktree's recent activity");
+    }
+    try {
+      const blob = await read.call(this.#git, this.#locator(entry), {
+        oid,
+        maxBytes: Math.min(maxBytes ?? ACTIVITY_BLOB_MAX_BYTES, ACTIVITY_BLOB_MAX_BYTES),
+      });
+      return { worktreeId, blob };
+    } catch (error) {
+      if (isGitCoreError(error, 'not_found')) {
+        throw new ApiError('not_found', 'content gone (the object was pruned)', { cause: error });
+      }
+      throw error;
+    }
+  }
+
+  /** Activity ring sizes (tests, memory checks). */
+  activityStats(): ReturnType<ActivityStore['stats']> {
+    return this.#activity.stats();
   }
 
   // --- files, diffs, commits -------------------------------------------------------------------
@@ -1769,6 +1887,18 @@ export class DaemonCore {
     }
     // Known when there was nothing to label, or when the labels were computed.
     const known = this.#git.readFileOrigins !== undefined && (labels === null || labels.known);
+    // Non-own labels by path, for the activity feed (#38): no git process of its own.
+    let origins: Map<string, OriginLabel> | null = null;
+    if (known && labels !== null) {
+      origins = new Map();
+      for (const f of labels.files) {
+        if (f.origin === undefined || f.origin === 'own') continue;
+        origins.set(pathKey(f), {
+          origin: f.origin,
+          ...(f.originVia !== undefined ? { originVia: f.originVia } : {}),
+        });
+      }
+    }
     return {
       key,
       bookmarkKey: bk,
@@ -1778,6 +1908,7 @@ export class DaemonCore {
       unreviewedCommits,
       baseCommits,
       integrationBase: labels?.n ?? null,
+      origins,
       info: {
         bookmark,
         base: range.base,

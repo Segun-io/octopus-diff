@@ -1,4 +1,5 @@
 import {
+  ActivityQuerySchema,
   AddProjectRequestSchema,
   type AddProjectResponse,
   AddScanRootRequestSchema,
@@ -7,6 +8,7 @@ import {
   AUTH_COOKIE_NAME,
   AUTH_FRAGMENT_PARAM,
   AUTH_QUERY_PARAM,
+  BlobQuerySchema,
   BulkReviewRequestSchema,
   type ChangeRequestConversationResponse,
   type ChangeRequestDetailResponse,
@@ -18,6 +20,7 @@ import {
   FilesQuerySchema,
   FocusRequestSchema,
   type ForgesResponse,
+  GitObjectIdSchema,
   HealthQuerySchema,
   IdSchema,
   InboxQuerySchema,
@@ -376,6 +379,21 @@ export function createApp(deps: AppDeps): Hono {
   route('refreshWorktree', async (c) => {
     const body: RefreshResponse = { summary: await core.refreshWorktree(idParam(c, 'worktreeId')) };
     return c.json(body);
+  });
+
+  // Live view (#38): the in-memory activity feed and the blobs it points at. Behind the token
+  // like every API route; the blob route serves only oids of this worktree's feed or snapshot.
+  route('getActivity', (c) => {
+    const worktreeId = idParam(c, 'worktreeId');
+    const query = parseWith(ActivityQuerySchema, c.req.query(), 'query');
+    return c.json(core.activity(worktreeId, query.after));
+  });
+
+  route('getBlob', async (c) => {
+    const worktreeId = idParam(c, 'worktreeId');
+    const oid = parseWith(GitObjectIdSchema, c.req.param('oid'), 'oid');
+    const query = parseWith(BlobQuerySchema, c.req.query(), 'query');
+    return c.json(await core.readBlob(worktreeId, oid, query.maxBytes));
   });
 
   route('setReview', async (c) => {

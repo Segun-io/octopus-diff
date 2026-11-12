@@ -1339,6 +1339,18 @@ export class WatcherService {
 
   // --- polling ---------------------------------------------------------------------------------
 
+  /**
+   * How a worktree's changes are noticed (live view, #38): `native` file events, `polling` only
+   * (degraded, too broad, over the per-project cap, a Windows mount), or `disabled` (watching off).
+   */
+  liveness(worktreeId: string): { mode: 'native' | 'polling' | 'disabled'; pollMs: number | null } {
+    if (!this.#opts.enabled) return { mode: 'disabled', pollMs: null };
+    const st = this.#worktrees.get(worktreeId);
+    if (!st) return { mode: 'disabled', pollMs: null };
+    const pollMs = this.pollIntervalFor(worktreeId);
+    return { mode: this.#isNative(st) ? 'native' : 'polling', pollMs };
+  }
+
   pollIntervalFor(worktreeId: string): number {
     const st = this.#worktrees.get(worktreeId);
     const focused = this.#focus === worktreeId;
