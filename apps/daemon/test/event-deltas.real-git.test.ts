@@ -54,7 +54,7 @@ async function startCounting(fx: RealGitFixture): Promise<Counting> {
   const log = path.join(await tempDir(), 'spawns.log');
   writeFileSync(log, '');
   const wrapper = path.join(path.dirname(log), 'git-wrapper.sh');
-  writeFileSync(wrapper, `#!/bin/sh\necho "$*" >> '${log}'\nexec git "$@"\n`);
+  writeFileSync(wrapper, `#!/bin/sh\nprintf '%s\\n' "$*" >> '${log}'\nexec git "$@"\n`);
   chmodSync(wrapper, 0o755);
   const daemon = await startDaemon({
     host: '127.0.0.1',

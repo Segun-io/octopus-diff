@@ -63,7 +63,7 @@ async function start(
   const log = path.join(dir, 'spawns.log');
   writeFileSync(log, '');
   const wrapper = path.join(dir, 'git-wrapper.sh');
-  writeFileSync(wrapper, `#!/bin/sh\necho "$*" >> '${log}'\nexec git "$@"\n`);
+  writeFileSync(wrapper, `#!/bin/sh\nprintf '%s\\n' "$*" >> '${log}'\nexec git "$@"\n`);
   chmodSync(wrapper, 0o755);
   const real = createGitCore({ env: fx.env, gitBinary: wrapper });
   const calls = new Map<string, number>();

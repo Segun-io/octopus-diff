@@ -29,7 +29,7 @@ async function setup() {
       '  case "$a" in -c) skip=1 ;; -*) ;; *) sub="$a"; break ;; esac',
       'done',
       '[ -n "$sub" ] || sub=version',
-      `echo "start $$ $sub $(basename "$PWD")" >> "${log}"`,
+      `printf 'start %s %s %s\\n' "$$" "$sub" "$(basename "$PWD")" >> "${log}"`,
       `while [ -e "${holds}/$sub" ]; do sleep 0.01; done`,
       'exec git "$@"',
       '',

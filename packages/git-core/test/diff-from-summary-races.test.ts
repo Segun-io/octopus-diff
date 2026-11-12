@@ -67,7 +67,7 @@ beforeAll(() => {
       'kind="$sub"',
       'for a in "$@"; do [ "$a" = "-p" ] && [ "$sub" = diff ] && kind=diffp; done',
       'dir=$(basename "$PWD")',
-      `echo "start $$ $kind $dir" >> "${log}"`,
+      `printf 'start %s %s %s\\n' "$$" "$kind" "$dir" >> "${log}"`,
       `while [ -e "${holds}/$kind@$dir" ]; do sleep 0.01; done`,
       `if [ "$kind" = diffp ] && [ -e "${hooks}/$dir.before" ]; then sh "${hooks}/$dir.before"; rm -f "${hooks}/$dir.before"; fi`,
       'git "$@"; code=$?',
