@@ -15,6 +15,7 @@ import {
   findSuspicious,
   hasSuspicious,
 } from '../../lib/unicode.ts';
+import { LOCAL_WAIT } from '../../lib/wait.ts';
 import { useCommandsContext } from '../../state/commandsContext.tsx';
 import { type CopyFn, copyAndReport } from '../../state/copy.ts';
 import {
@@ -42,6 +43,7 @@ import {
 import { ContextMenu, useContextMenu } from '../ContextMenu.tsx';
 import { CopyButton } from '../CopyButton.tsx';
 import { COPY_TEST_IDS, fileCopyItems, separated, worktreeCopyItems } from '../copyMenu.ts';
+import { SkeletonLines, WaitNote } from '../WaitNote.tsx';
 import { ImageDiff } from './ImageDiff.tsx';
 
 const DiffRenderer = lazy(() =>
@@ -469,9 +471,10 @@ export function DiffPane() {
           </Placeholder>
         )}
         {state === 'loading' && (
-          <p className="p-4 text-xs text-muted" role="status">
-            Loading diff…
-          </p>
+          <div className="p-4">
+            <SkeletonLines widths={[55, 80, 65, 72]} />
+            <WaitNote active source={LOCAL_WAIT} />
+          </div>
         )}
         {state === 'error' && (
           <Placeholder kind="error" title="Could not load this diff">

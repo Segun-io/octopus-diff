@@ -13,6 +13,7 @@ import {
   useSettingsQuery,
   useSettingsSupport,
 } from '../api/settings.ts';
+import { useSidebarNote } from '../api/wait.ts';
 import {
   DIRECT_FOLDER_ID,
   type FolderNode,
@@ -24,6 +25,8 @@ import {
   worktreeLabel,
 } from '../lib/model.ts';
 import { worktreeSource } from '../lib/source.ts';
+import { useDelayedFlag } from '../lib/useWait.ts';
+import { waitText } from '../lib/wait.ts';
 import { useCommandsContext } from '../state/commandsContext.tsx';
 import { type CopyFn, copyAndReport } from '../state/copy.ts';
 import { useAppModel } from '../state/model.tsx';
@@ -34,6 +37,7 @@ import { separated, worktreeCopyItems } from './copyMenu.ts';
 import { useFolderStart } from './FolderBrowser.tsx';
 import { Wordmark } from './Mark.tsx';
 import { SidebarFilter } from './SidebarFilter.tsx';
+import { FloatPill, FloatSlot, StaleNote } from './WaitNote.tsx';
 import { DefaultBranchChip, RowChips } from './WorktreeChips.tsx';
 
 /**
@@ -708,7 +712,7 @@ export function Sidebar() {
     <nav
       data-testid={TEST_IDS.sidebar}
       aria-label="Worktrees, projects and folders"
-      className="flex h-full min-h-0 flex-col border-r border-line bg-surface"
+      className="relative flex h-full min-h-0 flex-col border-r border-line bg-surface"
     >
       <div className="flex items-center gap-0.5 border-b border-line px-2 py-1.5">
         <Wordmark size={16} />
@@ -866,6 +870,7 @@ export function Sidebar() {
         )}
       </div>
 
+      <SidebarStatus />
       {menu.state && (
         <ContextMenu
           items={menuItems(menu.state.target)}
@@ -880,6 +885,42 @@ export function Sidebar() {
         </span>
       ) : null}
     </nav>
+  );
+}
+
+/**
+ * The sidebar's status slot (#11), floating over the foot of the list so nothing moves: which
+ * forge the PR chips are waiting for, the daemon working out review states after a project was
+ * opened, or, when forge data is old for a real reason, "Last updated 3 min ago · Refresh". A wait
+ * is named only after `WAIT_NOTE_DELAY_MS`; the stale note is a state, so it is not delayed.
+ */
+function SidebarStatus() {
+  const note = useSidebarNote();
+  const waiting = useDelayedFlag(note.wait !== null) && note.wait !== null;
+  const warn =
+    note.wait?.kind === 'forge' &&
+    (note.wait.budget?.state === 'backoff' || note.wait.budget?.state === 'low');
+  return (
+    <FloatSlot
+      role="status"
+      aria-live="polite"
+      data-testid="sidebar-status"
+      data-state={waiting ? 'waiting' : note.stale ? 'stale' : 'idle'}
+    >
+      {waiting && note.wait ? (
+        <FloatPill className={warn ? 'text-warn' : ''}>{waitText(note.wait)}</FloatPill>
+      ) : note.stale ? (
+        <FloatPill>
+          <StaleNote
+            updatedAt={note.stale.updatedAt}
+            reason={note.stale.reason}
+            title={note.stale.detail ?? undefined}
+            onRefresh={note.refresh}
+            refreshing={note.refreshing}
+          />
+        </FloatPill>
+      ) : null}
+    </FloatSlot>
   );
 }
 

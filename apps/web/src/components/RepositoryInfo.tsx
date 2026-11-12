@@ -10,16 +10,20 @@ import type { ReactNode } from 'react';
 import {
   type RepositoryEntry,
   useForgeIndex,
+  useForgesQuery,
   useRefreshRepositoryForge,
   useRepositoryForge,
 } from '../api/forges.ts';
+import { useForgeWaitSource, useHostBudget } from '../api/wait.ts';
 import { CHECKS_STATE_WORD, projectStatusLine, REVIEW_WORD, remoteLabel } from '../lib/forge.ts';
 import { absoluteTime, relativeTime } from '../lib/time.ts';
 import { hasSuspicious } from '../lib/unicode.ts';
+import { describeStale, LOCAL_WAIT } from '../lib/wait.ts';
 import { actions, useUiStore } from '../state/ui.tsx';
 import { ChangeRequestGlyph } from './ChangeRequest.tsx';
 import { CopyButton } from './CopyButton.tsx';
 import { PAGE_SIZE, Pager, usePage } from './Pager.tsx';
+import { SkeletonLines, StaleNote, WaitNote } from './WaitNote.tsx';
 
 /**
  * Repository information on the project Overview (docs/FORGES.md "Repository information"):
@@ -75,7 +79,10 @@ export function LocalRepositoryFacts({
     <section data-testid={TEST_IDS.repoInfoLocal} className="min-w-0">
       <h2 className="mb-1.5 text-[11px] font-medium text-muted uppercase">Local</h2>
       {!entry ? (
-        <p className="text-xs text-muted">Reading the repository…</p>
+        <div aria-busy="true">
+          <SkeletonLines widths={[70, 50, 60, 40]} />
+          <WaitNote active source={LOCAL_WAIT} />
+        </div>
       ) : !info ? (
         <p className="text-xs text-danger">{entry.error ?? 'Could not read the repository.'}</p>
       ) : (
@@ -170,6 +177,11 @@ function listUrls(info: ForgeRepositoryInfo): { requests: string; issues: string
 export function ForgeRepositoryFacts({ projectId }: { projectId: string }) {
   const query = useRepositoryForge(projectId);
   const refresh = useRefreshRepositoryForge(projectId);
+  const forges = useForgesQuery().data;
+  const state = forges?.projects.find((p) => p.projectId === projectId);
+  const kind = state?.forge?.kind ?? query.data?.forge?.kind ?? 'github';
+  const waitSource = useForgeWaitSource(kind, state?.forge?.host ?? query.data?.forge?.host);
+  const budget = useHostBudget(state?.forge?.host ?? query.data?.forge?.host, kind);
   const data = query.data;
   if (!data) {
     if (query.isError) {
@@ -179,13 +191,42 @@ export function ForgeRepositoryFacts({ projectId }: { projectId: string }) {
         </section>
       );
     }
-    return null;
+    // The project is known to have a forge: hold its place with a skeleton so the facts do not
+    // push the lists down when they arrive; the message comes after the threshold (#11).
+    const hasForge =
+      !!state?.forge &&
+      state.status !== 'disabled' &&
+      state.status !== 'no-forge' &&
+      state.status !== 'ignored';
+    // Only while the query is really pending or fetching: an older daemon without the route answers
+    // `null` (a finished answer), which shows nothing, not a placeholder that never goes away.
+    if (!hasForge || !(query.isPending || query.isFetching)) return null;
+    return (
+      <section data-testid={TEST_IDS.repoInfoForge} data-status="loading" className="min-w-0">
+        <h2 className="mb-1.5 text-[11px] font-medium text-muted uppercase">Forge</h2>
+        <div aria-busy="true">
+          <SkeletonLines widths={[65, 45, 55, 35]} />
+          <WaitNote active source={waitSource} />
+        </div>
+      </section>
+    );
   }
   if (data.status === 'no-forge' || data.status === 'disabled' || data.status === 'ignored') {
     return null;
   }
   const info = data.repository;
   const noun = data.forge ? changeRequestNoun(data.forge.kind) : null;
+  const stale = info
+    ? describeStale({
+        forge: data.forge?.kind ?? null,
+        fetchedAt: data.fetchedAt,
+        message: data.message,
+        budget,
+        failed: query.isError,
+        dataUpdatedAt: query.dataUpdatedAt,
+      })
+    : null;
+  const busy = refresh.isPending || query.isFetching || data.status === 'pending';
   return (
     <section data-testid={TEST_IDS.repoInfoForge} data-status={data.status} className="min-w-0">
       <div className="mb-1.5 flex items-center gap-2">
@@ -197,9 +238,10 @@ export function ForgeRepositoryFacts({ projectId }: { projectId: string }) {
             </External>
           </span>
         )}
+        <WaitNote variant="inline" className="ml-auto truncate" active={busy} source={waitSource} />
         <button
           type="button"
-          className="od-btn ml-auto"
+          className="od-btn"
           disabled={refresh.isPending}
           onClick={() => refresh.mutate()}
           title="Ask the forge again"
@@ -274,8 +316,16 @@ export function ForgeRepositoryFacts({ projectId }: { projectId: string }) {
               <span title={absoluteTime(info.pushedAt)}>{relativeTime(info.pushedAt)}</span>
             </Row>
           )}
-          {data.message && (
-            <p className="text-[11px] text-muted">Showing older data: {data.message}</p>
+          {stale && (
+            <p className="mt-1">
+              <StaleNote
+                updatedAt={stale.updatedAt}
+                reason={stale.reason}
+                title={stale.detail ?? undefined}
+                onRefresh={() => refresh.mutate()}
+                refreshing={refresh.isPending}
+              />
+            </p>
           )}
         </dl>
       )}
@@ -437,7 +487,14 @@ export function LocalBranches({
   );
   const slice = usePage(branches ?? []);
   if (error) return <p className="py-2 text-xs text-danger">{error}</p>;
-  if (!branches) return <p className="py-2 text-xs text-muted">Reading the branches…</p>;
+  if (!branches) {
+    return (
+      <div className="py-2" aria-busy="true">
+        <SkeletonLines widths={[60, 75, 50]} />
+        <WaitNote active source={LOCAL_WAIT} />
+      </div>
+    );
+  }
   const merged = defaultBranch ? branches.filter((b) => b.merged).length : 0;
   const capped = total !== null && listed !== null && listed < total;
   return (

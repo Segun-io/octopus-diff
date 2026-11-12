@@ -153,7 +153,45 @@ const STATES: Record<string, Step> = {
     await page.keyboard.press('?');
     await page.waitForTimeout(300);
   },
+  // Loading states (#11). `wait-forge` needs the server started with MOCK_FORGE_LATENCY_MS=60000
+  // (the forge never answers); the others change the mock's forge state through its control endpoint.
+  'wait-forge': async (page) => {
+    await page.locator('[data-testid="worktree-item"][data-branch="feat/auth"]').click();
+    await page.locator('[data-testid="worktree-tab"][data-tab="request"]').click();
+    await page.locator('[data-testid="request-view"][data-status="loading"]').waitFor();
+    await page
+      .getByText(/Waiting for Git(Hub|Lab)…/)
+      .first()
+      .waitFor({ timeout: 5000 });
+  },
+  'rate-limit': async (page) => {
+    await simulate(page, 'pending=1&budget=backoff');
+    await page.locator('[data-testid="sidebar-status"][data-state="waiting"]').waitFor();
+    await page.waitForTimeout(300);
+  },
+  'rate-limit-stale': async (page) => {
+    await simulate(page, 'budget=backoff&fetchedAgoMs=180000');
+    await page.locator('[data-testid="sidebar-status"][data-state="stale"]').waitFor();
+    await page.waitForTimeout(300);
+  },
+  'stale-request': async (page) => {
+    await simulate(page, 'error=GraphQL%3A%20timeout&fetchedAgoMs=180000');
+    await page.locator('[data-testid="worktree-item"][data-branch="feat/auth"]').click();
+    await page.locator('[data-testid="worktree-tab"][data-tab="request"]').click();
+    await page.locator('[data-testid="request-view"][data-status="ok"]').waitFor();
+    await page.locator('[data-testid="stale-note"]').first().waitFor();
+    await page.waitForTimeout(300);
+  },
 };
+
+/** States that change the mock's shared forge state (each resets it when its shot is done). */
+const SIMULATED_STATES = new Set(['rate-limit', 'rate-limit-stale', 'stale-request']);
+
+/** Sets the mock's forge state (`POST /api/__mock/forge-sim`, see mock/server.ts); no query resets it. */
+async function simulate(page: Page, query: string): Promise<void> {
+  const response = await page.request.post(`${base}/api/__mock/forge-sim?${query}`);
+  if (!response.ok()) throw new Error(`forge-sim failed: ${response.status()}`);
+}
 
 async function main() {
   await mkdir(out, { recursive: true });
@@ -189,14 +227,25 @@ async function main() {
         await page.goto(base);
         await ready(page);
         try {
-          await step(page);
-        } catch (err) {
-          console.warn(`state ${state} failed on ${theme.id}: ${String(err).split('\n')[0]}`);
+          try {
+            await step(page);
+          } catch (err) {
+            console.warn(`state ${state} failed on ${theme.id}: ${String(err).split('\n')[0]}`);
+          }
+          const file = path.join(out, `${theme.id}-${size.w}-${state}.png`);
+          await page.screenshot({ path: file });
+          console.log(file, errors.length ? `errors: ${errors.join(' | ')}` : '');
+        } finally {
+          // The mock server is shared by every shot and a fresh browser context does not reset it:
+          // put the forge knobs back (also when the shot failed) so the next image shows the
+          // plain fixture, not this one's rate limit or error.
+          if (SIMULATED_STATES.has(state)) {
+            await simulate(page, '').catch((err) =>
+              console.warn(`could not reset the forge simulation: ${String(err).split('\n')[0]}`),
+            );
+          }
+          await context.close();
         }
-        const file = path.join(out, `${theme.id}-${size.w}-${state}.png`);
-        await page.screenshot({ path: file });
-        console.log(file, errors.length ? `errors: ${errors.join(' | ')}` : '');
-        await context.close();
       }
     }
   }

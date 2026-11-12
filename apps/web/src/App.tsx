@@ -37,10 +37,13 @@ import { HelpDialog } from './components/HelpDialog.tsx';
 import { Mark } from './components/Mark.tsx';
 import { OriginGroupHeader } from './components/OriginGroupHeader.tsx';
 import { Sidebar } from './components/Sidebar.tsx';
+import { SkeletonLines, StaleNote, WaitNote } from './components/WaitNote.tsx';
 import { useFaviconDot } from './lib/favicon.ts';
 import { toFileRef } from './lib/fileRef.ts';
 import { type NavEntry, repairSelection } from './lib/model.ts';
 import { useDocumentTitle } from './lib/title.ts';
+import { useDelayedFlag } from './lib/useWait.ts';
+import { LOCAL_WAIT } from './lib/wait.ts';
 import { useCommands, useKeyboardShortcuts } from './state/commands.ts';
 import { CommandsContext } from './state/commandsContext.tsx';
 import { AppModelProvider, useAppModel } from './state/model.tsx';
@@ -217,6 +220,8 @@ function EmptyState() {
 
 /** First paint before the projects list arrives: the shell's shape, nothing jumping later. */
 function LoadingSkeleton() {
+  // Named only after the threshold: a cold start that paints in 150 ms flashes no text.
+  const slow = useDelayedFlag(true);
   return (
     <div
       role="status"
@@ -226,7 +231,7 @@ function LoadingSkeleton() {
       <div className="border-r border-line bg-surface p-3">
         <div className="mb-4 flex items-center gap-2 text-faint">
           <Mark size={16} />
-          <span className="text-xs">Connecting…</span>
+          <span className="text-xs">{slow ? 'Connecting…' : ''}</span>
         </div>
         {[72, 48, 64, 40, 56].map((w, i) => (
           <div
@@ -380,15 +385,26 @@ function AppShell({ eventSourceFactory }: { eventSourceFactory?: EventSourceFact
         <div className="col-span-2">
           <ContextBar />
         </div>
-        <div className="flex min-h-0 flex-col border-r border-line bg-surface">
+        <div className="relative flex min-h-0 flex-col border-r border-line bg-surface">
           {model.projects.isError && (
-            <div
-              data-testid={TEST_IDS.errorBanner}
-              role="alert"
-              className="border-b border-line bg-raised px-2 py-1 text-xs text-danger"
-            >
-              {describeError(model.projects.error).title}: showing the last known state.
-            </div>
+            <>
+              <div
+                data-testid={TEST_IDS.errorBanner}
+                role="alert"
+                className="bg-raised px-2 py-1 text-xs text-danger"
+              >
+                {describeError(model.projects.error).title}: showing the last known state.
+              </div>
+              {projectsData && (
+                <div className="border-b border-line bg-raised px-2 pb-1">
+                  <StaleNote
+                    updatedAt={model.projects.dataUpdatedAt}
+                    onRefresh={() => void model.projects.refetch()}
+                    refreshing={model.projects.isFetching}
+                  />
+                </div>
+              )}
+            </>
           )}
           {model.inbox.isError && !model.inbox.data && (
             <div
@@ -406,9 +422,10 @@ function AppShell({ eventSourceFactory }: { eventSourceFactory?: EventSourceFact
                 {describeError(model.files.error).detail}
               </p>
             ) : !model.viewReady ? (
-              <p className="p-3 text-xs text-muted" role="status">
-                Loading files…
-              </p>
+              <div className="p-3">
+                <SkeletonLines widths={[80, 60, 70, 50, 65]} />
+                <WaitNote active source={LOCAL_WAIT} />
+              </div>
             ) : useTree ? (
               <div className="flex h-full min-h-0 flex-col">
                 <div className="min-h-0 flex-1">
@@ -441,6 +458,11 @@ function AppShell({ eventSourceFactory }: { eventSourceFactory?: EventSourceFact
               />
             )}
           </div>
+          <WaitNote
+            variant="float"
+            active={model.viewReady && (inbox ? model.inbox.isFetching : model.files.isFetching)}
+            source={LOCAL_WAIT}
+          />
         </div>
         <div className="min-h-0 min-w-0">
           <DiffPane />

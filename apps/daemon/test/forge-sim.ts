@@ -38,6 +38,8 @@ export class CountingClient implements ForgeClientLike {
   repository: Tally = { queries: 0, points: 0 };
   /** Make the next batch queries fail with this error (null: succeed). */
   fail: Error | null = null;
+  /** Holds every batch query until it resolves (a slow forge). */
+  batchGate: Promise<void> | null = null;
   /** Head branches that have no request yet (every other branch has an open one). */
   withoutRequest = new Set<string>();
   /** Numbers of the open requests the repository query lists. */
@@ -71,6 +73,7 @@ export class CountingClient implements ForgeClientLike {
     branches: readonly string[],
   ): Promise<Map<string, ChangeRequest[]>> {
     this.batch.queries += 1;
+    await this.batchGate;
     this.batch.points += estimateQueryPoints('github', 'batch', branches.length);
     if (this.fail) throw this.fail;
     return new Map(

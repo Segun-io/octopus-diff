@@ -5,6 +5,9 @@
  * Env: MOCK_PORT (default 7429), MOCK_DATASET (demo | large | empty), MOCK_INTERVAL_MS
  * (simulator period, 0 disables; default 5000), MOCK_TOKEN (require auth), MOCK_LATENCY_MS,
  * MOCK_MERGE_NOISE (0 turns off the files that came from a merge, rebase or update of main).
+ * Loading states (#11): MOCK_FORGE_LATENCY_MS / MOCK_LOCAL_LATENCY_MS (extra delay on the routes
+ * that reach a forge / on the local ones), MOCK_FORGE_SIM (comma list: `pending`, `busy`, `low`,
+ * `backoff`, `error`) and `POST /api/__mock/forge-sim` to change the forge state while it runs.
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import {
@@ -13,6 +16,7 @@ import {
   SSE_HEARTBEAT_INTERVAL_MS,
 } from '@octopus-diff/contracts';
 import { MockBackend, type MockDataset } from './backend.js';
+import type { ForgeSim } from './forges.js';
 import { createMockRouter } from './router.js';
 
 export interface MockServerOptions {
@@ -22,6 +26,11 @@ export interface MockServerOptions {
   intervalMs?: number;
   token?: string;
   latencyMs?: number;
+  /** Extra delay on the routes that reach a forge / on the local routes (`MockRouterOptions`). */
+  forgeLatencyMs?: number;
+  localLatencyMs?: number;
+  /** Starting forge state (`ForgeSim`). */
+  forgeSim?: ForgeSim;
   /** Merge noise on the demo and large datasets (`MockBackendOptions.mergeNoise`). */
   mergeNoise?: boolean;
 }
@@ -58,7 +67,10 @@ export async function startMockServer(options: MockServerOptions = {}): Promise<
   const handle = createMockRouter(backend, {
     ...(options.token ? { token: options.token } : {}),
     ...(options.latencyMs ? { latencyMs: options.latencyMs } : {}),
+    ...(options.forgeLatencyMs ? { forgeLatencyMs: options.forgeLatencyMs } : {}),
+    ...(options.localLatencyMs ? { localLatencyMs: options.localLatencyMs } : {}),
   });
+  if (options.forgeSim) backend.setForgeSim(options.forgeSim);
   const sseClients = new Set<ServerResponse>();
   let eventId = 0;
 
@@ -127,12 +139,27 @@ function envNumber(name: string, fallback: number): number {
   return Number.isFinite(value) ? value : fallback;
 }
 
+/** `MOCK_FORGE_SIM=pending,backoff,error` -> `ForgeSim`. */
+export function forgeSimFromEnv(raw: string | undefined): ForgeSim {
+  const parts = new Set((raw ?? '').split(',').map((p) => p.trim()));
+  const budget = (['backoff', 'low', 'busy'] as const).find((b) => parts.has(b));
+  return {
+    ...(parts.has('pending') ? { pending: true } : {}),
+    ...(budget ? { budget } : {}),
+    ...(parts.has('error') ? { error: 'GitHub could not be reached (simulated).' } : {}),
+    ...(parts.has('error') || budget ? { fetchedAgoMs: 3 * 60_000 } : {}),
+  };
+}
+
 export function mockServerOptionsFromEnv(): MockServerOptions {
   return {
     port: envNumber('MOCK_PORT', 7429),
     dataset: (process.env.MOCK_DATASET as MockDataset | undefined) ?? 'demo',
     intervalMs: envNumber('MOCK_INTERVAL_MS', 5000),
     latencyMs: envNumber('MOCK_LATENCY_MS', 0),
+    forgeLatencyMs: envNumber('MOCK_FORGE_LATENCY_MS', 0),
+    localLatencyMs: envNumber('MOCK_LOCAL_LATENCY_MS', 0),
+    forgeSim: forgeSimFromEnv(process.env.MOCK_FORGE_SIM),
     mergeNoise: process.env.MOCK_MERGE_NOISE !== '0',
     ...(process.env.MOCK_TOKEN ? { token: process.env.MOCK_TOKEN } : {}),
   };

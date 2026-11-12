@@ -894,7 +894,12 @@ export class ForgeService {
       return finish();
     }
     if (options.allowance) options.allowance.left -= points;
-    if (cache.status !== 'ok' && cache.status !== 'error') set('pending', null);
+    if (cache.status !== 'ok' && cache.status !== 'error') {
+      set('pending', null);
+      // The forge is known now and the lookup starts: tell the clients at once, so a slow first
+      // lookup is named ("Waiting for GitHub...") while it runs, not only after it finished.
+      this.#o.hub.emit({ type: 'forge.updated', projectIds: [projectId] });
+    }
     cache.lastFetch = now;
     this.#budget.spend(forge.kind, forge.host, points);
     try {

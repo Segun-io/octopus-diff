@@ -3,11 +3,14 @@ import { useState } from 'react';
 import { useForgeIndex } from '../../api/forges.ts';
 import { describeError } from '../../api/queries.ts';
 import { useChangeRequestDetail, useRefreshChangeRequest } from '../../api/request.ts';
+import { useForgeWaitSource, useHostBudget } from '../../api/wait.ts';
 import { LOOK_TONE, LOOK_WORD, lookOf } from '../../lib/forge.ts';
 import { checksTone, describeChecks } from '../../lib/request.ts';
 import { absoluteTime, relativeTime } from '../../lib/time.ts';
+import { describeStale } from '../../lib/wait.ts';
 import { ChangeRequestGlyph } from '../ChangeRequest.tsx';
 import { SegmentedTabs, tabPanelProps } from '../Tabs.tsx';
+import { SkeletonLines, StaleNote, WaitNote } from '../WaitNote.tsx';
 import { Files } from './Files.tsx';
 import { Banner, ExternalLink, FileDiffGlyph, StatusDot } from './parts.tsx';
 import { Summary } from './Summary.tsx';
@@ -32,6 +35,8 @@ export function RequestView({ worktreeId }: { worktreeId: string }) {
   const [tab, setTab] = useState<RequestTab>('summary');
   const query = useChangeRequestDetail(worktreeId, batch, { live: true });
   const refresh = useRefreshChangeRequest(worktreeId);
+  const waitSource = useForgeWaitSource(batch?.kind ?? 'github', entry?.project.forge?.host);
+  const budget = useHostBudget(entry?.project.forge?.host, batch?.kind);
   if (!entry || !batch) {
     return (
       <div
@@ -55,6 +60,18 @@ export function RequestView({ worktreeId }: { worktreeId: string }) {
   const additions = detail?.additions ?? batch.additions ?? null;
   const deletions = detail?.deletions ?? batch.deletions ?? null;
   const createdAt = detail?.createdAt ?? batch.createdAt ?? null;
+  // Old for a real reason: the host holds lookups back, the last fetch failed, or the browser's
+  // own refetch failed with data cached (#11). Quiet otherwise.
+  const stale = detail
+    ? describeStale({
+        forge: batch.kind,
+        fetchedAt: response?.fetchedAt ?? null,
+        message: response?.message ?? null,
+        budget,
+        failed: query.isError,
+        dataUpdatedAt: query.dataUpdatedAt,
+      })
+    : null;
   return (
     <div
       data-testid={TEST_IDS.requestView}
@@ -77,9 +94,15 @@ export function RequestView({ worktreeId }: { worktreeId: string }) {
             {batch.number} <span className="text-faint">↗</span>
           </ExternalLink>
           <span className={LOOK_TONE[look]}>{LOOK_WORD[look]}</span>
+          <WaitNote
+            variant="inline"
+            className="ml-auto truncate"
+            active={!!detail && (refresh.isPending || query.isFetching)}
+            source={waitSource}
+          />
           <button
             type="button"
-            className="od-btn ml-auto"
+            className="od-btn"
             disabled={refresh.isPending}
             onClick={() => refresh.mutate()}
             title={`Ask the forge again${response?.fetchedAt ? `. Loaded ${relativeTime(response.fetchedAt)}` : ''}`}
@@ -165,9 +188,17 @@ export function RequestView({ worktreeId }: { worktreeId: string }) {
         )}
       </nav>
 
-      {detail && response?.message && (
+      {stale && (
         <div className="px-4">
-          <Banner>Showing the last loaded data: {response.message}</Banner>
+          <Banner>
+            <StaleNote
+              updatedAt={stale.updatedAt}
+              reason={stale.reason}
+              title={stale.detail ?? undefined}
+              onRefresh={() => refresh.mutate()}
+              refreshing={refresh.isPending}
+            />
+          </Banner>
         </div>
       )}
 
@@ -188,10 +219,9 @@ export function RequestView({ worktreeId }: { worktreeId: string }) {
           )}
         </div>
       ) : status === 'loading' ? (
-        <div role="status" aria-label={`Loading the ${noun.long}`} className="px-4 py-3">
-          {[70, 45, 60].map((w) => (
-            <div key={w} className="mb-2 h-3 rounded-sm bg-raised" style={{ width: `${w}%` }} />
-          ))}
+        <div className="px-4 py-3" aria-busy="true">
+          <SkeletonLines widths={[70, 45, 60]} />
+          <WaitNote active source={waitSource} />
         </div>
       ) : (
         <div role="alert" className="px-4 py-3 text-xs">
