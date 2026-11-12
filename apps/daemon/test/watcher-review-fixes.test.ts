@@ -421,6 +421,16 @@ describe('F5: build-output directories', { timeout: 20_000 }, () => {
         for (const file of files) await write(file);
         await eventually(() => files.every((f) => landed(from, f)), 10_000);
         await drained();
+        // A replayed event can still be reading ignore files (`tools/.gitignore` for
+        // `tools/build/run.sh`, `#resolveDeferred`) when its barrier has already come back, and its
+        // refresh starts only after that read plus its own debounce. Wait until the worktree has been
+        // marked dirty no more for three debounces, so none of it can land inside a negative probe.
+        const deadline = Date.now() + 10_000;
+        for (;;) {
+          const seen = rec.dirty.length;
+          await sleep(DEBOUNCE_MS * 3);
+          if (rec.dirty.length === seen || Date.now() > deadline) break;
+        }
       },
       /**
        * Does a write to `rel` mark the main worktree dirty? A negative answer (`wantDirty` false)
