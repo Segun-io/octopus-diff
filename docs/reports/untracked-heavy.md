@@ -251,3 +251,16 @@ Verification (this machine, branch head):
 - Default bench (30 × 3, UI, committed): every budget passes: cold paint 143 ms, warm 64 ms, startup spawns 4.5,
   idle CPU 0.27 %, edit → SSE p95 25 ms, → UI 41 ms, burst diff p95 38 ms, traffic per edit 1421 bytes, 0 projects
   requests per edit.
+
+## Greptile, second pass (PR #91)
+
+- **A broad line hid a listed nested repository** (DECISIONS #326): listed nested repositories now reach the
+  ignore-line check as directory entries (`a/node_modules/`), and tracked gitlinks count as directories
+  (`ls-files -z --stage`). Tests: real-git `check-ignore` for the repro (failing first: `a/node_modules/` was
+  ignored), a tracked `vendor/node_modules` repository, names with spaces and `[`/`#`; a unit table. Mutations
+  killed: the `/` dropped for directory entries; gitlinks read as files.
+- **The bench's summary table ignored `--no-incremental`** (#327): `summaryRoles(…, incremental)` creates its core
+  with the run's setting and reports each edit's refresh mode. Unit test (`e2e/support/summary-roles.test.ts`):
+  `incremental` true gives incremental edits, false gives full ones (folding-aware); the mutation dropping the
+  setting is killed. Not re-run as a large `--no-incremental` bench (its stale-index edits take about two minutes
+  each, #40's A/B); the unit test is the check.

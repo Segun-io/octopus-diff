@@ -3800,3 +3800,16 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      then 26 in `build/`. Directory counts drop the same paths before the biggest ones are picked; a directory left
      with none is not reported. The capped fuzz checks after every step that directory counts never add up to more
      than the total and that each equals the untracked rows an uncapped list has under it.
+326. **A broad ignore line never covers a listed nested repository or a tracked one (Greptile on PR #91; amends
+     #317).** The check whether `name/` or `/<path>/` covers listed or tracked entries looked at the directories
+     above each entry only, and listed nested repositories reached it without their trailing `/`: with omitted files
+     in `b/node_modules/` and a listed nested repository at `a/node_modules/`, the notice offered `node_modules/`,
+     which ignores both. Listed directory entries now keep their `/` (so the pattern matches them by their own name,
+     as git does), and the tracked scan reads modes (`ls-files -z --stage`, same subcommand) so a gitlink counts as a
+     directory too. Real-git `check-ignore --no-index` tests: the repro, a tracked repository named `node_modules`,
+     names with spaces and pattern characters; a unit table of directory entries.
+327. **The bench's per-role summary table uses the run's mode (Greptile on PR #91).** `summaryRoles` created its
+     git-core with the default settings, so a `--no-incremental` run reported incremental timings next to a daemon
+     with every refresh in full. It now takes the run's `incremental` setting, records the refresh mode of each edit
+     (shown in the table) and the heading says when the run was `--no-incremental`. Unit test in `e2e/support`
+     (both settings; on a case-folding filesystem both are full by design).
