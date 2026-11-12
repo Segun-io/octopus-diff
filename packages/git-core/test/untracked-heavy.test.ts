@@ -192,6 +192,36 @@ describe('summaries and lists above the cap (#43)', () => {
     expect(diff.patch).toContain('+x 0 0');
   });
 
+  it('listed files keep the rows and patches they had without a cap, byte for byte', async () => {
+    const repo = heavyRepo('identical');
+    const wt = locator(repo);
+    // Both above `maxUntrackedFiles` (contents not read, as with 30k files and the defaults);
+    // only the first omits anything.
+    const capped = createGitCore(
+      fx.coreOptions({ maxListedUntracked: CAP, maxUntrackedFiles: 50 }),
+    );
+    const uncapped = createGitCore(
+      fx.coreOptions({ maxListedUntracked: 10_000, maxUntrackedFiles: 50 }),
+    );
+    try {
+      for (const scope of [{ kind: 'working' as const }, { kind: 'review' as const }]) {
+        const got = await listFiles(capped, wt, scope);
+        const all = await listFiles(uncapped, wt, scope);
+        expect(got.map((f) => f.path)).toEqual(['a.txt', 'src/new.ts']);
+        expect(got).toEqual(all.filter((f) => !f.path.startsWith('build/')));
+        for (const file of got) {
+          const a = await capped.getFileDiff(wt, scope, { path: file.path });
+          const b = await uncapped.getFileDiff(wt, scope, { path: file.path });
+          expect(a).toEqual(b);
+          expect(a.patchHash).toBe(file.patchHash);
+        }
+      }
+    } finally {
+      await capped.dispose();
+      await uncapped.dispose();
+    }
+  });
+
   it('below the cap nothing changes: no field, same state hash as without the option', async () => {
     const repo = fx.repo('below', { files: { 'a.txt': 'a\n' } });
     for (const i of range(CAP)) fx.write(path.join(repo, 'new', `n${i}.txt`), `${i}\n`);

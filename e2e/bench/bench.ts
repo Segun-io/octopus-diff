@@ -69,6 +69,7 @@ import {
   webUiProblem,
 } from '../support/env.js';
 import { type BurstResult, diffDuringBurst } from './burst.js';
+import { type RoleSummaryTimes, summaryRoles } from './summary-roles.js';
 import { gitSpawns, readSpawns, type SpawnStats, spawnStats, within } from './trace.js';
 
 const { values: args } = parseArgs({
@@ -1091,6 +1092,22 @@ async function main() {
       args.strict,
     );
     const failed = budgets.filter((b) => b.status === 'fail');
+    // #43: each large worktree's summary through git-core alone, once the daemon is stopped.
+    let summaryByRole: RoleSummaryTimes[] | null = null;
+    if (LAYOUT !== 'small') {
+      if (daemon) await stopChild(daemon.child);
+      daemon = null;
+      log('timing full and incremental summaries per worktree role (git-core, daemon stopped)…');
+      summaryByRole = await summaryRoles(
+        [...setup.roles].map(([path, role]) => ({ path, role })),
+        setup.gitVars,
+      );
+      for (const r of summaryByRole) {
+        log(
+          `summary ${r.role}: cold ${r.coldMs} ms, warm ${r.warmMs.join(' / ')} ms, edit ${r.editMs.join(' / ')} ms, list ${r.listRows} rows ${bytes(r.listBytes)}${r.omitted ? `, ${r.omitted} untracked omitted` : ''}`,
+        );
+      }
+    }
     const result = {
       generatedAt: new Date().toISOString(),
       incremental: !args['no-incremental'],
@@ -1155,6 +1172,7 @@ async function main() {
           }
         : null,
       payloads,
+      summaryByRole,
       afterFetch:
         AFTER_FETCH && setup.origins
           ? {
@@ -1197,6 +1215,24 @@ async function main() {
     if (daemon) await stopChild(daemon.child);
     await setup.cleanup();
   }
+}
+
+/** The #43 table: summary cost per worktree role (large layouts only). */
+function summaryRolesSection(rows: RoleSummaryTimes[] | null | undefined): string {
+  if (!rows || rows.length === 0) return '';
+  const lines = rows.map(
+    (r) =>
+      `| ${r.role} | ${r.untracked}${r.omitted ? ` (${r.omitted} not listed)` : ''} | ${fmt(r.coldMs)} | ${r.warmMs.map((v) => fmt(v)).join(' / ')} | ${r.editMs.map((v) => fmt(v)).join(' / ')} | ${r.listRows} rows, ${bytes(r.listBytes)} |`,
+  );
+  return `
+## Summary by worktree role (#43)
+
+git-core in the bench process after the daemon stopped (nothing else running): a full summary with a new git-core (*cold*, as at startup), full summaries with a kept state (*warm*: reconciliation, focus, polls, git-dir events), and incremental ones after a one-line append to \`README.md\` (*edit*); then the working list of the last summary as JSON.
+
+| Role | Untracked files | Cold | Warm (3) | Edit (3) | Working list |
+|---|---|---|---|---|---|
+${lines.join('\n')}
+`;
 }
 
 function fmt(value: number | null | undefined, unit = ' ms'): string {
@@ -1420,7 +1456,7 @@ ${roleRows}
 | Request | Raw | Gzipped (computed) | Sent when asked for gzip | First / warm request |
 |---|---|---|---|---|
 ${payloadRows}
-
+${summaryRolesSection(r.summaryByRole)}
 ## Baseline: the 2026-11-11 profiling pass (issue #24)
 
 Static reference from the roadmap issue (12-core WSL2, Node 26, git 2.53), not measured by this run:
