@@ -4,7 +4,7 @@ import {
   ForgeRepositoryInfoSchema,
 } from '@octopus-diff/contracts';
 import { describe, expect, it } from 'vitest';
-import { ForgeCli, ForgeClient, type ForgeQueryCost } from '../src/index.js';
+import { estimateQueryPoints, ForgeCli, ForgeClient, type ForgeQueryCost } from '../src/index.js';
 
 /**
  * Talks to the real github.com / gitlab.com through the installed CLIs. Opt-in only
@@ -35,6 +35,23 @@ describe.runIf(live)('live forges', () => {
     expect(batch.length).toBeGreaterThan(0);
     for (const c of batch) expect(c.cost).toBeLessThanOrEqual(1);
   }, 30_000);
+
+  it('a 14- and a 20-branch batch cost what the arithmetic says (#8: 2 points, not 1)', async () => {
+    const status = await client.probe('github');
+    if (status.auth !== 'authenticated') return;
+    for (const count of [1, 13, 14, 20]) {
+      const before = costs.length;
+      await client.fetchChangeRequests(
+        { kind: 'github', host: 'github.com', repository: 'cli/cli' },
+        Array.from({ length: count }, (_, i) => `octopus-diff-no-such-branch-${i}`),
+      );
+      const seen = costs.slice(before).filter((c) => c.operation === 'OctopusDiffPullRequests');
+      expect(
+        seen.map((c) => c.cost),
+        `${count} branches`,
+      ).toEqual([estimateQueryPoints('github', 'batch', count)]);
+    }
+  }, 60_000);
 
   it('runs the repository, detail and conversation queries on pingdotgg/t3code at 1 point each', async () => {
     const status = await client.probe('github');
