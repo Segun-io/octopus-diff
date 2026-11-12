@@ -85,7 +85,7 @@ import {
 /** The agent actions of `MockBackend.mutate`. */
 export type MutateAction = 'edit' | 'add' | 'revert' | 'delete' | 'delete-untracked' | 'commit';
 
-export type MockDataset = 'demo' | 'large' | 'empty';
+export type MockDataset = 'demo' | 'large' | 'empty' | 'gallery';
 
 export interface MockBackendOptions {
   dataset?: MockDataset;
@@ -237,6 +237,7 @@ export class MockBackend {
     const dataset = options.dataset ?? 'demo';
     if (dataset === 'demo') this.buildDemo();
     else if (dataset === 'large') this.buildLarge();
+    else if (dataset === 'gallery') this.buildGallery();
   }
 
   // --- events ---------------------------------------------------------------------------
@@ -594,6 +595,127 @@ export class MockBackend {
     ] as const) {
       this.overrides.set(reviewTargetKey(target), { target, enabled: false, updatedAt: isoAt(0) });
     }
+  }
+
+  /**
+   * Every look a sidebar row has (#14, `MOCK_DATASET=gallery`): 0 / 1 / 9 / 99 / 1000 unreviewed
+   * files, long branch and repository names, conflicts, an operation in progress, ahead / behind,
+   * deleted files, reviewed, merged, closed, open and draft requests, review off, missing, failed,
+   * detached and a worktree that changed a moment ago. A design aid for `pnpm shots`, not a test
+   * fixture: nothing else reads it.
+   */
+  private buildGallery(): void {
+    const code: ScanRoot = {
+      id: hash16('/home/dev/code'),
+      path: '/home/dev/code',
+      depth: 3,
+      addedAt: isoAt(-2 * 86_400_000),
+      lastScannedAt: isoAt(-3_600_000),
+      projectCount: 4,
+    };
+    this.scanRoots.push(code);
+    const api = this.makeProject('octopus-api', { scanRootId: code.id });
+    const longRepo = this.makeProject(
+      'platform-services-monorepo-with-a-very-long-repository-name',
+      { scanRootId: code.id },
+    );
+    const web = this.makeProject('web', { scanRootId: code.id });
+    const legacy = this.makeProject('legacy-tool', { scanRootId: code.id });
+    const files = (n: number, status: MockFile['status'] = 'modified', prefix = 'src/mod') =>
+      Array.from({ length: n }, (_, i) =>
+        this.file(`${prefix}${String(i).padStart(4, '0')}.ts`, status, {
+          lines: 4,
+          staged: false,
+          unstaged: true,
+        }),
+      );
+    let minutes = 0;
+    let index = 0;
+    const AGES_MIN = [
+      0, 1, 4, 11, 38, 90, 190, 420, 900, 1500, 2400, 4000, 7000, 12000, 20000, 33000, 50000, 90000,
+      140000, 200000, 260000, 400000, 600000,
+    ];
+    const add = (
+      mp: MockProject,
+      branch: string | null,
+      opts: Omit<Parameters<MockBackend['makeWorktree']>[1], 'branch'> & {
+        files?: MockFile[];
+        reviewed?: boolean;
+      } = {},
+    ): MockWorktree => {
+      const { files: list = [], reviewed = false, ...rest } = opts;
+      minutes += 7;
+      const mw = this.makeWorktree(mp, { activeMinutesAgo: minutes, ...rest, branch });
+      // Ages are read against the real clock (the mock's own clock is a fixed day): a spread
+      // from "a moment ago" to weeks, in the order the rows are added.
+      mw.activityAt = new Date(
+        Date.now() -
+          (rest.activeMinutesAgo ?? AGES_MIN[Math.min(index, AGES_MIN.length - 1)] ?? 0) * 60_000,
+      ).toISOString();
+      index += 1;
+      mw.files = list;
+      if (reviewed) {
+        for (const f of this.changedFiles(mp, mw, { kind: 'working' })) {
+          this.reviews.add(this.reviewKey(mp.project.id, 'working', f, f.patchHash));
+        }
+      }
+      return mw;
+    };
+    add(api, 'agent/live-edit', { activeMinutesAgo: 0, files: files(4), ahead: 1, behind: 0 });
+    add(api, 'feat/one-thousand-files', { files: files(1000), ahead: 31, behind: 2 });
+    add(api, 'feat/ninety-nine', { files: files(99), ahead: 4, behind: 0 });
+    add(api, 'feat/nine', { files: files(9), ahead: 2, behind: 1 });
+    add(api, 'feat/one', { files: files(1), ahead: 1, behind: 0 });
+    add(api, 'chore/nothing-to-review', { ahead: 0, behind: 0 });
+    add(api, 'feat/reviewed', {
+      files: files(3, 'modified', 'src/reviewed'),
+      reviewed: true,
+      ahead: 2,
+      behind: 0,
+    });
+    add(
+      api,
+      'agent/refactor-the-authentication-middleware-and-session-handling-for-oauth-device-flow',
+      { files: files(5), ahead: 6, behind: 3 },
+    );
+    add(longRepo, 'main', {
+      isMain: true,
+      upstream: 'origin/main',
+      files: files(2),
+      ahead: 3,
+      behind: 12,
+    });
+    add(longRepo, 'fix/conflicts', {
+      files: [
+        ...files(2),
+        ...['a', 'b', 'c'].map((n) =>
+          this.file(`src/conflict-${n}.ts`, 'conflicted', { kind: 'conflict', staged: false }),
+        ),
+      ],
+      ahead: 2,
+      behind: 4,
+    });
+    add(web, 'feat/rebase-in-progress', { inProgress: 'rebase', files: files(2), ahead: 3 });
+    add(web, 'feat/far-behind', { files: files(5), ahead: 12, behind: 134 });
+    add(web, 'agent/deleted-files', {
+      files: [...files(3), ...files(2, 'deleted', 'src/gone')],
+      ahead: 1,
+    });
+    add(web, 'feat/pr-open', { files: files(6), ahead: 3 });
+    add(web, 'feat/pr-draft', { files: files(2), ahead: 1 });
+    add(web, 'feat/pr-changes-requested', { ahead: 5 });
+    add(web, 'feat/pr-merged', { ahead: 0 });
+    add(web, 'feat/pr-closed', { ahead: 0 });
+    add(web, null, { path: '/home/dev/.t3/worktrees/web/bisect', files: files(1) });
+    add(legacy, 'feat/review-off', { files: files(4), ahead: 1 });
+    add(legacy, 'old-experiment', { missing: true, locked: true });
+    add(legacy, 'broken/status', { error: 'git status timed out after 10000 ms' });
+    const target = {
+      kind: 'branch',
+      projectId: legacy.project.id,
+      branch: 'feat/review-off',
+    } as const;
+    this.overrides.set(reviewTargetKey(target), { target, enabled: false, updatedAt: isoAt(0) });
   }
 
   private buildLarge(): void {
@@ -983,7 +1105,13 @@ export class MockBackend {
 
   /** Mock forge data (mock/forges.ts). */
   forges(): ForgesResponse {
-    return mockForges(this.listProjects(), this.settings, new Date().toISOString(), this.forgeSim);
+    return mockForges(
+      this.listProjects(),
+      this.settings,
+      new Date().toISOString(),
+      this.forgeSim,
+      this.options.dataset === 'gallery',
+    );
   }
 
   /** What the forge side reports (pending lookups, a held-back budget, a failed fetch): #11. */

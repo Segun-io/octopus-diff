@@ -3088,9 +3088,64 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      ≈ 100 rows) shows every row of the small fixtures, so older tests are unaffected; a test that is about the window
      calls `setSidebarLayout({ viewport })` before rendering and `scrollSidebarTo(el, top)` to scroll.
 
+## Sidebar: row layout, states and statuses (session, 2026-11-12; roadmap #14, step 16)
+
+249. **A row is two lines.** Line 1: the state indicator, the branch (truncates, `title` = full name), the `default`
+     chip, and the status slot at the right. Line 2: the repository (glyph under the indicator, name truncating at 72%
+     of the line, `title` = full name), then ahead / behind, files, the "N deleted" chip, the request chip, and the age
+     at the far end. Line 2 wraps (the repository, facts and chips wrap; the age never does), so a crowded row at
+     200 px grows to a third line instead of clipping a fact. Rows still carry no height of their own: the virtual
+     list measures them (#246). `row-branch` and `row-age` are new test ids; `worktree-item`, `row-repo`,
+     `deleted-chip`, `review-off-badge`, `change-request-chip` and every `data-*` attribute are unchanged. The old
+     third line (files, `+a −d`, source chip) is gone from the row: files appear only when no pill counts them, the
+     lines and the source live in the hover card and the context bar. The source chip and the in-progress chip are
+     left out of the row's chip list (`RowChips compact`; the status slot says the operation).
+250. **Statuses are `rowIndicator(row)`** (`lib/model.ts`), one kind per look: `missing`, `error`, `loading`,
+     `conflicts`, `operation`, `merged`, `closed`, `reviewOff`, `review` (own unreviewed files), `changed` (review
+     state not computed yet), `request` (open, nothing new), `reviewed`, `clean`, in that priority, each with a
+     sentence (`3 unreviewed files to review`, `request merged`, `rebase in progress`...). It sets `data-indicator`
+     on the row, the tooltip of the indicator and the screen-reader sentence. **"clean" is never a word.** A
+     reviewed worktree gets a faint tick and a clean one a faint dot: informative marks, no text on the row (the
+     hover card says "reviewed" / "no changes"). This revisits #244 only in that the indicator makes "reviewed"
+     visible again as a mark; the words stay off the row.
+251. **Counts stop at `99+`** (`countLabel`, `COUNT_CLAMP`): the pill and nothing else; the exact number is its
+     tooltip (`1000 unreviewed`; the e2e helper `unreviewedBadge` selects `[title$=" unreviewed"]`, so the format stays), `data-unreviewed` and the hover card. Merge noise is never counted: the pill
+     is `row.unreviewed` = `unreviewedOwnFiles ?? unreviewedFiles` as in #244, and a test feeds a summary with 17
+     base files to check it.
+252. **The indicator is a shape per kind, colour second** (12 px SVG, `aria-hidden`): filled accent dot = unreviewed
+     own files; accent ring = changes not yet computed; triangle (danger = conflicts, warn = rebase / merge / ...) =
+     blocked; cross in a circle = missing or error; the request glyphs (open / merged / closed) for requests; dashed
+     ring = review off; tick = reviewed; three dots = loading; a faint dot = clean. A request chip on line 2 repeats
+     the glyph with its number: the indicator says the state, the chip names the request.
+253. **Accessible name = the button's own content, no `aria-label`.** Branch, then (after the visual lines) an
+     `sr-only` sentence (`data-testid="row-status-text"`: the indicator sentence, `, review off` when the review is off
+     under another status, `, hidden`), the repository and the facts that are symbols have words (`2 ahead, 1
+     behind`). The visual status slot, the age and every glyph are `aria-hidden`, so nothing is read twice. An
+     `aria-label` would have hidden the repository and the chips from a screen reader.
+254. **Actions by state.** Idle: nothing extra. Hover or focus inside the row (the row button or its action): the
+     Hide / Show again button fades in over the end of line 2 (absolute, a gradient in the row's own background, so
+     the age and chips under it stay readable and nothing shifts; hover and focus use the same class pair). Selected:
+     a filled row (`aria-current`), action as above. Hidden section: the same row, dimmed, with `Show again`. Blocked
+     work has no action (it cannot be hidden). Right-click or the menu key still opens the full menu. The action
+     is a sibling of the row button, in the tab order right after it. No `⋯`.
+255. **Active with a recent change shows `now`.** `RowAge` (`shortAge`: `now`, `7m`, `3h`, `2d`, `5w`, `8mo`, `2y`)
+     reads `activityAt`; inside `RECENT_MS` (2 minutes) it is accent-coloured with a small static dot
+     (`data-recent="true"`). **Nothing animates**, keeping PLAN §4.2's "no activity pulse". The age is its own leaf
+     on a shared 30 s clock (`lib/ticker.ts`, one interval for the page, stopped with the last subscriber), so the
+     tick re-renders the ages, never the memoised rows.
+256. **Variants gallery.** The mock gets `MOCK_DATASET=gallery` (`mock/backend.ts buildGallery`, 22 worktrees: 0 / 1 /
+     9 / 99 / 1000 unreviewed files, long branch and repository names, conflicts, a rebase in progress, ahead /
+     behind, deleted files, reviewed, open / draft / changes-requested / merged / closed requests, review off,
+     missing, failed, detached, a change from a moment ago; ages relative to the real clock, no simulator tick) and
+     `scripts/shots.ts` the states `sidebar-gallery`, `-narrow` (200 px), `-states` (selected, focused, hovered)
+     and `-hidden`, each a screenshot of the sidebar alone in a tall viewport. `forges.ts` takes the look of a request
+     from the branch name (`pr-merged`, ...) for that dataset only. The row tests run against the same dataset, so
+     the pictures and the tests cannot drift apart. A row's render count is tested with a spy on `rowIndicator`
+     (a React Profiler fires whenever its own element is re-created, which is what a parent re-render does).
+
 ## Event deltas: the worktree's row and changed paths in `worktree.changed` (session, 2026-11-12; roadmap #51, step 22)
 
-249. **Contract (additive).** `worktree.changed` gains optional `worktree`, `summary`, `error` and `review` (the
+257. **Contract (additive).** `worktree.changed` gains optional `worktree`, `summary`, `error` and `review` (the
      worktree's `WorktreeListItem` exactly as `GET /api/projects` now holds it: the summary with its `review`, the
      effective review policy) and `paths` (`WorktreeChangedPaths`: `scope`, `files: {path, rawPath?, patchHash}[]`,
      `total`, `truncated`). The row rather than the bare summary: a checkout changes `worktree.branch` / `headSha`
@@ -3104,7 +3159,7 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      bytes: a 2000-path worktree's event stays about 1.5 KB). `GET /api/inbox` gains `worktreeIds` (comma-separated
      ids, deduplicated, at most `INBOX_WORKTREES_MAX` = 200; unknown ids ignored; within `projectIds` when both are
      given), and `ApiClient.inbox` passes it.
-250. **Daemon: where `paths` comes from, without a git process.** At the announcement (`#cachedPaths`, after the
+258. **Daemon: where `paths` comes from, without a git process.** At the announcement (`#cachedPaths`, after the
      summary, the review state and the activity snapshot): an empty `working` list when the summary counts no changed
      file; else the `working` list if `#filesCache` holds it for this `stateHash` and the same attributes stamp (two
      `stat`s); else the review state's list (`{kind:'review', base}`), which `#computeReview` lists *before* the
@@ -3114,18 +3169,18 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      treats it as a shortcut for that scope only. The spawn-wrapper test (`event-deltas.real-git.test.ts`) pins an edit
      to the counts measured on main with the same test (7 / 6 / 7 processes for three appends, identical over 3 runs);
      adding a `working` listing makes it fail (mutation-checked).
-251. **Daemon: the event is checked, the replay is slim.** The full event is parsed with
+259. **Daemon: the event is checked, the replay is slim.** The full event is parsed with
      `WorktreeChangedEventSchema` before it is sent: a client drops an event its schema rejects, so a field it would
      reject (a path the list schema refuses) costs the delta, not the event (the slim event goes out instead, logged
      at debug). `EventHub.emit(event, replay)` keeps the slim form in the `Last-Event-ID` buffer: a reconnecting client
      refetches everything after its second `hello` anyway, and the buffer (1000 events) would otherwise hold up to
      1000 rows and path lists (about 1.5 KB each for a few files, up to about 30 KB at the caps). Sizes measured from
      the test fixtures: a row is about 1 KB, a path entry 60-120 bytes.
-252. **Daemon: `inbox(..., worktreeIds)`.** Only the named worktrees are candidates, within `projectIds` when both
+260. **Daemon: `inbox(..., worktreeIds)`.** Only the named worktrees are candidates, within `projectIds` when both
      are given; unknown ids match nothing; the single-flight key includes the sorted ids; the bounded wait for first
      summaries covers only projects that hold a named worktree. Validation is the contract's (`IdSchema`, at most 200,
      deduplicated): `worktreeIds=nope` is a 400.
-253. **Web: rows go into the projects list, newest wins.** `api/deltas.ts`: `applyRow` replaces the worktree's row in
+261. **Web: rows go into the projects list, newest wins.** `api/deltas.ts`: `applyRow` replaces the worktree's row in
      the cached `['projects']` list (a new object for that project only; React Query's structural sharing keeps the
      rest). A row older than the cached one (`summary.updatedAt`, the daemon's compute time) is dropped (`stale`).
      A worktree the cached list does not have (no list yet, or added or removed between the event and the apply) is
@@ -3134,7 +3189,7 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      any projects answer (`keepNewerRows`, wrapped into the projects query function by `projectsQueryOptions`). The
      cached-hash skip (`cachedStateHash === event.stateHash`) is unchanged. A reconnect's `hello` still invalidates
      everything, and replayed events carry no delta.
-254. **Web: the inbox rows come from the daemon.** The client-side reconstruction from `/files` (`patchInbox`,
+262. **Web: the inbox rows come from the daemon.** The client-side reconstruction from `/files` (`patchInbox`,
      DECISIONS P6, and its `INBOX_PATCH_MAX_WORKTREES` = 8) is removed. For delta events the inbox queries on screen
      ask `GET /api/inbox?scope=<their scope>&worktreeIds=<the changed ones>` (one request per scope on screen, up to
      `INBOX_WORKTREES_MAX` ids; above that a full refetch) and replace those rows (a named worktree without a row
@@ -3144,7 +3199,7 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      and worktree). **Older daemons** (no `worktree`/`summary` on the event): the projects list and the whole inbox
      are refetched, the old invalidation; that costs an old daemon more bytes than the removed patch did, with the
      same data on screen. Feature detection is per event, so it needs no version check.
-255. **Web: the open worktree's lists.** For a delta worktree its file lists are invalidated (the ones on screen
+263. **Web: the open worktree's lists.** For a delta worktree its file lists are invalidated (the ones on screen
      refetch: one request each, as before). A diff is refetched only when its own file moved: at once when the event's
      `paths` are for the diff's (resolved) scope and say another patch or no entry; otherwise once the refetched file
      list of the same view scope (or the worktree's inbox row in it) is current for the latest `stateHash`, by
@@ -3154,13 +3209,13 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      the default branch, which relabels merge-noise origins (#33) without changing any `patchHash`, so a skip could
      leave stale `origin` labels on screen. A follow-up could put `origin` per path into `paths`. Selection and
      scroll: nothing selection-related changed; the open diff simply keeps its data more often.
-256. **Bench: per-edit traffic budgets.** The refresh loop (Inbox view, an append in a different worktree each time)
+264. **Bench: per-edit traffic budgets.** The refresh loop (Inbox view, an append in a different worktree each time)
      records every finished `/api/*` request of the page with `request.sizes()` (body + headers on the wire, gzip
      included) and judges two new budgets on the small layout: `editTraffic` (worst edit under 100 KB) and
      `editProjects` (`/api/projects` requests per edit, worst edit, below 1). The primary proofs are the request-count
      tests (`apps/web/test/event-deltas.test.ts`, `app.test.tsx` "applies the event delta", e2e
      `04-live-updates` "an edit costs no /api/projects …"); the bench is the end-to-end number.
-257. **Daemon: a first review state computed for an announcement rides on it, not on `review.ready`.** The first
+265. **Daemon: a first review state computed for an announcement rides on it, not on `review.ready`.** The first
      bench run with the new budgets measured 1 `/api/projects` refetch (10 KB at 30 × 3) on 12 of 15 edits: the
      first edit of a worktree after startup computes its first review state (`#reviewWanted`), which noted a
      `review.ready` for the project 50 ms after the `worktree.changed`, and every client refetched the projects list
@@ -3169,7 +3224,7 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      (same state hash) or fails. A first review state reached any other way (an opened project, a request) still sends
      `review.ready`. Older clients refetch the projects list on every `worktree.changed` anyway, so they see it too.
      Mutation-checked in `event-deltas.real-git.test.ts` (no `review.ready` after the first edits).
-258. **Web: bulk review expects the state of the files it acts on.** `state/model.tsx`'s `stateHashes` (the
+266. **Web: bulk review expects the state of the files it acts on.** `state/model.tsx`'s `stateHashes` (the
      `expectedStateHashes` of a bulk request; the daemon skips a worktree that moved on) used to prefer the sidebar's
      summary, then the inbox row. Before #51 both refetched together after an edit. Now the sidebar row is applied
      from the event at once, while the inbox row or file list on screen refetches. Sending the sidebar's newer hash with

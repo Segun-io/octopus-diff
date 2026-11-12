@@ -111,18 +111,21 @@ References to read (do not fork):
 
 Three-pane layout, dark and light themes:
 
-1. **Sidebar** (DECISIONS #241-#248, which supersede "UX round 4"). One **flat, virtualised list** of the worktrees of
-   every folder the filter lets through: pinned first, then most recent activity first (`WorktreeSummary.activityAt`,
-   DECISIONS #124). No Inbox entry, no folder or project headers, no On review / Hidden split. Each row names its
-   repository (a small repo label above the branch) and says only what is informative: `N conflicts`, `N commits ·` and
-   the unreviewed pill (own files only, `unreviewedOwnFiles`; merge noise never counts), an open request
-   (`#42 · checks ✓`), `N deleted`, `review off`, `merged`, `closed`, `missing`, `error`. A worktree that needs no
-   review has no special state. Status comes from `WorktreeSummary.review` (status flow v2), never from the toolbar
-   scope. "Hide until it changes" / "Show again" on hover and in the row menu: what the user hid by hand sits in a
-   closed **Hidden** section at the end (it holds until the worktree's state hash changes). Only a window of rows is
-   mounted (`@tanstack/react-virtual`); `J`/`K` walk the whole list. The filter is a searchable multi-select picker
-   (status, **folders**, projects, worktrees), the way to narrow the list; a folder's or project's Overview opens from
-   a row's menu or the palette. No activity pulse.
+1. **Sidebar** (DECISIONS #241-#248, which supersede "UX round 4"; the row is #249-#256). One **flat, virtualised
+   list** of the worktrees of every folder the filter lets through: pinned first, then most recent activity first
+   (`WorktreeSummary.activityAt`, DECISIONS #124). No Inbox entry, no folder or project headers, no On review / Hidden
+   split. Each row is **two lines**: a state indicator (a shape per kind, never only a colour), the branch and the
+   status slot (`N conflicts`, the operation in progress, `N commits ·` and the unreviewed pill, `merged`, `closed`,
+   `review off`, `missing`, `error`), then the repository and what matters about the work (ahead / behind, files when
+   no pill counts them, `N deleted`, the request chip, and the age of the last change). The pill counts own files only
+   (`unreviewedOwnFiles`; merge noise never counts) and stops at `99+`. A reviewed worktree has a tick and a clean one
+   a faint dot, neither has a word. Status comes from `WorktreeSummary.review` (status flow v2), never from the
+   toolbar scope. "Hide until it changes" / "Show again" on hover or keyboard focus and in the row menu: what the user
+   hid by hand sits in a closed **Hidden** section at the end (it holds until the worktree's state hash changes). Only
+   a window of rows is mounted (`@tanstack/react-virtual`); `J`/`K` walk the whole list. The filter is a searchable
+   multi-select picker (status, **folders**, projects, worktrees), the way to narrow the list; a folder's or project's
+   Overview opens from a row's menu or the palette. No activity pulse: a change from the last two minutes shows a
+   static `now` in the accent colour, nothing animates.
 2. **File list** (`@pierre/trees`): changed files for the selected worktree (or, in Inbox mode, grouped by
    project → worktree). Status icons, +/− counts, reviewed checkmark.
 3. **Diff viewer** (`@pierre/diffs`): split / unified toggle, hide-whitespace toggle, collapsed unchanged
@@ -270,13 +273,13 @@ POST   /api/projects        { path }           → add repo (path may be a linke
 DELETE /api/projects/:id
 GET    /api/scan-roots   POST /api/scan-roots {path, depth}   DELETE /api/scan-roots/:id
 GET    /api/inbox?scope=...&onlyUnreviewed=    → [{project, worktree, summary, files[]}]  (dirty only;
-                                                &projectIds= / &worktreeIds= narrow it, DECISIONS #249)
+                                                &projectIds= / &worktreeIds= narrow it, DECISIONS #257)
 GET    /api/worktrees/:id/files?scope=...      → ChangedFile[]
 GET    /api/worktrees/:id/diff?scope=...&path= → { patch: string, truncated, binary, ... } raw unified diff
 GET    /api/worktrees/:id/commits?limit=       → recent commits (for the commit scope picker)
 PUT    /api/review      { projectId, scope, path, patchHash, reviewed }   (app state only)
 GET    /api/events                              SSE: worktree.changed {worktreeId, stateHash, + the worktree's
-                                                row and changed paths, DECISIONS #249-#256},
+                                                row and changed paths, DECISIONS #257-#264},
                                                 project.added|removed, worktree.added|removed, scan.progress
 ```
 
@@ -330,7 +333,7 @@ All git access goes through **one runner** in `packages/git-core`:
   events in the window use the trailing debounce below.
 - Debounce 150–300 ms per worktree, coalesce bursts, then recompute the summary; emit `worktree.changed`
   only if `stateHash` changed; the event carries the worktree's `/api/projects` row and the changed paths the daemon
-  already listed for that state (no git process of its own; DECISIONS #249-#256), so a client applies it instead of
+  already listed for that state (no git process of its own; DECISIONS #257-#264), so a client applies it instead of
   refetching the projects list. `stateHash` covers git's state of the worktree and the default branch's
   commit (DECISIONS #168): a branch scope's diff follows both. File lists (every scope, `branch` included) are cached
   by `(worktree, scope, stateHash, base commit)` and single-flight (DECISIONS #166–#169). Fallback poll (30 s focused / 5 min others) in case watchers miss events.

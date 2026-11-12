@@ -4,12 +4,22 @@ import { worktreeSource } from '../lib/source.ts';
 import { ChangeRequestChip } from './ChangeRequest.tsx';
 
 /**
- * `main` (off the default branch), the worktree source, an in-progress operation and, unless
- * `request` is false, its PR/MR chip. Shared by the sidebar rows and the context bar.
+ * `N deleted`, `main` (off the default branch), the worktree source, an in-progress operation and,
+ * unless `request` is false, its PR/MR chip. Shared by the sidebar rows and the context bar. A
+ * `compact` list (the sidebar's second line) leaves out the source and the operation: the row says
+ * those elsewhere (its hover card, the status slot), and a second line has little room.
  */
-export function RowChips({ row, request = true }: { row: WorktreeRow; request?: boolean }) {
+export function RowChips({
+  row,
+  request = true,
+  compact = false,
+}: {
+  row: WorktreeRow;
+  request?: boolean;
+  compact?: boolean;
+}) {
   const { worktree, summary, project } = row;
-  const source = worktree.isMain ? null : worktreeSource(worktree.path);
+  const source = worktree.isMain || compact ? null : worktreeSource(worktree.path);
   // The main checkout on the default branch is the expected case; the chip speaks only when the
   // main checkout sits elsewhere, or when the project has no default branch to compare with.
   const mainChip = worktree.isMain && worktree.branch !== project.defaultBranch;
@@ -26,7 +36,7 @@ export function RowChips({ row, request = true }: { row: WorktreeRow; request?: 
           {source.label}
         </span>
       )}
-      {summary?.inProgress && (
+      {summary?.inProgress && !compact && (
         <span className="od-chip text-warn" title={`${summary.inProgress} in progress`}>
           {summary.inProgress}
         </span>
