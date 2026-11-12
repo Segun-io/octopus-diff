@@ -13,7 +13,7 @@ import { type BulkActions, hasUndoableToast, useBulkActions } from './bulk.ts';
 import { copyAndReport } from './copy.ts';
 import { DEFAULT_CONTEXT, isFullContext, nextContext, patchShowsWholeFile } from './diffContext.ts';
 import type { AppModel } from './model.tsx';
-import { actions, useUiStore } from './ui.tsx';
+import { actions, useUiStore, type View } from './ui.tsx';
 
 /** What the palette's Copy commands copy (docs/COPY-TOOLS.md §4 step 2). */
 export type CopyCommand = 'branch' | 'worktreePath' | 'filePath' | 'fileName' | 'absolutePath';
@@ -36,6 +36,12 @@ export interface Commands {
   toggleShowReviewed(): void;
   /** The "From main" chip: list only the files a merge, rebase or update brought. */
   toggleFromMain(): void;
+  /**
+   * An explicit pick of a view by name (the palette, an Overview row, a link, a toast). A worktree
+   * the sidebar filters leave out is made visible by clearing the filters (DECISIONS #281); the
+   * automatic moves (landing, `n`, `J`/`K`) never come through here and never clear anything.
+   */
+  openView(view: View): void;
   /** Expands or collapses the "from main" group of the open worktree. */
   toggleOriginGroup(): void;
   toggleTheme(): void;
@@ -150,6 +156,31 @@ export function useCommands(model: AppModel, resolvedTheme: 'light' | 'dark'): C
       void latest.current.bulk.run(p);
     };
     return {
+      openView(view) {
+        // Listedness is read from the model of the last render, the one the user is looking at.
+        const m = latest.current.model;
+        const state = store.getState();
+        const hidden =
+          view.kind === 'worktree' &&
+          !m.listedIds.has(view.worktreeId) &&
+          m.sidebar.byId.has(view.worktreeId) &&
+          (state.filterFolders.length > 0 ||
+            state.filterProjects.length > 0 ||
+            state.filterWorktrees.length > 0 ||
+            state.onlyDirty ||
+            state.onlyUnreviewed);
+        if (hidden) {
+          store.setState({
+            filterFolders: [],
+            filterProjects: [],
+            filterWorktrees: [],
+            onlyDirty: false,
+            onlyUnreviewed: false,
+          });
+          actions.notice(store, 'Filters cleared to show that worktree.');
+        }
+        actions.setView(store, view);
+      },
       nextFile() {
         const m = latest.current.model;
         if (!m.viewListed) return;

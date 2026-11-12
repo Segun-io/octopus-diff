@@ -18,6 +18,7 @@ import {
   folderJobOutcome,
   scanFollowDone,
 } from '../state/addJob.ts';
+import { useCommandsContext } from '../state/commandsContext.tsx';
 import { actions, type UiStore, useUi, useUiStore } from '../state/ui.tsx';
 import { CheckIcon, CloseIcon, SpinnerIcon, WarningIcon } from './bits.tsx';
 
@@ -119,12 +120,13 @@ function useSummary(): { job: AddJob | null; summary: AddJobSummary | null } {
 
 function useRunAction(onRetry?: () => void) {
   const store = useUiStore();
+  const commands = useCommandsContext();
   const api = useApi();
   const queryClient = useQueryClient();
   return async (job: AddJob, action: AddJobAction) => {
     if (action.id === 'open' && action.view) {
       store.setState({ addJob: null, addProjectOpen: false, settingsOpen: false });
-      actions.setView(store, action.view);
+      commands.openView(action.view);
       return;
     }
     if (action.id === 'stop-watching' && job.kind === 'folder' && job.scanRootId) {

@@ -809,6 +809,7 @@ describe('every navigation targets a worktree the pane can show (#281)', () => {
         expect(currentWorktree()).toBe(cache);
         expect(viewerPath()).toBe('test/cache.test.ts');
         expect(noticeText()).toContain('No more unreviewed files in the listed worktrees');
+        expect(h.store.getState().filterWorktrees).toHaveLength(1);
       },
     ],
     [
@@ -821,6 +822,8 @@ describe('every navigation targets a worktree the pane can show (#281)', () => {
           expect(ids).toContain(currentWorktree());
           expect(screen.queryByTestId('no-worktree')).toBeNull();
         }
+        // Automatic moves never touch the filters.
+        expect(h.store.getState().filterWorktrees).toHaveLength(2);
       },
     ],
     [
@@ -834,6 +837,7 @@ describe('every navigation targets a worktree the pane can show (#281)', () => {
         await press(h.user, 'r');
         expect(currentWorktree()).toBe(cache);
         expect(screen.queryByTestId('no-worktree')).toBeNull();
+        expect(h.store.getState().filterWorktrees).toHaveLength(1);
       },
     ],
     [
@@ -841,10 +845,11 @@ describe('every navigation targets a worktree the pane can show (#281)', () => {
       async (h) => {
         await openAndFilter(h, 'fix/cache', 'feat/auth');
         const ids = listed();
-        for (const key of ['J', 'J', 'J', 'K', 'K', 'K', 'K']) {
+        for (const key of ['K', 'J', 'J', 'K', 'K', 'J']) {
           await press(h.user, key);
           expect(ids).toContain(currentWorktree());
         }
+        expect(h.store.getState().filterWorktrees).toHaveLength(2);
       },
     ],
     [
@@ -920,6 +925,42 @@ describe('every navigation targets a worktree the pane can show (#281)', () => {
     expect(h.store.getState().filterWorktrees).toEqual([]);
     expect(noticeText()).toContain('Filters cleared');
     await waitFor(() => expect(viewerPath()).toBe('assets/logo.png'));
+  });
+
+  it('an automatic landing never clears the filters: the worktree that becomes listed is opened under them', async () => {
+    const h = setup();
+    await ready();
+    fireEvent.click(rowOf('fix/cache'));
+    await waitFor(() => expect(viewerPath()).toBe('src/lib/cache.ts'));
+    // Only dirty worktrees, picked: fix/cache (dirty) and trunk (clean, so not listed).
+    await press(h.user, '/');
+    await h.user.click(screen.getByTestId(TEST_IDS.onlyDirtyToggle));
+    await press(h.user, '{Escape}');
+    await pick(h.user, 'fix/cache');
+    await pick(h.user, 'trunk');
+    await waitFor(() => expect(screen.getAllByTestId(TEST_IDS.worktreeItem)).toHaveLength(1));
+    const filters = {
+      onlyDirty: true,
+      filterWorktrees: [...h.store.getState().filterWorktrees],
+    };
+    expect(filters.filterWorktrees).toHaveLength(2);
+    // The open worktree goes away and nothing else is listed.
+    act(() => {
+      h.backend.removeProject(rowOf('fix/cache').dataset.projectId as string);
+    });
+    await waitFor(() => expect(screen.queryByTestId(TEST_IDS.worktreeItem)).toBeNull());
+    expect((await screen.findByTestId('no-worktree')).dataset.reason).toBe('empty');
+    // A clean worktree gets edited: it passes the filters, so it is listed and the app lands on it.
+    const trunk = idOf('trunk');
+    act(() => {
+      h.backend.mutate(trunk, 'add');
+    });
+    await waitFor(() => expect(currentWorktree()).toBe(trunk));
+    await waitFor(() => expect(screen.queryByTestId('no-worktree')).toBeNull());
+    expect(h.store.getState().onlyDirty).toBe(filters.onlyDirty);
+    expect(h.store.getState().filterWorktrees).toEqual(filters.filterWorktrees);
+    expect(screen.getAllByTestId(TEST_IDS.worktreeItem)).toHaveLength(1);
+    expect(h.store.getState().notice?.text ?? '').not.toContain('Filters cleared');
   });
 
   it('the landing opens a listed worktree, not a remembered one the filters hide', async () => {

@@ -169,12 +169,6 @@ function useLanding() {
     }
   }, [loaded, view.kind, missing, pick, store]);
 
-  // The list the pane may show, for `actions.setView` (it clears the filters that hide a picked worktree).
-  const { listedIds } = model;
-  useEffect(() => {
-    store.setState({ listed: loaded ? listedIds : null });
-  }, [loaded, listedIds, store]);
-
   useEffect(() => {
     if (openId !== null && !missing && lastWorktree !== openId) {
       store.setState({ lastWorktree: openId });
@@ -622,7 +616,7 @@ function AppShell({ eventSourceFactory }: { eventSourceFactory?: EventSourceFact
               autoFocus
               onOpen={(view) => {
                 store.setState({ addProjectOpen: false });
-                actions.setView(store, view);
+                commands.openView(view);
               }}
             />
           </Dialog>

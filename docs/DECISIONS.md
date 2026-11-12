@@ -3379,10 +3379,13 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      there, stays put with the notice "No more unreviewed files in the listed worktrees." (the old text when no filter is
      on); `J`/`K` walk `sidebar.order`; the landing picks from `sidebar.order` (a remembered worktree the filters hide is
      not a target). **Explicit** ones name a worktree (the palette, an Overview row, a link): if the filters hide it, the
-     filters are cleared and the notice "Filters cleared to show that worktree." says so. **Amendment (PR #86, P2):** the
-     rule lives in one place, `actions.setView` (checks the target against `UiState.listed`, the app's copy of
-     `listedIds`, `null` until the projects load), not in an effect comparing ids: so picking the worktree that is
-     *already open* but hidden (the palette) clears the filters too. A filter that later hides the open worktree is still
+     filters are cleared and the notice "Filters cleared to show that worktree." says so. **Amendment (PR #86, P2, revised):** the rule is an *explicit-pick* action,
+     `Commands.openView(view)` (palette, Overview rows and menus, request links, the add-folder dialog and toast), not
+     something every `setView` does and not an effect: it reads `listedIds` of the model the user is looking at, so
+     picking the worktree that is *already open* but hidden clears the filters too, and there is no lagging copy of the
+     list in the store (the earlier `UiState.listed` was removed: the landing could run before its effect and clear the
+     filters on an automatic move). Automatic moves (the landing and re-landing after a removal, `n`, auto-advance,
+     `J`/`K`) call `actions.setView` directly and never touch the filters. A filter that later hides the open worktree is still
      the #279 "hidden by the filters" pane, not a navigation. The opposite rule (the pane shows what was navigated to whatever the filters say) was not
      taken: it would need a second source of truth for what the pane may show. Bulk plans never select. Filtering itself
      never navigates. Table-driven test: `app.test.tsx` "every navigation targets a worktree the pane can show" (n at the

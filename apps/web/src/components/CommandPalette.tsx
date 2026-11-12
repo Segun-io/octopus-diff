@@ -73,7 +73,7 @@ export function CommandPalette() {
     enabled: browsing,
     onOpen: (view) => {
       close();
-      actions.setView(store, view);
+      commands.openView(view);
     },
     // The scan's progress and outcome show in the add-job toast (components/AddJobStatus.tsx).
     onWatched: () => close(),
@@ -103,7 +103,7 @@ export function CommandPalette() {
         kind: 'go',
         label: node.id === DIRECT_FOLDER_ID ? 'Added directly' : `Folder ${node.label}`,
         hint: `${node.stats.projects} repos, ${node.stats.dirty} dirty`,
-        run: () => actions.setView(store, { kind: 'folder', scanRootId: node.id }),
+        run: () => commands.openView({ kind: 'folder', scanRootId: node.id }),
       });
       for (const group of node.groups) {
         out.push({
@@ -111,7 +111,7 @@ export function CommandPalette() {
           kind: 'go',
           label: `Project ${group.project.name}`,
           hint: `${group.allRows.length} worktrees`,
-          run: () => actions.setView(store, { kind: 'project', projectId: group.project.id }),
+          run: () => commands.openView({ kind: 'project', projectId: group.project.id }),
         });
         for (const row of group.allRows) {
           out.push({
@@ -120,7 +120,7 @@ export function CommandPalette() {
             label: `${group.project.name} ${worktreeLabel(row.worktree)}`,
             parts: [group.project.name, worktreeLabel(row.worktree)],
             hint: row.unreviewed > 0 ? `${row.unreviewed} unreviewed` : row.worktree.path,
-            run: () => actions.setView(store, { kind: 'worktree', worktreeId: row.worktree.id }),
+            run: () => commands.openView({ kind: 'worktree', worktreeId: row.worktree.id }),
           });
         }
       }

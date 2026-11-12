@@ -41,7 +41,7 @@ Run from the repo root on this machine (Node 26):
 - `pnpm lint`: pass (credits up to date; no dependency changed, `pnpm credits` not needed). One `info` from the daemon
   test file `apps/daemon/test/file-origins.real-git.test.ts` (another session's, not touched).
 - `pnpm typecheck`: pass (all packages incl. `e2e`).
-- `pnpm --filter @octopus-diff/web test`: **30 files, 436 tests pass (after the PR #86 follow-ups; 423 before them)** (before this work: 30 files / 416 tests).
+- `pnpm --filter @octopus-diff/web test`: **30 files, 437 tests pass (after the PR #86 follow-ups; 423 before them)** (before this work: 30 files / 416 tests).
 - `pnpm build`: pass.
 - `pnpm test:e2e` (full, `workers: 1`): first run 101 passed, 1 failed (`15-ui-status-flow` "a commit keeps the work out
   of the shelf", a real race, below); after the fix, final run **102 passed, 0 failed** (3.2 min; re-run after the PR #86 follow-up: 102 passed).
@@ -156,3 +156,12 @@ nothing) into `actions.setView` (DECISIONS #281 amendment; `UiState.listed`). Ne
 filter to B, pick A again: filters cleared, A shown, notice. An Overview row for the open worktree is not a separate path
 (an Overview replaces the open view, so that is the ordinary id-changing case, covered). Mutation checks: no clearing (3
 fail), `listed` never synced (3), no notice (2), clearing only when the id changes (1, the reported bug).
+
+## Review follow-up 4 (PR #86 P2, the landing cleared the filters)
+
+The filter-clearing is now `Commands.openView`, used only by explicit picks; `actions.setView` is plain again and the
+lagging `UiState.listed` copy is gone (DECISIONS #281, amendment revised). New test through the real UI (only dirty +
+two picked worktrees, remove the open worktree so nothing is listed, edit the clean one): the landing opens it, the
+filters stay as set, no "Filters cleared" notice. The `n`, auto-advance and `J`/`K` cases now also assert the filters are
+untouched. Mutation checks: no clearing in `openView` (3 fail), the landing clearing filters (1, the reported bug),
+`J` and `K` each clearing (1 each), `n` clearing (2), no notice (2).
