@@ -120,8 +120,9 @@ Settings → Folders → **Start browsing in** sets where the picker opens (defa
 
 ### Review controls, settings and themes
 
-- **The sidebar is your folders and projects, with the open work under them.** Under the Inbox (and anything
-  you pinned), each watched folder lists its repositories, and each repository lists the worktrees that are
+- **The sidebar is your folders and projects, with the open work under them.** (There is no Inbox view: the app
+  opens on the top worktree of the list, the one open last when it is still there.) Under anything
+  you pinned, each watched folder lists its repositories, and each repository lists the worktrees that are
   still open: unreviewed files, a conflict or an operation in progress. Everything else (`clean`, `verified`,
   `review off`, `missing`) sits in the **Hidden** shelf at the bottom, closed by default with a count; a
   project whose worktrees are all there just says `hidden`. Hover a row for **Hide** to put it away by hand
@@ -135,8 +136,9 @@ Settings → Folders → **Start browsing in** sets where the picker opens (defa
   status options narrow them. The button says what is filtered, and `×` clears it.
 
   ![The sidebar filter dropdown: status options, projects and worktrees with a search field](docs/screenshots/sidebar-filter-dark.png)
-- **Mark all as verified.** The button above the file list marks every file you can see (respecting the
-  sidebar filters); in the Inbox it marks everything. `Shift+R` does the same from the keyboard, and the
+- **Mark all as verified.** The button above the file list marks every file you can see in the open worktree
+  (respecting its list options). `Shift+R` does the same from the keyboard; the command palette's **Review all
+  worktrees in the list** marks every worktree the sidebar filters leave in the list, and the
   context menu of a worktree, project or folder (and the folder Overview) can mark that whole level, or
   clear it again ("Mark all as unreviewed"). A toast offers **Undo** (also `Ctrl/Cmd+Z`) for ten minutes.
   A worktree that changed after you last looked is skipped and reported, so you never verify a diff you

@@ -34,9 +34,9 @@ import {
   newestFirst,
   watchNote,
 } from '../src/lib/activity.ts';
-import type { WorktreeRow } from '../src/lib/model.ts';
+import { DIRECT_FOLDER_ID, type WorktreeRow } from '../src/lib/model.ts';
 import { DEFAULT_PREFS, scopeForPref } from '../src/state/prefs.ts';
-import { createUiStore, type UiStore } from '../src/state/ui.tsx';
+import { actions, createUiStore, type UiStore } from '../src/state/ui.tsx';
 
 vi.mock('../src/components/diff/DiffRenderer.tsx', () => ({
   DiffRenderer: ({ patch }: { patch: string }) => <pre data-testid="stub-diff">{patch}</pre>,
@@ -396,12 +396,16 @@ describe('the Activity strip', () => {
     expect((await screen.findByTestId(ACTIVITY_TEST_IDS.strip)).dataset.open).toBe('false');
   });
 
-  it('is collapsed by default, only in a worktree, and fetches nothing before one is open', async () => {
+  it('is collapsed by default, only in a worktree, and asks for the open worktree only', async () => {
     const h = setup({ activityOpen: false });
     await waitFor(() => expect(app().getAttribute('data-ready')).toBe('true'));
-    // The Inbox mixes worktrees: no strip, no request.
-    expect(screen.queryByTestId(ACTIVITY_TEST_IDS.strip)).toBeNull();
-    expect(activityUrls(h)).toHaveLength(0);
+    // The app lands on the top worktree (#83): the strip is its, and so is the one request.
+    const landing = screen.getAllByTestId(TEST_IDS.worktreeItem)[0]?.dataset.worktreeId as string;
+    expect((await screen.findByTestId(ACTIVITY_TEST_IDS.strip)).dataset.worktreeId).toBe(landing);
+    expect(activityUrls(h).every((r) => r.url.includes(`/worktrees/${landing}/`))).toBe(true);
+    // An Overview is no worktree: no strip.
+    act(() => actions.setView(h.store, { kind: 'folder', scanRootId: DIRECT_FOLDER_ID }));
+    await waitFor(() => expect(screen.queryByTestId(ACTIVITY_TEST_IDS.strip)).toBeNull());
     await open('feat/auth');
     const strip = await screen.findByTestId(ACTIVITY_TEST_IDS.strip);
     expect(strip.dataset.open).toBe('false');
@@ -552,9 +556,12 @@ describe('the Activity strip', () => {
 
   it('fetches incrementally, sends the run back and only for the open worktree', async () => {
     const h = setup();
+    await waitFor(() => expect(app().getAttribute('data-ready')).toBe('true'));
+    const landing = screen.getAllByTestId(TEST_IDS.worktreeItem)[0]?.dataset.worktreeId as string;
     const id = await open('feat/auth');
     await screen.findByText(/Nothing has changed since/);
-    const first = activityUrls(h);
+    // The landing worktree's request is not this one's (#83).
+    const first = activityUrls(h).filter((r) => r.url.includes(`/worktrees/${id}/`));
     expect(first).toHaveLength(1);
     expect(first[0]?.url).toContain(`/api/worktrees/${id}/activity`);
     expect(first[0]?.url).not.toContain('after=');
@@ -572,7 +579,11 @@ describe('the Activity strip', () => {
     await agent(h, other, 'edit', 'README.md');
     await waitFor(() => expect(app().getAttribute('data-ready')).toBe('true'));
     expect(activityUrls(h)).toHaveLength(before);
-    expect(activityUrls(h).every((r) => r.url.includes(`/worktrees/${id}/`))).toBe(true);
+    expect(
+      activityUrls(h).every(
+        (r) => r.url.includes(`/worktrees/${id}/`) || r.url.includes(`/worktrees/${landing}/`),
+      ),
+    ).toBe(true);
   });
 
   it('replaces its list when the answer says dropped (the daemon restarted)', async () => {

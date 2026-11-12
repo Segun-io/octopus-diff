@@ -16,13 +16,9 @@ import { DefaultBranchChip, RowChips } from './WorktreeChips.tsx';
 
 export const CONTEXT_BAR_TEST_ID = 'context-bar';
 
-function plural(n: number, one: string): string {
-  return `${n} ${n === 1 ? one : `${one}s`}`;
-}
-
 /**
- * The row above the panes (docs/TOOLBAR.md §3.1): where you are (the Inbox, or the worktree's
- * project and branch with its facts), the view switch when the branch has a pull/merge request,
+ * The row above the panes (docs/TOOLBAR.md §3.1): where you are (the worktree's project and
+ * branch with its facts), the view switch when the branch has a pull/merge request,
  * the review policy, and the app chrome at the right. It is the same on the Changes and Request
  * tabs: the tabs change what sits below it.
  */
@@ -61,34 +57,22 @@ export function ContextBar() {
     idle: connection === 'open' ? 'Live' : 'Connecting…',
   }[indicatorState];
 
-  const inbox = model.view.kind === 'inbox';
   const summary = row?.summary;
   const aheadBehind =
     summary && summary.ahead !== null && summary.behind !== null
       ? { ahead: summary.ahead, behind: summary.behind }
       : null;
-  const label = inbox ? 'Inbox' : row ? `${row.project.name} ${worktreeLabel(row.worktree)}` : '';
+  const label = row ? `${row.project.name} ${worktreeLabel(row.worktree)}` : '';
 
   return (
     <div
       role="toolbar"
       data-testid={CONTEXT_BAR_TEST_ID}
-      // What the bar is about: `inbox` (with `data-count` = dirty worktrees) or `worktree`. The
-      // sidebar has no Inbox entry any more (#13), so this is how a test sees the current view.
+      // What the bar is about (always `worktree` now: the Overviews have no bar); tests read it.
       data-view={model.view.kind}
-      data-count={inbox ? String(model.groups.length) : undefined}
       aria-label={label}
       className="flex min-h-9 flex-wrap items-center gap-2 border-b border-line bg-surface px-3 py-1.5"
     >
-      {inbox && (
-        <>
-          <span className="font-medium">Inbox</span>
-          <span className="flex gap-3 text-[11px] text-muted tabular-nums">
-            <span>{plural(model.groups.length, 'worktree')}</span>
-            <span>{plural(model.entries.length, 'file')}</span>
-          </span>
-        </>
-      )}
       {row && (
         <>
           <span

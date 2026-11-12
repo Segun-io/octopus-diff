@@ -18,25 +18,21 @@ import { type CopyFn, copyAndReport } from '../state/copy.ts';
 import { useUi, useUiStore } from '../state/ui.tsx';
 import { CheckIcon, LineCounts, StatusIcon, statusLabel, WarningIcon } from './bits.tsx';
 import { ContextMenu, type MenuItem, useContextMenu } from './ContextMenu.tsx';
-import { fileCopyItems, worktreeCopyItems } from './copyMenu.ts';
+import { fileCopyItems } from './copyMenu.ts';
 import { ORIGIN_TEST_IDS, OriginGroupHeader } from './OriginGroupHeader.tsx';
 
-type ListMenuTarget = { kind: 'file'; entry: NavEntry } | { kind: 'group'; group: FileGroup };
-
-/** Row heights per density (mirrors `--od-row` / `--od-row-header` in styles.css). */
+/** Row heights per density (mirrors `--od-row` in styles.css). */
 export const ROW_HEIGHTS = {
-  compact: { row: 26, header: 30 },
-  comfortable: { row: 30, header: 32 },
+  compact: { row: 26 },
+  comfortable: { row: 30 },
 } as const;
 export const ROW_HEIGHT = ROW_HEIGHTS.compact.row;
-export const HEADER_HEIGHT = ROW_HEIGHTS.compact.header;
 const OVERSCAN_PX = 400;
 
 interface LayoutGroup {
   group: FileGroup;
   top: number;
   height: number;
-  headerHeight: number;
   /** Listed files in order: own and mixed ones, then the "from main" ones while that group is open. */
   rows: NavEntry[];
   /** Slot of the collapsible "from main" row (it follows the own rows), or -1 without one. */
@@ -58,13 +54,9 @@ export interface FileListOrigin {
 
 export interface FileListProps {
   groups: readonly FileGroup[];
-  /** Worktrees out of the review loop (no unreviewed counts; dimmed when `dimDisabled`). */
-  disabled?: ReadonlySet<string>;
-  dimDisabled?: boolean;
   entries: readonly NavEntry[];
   visible: VisiblePredicate;
   selectedKey: string | null;
-  grouped: boolean;
   onSelect: (entry: NavEntry) => void;
   emptyMessage: string;
   origin?: FileListOrigin;
@@ -83,12 +75,9 @@ function rowId(key: string): string {
  */
 export function FileList({
   groups,
-  disabled,
-  dimDisabled = true,
   entries,
   visible,
   selectedKey,
-  grouped,
   onSelect,
   emptyMessage,
   origin,
@@ -96,26 +85,18 @@ export function FileList({
   const scrollRef = useRef<HTMLDivElement>(null);
   const [viewport, setViewport] = useState({ top: 0, height: 800 });
   const store = useUiStore();
-  const menu = useContextMenu<ListMenuTarget>();
+  const menu = useContextMenu<NavEntry>();
   const openMenu = menu.open;
   const onFileMenu = useCallback(
-    (event: React.MouseEvent, entry: NavEntry) => openMenu(event, { kind: 'file', entry }),
-    [openMenu],
-  );
-  const onGroupMenu = useCallback(
-    (event: React.MouseEvent, group: FileGroup) => openMenu(event, { kind: 'group', group }),
+    (event: React.MouseEvent, entry: NavEntry) => openMenu(event, entry),
     [openMenu],
   );
   const worktreePath = (id: string) => groups.find((g) => g.worktree.id === id)?.worktree.path;
   const copy: CopyFn = (text, options) => void copyAndReport(store, text, options);
-  const menuItems = (target: ListMenuTarget): MenuItem[] => {
-    const at = menu.state?.position;
-    if (target.kind === 'group') return worktreeCopyItems(target.group.worktree, copy, at);
-    return fileCopyItems(target.entry.file, worktreePath(target.entry.worktreeId), copy, at);
-  };
+  const menuItems = (entry: NavEntry): MenuItem[] =>
+    fileCopyItems(entry.file, worktreePath(entry.worktreeId), copy, menu.state?.position);
   const density = useUi((s) => s.density);
   const ROW_HEIGHT = ROW_HEIGHTS[density].row;
-  const HEADER_HEIGHT = ROW_HEIGHTS[density].header;
 
   const layout = useMemo(() => {
     const byWorktree = new Map<string, NavEntry[]>();
@@ -139,13 +120,12 @@ export function FileList({
         while (noiseAt < rows.length && !isBaseFile(rows[noiseAt]?.file ?? {})) noiseAt++;
       }
       const slots = rows.length + (noise ? 1 : 0);
-      const headerHeight = grouped ? HEADER_HEIGHT : 0;
-      const height = headerHeight + slots * ROW_HEIGHT;
-      out.push({ group, top, height, headerHeight, rows, noiseAt, noise, slots });
+      const height = slots * ROW_HEIGHT;
+      out.push({ group, top, height, rows, noiseAt, noise, slots });
       top += height;
     }
     return { groups: out, total: top };
-  }, [groups, entries, visible, grouped, ROW_HEIGHT, HEADER_HEIGHT, origin]);
+  }, [groups, entries, visible, ROW_HEIGHT, origin]);
 
   // Track viewport (scroll + size), throttled to animation frames.
   useLayoutEffect(() => {
@@ -184,10 +164,9 @@ export function FileList({
       if (index === -1) continue;
       lastScrolledKey.current = selectedKey;
       const slot = index + (g.noiseAt >= 0 && index >= g.noiseAt ? 1 : 0);
-      const rowTop = g.top + g.headerHeight + slot * ROW_HEIGHT;
-      const headerTop = g.top;
+      const rowTop = g.top + slot * ROW_HEIGHT;
       if (rowTop < el.scrollTop) {
-        el.scrollTop = index === 0 ? headerTop : rowTop - ROW_HEIGHT;
+        el.scrollTop = index === 0 ? g.top : rowTop - ROW_HEIGHT;
       } else if (rowTop + ROW_HEIGHT > el.scrollTop + el.clientHeight) {
         el.scrollTop = rowTop + ROW_HEIGHT * 2 - el.clientHeight;
       }
@@ -239,9 +218,8 @@ export function FileList({
           let first = 0;
           let last = -1;
           if (inView) {
-            const rowsTop = g.top + g.headerHeight;
-            first = Math.max(0, Math.floor((windowTop - rowsTop) / ROW_HEIGHT));
-            last = Math.min(g.slots - 1, Math.ceil((windowBottom - rowsTop) / ROW_HEIGHT));
+            first = Math.max(0, Math.floor((windowTop - g.top) / ROW_HEIGHT));
+            last = Math.min(g.slots - 1, Math.ceil((windowBottom - g.top) / ROW_HEIGHT));
           }
           // Slots are rows, with the collapsible "from main" row (`noiseAt`) after the own ones.
           const slotIndexes: number[] = [];
@@ -253,33 +231,13 @@ export function FileList({
               key={g.group.worktree.id}
               role="group"
               aria-label={`${g.group.project.name}, ${worktreeLabel(g.group.worktree)}`}
-              {...(grouped
-                ? {
-                    'data-testid': TEST_IDS.fileGroup,
-                    'data-worktree-id': g.group.worktree.id,
-                    'data-project-id': g.group.project.id,
-                  }
-                : {})}
+              data-testid={TEST_IDS.fileGroup}
+              data-worktree-id={g.group.worktree.id}
+              data-project-id={g.group.project.id}
               style={{ position: 'absolute', top: g.top, left: 0, right: 0, height: g.height }}
-              className={disabled?.has(g.group.worktree.id) && dimDisabled ? 'opacity-60' : ''}
             >
-              {grouped && (
-                <GroupHeader
-                  onMenu={onGroupMenu}
-                  group={g.group}
-                  // Expanded base files are rows too, but not part of the own-only count they are compared with.
-                  shown={
-                    fromMainOnly
-                      ? g.rows.length
-                      : g.rows.reduce((n, r) => (isBaseFile(r.file) ? n : n + 1), 0)
-                  }
-                  fromMainOnly={fromMainOnly}
-                  height={HEADER_HEIGHT}
-                  reviewOff={disabled?.has(g.group.worktree.id) ?? false}
-                />
-              )}
               {slotIndexes.map((slot) => {
-                const top = g.headerHeight + slot * ROW_HEIGHT;
+                const top = slot * ROW_HEIGHT;
                 if (slot === g.noiseAt && g.noise && origin) {
                   return (
                     <OriginGroupHeader
@@ -332,58 +290,6 @@ export function FileList({
     </>
   );
 }
-
-const GroupHeader = memo(function GroupHeader({
-  group,
-  shown,
-  fromMainOnly,
-  height,
-  reviewOff,
-  onMenu,
-}: {
-  group: FileGroup;
-  shown: number;
-  /** The chip is on: `shown` counts base files, and they are the count. */
-  fromMainOnly: boolean;
-  height: number;
-  reviewOff: boolean;
-  onMenu: (event: React.MouseEvent, group: FileGroup) => void;
-}) {
-  // Counts are own + mixed files: what came from the default branch is wrapped, not counted.
-  let total = 0;
-  let unreviewed = 0;
-  for (const f of group.files) {
-    if (isBaseFile(f)) continue;
-    total++;
-    if (!f.reviewed && !reviewOff) unreviewed++;
-  }
-  return (
-    // biome-ignore lint/a11y/noStaticElementInteractions: right-click shortcut; the palette has the same copy commands
-    <div
-      className="flex items-center gap-2 border-b border-line bg-raised px-2 text-xs"
-      style={{ height }}
-      title={group.worktree.path}
-      onContextMenu={(e) => onMenu(e, group)}
-    >
-      <span className="truncate font-semibold">{group.project.name}</span>
-      <span className="truncate text-muted">{worktreeLabel(group.worktree)}</span>
-      <span className="ml-auto flex shrink-0 gap-3 text-[11px] text-muted tabular-nums">
-        {reviewOff ? (
-          <span>review off</span>
-        ) : unreviewed > 0 ? (
-          <span>{unreviewed} unreviewed</span>
-        ) : null}
-        {fromMainOnly ? (
-          <span>{shown} from main</span>
-        ) : (
-          <span>
-            {shown < total ? `${shown}/${total}` : total} {total === 1 ? 'file' : 'files'}
-          </span>
-        )}
-      </span>
-    </div>
-  );
-});
 
 function renameLabel(file: ChangedFile): string | null {
   if (!file.oldPath || file.oldPath === file.path) return null;

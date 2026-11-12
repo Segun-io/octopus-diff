@@ -303,9 +303,9 @@ test.describe('merge noise (real daemon, real git)', () => {
     await app.selectWorktree(ids('merge'));
     await expect.poll(() => scopeLabel(app, 'review')).toBe('To review (2)');
     await expect(groupOf(app)).toHaveAttribute('data-count', '5');
-    // The Inbox's "Review all N" counts what Review all would mark: own work, never the group.
-    await app.selectInbox();
-    await expect(app.byTestId(TEST_IDS.markAllButton)).toHaveAttribute('data-count', String(15));
+    // "Review all worktrees" (the palette; it was the Inbox's "Review all N") counts what it would
+    // mark: own work, never the group.
+    await expect.poll(() => app.everyWorktreeCount()).toBe(15);
   });
 
   test('a resolved conflict and a file both sides changed are `+main`; "Only this branch\'s changes" shows them as own', async ({

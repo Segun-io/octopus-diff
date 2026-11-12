@@ -77,7 +77,7 @@ describe('prefs', () => {
       density: 'comfortable' as const,
       defaultScope: 'staged' as const,
       autoAdvance: true,
-      reviewOffDisplay: 'hide' as const,
+      lastWorktree: 'wt-1',
       titleCount: false,
       confirmBulk: false,
       collapsed: ['a', 'b'],

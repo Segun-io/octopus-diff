@@ -4,15 +4,9 @@ import type {
   InboxEntry,
   WorktreeForge,
 } from '@octopus-diff/contracts';
-import { createContext, type ReactNode, useContext, useMemo } from 'react';
+import { createContext, type ReactNode, useContext, useEffect, useMemo, useRef } from 'react';
 import { useForgeIndex } from '../api/forges.ts';
-import {
-  inboxScopeFor,
-  isPartialInbox,
-  useFilesQuery,
-  useInboxQuery,
-  useProjectsQuery,
-} from '../api/queries.ts';
+import { isPartialInbox, useFilesQuery, useInboxQuery, useProjectsQuery } from '../api/queries.ts';
 import { useScanRootsQuery } from '../api/settings.ts';
 import { fileRefKey } from '../lib/fileRef.ts';
 import {
@@ -46,15 +40,21 @@ export interface AppModel {
   scope: DiffScope;
   projects: ReturnType<typeof useProjectsQuery>;
   scanRoots: ReturnType<typeof useScanRootsQuery>;
-  inbox: ReturnType<typeof useInboxQuery>;
   files: ReturnType<typeof useFilesQuery>;
   sidebar: SidebarModel;
-  /** Inbox entries in sidebar order (unfiltered). */
+  /** Every worktree's review data in sidebar order (unfiltered): what `n` and bulk "all" read. */
   inboxEntries: InboxEntry[];
-  /** File groups for the current view (inbox: one per visible dirty worktree). */
+  /** The open worktree's file group (empty when no worktree is open). */
   groups: FileGroup[];
-  /** Every file of the current view, in display order. */
+  /** Every file of the open worktree, in display order. */
   entries: NavEntry[];
+  /**
+   * The groups "Review all worktrees" acts on: one per worktree of the list that passes the
+   * sidebar filters and is in the review loop (the cross-worktree data, current scope).
+   */
+  allGroups: FileGroup[];
+  /** Every file of `allGroups`, in display order. */
+  allEntries: NavEntry[];
   /** Files across all worktrees for `n` (current scope; commit scope: current list only). */
   globalEntries: NavEntry[];
   /** What `j`/`k` reach and the list shows: the eye and the "from main" view (wrapped group, chip). */
@@ -81,11 +81,41 @@ export interface AppModel {
   unreviewedTotal: number;
   /** Worktrees whose review policy is disabled. */
   disabledWorktrees: ReadonlySet<string>;
-  /** Current `stateHash` per worktree (from the projects list), for bulk `expectedStateHashes`. */
+  /**
+   * The `stateHash` a bulk request for a worktree's own file list expects: the state of the files
+   * it acts on (the open file list's, then the review data's row, then the sidebar's).
+   */
   stateHashes: ReadonlyMap<string, string>;
-  /** Inbox view with no sidebar filter and no hidden file: a bulk "all" matches what is shown. */
-  inboxUnfiltered: boolean;
-  /** Effective policy of the selected worktree view (null in the Inbox). */
+  /**
+   * The `stateHash` of each review data row (`inboxEntries`): the one snapshot `allGroups` /
+   * `allEntries` were built from, so a plan over those files expects exactly their state.
+   */
+  inboxStateHashes: ReadonlyMap<string, string>;
+  /**
+   * The open worktree is a row of the list the sidebar shows (the filters apply). False for a
+   * worktree the filters leave out, or that is gone: its pane is not shown and keys do not act on it.
+   */
+  viewListed: boolean;
+  /**
+   * The open worktree's row has moved on (an event carried its new state) but the file list on
+   * screen is still the old one, for a moment: what a bulk mark would act on is not what the row
+   * says. "Review all" waits (it would send the old list's hash and the daemon would skip it).
+   */
+  listBehind: boolean;
+  /**
+   * What the open list is doing about it: `refreshing` (a request is in flight, or about to be)
+   * or `failed` (the refetch for this pair of states ended and the list is still behind: a failed
+   * request, or a daemon that answers an older state). Null when the list is current.
+   */
+  listState: 'refreshing' | 'failed' | null;
+  /**
+   * The worktrees of the list the sidebar shows (the filters apply): the one predicate of what a
+   * pane can show, used by the pane, `n`, `J`/`K`, the landing and the bulk plans (DECISIONS #281).
+   */
+  listedIds: ReadonlySet<string>;
+  /** No sidebar filter and no hidden file: a bulk on every worktree is one `all` request. */
+  allUnfiltered: boolean;
+  /** Effective policy of the selected worktree view (null outside a worktree). */
   viewPolicy: EffectiveReviewPolicy | null;
 }
 
@@ -135,7 +165,8 @@ function useBuildAppModel(): AppModel {
   const projects = useProjectsQuery();
   const scanRoots = useScanRootsQuery();
   // The sidebar's status never depends on the toolbar scope (docs/STATUS-FLOW.md §1.1), nor on
-  // an inbox: it comes from the projects list alone, so it paints first (#10).
+  // the review data: it comes from the projects list alone, so it paints first (#10).
+  // The review data of every worktree (the daemon's inbox rows): `n` and bulk "all" read it.
   const inbox = useInboxQuery(scope);
   const worktreeId = view.kind === 'worktree' ? view.worktreeId : null;
   const files = useFilesQuery(worktreeId, scope);
@@ -170,22 +201,21 @@ function useBuildAppModel(): AppModel {
     return map;
   }, [inboxEntries]);
 
-  const reviewOffDisplay = useUi((s) => s.reviewOffDisplay);
   const fileListLayout = useUi((s) => s.fileListLayout);
   const filesData = files.data;
-  const groups = useMemo<FileGroup[]>(() => {
-    if (view.kind === 'inbox') {
-      const out: FileGroup[] = [];
-      for (const entry of inboxEntries) {
-        const row = sidebar.byId.get(entry.worktree.id);
-        if (row && !rowVisible(row, filters)) continue;
-        const enabled = row ? row.review.enabled : effectivePolicy(entry.review).enabled;
-        if (!enabled && reviewOffDisplay === 'hide') continue;
-        const group = sortedInboxFiles.get(entry.worktree.id);
-        if (group) out.push(group);
-      }
-      return out;
+  const allGroups = useMemo<FileGroup[]>(() => {
+    const out: FileGroup[] = [];
+    for (const entry of inboxEntries) {
+      const row = sidebar.byId.get(entry.worktree.id);
+      if (row && !rowVisible(row, filters)) continue;
+      const group = sortedInboxFiles.get(entry.worktree.id);
+      if (group) out.push(group);
     }
+    return out;
+  }, [inboxEntries, sortedInboxFiles, sidebar, filters]);
+  const allEntries = useMemo(() => flattenGroups(allGroups), [allGroups]);
+
+  const groups = useMemo<FileGroup[]>(() => {
     if (view.kind !== 'worktree') return [];
     const row = sidebar.byId.get(view.worktreeId);
     if (!row || !filesData) return [];
@@ -196,16 +226,7 @@ function useBuildAppModel(): AppModel {
         ? sortFilesTreeOrder(filesData.files)
         : ownFirst(sortFiles(filesData.files));
     return [{ project: row.project, worktree: row.worktree, files: sorted }];
-  }, [
-    view,
-    inboxEntries,
-    sortedInboxFiles,
-    sidebar,
-    filesData,
-    filters,
-    reviewOffDisplay,
-    fileListLayout,
-  ]);
+  }, [view, sidebar, filesData, fileListLayout]);
 
   const entries = useMemo(() => flattenGroups(groups), [groups]);
 
@@ -221,7 +242,7 @@ function useBuildAppModel(): AppModel {
   }, [sidebar, inboxEntries]);
 
   // The state a bulk request expects (the daemon skips a worktree that moved on) is the state of
-  // the files it acts on: the open file list's, then the inbox row's, then the sidebar's. Since
+  // the files it acts on: the open file list's, then the review data's row, then the sidebar's. Since
   // #51 the sidebar row is applied from the event at once while those lists refetch, so the
   // sidebar's hash can be newer than the files on screen; sending it would defeat the stale check.
   const stateHashes = useMemo(() => {
@@ -238,14 +259,55 @@ function useBuildAppModel(): AppModel {
     return out;
   }, [sidebar, inboxEntries, filesData]);
 
-  // While its batches are still landing (#10) the Inbox shows less than an "all" request covers.
-  const inboxUnfiltered =
-    view.kind === 'inbox' &&
+  const inboxStateHashes = useMemo(() => {
+    const out = new Map<string, string>();
+    for (const entry of inboxEntries) out.set(entry.worktree.id, entry.summary.stateHash);
+    return out;
+  }, [inboxEntries]);
+
+  const openRow = view.kind === 'worktree' ? sidebar.byId.get(view.worktreeId) : undefined;
+  // Not for a row with no summary or an error.
+  const listBehind =
+    filesData !== undefined &&
+    filesData.worktreeId === openRow?.worktree.id &&
+    openRow.summary !== null &&
+    openRow.error === null &&
+    filesData.stateHash !== openRow.summary.stateHash;
+
+  // A list behind its row with nothing in flight is refetched, once per pair of states, so it can
+  // never stay stuck behind a row nobody will move again. A refetch that ends with the list still
+  // behind is `failed`: the button says so instead of claiming a refresh.
+  const listBehindKey = listBehind
+    ? `${openRow?.summary?.stateHash}|${filesData?.stateHash}`
+    : null;
+  const healedKey = useRef<string | null>(null);
+  const refetchFiles = files.refetch;
+  const filesFetching = files.isFetching;
+  useEffect(() => {
+    if (listBehindKey === null) {
+      healedKey.current = null;
+      return;
+    }
+    if (filesFetching || healedKey.current === listBehindKey) return;
+    healedKey.current = listBehindKey;
+    void refetchFiles();
+  }, [listBehindKey, filesFetching, refetchFiles]);
+  const listState: AppModel['listState'] = !listBehind
+    ? null
+    : filesFetching || healedKey.current !== listBehindKey
+      ? 'refreshing'
+      : 'failed';
+
+  const listedIds = useMemo<ReadonlySet<string>>(() => new Set(sidebar.order), [sidebar.order]);
+  const viewListed = view.kind !== 'worktree' || listedIds.has(view.worktreeId);
+
+  // While its batches are still landing (#10) the data covers less than an "all" request does.
+  const allUnfiltered =
     !isPartialInbox(scope) &&
     !hasSidebarFilters(filters) &&
     showsReviewed &&
     !fromMainOnly &&
-    groups.length === inboxEntries.length;
+    allGroups.length === inboxEntries.length;
 
   const viewPolicy =
     view.kind === 'worktree' ? (sidebar.byId.get(view.worktreeId)?.review ?? null) : null;
@@ -305,13 +367,9 @@ function useBuildAppModel(): AppModel {
   }, [entries]);
 
   const viewReady =
-    view.kind === 'inbox'
-      ? inboxData !== undefined &&
-        !inbox.isPlaceholderData &&
-        inboxScopeFor(scope).kind === inboxData.scope.kind
-      : view.kind === 'worktree'
-        ? filesData !== undefined && sidebar.byId.has(view.worktreeId)
-        : projectList !== undefined;
+    view.kind === 'worktree'
+      ? filesData !== undefined && sidebar.byId.has(view.worktreeId)
+      : projectList !== undefined;
 
   const selectedKey = selected ? fileRefKey(selected) : null;
   const selectedEntry = useMemo(
@@ -334,17 +392,23 @@ function useBuildAppModel(): AppModel {
     scope,
     projects,
     scanRoots,
-    inbox,
     files,
     sidebar,
     unreviewedTotal,
     disabledWorktrees,
     stateHashes,
-    inboxUnfiltered,
+    inboxStateHashes,
+    viewListed,
+    listBehind,
+    listState,
+    listedIds,
+    allUnfiltered,
     viewPolicy,
     inboxEntries,
     groups,
     entries,
+    allGroups,
+    allEntries,
     globalEntries,
     visible,
     originVisible,

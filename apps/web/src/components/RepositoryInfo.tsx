@@ -19,7 +19,7 @@ import { CHECKS_STATE_WORD, projectStatusLine, REVIEW_WORD, remoteLabel } from '
 import { absoluteTime, relativeTime } from '../lib/time.ts';
 import { hasSuspicious } from '../lib/unicode.ts';
 import { describeStale, LOCAL_WAIT } from '../lib/wait.ts';
-import { actions, useUiStore } from '../state/ui.tsx';
+import { useCommandsContext } from '../state/commandsContext.tsx';
 import { ChangeRequestGlyph } from './ChangeRequest.tsx';
 import { CopyButton } from './CopyButton.tsx';
 import { PAGE_SIZE, Pager, usePage } from './Pager.tsx';
@@ -339,7 +339,7 @@ export function ForgeRepositoryFacts({ projectId }: { projectId: string }) {
  */
 export function OpenRequests({ projectId }: { projectId: string }) {
   const query = useRepositoryForge(projectId);
-  const store = useUiStore();
+  const commands = useCommandsContext();
   const index = useForgeIndex();
   const info = query.data?.repository;
   if (!info) return null;
@@ -365,7 +365,7 @@ export function OpenRequests({ projectId }: { projectId: string }) {
             const local = r.worktreeId !== null && index.has(r.worktreeId);
             const open = () => {
               if (r.worktreeId && local) {
-                actions.setView(store, {
+                commands.openView({
                   kind: 'worktree',
                   worktreeId: r.worktreeId,
                   tab: 'request',

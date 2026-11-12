@@ -161,7 +161,7 @@ export function useFocusReporting(worktreeId: string | null, projectId: string |
       const hidden = typeof document !== 'undefined' && document.visibilityState === 'hidden';
       const next = hidden ? null : worktreeId;
       const nextProject = hidden ? null : projectId;
-      // A visible tab with nothing selected (the Inbox, a folder Overview) is not a hidden tab.
+      // A visible tab with nothing selected (a folder Overview) is not a hidden tab.
       const key = `${hidden ? 'h' : 'v'}\u0000${next ?? ''}\u0000${nextProject ?? ''}`;
       if (key === last.current) return;
       if (timer !== undefined) clearTimeout(timer);

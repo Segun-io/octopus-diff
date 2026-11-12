@@ -24,7 +24,8 @@ speaks git, so it works with any tool that edits files or creates worktrees.
 ### Principles
 
 - **Diff first.** The diff is the main screen. Everything else is navigation toward a diff.
-- **Many projects, one view.** The unit of navigation is a *changes inbox* across all repos and worktrees.
+- **Many projects, one view.** The unit of navigation is one flat list of the worktrees of every repo, newest
+  activity first (the Inbox *view* is gone, DECISIONS #272-#278).
 - **Read-only toward repositories.** octopus-diff never writes to a repo: no stage, commit, checkout, fetch,
   or even index refresh locks. (Its own app state, such as review marks, lives outside the repos.) This is
   enforced in code and tested, not just promised.
@@ -126,15 +127,15 @@ Three-pane layout, dark and light themes:
    multi-select picker (status, **folders**, projects, worktrees), the way to narrow the list; a folder's or project's
    Overview opens from a row's menu or the palette. No activity pulse: a change from the last two minutes shows a
    static `now` in the accent colour, nothing animates.
-2. **File list** (`@pierre/trees`): changed files for the selected worktree (or, in Inbox mode, grouped by
-   project → worktree). Status icons, +/− counts, reviewed checkmark.
+2. **File list** (`@pierre/trees`): changed files for the selected worktree. Status icons, +/− counts, reviewed
+   checkmark. The app opens on the top worktree of the sidebar list (the one open last, when it is still there).
 3. **Diff viewer** (`@pierre/diffs`): split / unified toggle, hide-whitespace toggle, collapsed unchanged
    regions ("More context" +20 lines up to the whole file, "Expand all" / "Collapse"; never past the API's
    `context` maximum, DECISIONS #154–#156), lazy rendering with virtualization for huge diffs, binary / too-large placeholders,
    rename display (`old → new`), submodule and symlink diffs shown sanely.
 
 Chrome (`docs/TOOLBAR.md`, DECISIONS #116–#122): three tiers, one row each. A **context bar** above both panes says
-where you are (the Inbox with its counts, or the worktree's project and branch with its chips and `↑a ↓b`), holds the
+where you are (the worktree's project and branch with its chips and `↑a ↓b`), holds the
 `Changes | PR #n` switch for a worktree whose branch has a matched pull/merge request (the **Request** tab, read-only:
 summary, checks, conversation, timeline, files; `docs/FORGES.md`), the forge link, the review policy and, at the
 right, the refresh indicator, theme and help. The **file pane header** holds the scope select with counts
@@ -148,8 +149,8 @@ local branches no worktree has checked out, and the newest 15 open requests with
 (`docs/OVERVIEW-LISTS.md`). The worktree with the default branch checked out carries a `default` chip wherever
 worktrees are listed.
 
-Copy (`docs/COPY-TOOLS.md`, web only): a "Copy" group in the worktree menus (sidebar, Overview, Inbox group
-headers: branch name, worktree path, commit id), a file menu on list and tree rows (path, old path, name, absolute
+Copy (`docs/COPY-TOOLS.md`, web only): a "Copy" group in the worktree menus (sidebar, Overview:
+branch name, worktree path, commit id), a file menu on list and tree rows (path, old path, name, absolute
 path), a copy-path button and a `⋯` menu in the diff header (plus the file's patch), a copy button for the commit
 scope, and palette commands. In the diff, a press-and-drag on the line numbers selects lines; a floating bar copies
 them as plain code or as Markdown with where they live (file, lines, branch, worktree, project, scope, HEAD), and
@@ -168,7 +169,7 @@ chip next to the eye and a `+main` tag with an "Only this branch's changes" togg
 N" leave the wrapped files out; `j`/`k`/`n` skip them while collapsed. An older daemon (no `origin`) shows none of it.
 
 Keyboard: `j`/`k` next/prev file · `J`/`K` next/prev worktree · `n` next **unreviewed** file anywhere ·
-`r` toggle reviewed · `m` only files from the default branch · `s` split/unified · `/` filter · `g i` inbox · `?` help. All actions reachable
+`r` toggle reviewed · `m` only files from the default branch · `s` split/unified · `/` filter · `?` help. All actions reachable
 without a mouse.
 
 Live updates: selection and scroll position are preserved when the underlying diff refreshes. If the open
@@ -176,7 +177,9 @@ file's patch changed, show a subtle "updated" banner and keep reading position w
 
 ### 4.3 Differentiators (protect these)
 
-1. Cross-repo **Inbox** ("what did my agents change?").
+1. Cross-repo **worktree list** ("what did my agents change?"): every worktree of every watched repo in one list,
+   newest activity first, with the unreviewed count on the row and in the tab title, and `n` walking the
+   unreviewed files across all of them.
 2. **Reviewed marks that survive and invalidate** correctly (patch-hash keyed), and **review bookmarks** so that
    committed, merged, squashed or rebased work is reviewed once (`docs/STATUS-FLOW.md`).
 3. **Worktree auto-discovery**, no agent integration needed (covers T3 Code `~/.t3/worktrees`,

@@ -217,8 +217,7 @@ describe('merge noise: the model', () => {
         visible: visibleIf(true, view),
         stateHashes: new Map([['w1', 'h']]),
         disabled: new Set(),
-        inboxUnfiltered: false,
-        view: 'worktree',
+        allUnfiltered: false,
       });
     expect(plan(COLLAPSED).count).toBe(3);
     // Expanded, the base files are listed but are not part of the bulk request.
@@ -252,8 +251,7 @@ describe('merge noise: the model', () => {
           ['w2', 'h2'],
         ]),
         disabled: new Set(),
-        inboxUnfiltered: false,
-        view: 'inbox',
+        allUnfiltered: false,
       });
     const review = plan(true, { kind: 'review' });
     // Nothing of w2 is marked (so it is not in the count), but its bookmark moves like w1's.
@@ -278,8 +276,7 @@ describe('merge noise: the model', () => {
       visible: visibleIf(true, { fromMainOnly: true, expanded: new Set() }),
       stateHashes: new Map([['w1', 'h1']]),
       disabled: new Set(),
-      inboxUnfiltered: false,
-      view: 'inbox',
+      allUnfiltered: false,
     });
     expect(chip.count).toBe(0);
     // w1 hides own files, so it gets nothing; w2 has none hidden, and its bookmark-only request
@@ -662,7 +659,7 @@ describe('merge noise: the chip', () => {
 
 describe('merge noise: counts', () => {
   it('the scope counts, the sidebar chip and the title use own + mixed only', async () => {
-    const { backend, store } = setup();
+    const { backend } = setup();
     await open('feat/auth');
     await screen.findByTestId(ORIGIN_TEST_IDS.group);
     const review = backend
@@ -677,53 +674,12 @@ describe('merge noise: counts', () => {
     expect(scopeSelect().textContent).toContain(`To review (${own})`);
     // Sidebar row.
     expect(worktreeItem('feat/auth').dataset.unreviewed).toBe(String(own));
-    // The group header of the inbox counts own + mixed only too.
-    act(() => store.setState({ view: { kind: 'inbox' } }));
-    await waitFor(() =>
-      expect(screen.queryAllByTestId(TEST_IDS.fileGroup).length).toBeGreaterThan(0),
-    );
-    const authGroup = screen
-      .getAllByTestId(TEST_IDS.fileGroup)
-      .find((el) => el.dataset.worktreeId === worktreeItem('feat/auth').dataset.worktreeId);
-    expect(authGroup?.textContent).toContain(`${own} unreviewed`);
     // The document title is the sum of the rows' counts (no base file in it).
     const total = Array.from(screen.getAllByTestId(TEST_IDS.worktreeItem)).reduce(
       (n, el) => n + Number(el.dataset.unreviewed ?? 0),
       0,
     );
     await waitFor(() => expect(document.title).toBe(`(${total}) octopus-diff`));
-  });
-
-  it('expanding the group does not change the file count in the Inbox group header (PR #67 review)', async () => {
-    const { user, store } = setup();
-    await open('feat/auth');
-    await screen.findByTestId(ORIGIN_TEST_IDS.group);
-    // One own file is reviewed (hidden while "show reviewed" is off), so the header reads `k/total`:
-    // the case where counting the expanded base files as shown used to make it read `total`.
-    const before = paths().length;
-    expect(before).toBeGreaterThan(1);
-    await user.click(screen.getAllByTestId(TEST_IDS.fileItem)[0] as HTMLElement);
-    await press(user, 'r');
-    await waitFor(() => expect(paths().length).toBe(before - 1));
-    act(() => store.setState({ view: { kind: 'inbox' } }));
-    await waitFor(() =>
-      expect(screen.queryAllByTestId(TEST_IDS.fileGroup).length).toBeGreaterThan(0),
-    );
-    const headerOf = () =>
-      screen
-        .getAllByTestId(TEST_IDS.fileGroup)
-        .find((el) => el.dataset.worktreeId === worktreeItem('feat/auth').dataset.worktreeId)
-        ?.querySelector('div.flex')?.textContent ?? '';
-    const collapsed = headerOf();
-    expect(collapsed).toMatch(/\d+\/\d+ files/);
-    const noise = screen
-      .getAllByTestId(ORIGIN_TEST_IDS.group)
-      .find((el) => el.dataset.worktreeId === worktreeItem('feat/auth').dataset.worktreeId);
-    expect(noise).toBeDefined();
-    fireEvent.click(noise as HTMLElement);
-    await waitFor(() => expect(paths().length).toBeGreaterThan(0));
-    // Same text with the base files expanded: they are rows, but not part of the own-only count.
-    expect(headerOf()).toBe(collapsed);
   });
 
   it('Review N shown counts own + mixed; Review all leaves the base files alone', async () => {

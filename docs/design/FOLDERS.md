@@ -12,21 +12,21 @@ everything an agent touched, the history of one file, and plain directories that
 at all (build output, notes, a vendored tree) where "what changed since I looked" is still a fair
 question. All of it stays read-only: octopus-diff shows, it never writes.
 
-The product stays diff-first. The Inbox is still the home screen and `Changes` is still the view you
+The product stays diff-first. The app opens on a worktree (DECISIONS #272; there is no Inbox view any more) and `Changes` is still the view you
 land in. Folder capabilities are what you reach for when the diff is not enough context: "show me the
 whole file", "where else is this symbol", "when did this line arrive", "what is in this folder anyway".
 
 ## 2. What the shell already provides (shipped in this round)
 
-- **Folder is a first-class node.** The sidebar is `Inbox → Folders (scan roots) → Projects →
-  Worktrees`, with an "Added directly" pseudo-folder for projects registered without a scan root. A
+- **Folder is a first-class node.** The sidebar was `Inbox → Folders (scan roots) → Projects →
+  Worktrees` (now one flat list, DECISIONS #241, with no Inbox, #272), with an "Added directly" pseudo-folder for projects registered without a scan root. A
   folder row aggregates repositories, dirty worktrees and unreviewed files, has the same context menu as
   a project (mark all verified / unreviewed, review on / off / inherit, rescan, remove) and its own
   Overview.
-- **Selection is a path, not a mode.** `View` is `{ kind: 'inbox' } | { kind: 'folder', scanRootId } |
+- **Selection is a path, not a mode.** `View` is `{ kind: 'none' } | { kind: 'folder', scanRootId } |
   { kind: 'project', projectId } | { kind: 'worktree', worktreeId }`; `views/registry.ts` turns it into a
-  `Selection { folder?, project?, worktree?, inbox }` and asks each registered `ViewDefinition.appliesTo`
-  whether it fits. `Changes` applies to the Inbox and worktrees, `Overview` to folders and projects.
+  `Selection { folder?, project?, worktree? }` and asks each registered `ViewDefinition.appliesTo`
+  whether it fits. `Changes` applies to worktrees, `Overview` to folders and projects.
 - **The main pane is a registry.** Adding a view is a `ViewDefinition { id, label, icon, appliesTo }`
   plus a lazy component; the shell renders whichever applies first. No tab strip is shown today because
   exactly one view applies to every selection; once two apply (a worktree with `Changes` and `Files`),

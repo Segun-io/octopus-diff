@@ -14,7 +14,6 @@ export interface Selection {
   folder?: string | undefined;
   project?: string | undefined;
   worktree?: string | undefined;
-  inbox: boolean;
   /** The selected worktree has a matched pull/merge request (docs/FORGES.md). */
   hasRequest?: boolean;
 }
@@ -32,13 +31,14 @@ export const VIEWS: readonly ViewDefinition[] = [
     id: 'changes',
     label: 'Changes',
     icon: '±',
-    appliesTo: (s) => s.inbox || s.worktree !== undefined,
+    appliesTo: (s) => s.worktree !== undefined,
   },
   {
     id: 'overview',
     label: 'Overview',
     icon: '▦',
-    appliesTo: (s) => !s.inbox && s.worktree === undefined,
+    appliesTo: (s) =>
+      s.worktree === undefined && (s.folder !== undefined || s.project !== undefined),
   },
   {
     id: 'request',
@@ -50,15 +50,14 @@ export const VIEWS: readonly ViewDefinition[] = [
 
 export function selectionOf(view: View, context: { hasRequest?: boolean } = {}): Selection {
   switch (view.kind) {
-    case 'inbox':
-      return { inbox: true };
+    case 'none':
+      return {};
     case 'folder':
-      return { inbox: false, folder: view.scanRootId };
+      return { folder: view.scanRootId };
     case 'project':
-      return { inbox: false, project: view.projectId };
+      return { project: view.projectId };
     case 'worktree':
       return {
-        inbox: false,
         worktree: view.worktreeId,
         ...(context.hasRequest ? { hasRequest: true } : {}),
       };

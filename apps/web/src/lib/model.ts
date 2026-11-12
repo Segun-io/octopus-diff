@@ -989,17 +989,19 @@ export function repairSelection(
   return visibleEntries[at] ?? null;
 }
 
-/** `J`/`K`: list is [inbox, ...worktrees]; returns the next view id (`null` = inbox). */
+/**
+ * `J`/`K`: the next worktree of `order` (the list, then the hidden ones). From a view that is no
+ * worktree (an Overview) either key goes to the first one; at either end nothing changes.
+ */
 export function stepWorktree(
   order: readonly string[],
   current: string | null,
   delta: 1 | -1,
 ): { changed: boolean; worktreeId: string | null } {
-  const items: (string | null)[] = [null, ...order];
-  const index = items.indexOf(current);
-  const nextIndex = index === -1 ? (delta === 1 ? 1 : 0) : index + delta;
-  if (nextIndex < 0 || nextIndex >= items.length) return { changed: false, worktreeId: current };
-  const next = items[nextIndex] ?? null;
+  const index = current === null ? -1 : order.indexOf(current);
+  const nextIndex = index === -1 ? 0 : index + delta;
+  const next = order[nextIndex];
+  if (next === undefined) return { changed: false, worktreeId: current };
   return { changed: next !== current, worktreeId: next };
 }
 

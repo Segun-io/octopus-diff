@@ -59,11 +59,13 @@ The problems, named:
 Says where you are and which view of it is open. Identical on the Changes and Request tabs: the tabs switch
 what is *below* it.
 
-| Slot | Inbox | Worktree |
-|---|---|---|
-| Identity (13 px, project 500, branch mono muted; tooltip: path) | `Inbox` | `octopus-api` `feat/auth` |
-| Facts (11 px muted, spaced) | `5 worktrees` `17 files` (what the list holds in the current scope) | chips `main` / source / in-progress, `↑4 ↓0` |
-| View switch (`od-seg`, only with a matched request) | – | `[Changes \| ⎇ PR #100]` |
+> The Inbox column of this table is gone with the Inbox view (DECISIONS #272): the bar is always a worktree's.
+
+| Slot | Worktree |
+|---|---|
+| Identity (13 px, project 500, branch mono muted; tooltip: path) | `octopus-api` `feat/auth` |
+| Facts (11 px muted, spaced) | chips `main` / source / in-progress, `↑4 ↓0` |
+| View switch (`od-seg`, only with a matched request) | `[Changes \| ⎇ PR #100]` |
 | Forge link (ghost, only on the Changes tab; the Request header carries it) | – | `⎇ open  changes requested ↗` (state words, no number: the tab has it) |
 | Review policy (ghost when on, raised when off) | – | `Review on` |
 | App chrome (right, ghost) | `Live` `☾` `?` | the same |
@@ -92,8 +94,7 @@ The `17 files  17 unreviewed` line is gone: the select carries the total, the bu
 ### 3.3 Diff header (`components/diff/DiffPane.tsx`)
 
 Always rendered in the Changes view, so the rendering options have a fixed home. Left: status letter, path, copy
-button, status word, `+a −d`; the worktree name only in the Inbox, where the file's worktree is not the selected
-one. Right, in three groups separated by hairlines: rendering (`[unified | split]` segmented icons, whitespace
+button, status word, `+a −d`; (the worktree's name is in the context bar; the Inbox, where the file's worktree differed, is gone). Right, in three groups separated by hairlines: rendering (`[unified | split]` segmented icons, whitespace
 pilcrow), this file (`More context`, `Expand all` as ghost text, `⋯` copy menu), then `✓ Reviewed`.
 
 ## 4. What the tests pin, kept as is

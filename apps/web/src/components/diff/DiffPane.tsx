@@ -38,7 +38,6 @@ import {
   StatusIcon,
   statusLabel,
   WarningIcon,
-  WorktreeName,
 } from '../bits.tsx';
 import { ContextMenu, useContextMenu } from '../ContextMenu.tsx';
 import { CopyButton } from '../CopyButton.tsx';
@@ -178,9 +177,6 @@ export function DiffPane() {
   const entry = model.selectedEntry;
   const reviewed = diff?.reviewed ?? entry?.file.reviewed ?? false;
   const row = selected ? model.sidebar.byId.get(selected.worktreeId) : undefined;
-  // In the Inbox the list mixes worktrees, so the header names the file's; elsewhere the context
-  // bar already does.
-  const inbox = model.view.kind === 'inbox';
   const menu = useContextMenu<null>();
 
   // "Updated" banner: the open file's patchHash changed underneath the reader. Keyed by file
@@ -306,16 +302,6 @@ export function DiffPane() {
             )}
             {status && <span className="text-[11px] text-muted">{statusLabel(status)}</span>}
             {file && <LineCounts additions={file.additions} deletions={file.deletions} />}
-            {inbox && row && (
-              <span data-testid="diff-header-worktree" className="inline-flex min-w-0">
-                <WorktreeName
-                  project={row.project.name}
-                  branch={row.worktree.branch ?? 'detached'}
-                  className="text-[11px] text-muted"
-                  branchClassName="text-faint"
-                />
-              </span>
-            )}
           </>
         )}
         <span className="ml-auto flex items-center gap-1">
@@ -497,7 +483,7 @@ export function DiffPane() {
           />
         )}
       </div>
-      {/* The open worktree's live feed (not the Inbox's: that mixes worktrees). */}
+      {/* The open worktree's live feed. */}
       {model.view.kind === 'worktree' && <ActivityStrip worktreeId={model.view.worktreeId} />}
     </section>
   );

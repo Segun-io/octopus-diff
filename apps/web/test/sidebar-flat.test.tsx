@@ -253,7 +253,7 @@ describe('virtualised sidebar', () => {
     mount(LARGE);
     await listed(TOTAL);
     const first = mountedRows();
-    // The viewport's 10 rows plus the overscan below (and the selected row, here none).
+    // The viewport's 10 rows plus the overscan below (the selected row is the landing one: row 0).
     expect(first.length).toBeGreaterThanOrEqual(10);
     expect(first.length).toBeLessThanOrEqual(10 + OVERSCAN + 1);
     expect(first.length).toBeLessThan(TOTAL / 10);
@@ -261,9 +261,10 @@ describe('virtualised sidebar', () => {
     expect(list().style.height).toBe(`${TOTAL * 58}px`);
 
     act(() => scrollSidebarTo(scroller(), 100 * 58));
-    await waitFor(() => expect(mountedRows()).not.toContain(first[0]));
+    await waitFor(() => expect(mountedRows()).not.toContain(first[1]));
     const moved = mountedRows();
-    expect(moved.length).toBeLessThanOrEqual(10 + 2 * OVERSCAN + 1);
+    // The landing row stays mounted as the selection, hence one more than the window.
+    expect(moved.length).toBeLessThanOrEqual(10 + 2 * OVERSCAN + 2);
     // Rows are absolutely positioned at their own offset.
     const li = list().querySelector<HTMLElement>(`li[data-index="${100}"]`);
     expect(li?.style.top).toBe(`${100 * 58}px`);
@@ -278,13 +279,16 @@ describe('virtualised sidebar', () => {
     // in the window, and the list scrolls to it.
     const model = [...document.querySelectorAll('li[data-index]')];
     expect(model.length).toBeLessThan(40);
+    // The app lands on the first row (#83); J steps to the second.
+    const firstId = mountedRows()[0] as string;
+    await waitFor(() => expect(store.getState().view).toMatchObject({ worktreeId: firstId }));
     await act(async () => {
       await user.keyboard('J');
     });
-    const firstId = mountedRows()[0] as string;
-    await waitFor(() => expect(store.getState().view).toMatchObject({ kind: 'worktree' }));
-    expect(store.getState().view).toMatchObject({ worktreeId: firstId });
-    // Press J 25 more times: the 26th row is past the first window of 10 rows.
+    await waitFor(() =>
+      expect(store.getState().view).toMatchObject({ worktreeId: mountedRows()[1] as string }),
+    );
+    // Press J 25 more times: the 27th row is past the first window of 10 rows.
     for (let i = 0; i < 25; i++) {
       await act(async () => {
         await user.keyboard('J');

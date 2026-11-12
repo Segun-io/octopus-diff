@@ -1,6 +1,7 @@
 /**
- * PLAN §8 item 3: the Inbox lists every dirty worktree; selecting a file shows a correct diff in
- * split and unified modes.
+ * PLAN §8 item 3: the daemon's inbox has every dirty worktree; the UI lists every worktree, lands
+ * on the first one (there is no Inbox view since #83) and shows its files; selecting a file shows
+ * a correct diff in split and unified modes.
  */
 import { TEST_IDS } from '@octopus-diff/contracts';
 import { findWorktree } from '@octopus-diff/fixtures';
@@ -32,42 +33,53 @@ test.describe('§8.3 inbox and diff', () => {
     }
   });
 
-  test('UI inbox lists every dirty worktree and no clean one', async ({
+  test('the UI lists every worktree, lands on the first and shows each one’s own files (dirty ones only have files)', async ({
     manifest,
     daemon,
     app,
   }) => {
     await app.open(daemon.authUrl);
-    await app.selectInbox();
-    const dirty = dirtyCheckouts(manifest);
-    await expect(app.contextBar).toHaveAttribute('data-count', String(dirty.length));
-    const groups = app.byTestId(TEST_IDS.fileGroup);
-    await expect(groups).toHaveCount(dirty.length);
-    const ids = await groups.evaluateAll((nodes) =>
-      nodes.map((n) => n.getAttribute('data-worktree-id')),
-    );
-    expect(ids.sort()).toEqual(dirty.map((d) => d.worktree.id).sort());
-    for (const { worktree } of registeredCheckouts(manifest).filter((c) => !c.worktree.dirty)) {
-      await expect(
-        app.page.locator(
-          `[data-testid="${TEST_IDS.fileGroup}"][data-worktree-id="${worktree.id}"]`,
-        ),
-        `clean ${worktree.name} must not be in the inbox`,
-      ).toHaveCount(0);
+    // The landing view: the first row of the list is open and its files are shown.
+    const landed = await app.expectLanded();
+    await expect(app.byTestId(TEST_IDS.fileGroup)).toHaveCount(1);
+    await expect(app.byTestId(TEST_IDS.fileGroup)).toHaveAttribute('data-worktree-id', landed);
+    const checkouts = registeredCheckouts(manifest);
+    for (const { worktree } of checkouts) {
+      await app.expectWorktreeItem(worktree);
     }
-    // Every file of a dirty worktree is listed under its group. The list is virtualized, so
-    // collect rows by scrolling through it instead of expecting them all in the DOM at once.
-    const listed = new Set(
-      (await app.allFileItems()).map((item) => `${item.worktreeId ?? ''}\u0000${item.path}`),
-    );
-    for (const { worktree } of dirty) {
-      for (const file of worktree.scopes.working ?? []) {
-        expect(
-          listed.has(`${worktree.id}\u0000${file.path}`),
-          `${worktree.name}: ${file.path}`,
-        ).toBe(true);
-      }
+    // What the Inbox view used to list in one place, worktree by worktree: a dirty worktree
+    // lists exactly its working-scope files, a clean one lists none.
+    for (const { worktree } of checkouts) {
+      await app.selectWorktree(worktree.id);
+      const want = (worktree.scopes.working ?? []).map((f) => f.path).sort();
+      await expect
+        .poll(async () => (await app.filePaths()).sort(), { message: worktree.name })
+        .toEqual(want);
+      await expect(app.byTestId(TEST_IDS.fileGroup)).toHaveAttribute(
+        'data-worktree-id',
+        worktree.id,
+      );
     }
+    expect(dirtyCheckouts(manifest).length).toBeGreaterThan(0);
+  });
+
+  test('there is no Inbox: no sidebar entry, no `g i`, no palette command', async ({
+    daemon,
+    app,
+  }) => {
+    await app.open(daemon.authUrl);
+    const landed = await app.expectLanded();
+    await expect(app.byTestId(TEST_IDS.inboxItem)).toHaveCount(0);
+    await app.focusApp();
+    await app.press('g');
+    await app.press('i');
+    await expect(app.contextBar).toHaveAttribute('data-view', 'worktree');
+    await expect(app.worktreeItem(landed)).toHaveAttribute('aria-current', 'true');
+    await app.press('Control+k');
+    await app.byTestId(TEST_IDS.commandPaletteInput).fill('inbox');
+    await expect(
+      app.byTestId(TEST_IDS.commandPaletteItem).filter({ hasText: /inbox/i }),
+    ).toHaveCount(0);
   });
 
   test('selecting a file shows its real patch in unified and split modes', async ({
@@ -86,7 +98,7 @@ test.describe('§8.3 inbox and diff', () => {
     if (!added || !removed) throw new Error('README.md patch should add and remove lines');
 
     await app.open(daemon.authUrl);
-    await app.selectInbox();
+    await app.selectWorktree(worktree.id);
     await app.openFile(path, worktree.id);
     await expect(app.diffViewer).toHaveAttribute('data-worktree-id', worktree.id);
     await expect(app.diffViewer).toHaveAttribute('data-state', 'ready');

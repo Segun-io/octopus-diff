@@ -33,14 +33,15 @@ describe('source chip and activity', () => {
 });
 
 describe('view registry', () => {
-  it('routes inbox and worktrees to Changes, folders and projects to Overview', () => {
-    expect(activeView({ kind: 'inbox' }).id).toBe('changes');
+  it('routes worktrees to Changes, folders and projects to Overview', () => {
     expect(activeView({ kind: 'worktree', worktreeId: 'a' }).id).toBe('changes');
     expect(activeView({ kind: 'folder', scanRootId: 'a' }).id).toBe('overview');
     expect(activeView({ kind: 'project', projectId: 'a' }).id).toBe('overview');
     expect(viewsFor(selectionOf({ kind: 'project', projectId: 'a' })).map((v) => v.id)).toEqual([
       'overview',
     ]);
+    // Nothing open yet has no view: the app settles it before it renders one.
+    expect(() => activeView({ kind: 'none' })).toThrow();
   });
 });
 
@@ -90,7 +91,7 @@ describe('planBulk', () => {
     ['b', 'hb'],
   ]);
 
-  it('uses one all request for an unfiltered inbox and per-worktree paths otherwise', () => {
+  it('uses one all request when every worktree is covered and per-worktree paths otherwise', () => {
     const all = planBulk({
       scope: { kind: 'working' },
       reviewed: true,
@@ -99,8 +100,7 @@ describe('planBulk', () => {
       visible: () => true,
       stateHashes: hashes,
       disabled: new Set(),
-      inboxUnfiltered: true,
-      view: 'inbox',
+      allUnfiltered: true,
     });
     expect(all.target).toBe('all');
     expect(all.count).toBe(2);
@@ -116,8 +116,7 @@ describe('planBulk', () => {
       visible: (e) => !e.file.reviewed,
       stateHashes: hashes,
       disabled: new Set(['b']),
-      inboxUnfiltered: false,
-      view: 'inbox',
+      allUnfiltered: false,
     });
     expect(filtered.requests).toHaveLength(1);
     expect(filtered.requests[0]).toMatchObject({
@@ -133,8 +132,7 @@ describe('planBulk', () => {
       visible: () => true,
       stateHashes: hashes,
       disabled: new Set(),
-      inboxUnfiltered: false,
-      view: 'worktree',
+      allUnfiltered: false,
     });
     expect(clear.count).toBe(1);
     expect(clear.requests[0]?.scope).toEqual({ kind: 'working' });

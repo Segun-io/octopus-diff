@@ -13,7 +13,7 @@ import { type BulkActions, hasUndoableToast, useBulkActions } from './bulk.ts';
 import { copyAndReport } from './copy.ts';
 import { DEFAULT_CONTEXT, isFullContext, nextContext, patchShowsWholeFile } from './diffContext.ts';
 import type { AppModel } from './model.tsx';
-import { actions, useUiStore } from './ui.tsx';
+import { actions, useUiStore, type View } from './ui.tsx';
 
 /** What the palette's Copy commands copy (docs/COPY-TOOLS.md §4 step 2). */
 export type CopyCommand = 'branch' | 'worktreePath' | 'filePath' | 'fileName' | 'absolutePath';
@@ -36,21 +36,31 @@ export interface Commands {
   toggleShowReviewed(): void;
   /** The "From main" chip: list only the files a merge, rebase or update brought. */
   toggleFromMain(): void;
-  /** Expands or collapses the "from main" group (the open worktree's, or every one in the Inbox). */
+  /**
+   * An explicit pick of a view by name (the palette, an Overview row, a link, a toast). A worktree
+   * the sidebar filters leave out is made visible by clearing the filters (DECISIONS #281); the
+   * automatic moves (landing, `n`, `J`/`K`) never come through here and never clear anything.
+   */
+  openView(view: View): void;
+  /** Expands or collapses the "from main" group of the open worktree. */
   toggleOriginGroup(): void;
   toggleTheme(): void;
   toggleTreeLayout(): void;
   expandContext(): void;
   focusFilter(): void;
-  goInbox(): void;
   toggleHelp(): void;
   openSettings(section?: SettingsSectionId): void;
   togglePalette(): void;
   refreshNow(): void;
   /** Copies a name or path of the open worktree / file (palette commands). */
   copy(what: CopyCommand): void;
-  /** Bulk mark for what is on screen (current view, filters and "show reviewed" respected). */
+  /** Bulk mark for what is on screen (the open worktree, "show reviewed" respected). */
   markAll(reviewed: boolean): void;
+  /**
+   * Bulk mark for every worktree of the list (sidebar filters and "show reviewed" respected;
+   * unfiltered it is one `all` request).
+   */
+  markEvery(reviewed: boolean): void;
   /** Bulk mark for a sidebar node, ignoring UI filters. */
   markAllFor(target: BulkReviewTarget, reviewed: boolean, worktreeIds: readonly string[]): void;
   confirmBulk(): void;
@@ -59,8 +69,8 @@ export interface Commands {
   /** Scrolls the diff by a fraction of its height (negative = up). */
   scrollDiff(fraction: number): void;
   selectEntry(entry: NavEntry): void;
-  /** The plan `markAll(true)` would run right now (for button counts). */
-  currentPlan(reviewed: boolean): BulkPlan;
+  /** The plan `markAll` (or `markEvery`) would run right now (for button and palette counts). */
+  currentPlan(reviewed: boolean, every?: boolean): BulkPlan;
 }
 
 /** The diff pane's scroll container (the @pierre/diffs virtualizer root or a raw <pre>). */
@@ -94,7 +104,9 @@ export function useCommands(model: AppModel, resolvedTheme: 'light' | 'dark'): C
       // `n` skips the files of a collapsed "from main" group, like `j`/`k`.
       const eligible = (e: NavEntry) =>
         !m.disabledWorktrees.has(e.worktreeId) && m.originVisible(e);
-      const target = nextUnreviewed(m.globalEntries, m.selectedKey, eligible);
+      // Only worktrees of the list the sidebar shows: the pane cannot show any other one.
+      const listed = m.globalEntries.filter((e) => m.listedIds.has(e.worktreeId));
+      const target = nextUnreviewed(listed, m.selectedKey, eligible);
       if (!target) return false;
       const ref = toFileRef(target.worktreeId, target.file);
       if (m.view.kind === 'worktree' && m.view.worktreeId !== target.worktreeId) {
@@ -102,8 +114,8 @@ export function useCommands(model: AppModel, resolvedTheme: 'light' | 'dark'): C
           view: { kind: 'worktree', worktreeId: target.worktreeId },
           selected: ref,
         });
-      } else if (m.view.kind === 'inbox' && !m.entries.some((e) => e.key === target.key)) {
-        // Hidden by sidebar filters in the inbox: open its worktree instead.
+      } else if (m.view.kind !== 'worktree' && !m.entries.some((e) => e.key === target.key)) {
+        // From an Overview (or nothing open yet): open the target's worktree.
         store.setState({
           view: { kind: 'worktree', worktreeId: target.worktreeId },
           selected: ref,
@@ -113,18 +125,41 @@ export function useCommands(model: AppModel, resolvedTheme: 'light' | 'dark'): C
       }
       return true;
     };
-    const plan = (reviewed: boolean): BulkPlan => {
+    /**
+     * The open worktree's list is behind its row (it would send an older state's hash and the
+     * daemon would skip it): says why, retries a refetch that failed, and returns true. Only for
+     * a request that includes the open worktree (`ids` absent: the open worktree's own).
+     */
+    const listBehind = (ids?: readonly string[]): boolean => {
       const m = latest.current.model;
+      if (!m.listBehind || m.view.kind !== 'worktree') return false;
+      if (ids && !ids.includes(m.view.worktreeId)) return false;
+      if (m.listState === 'failed') {
+        actions.notice(store, "Could not refresh this worktree's file list. Retrying now.");
+        void queryClient.refetchQueries({ queryKey: queryKeys.files(m.view.worktreeId, m.scope) });
+      } else {
+        actions.notice(
+          store,
+          'This worktree just changed and its list is refreshing. Try again in a moment.',
+        );
+      }
+      return true;
+    };
+    const plan = (reviewed: boolean, every = false): BulkPlan => {
+      const m = latest.current.model;
+      // The hashes come from the same snapshot as the files and counts: the review data's rows for
+      // every worktree (its file query refreshes on its own and may be newer), the open file
+      // list's own state for the open worktree. A worktree the list does not show is not marked.
+      const shown = every || m.viewListed;
       return planBulk({
         scope: m.scope,
         reviewed,
-        groups: m.groups,
-        entries: m.entries,
+        groups: every ? m.allGroups : shown ? m.groups : [],
+        entries: every ? m.allEntries : shown ? m.entries : [],
         visible: m.visible,
-        stateHashes: m.stateHashes,
+        stateHashes: every ? m.inboxStateHashes : m.stateHashes,
         disabled: m.disabledWorktrees,
-        inboxUnfiltered: m.inboxUnfiltered,
-        view: m.view.kind === 'inbox' ? 'inbox' : 'worktree',
+        allUnfiltered: every && m.allUnfiltered,
       });
     };
     const runPlan = (p: BulkPlan, reviewed: boolean) => {
@@ -141,40 +176,69 @@ export function useCommands(model: AppModel, resolvedTheme: 'light' | 'dark'): C
       void latest.current.bulk.run(p);
     };
     return {
+      openView(view) {
+        // Listedness is read from the model of the last render, the one the user is looking at.
+        const m = latest.current.model;
+        const state = store.getState();
+        const hidden =
+          view.kind === 'worktree' &&
+          !m.listedIds.has(view.worktreeId) &&
+          m.sidebar.byId.has(view.worktreeId) &&
+          (state.filterFolders.length > 0 ||
+            state.filterProjects.length > 0 ||
+            state.filterWorktrees.length > 0 ||
+            state.onlyDirty ||
+            state.onlyUnreviewed);
+        if (hidden) {
+          store.setState({
+            filterFolders: [],
+            filterProjects: [],
+            filterWorktrees: [],
+            onlyDirty: false,
+            onlyUnreviewed: false,
+          });
+          actions.notice(store, 'Filters cleared to show that worktree.');
+        }
+        actions.setView(store, view);
+      },
       nextFile() {
         const m = latest.current.model;
+        if (!m.viewListed) return;
         select(stepFile(m.entries, m.selectedKey, 1, m.visible));
       },
       prevFile() {
         const m = latest.current.model;
+        if (!m.viewListed) return;
         select(stepFile(m.entries, m.selectedKey, -1, m.visible));
       },
       nextWorktree() {
         const next = stepWorktree(latest.current.model.sidebar.order, currentWorktreeId(), 1);
-        if (next.changed) {
-          actions.setView(
-            store,
-            next.worktreeId ? { kind: 'worktree', worktreeId: next.worktreeId } : { kind: 'inbox' },
-          );
+        if (next.changed && next.worktreeId) {
+          actions.setView(store, { kind: 'worktree', worktreeId: next.worktreeId });
         }
       },
       prevWorktree() {
         const next = stepWorktree(latest.current.model.sidebar.order, currentWorktreeId(), -1);
-        if (next.changed) {
-          actions.setView(
-            store,
-            next.worktreeId ? { kind: 'worktree', worktreeId: next.worktreeId } : { kind: 'inbox' },
-          );
+        if (next.changed && next.worktreeId) {
+          actions.setView(store, { kind: 'worktree', worktreeId: next.worktreeId });
         }
       },
       nextUnreviewed() {
-        if (!goNextUnreviewed()) actions.notice(store, 'No unreviewed files left in this scope.');
+        if (!goNextUnreviewed()) {
+          const m = latest.current.model;
+          actions.notice(
+            store,
+            m.listedIds.size < m.sidebar.byId.size
+              ? 'No more unreviewed files in the listed worktrees.'
+              : 'No unreviewed files left in this scope.',
+          );
+        }
       },
       toggleReviewed() {
         const m = latest.current.model;
         const entry = m.selectedEntry;
         const selected = store.getState().selected;
-        if (!entry || !selected) return;
+        if (!entry || !selected || !m.viewListed) return;
         if (m.disabledWorktrees.has(entry.worktreeId)) {
           actions.notice(store, 'Review is off for this worktree.');
           return;
@@ -227,7 +291,7 @@ export function useCommands(model: AppModel, resolvedTheme: 'light' | 'dark'): C
         if (withBase.length === 0)
           return actions.notice(store, 'No files from the default branch.');
         const open = store.getState().originOpen;
-        // One open group closes them all; none open expands them all (the Inbox has many).
+        // One open group closes them all; none open expands them all.
         const expand = !withBase.some((id) => open.includes(id));
         for (const id of withBase) actions.toggleOriginGroup(store, id, expand);
       },
@@ -278,9 +342,6 @@ export function useCommands(model: AppModel, resolvedTheme: 'light' | 'dark'): C
           input.select();
         } else store.setState({ filterOpen: true });
       },
-      goInbox() {
-        actions.setView(store, { kind: 'inbox' });
-      },
       toggleHelp() {
         store.setState((s) => ({ helpOpen: !s.helpOpen, paletteOpen: false }));
       },
@@ -327,9 +388,14 @@ export function useCommands(model: AppModel, resolvedTheme: 'light' | 'dark'): C
         void queryClient.invalidateQueries({ queryKey: ['diff'] });
       },
       markAll(reviewed) {
+        if (listBehind()) return;
         runPlan(plan(reviewed), reviewed);
       },
+      markEvery(reviewed) {
+        runPlan(plan(reviewed, true), reviewed);
+      },
       markAllFor(target, reviewed, worktreeIds) {
+        if (listBehind(worktreeIds)) return;
         const m = latest.current.model;
         runPlan(planBulkForTarget(target, m.scope, reviewed, m.stateHashes, worktreeIds), reviewed);
       },
@@ -353,8 +419,8 @@ export function useCommands(model: AppModel, resolvedTheme: 'light' | 'dark'): C
       selectEntry(entry) {
         select(entry);
       },
-      currentPlan(reviewed) {
-        return plan(reviewed);
+      currentPlan(reviewed, every) {
+        return plan(reviewed, every);
       },
     };
   }, [store, api, queryClient]);
@@ -380,14 +446,11 @@ function isActivatable(target: EventTarget | null): boolean {
   );
 }
 
-export const CHORD_TIMEOUT_MS = 1200;
-
 /** Global keyboard shortcuts (PLAN §4.2 plus UX round 1). */
 export function useKeyboardShortcuts(commands: Commands, enabled: boolean) {
   const store = useUiStore();
   useEffect(() => {
     if (!enabled) return;
-    let pendingG = 0;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented || event.altKey) return;
       const state = store.getState();
@@ -412,16 +475,6 @@ export function useKeyboardShortcuts(commands: Commands, enabled: boolean) {
         return; // dialogs handle their own keys (Escape included)
       }
       if (state.helpOpen && event.key !== '?' && event.key !== 'Escape') return;
-
-      if (pendingG && Date.now() - pendingG < CHORD_TIMEOUT_MS) {
-        pendingG = 0;
-        if (event.key === 'i') {
-          event.preventDefault();
-          commands.goInbox();
-          return;
-        }
-      }
-      pendingG = 0;
 
       const run = (fn: () => void) => {
         event.preventDefault();
@@ -468,10 +521,6 @@ export function useKeyboardShortcuts(commands: Commands, enabled: boolean) {
           return run(() => commands.scrollDiff(0.5));
         case 'u':
           return run(() => commands.scrollDiff(-0.5));
-        case 'g':
-          event.preventDefault();
-          pendingG = Date.now();
-          return;
         case 'Escape':
           if (state.helpOpen) run(() => store.setState({ helpOpen: false }));
           else if (state.bulkToast) run(() => store.setState({ bulkToast: null }));

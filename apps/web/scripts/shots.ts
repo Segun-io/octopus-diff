@@ -56,7 +56,8 @@ let activityWorktree: string | null = null;
 
 /** Named states; each starts from a fresh load with the theme preset in localStorage. */
 const STATES: Record<string, Step> = {
-  inbox: async () => {},
+  // The landing view: the app opens the top worktree of the list (#83).
+  landing: async () => {},
   worktree: async (page) => {
     await page.locator('[data-testid="worktree-item"][data-branch="feat/auth"]').click();
     await page.waitForTimeout(400);
@@ -312,7 +313,7 @@ async function simulate(page: Page, query: string): Promise<void> {
 async function main() {
   await mkdir(out, { recursive: true });
   const browser = await chromium.launch();
-  const requested = process.env.STATES?.split(',').filter(Boolean) ?? ['inbox', 'worktree'];
+  const requested = process.env.STATES?.split(',').filter(Boolean) ?? ['landing', 'worktree'];
   // Passes: the states that leave the mock as it was, then the ones that change it.
   const passes = [
     requested.filter((state) => !MUTATING_STATES.has(state)),
