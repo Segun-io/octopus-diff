@@ -749,3 +749,35 @@ describe('long runs of commits (PR #77 review)', () => {
     });
   });
 });
+
+// PR #91 P2-1: with untracked files omitted (#43), a never-committed index addition that leaves the
+// snapshot may be an untracked (omitted) file again: one coarse entry, never "deleted".
+describe('diffSnapshots: omitted untracked files', () => {
+  const staged = { path: 'gen/f3.txt', xy: 'A.', hH: null, hI: A, added: 1, deleted: 0 };
+  const omitted = { untrackedOmitted: 10, omittedPlan: 'plan1' };
+
+  it('a vanished index addition is coarse while files are omitted', () => {
+    const drafts = diff(
+      state([{ path: 'mine.txt', xy: '??' }, staged], {}, omitted),
+      state([{ path: 'mine.txt', xy: '??' }], {}, omitted),
+    );
+    expect(drafts.map((d) => d.kind)).toEqual(['bulk']);
+    expect(drafts[0]).toMatchObject({ truncated: true });
+  });
+
+  it('per-file entries stay alongside it', () => {
+    const drafts = diff(
+      state([{ path: 'a.txt', sig: 's1' }, staged], {}, omitted),
+      state([{ path: 'a.txt', sig: 's2', added: 2 }], {}, omitted),
+    );
+    expect(drafts.map((d) => [d.kind, d.path ?? null])).toEqual([
+      ['modified', 'a.txt'],
+      ['bulk', null],
+    ]);
+  });
+
+  it('without omitted files it is still a deletion', () => {
+    const drafts = diff(state([staged]), state([]));
+    expect(drafts).toMatchObject([{ kind: 'deleted', path: 'gen/f3.txt', oid: A }]);
+  });
+});

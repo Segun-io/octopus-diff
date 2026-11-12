@@ -61,6 +61,8 @@ export interface SnapshotState {
    * listed and omitted, so the comparison is coarse.
    */
   omittedPlan?: string;
+  /** `SummarySnapshot.untrackedOmitted`: untracked files the snapshot leaves out (#43). */
+  untrackedOmitted?: number;
 }
 
 export function entryKey(e: Pick<SummarySnapshotEntry, 'path' | 'rawPath'>): string {
@@ -82,6 +84,9 @@ export function snapshotState(
     truncated: snapshot.truncated,
     ...(snapshot.contentHash === undefined ? {} : { stateHash: snapshot.contentHash }),
     ...(snapshot.omittedPlan === undefined ? {} : { omittedPlan: snapshot.omittedPlan }),
+    ...(snapshot.untrackedOmitted === undefined
+      ? {}
+      : { untrackedOmitted: snapshot.untrackedOmitted }),
     head: {
       sha: summary.headSha,
       branch: summary.branch,
@@ -265,6 +270,8 @@ export function diffSnapshots(
 ): ActivityDraft[] {
   const files: ActivityDraft[] = [];
   const left: string[] = [];
+  /** A path left the snapshot in a way it cannot tell (see the omitted case below). */
+  let unsure = false;
   // Another set of omitted untracked files (#43): a listed file that left may only be omitted now.
   const coarse = prev.truncated || cur.truncated || prev.omittedPlan !== cur.omittedPlan;
   // A truncated snapshot cannot see an edit to a path beyond its cap: neither `total` nor a retained
@@ -313,6 +320,13 @@ export function diffSnapshots(
     } else if (p.xy === '??') {
       files.push(fileDraft('deleted', p, { xy: '??', oid: null, untracked: true }));
     } else if (p.hH === null && p.hI !== null && !isDeletion(p.xy)) {
+      if (prev.untrackedOmitted || cur.untrackedOmitted) {
+        // Untracked files are omitted (#43, PR #91 P2-1): the path may be an untracked file again
+        // (`git reset`, `git rm --cached`) that is now left out, not a deleted one. Say only that
+        // something changed (one coarse entry), never "deleted".
+        unsure = true;
+        continue;
+      }
       // Added to the index, never committed, now gone without a commit: deleted (or unstaged and
       // ignored); its staged content is still a blob.
       files.push(fileDraft('deleted', p, { xy: p.xy, oid: p.hI, added: null, deleted: null }));
@@ -375,6 +389,7 @@ export function diffSnapshots(
   } else {
     for (const f of files) out.push(label(f));
   }
+  if (unsure && !coarse) out.push({ kind: 'bulk', truncated: true, pathCount: cur.total });
   return out;
 }
 

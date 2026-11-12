@@ -74,7 +74,9 @@ describe('untracked-heavy worktrees through the daemon (#43)', { timeout: 60_000
     const omission = {
       count: 60,
       limit: CAP,
-      directories: [{ path: 'node_modules', count: 60, ignoreLine: 'node_modules/' }],
+      directories: [
+        { path: 'node_modules', count: 60, ignoreLine: 'node_modules/', generated: true },
+      ],
     };
     expect(summary.untrackedOmitted).toEqual(omission);
 
@@ -188,5 +190,55 @@ describe('untracked-heavy worktrees through the daemon (#43)', { timeout: 60_000
     entries = await feed(seq);
     expect(entries.filter((e) => e.kind !== 'bulk')).toEqual([]);
     expect((await summaryOf(api, id))?.untrackedOmitted).toBeUndefined();
+  });
+
+  // PR #91 P2-1: a file staged out of an omitted directory and unstaged again is not deleted.
+  it('activity: staging and unstaging an omitted file never reads as a deletion', async () => {
+    const fx = await makeRealGitFixture();
+    const dir = await makeRealRepo(fx, 'unstage', { 'a.txt': 'a\n' });
+    await writeFile(path.join(dir, 'mine.txt'), 'mine\n');
+    await mkdir(path.join(dir, 'gen'));
+    for (let i = 0; i < 30; i++) await writeFile(path.join(dir, 'gen', `f${i}.txt`), `${i}\n`);
+    const id = hashId(dir);
+    const { api } = await start(fx, [dir]);
+    await eventually(async () => {
+      const feed = await api.getActivity(id);
+      return feed.live && feed.watch.mode === 'native';
+    }, 20_000);
+    expect((await summaryOf(api, id))?.untrackedOmitted?.count).toBe(30);
+    const feed = async (after: number): Promise<ActivityEntry[]> =>
+      (await api.getActivity(id, { after })).entries;
+    const head = async () => (await summaryOf(api, id))?.stateHash;
+
+    for (const undo of [
+      ['reset', '-q', '--', 'gen/f3.txt'],
+      ['rm', '-q', '--cached', '--', 'gen/f3.txt'],
+    ]) {
+      let seq = (await api.getActivity(id)).seq;
+      let before = await head();
+      fx.git(dir, 'add', '--', 'gen/f3.txt');
+      const added = await eventually(
+        async () => (await feed(seq)).find((e) => e.path === 'gen/f3.txt'),
+        10_000,
+      );
+      expect(added).toMatchObject({ kind: 'added', xy: 'A.' });
+      await eventually(async () => (await head()) !== before, 10_000);
+      seq = (await api.getActivity(id)).seq;
+      before = await head();
+      fx.git(dir, ...undo);
+      await eventually(async () => (await head()) !== before, 10_000);
+      await sleep(400);
+      const entries = await feed(seq);
+      expect(
+        entries.filter((e) => e.kind === 'deleted'),
+        undo.join(' '),
+      ).toEqual([]);
+      // Something truthful instead: one coarse entry (the file is untracked and not listed again).
+      expect(
+        entries.map((e) => e.kind),
+        undo.join(' '),
+      ).toEqual(['bulk']);
+      expect((await summaryOf(api, id))?.untrackedOmitted?.count).toBe(30);
+    }
   });
 });
