@@ -24,6 +24,7 @@ import {
   HealthQuerySchema,
   IdSchema,
   InboxQuerySchema,
+  isGitCoreError,
   type Logger,
   type OkResponse,
   type ProjectsResponse,
@@ -360,19 +361,21 @@ export function createApp(deps: AppDeps): Hono {
   route('listFiles', async (c) => {
     const worktreeId = idParam(c, 'worktreeId');
     const query = parseWith(FilesQuerySchema, c.req.query(), 'query');
-    return c.json(await core.listFiles(worktreeId, query.scope));
+    return c.json(await core.listFiles(worktreeId, query.scope, c.req.raw.signal));
   });
 
   route('getDiff', async (c) => {
     const worktreeId = idParam(c, 'worktreeId');
     const query = parseWith(DiffQuerySchema, c.req.query(), 'query');
-    return c.json(await core.getDiff(worktreeId, query));
+    return c.json(await core.getDiff(worktreeId, query, c.req.raw.signal));
   });
 
   route('listCommits', async (c) => {
     const worktreeId = idParam(c, 'worktreeId');
     const query = parseWith(CommitsQuerySchema, c.req.query(), 'query');
-    const body: CommitsResponse = { commits: await core.listCommits(worktreeId, query.limit) };
+    const body: CommitsResponse = {
+      commits: await core.listCommits(worktreeId, query.limit, c.req.raw.signal),
+    };
     return c.json(body);
   });
 
@@ -393,7 +396,7 @@ export function createApp(deps: AppDeps): Hono {
     const worktreeId = idParam(c, 'worktreeId');
     const oid = parseWith(GitObjectIdSchema, c.req.param('oid'), 'oid');
     const query = parseWith(BlobQuerySchema, c.req.query(), 'query');
-    return c.json(await core.readBlob(worktreeId, oid, query.maxBytes));
+    return c.json(await core.readBlob(worktreeId, oid, query.maxBytes, c.req.raw.signal));
   });
 
   route('setReview', async (c) => {
@@ -576,6 +579,12 @@ export function createApp(deps: AppDeps): Hono {
   app.notFound((c) => errorResponse(c, new ApiError('not_found', 'not found')));
 
   app.onError((error, c) => {
+    // The client went away (#44): its git work was cancelled and nobody reads an answer. No body,
+    // no error log; 499 ("client closed request") only shows up in traces.
+    if (c.req.raw.signal.aborted && isGitCoreError(error, 'aborted')) {
+      logger.debug('request cancelled', { path: new URL(c.req.url).pathname });
+      return c.body(null, 499 as ContentfulStatusCode);
+    }
     const apiError = toApiError(error);
     if (apiError.status >= 500) {
       logger.error('request failed', {
