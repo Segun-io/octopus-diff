@@ -6,6 +6,7 @@
 import {
   type ChangedFile,
   createApiClient,
+  type DiffScope,
   type ServerEvent,
   TEST_IDS,
   type WorktreeListItem,
@@ -227,6 +228,49 @@ describe('merge noise: the model', () => {
     expect(paths).toEqual(['b-own.ts', 'c-mixed.ts', 'e-own.ts']);
     // The chip lists only base files: nothing to review in bulk.
     expect(plan({ fromMainOnly: true, expanded: new Set() }).count).toBe(0);
+  });
+
+  it('Review all in To review also moves the bookmark of a worktree with base files only (PR #67 review)', () => {
+    const own = groupOf(ownFirst(FILES), 'w1');
+    const baseOnly = groupOf(
+      [
+        file('x-base.ts', { origin: 'base', originVia: 'merge' }),
+        file('y-base.ts', { origin: 'base' }),
+      ],
+      'w2',
+    );
+    const entries = flattenGroups([own, baseOnly]);
+    const plan = (reviewed: boolean, scope: DiffScope) =>
+      planBulk({
+        scope,
+        reviewed,
+        groups: [own, baseOnly],
+        entries,
+        visible: visibleIf(true, COLLAPSED),
+        stateHashes: new Map([
+          ['w1', 'h1'],
+          ['w2', 'h2'],
+        ]),
+        disabled: new Set(),
+        inboxUnfiltered: false,
+        view: 'inbox',
+      });
+    const review = plan(true, { kind: 'review' });
+    // Nothing of w2 is marked (so it is not in the count), but its bookmark moves like w1's.
+    expect(review.count).toBe(3);
+    expect(review.worktrees).toBe(2);
+    const targets = review.requests.map((r) => [
+      (r.target as { worktreeId?: string }).worktreeId,
+      r.advanceBookmarks,
+      'paths' in r ? r.paths : undefined,
+    ]);
+    expect(targets).toEqual([
+      ['w1', true, undefined],
+      ['w2', true, undefined],
+    ]);
+    // Only "Review all" in To review moves bookmarks: other scopes and un-reviewing do not.
+    expect(plan(true, { kind: 'working' }).requests).toHaveLength(1);
+    expect(plan(false, { kind: 'review' }).requests.every((r) => !r.advanceBookmarks)).toBe(true);
   });
 });
 
@@ -473,6 +517,27 @@ describe('merge noise: the file list', () => {
         .find((el) => el.getAttribute('aria-selected') === 'true');
       expect(selected?.dataset.origin).toBe('base');
     });
+  });
+
+  it('ArrowUp from a base file whose group was just collapsed goes to the last own file, not the first (PR #67 review)', async () => {
+    const { store } = setup();
+    await open('feat/auth');
+    await screen.findByTestId(ORIGIN_TEST_IDS.group);
+    const worktreeId = worktreeItem('feat/auth').dataset.worktreeId as string;
+    const own = paths().filter((p) => !AUTH_BASE.includes(p ?? ''));
+    expect(own.length).toBeGreaterThan(1);
+    // Expand, select a base file, collapse again: the selection stays on a file that is no longer listed.
+    actions.toggleOriginGroup(store, worktreeId, true);
+    await waitFor(() => expect(paths()).toContain('src/lib/http.ts'));
+    const baseRow = screen
+      .getAllByTestId(TEST_IDS.fileItem)
+      .find((el) => el.dataset.path === 'src/lib/http.ts') as HTMLElement;
+    fireEvent.click(baseRow);
+    await waitFor(() => expect(store.getState().selected?.path).toBe('src/lib/http.ts'));
+    actions.toggleOriginGroup(store, worktreeId, false);
+    await waitFor(() => expect(paths()).not.toContain('src/lib/http.ts'));
+    fireEvent.keyDown(screen.getByTestId(TEST_IDS.fileList), { key: 'ArrowUp' });
+    await waitFor(() => expect(store.getState().selected?.path).toBe(own.at(-1)));
   });
 
   it('n never lands on a file of a collapsed group', async () => {

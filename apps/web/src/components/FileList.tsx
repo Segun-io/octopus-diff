@@ -9,6 +9,7 @@ import {
   type OriginView,
   originTag,
   splitPath,
+  stepFile,
   type VisiblePredicate,
   worktreeLabel,
 } from '../lib/model.ts';
@@ -204,11 +205,16 @@ export function FileList({
       if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
       event.preventDefault();
       const flat = layout.groups.flatMap((g) => g.rows);
-      const index = flat.findIndex((r) => r.key === selectedKey);
-      const next = flat[event.key === 'ArrowDown' ? index + 1 : Math.max(0, index - 1)];
+      // With a selection the full entry order and the shared visibility check decide, as for
+      // `j` / `k`: a selected base file that was just wrapped is not in `flat`, and its neighbours
+      // are still the ones around it in the full list. Without one, the first row.
+      const known = selectedKey !== null && entries.some((e) => e.key === selectedKey);
+      const next = known
+        ? stepFile(entries, selectedKey, event.key === 'ArrowDown' ? 1 : -1, visible)
+        : flat[0];
       if (next) onSelect(next);
     },
-    [layout, selectedKey, onSelect],
+    [layout, entries, visible, selectedKey, onSelect],
   );
 
   const list = (
