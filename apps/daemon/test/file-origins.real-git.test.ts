@@ -142,6 +142,26 @@ async function local(): Promise<Local> {
   };
 }
 
+/**
+ * Waits until the daemon has started no git process for `quietMs` (at most `maxMs`): the refreshes
+ * that the test's own setup caused (watcher events, `review.ready`) are over, so a count taken now
+ * and compared after a repeat only sees what the repeat costs. A fixed sleep guessed that and
+ * flaked under CPU load (#71: `expected 90 to be 89`).
+ */
+async function quietSpawns(c: Counting, quietMs = 600, maxMs = 15_000): Promise<void> {
+  const deadline = Date.now() + maxMs;
+  let last = c.spawns();
+  let since = Date.now();
+  while (Date.now() < deadline) {
+    await sleep(100);
+    const now = c.spawns();
+    if (now !== last) {
+      last = now;
+      since = Date.now();
+    } else if (Date.now() - since >= quietMs) return;
+  }
+}
+
 type Api = Counting['api'];
 
 async function review(api: Api, worktreeId: string): Promise<WorktreeReview> {
@@ -590,7 +610,16 @@ describe.skipIf(!GIT_CORE_IMPLEMENTED)(
         await c.api.inbox({ scope });
         for (const id of [s.featureId, ...extra.map(hashId)]) await c.api.listFiles(id, { scope });
       }
-      await sleep(300);
+      await quietSpawns(c);
+      // One more pass before counting. The config scan git-core reuses is not stored while a config
+      // file is younger than 2 s (the racy guard, DECISIONS #191), and this fixture wrote config a
+      // moment ago (`worktree add`, merges): the first call after that window costs one more `config`
+      // read, once. That is the scan's business, not the origins' (#71: `expected 90 to be 89`).
+      for (const scope of [REVIEW, BRANCH_ALL, WORKING]) {
+        await c.api.inbox({ scope });
+        for (const id of [s.featureId, ...extra.map(hashId)]) await c.api.listFiles(id, { scope });
+      }
+      await quietSpawns(c);
       const spawns = c.spawns();
       const calls = c.originCalls();
       for (const scope of [REVIEW, BRANCH_ALL, WORKING]) {
