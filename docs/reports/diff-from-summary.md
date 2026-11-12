@@ -161,3 +161,10 @@ None added or removed (`pnpm credits:check`: up to date).
   run twice more with the same counts); folding mode git-core 384 + 15 skipped, daemon 389 + 6 skipped; `pnpm test:e2e` 102 passed (3.6 min),
   read-only proof 12 repos, 4968 lock polls, 0 violations; `perf:smoke` exit 0; diff-open 100k: modified 15-16 ms / 1 spawn, untracked 2 ms
   (21 ms in the 30.7k-untracked worktree) / 0 spawns, 300k-line rewrite 299 ms; fuzz seeds 11, 424242, 90210 at 100 steps pass.
+
+## Merge with main (PR #91, untracked-heavy)
+
+Conflicts: DECISIONS (kept #305-#327, then #330-#339), PLAN §5.6 (both paragraphs), `incremental-fuzz.test.ts` (ported into the
+`helpers/fuzz-ops.ts` structure: `useUniverse`, plan path shapes, caps 1 and 2, directory-count invariants; titles and thresholds identical to
+main's). Semantic checks (DECISIONS #339): omitted untracked files take the whole route (test + mutation), `unsettled` signatures refuse,
+capped seeds added to the diff fuzz.

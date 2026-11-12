@@ -68,6 +68,18 @@ export function ownWork<T extends Pick<ChangedFile, 'origin'>>(files: readonly T
   return files.filter((f) => f.origin !== 'base');
 }
 
+/**
+ * Scopes whose lists hold untracked files (git-core's `includeUntracked`): the ones a worktree's
+ * omitted untracked files are missing from (#43).
+ */
+export function listsUntracked(scope: DiffScope): boolean {
+  return (
+    scope.kind === 'working' ||
+    scope.kind === 'review' ||
+    (scope.kind === 'branch' && scope.includeWorking === true)
+  );
+}
+
 /** Same prefilter the inbox uses: can this worktree have files in `scope` at all? */
 export function mayHaveFiles(summary: WorktreeSummary, scope: DiffScope): boolean {
   const c = summary.counts;

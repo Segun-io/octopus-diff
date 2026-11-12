@@ -18,6 +18,7 @@ import {
   type GitCore,
   type GitFileDiff,
   isGitCoreError,
+  type SummaryResult,
 } from '@octopus-diff/contracts';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { fileDiffRoutes } from '../src/diff.js';
@@ -134,7 +135,7 @@ const SUMMARY = FOLDS ? 'case-insensitive' : 'summary';
  * which ignore files it can vouch for only when they are older than itself, so a test that has just
  * written files waits a moment first (a real watcher's debounce does the same).
  */
-async function summarize(repo: string, core: GitCore = fast): Promise<{ stateHash: string }> {
+async function summarize(repo: string, core: GitCore = fast): Promise<SummaryResult> {
   await new Promise((resolve) => setTimeout(resolve, 60));
   return core.getSummary(locator(repo));
 }
@@ -400,6 +401,44 @@ describe('untracked files: no git process at all', () => {
     } finally {
       await few.dispose();
       await fewReference.dispose();
+    }
+  });
+
+  it('untracked files omitted by the cap (#43): the whole route answers them, the listed ones take the summary route', async () => {
+    const capped = createGitCore(
+      fx.coreOptions({ maxListedUntracked: 2, logger: recordingLogger(), env: isolated() }),
+    );
+    const cappedReference = createGitCore(
+      fx.coreOptions({ maxListedUntracked: 2, incremental: false, env: isolated() }),
+    );
+    try {
+      const repo = fx.repo('omitted-cap', { files: { 'a.txt': 'a\n' } });
+      for (let i = 1; i <= 5; i++) text(repo, `u${i}.txt`, `${i}\n`);
+      text(repo, 'node_modules/dep/index.js', 'dep\n');
+      const summary = await summarize(repo, capped);
+      expect(summary.untrackedOmitted?.count ?? 0).toBeGreaterThan(0);
+      const cores = { fast: capped, reference: cappedReference };
+      const listed = new Set(
+        (await cappedReference.listChangedFiles(locator(repo), WORKING)).map((f) => f.path),
+      );
+      const all = ['u1.txt', 'u2.txt', 'u3.txt', 'u4.txt', 'u5.txt', 'node_modules/dep/index.js'];
+      const omitted = all.filter((file) => !listed.has(file));
+      const shown = all.filter((file) => listed.has(file));
+      expect(omitted.length).toBeGreaterThan(0);
+      expect(shown.length).toBeGreaterThan(0);
+      // An omitted file was never inspected or listed: the track holds nothing to serve it from. The
+      // whole route (which reads that one file) answers, as it always did.
+      for (const file of omitted) {
+        const outcome = await diffBoth(repo, WORKING, file, undefined, cores);
+        expect(outcome.route, file).toBe(FOLDS ? 'case-insensitive' : 'no-inspection');
+        expect((outcome.result as { ok: GitFileDiff }).ok.status, file).toBe('untracked');
+      }
+      for (const file of shown) {
+        expect((await diffBoth(repo, WORKING, file, undefined, cores)).route, file).toBe(SUMMARY);
+      }
+    } finally {
+      await capped.dispose();
+      await cappedReference.dispose();
     }
   });
 

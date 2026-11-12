@@ -9,6 +9,7 @@ import type { IgnoreRecord } from './ignore-sources.js';
 import type { NumstatEntry } from './parse/diff-output.js';
 import type { StatusBranch, StatusEntry } from './parse/status.js';
 import type { UntrackedInfo } from './untracked.js';
+import type { UntrackedPlan } from './untracked-plan.js';
 
 /**
  * Incremental summaries (#40): the state a summary was computed from, kept per worktree, and
@@ -113,6 +114,11 @@ export interface SummaryTrack {
   untrackedInfos: Map<string, { info: UntrackedInfo; attribute: string }>;
   /** Contents of untracked files were read (`inspectOptions.readContent`). */
   readContent: boolean;
+  /**
+   * Which untracked files went uninspected and unlisted (#43; null: none). `untrackedInfos` holds
+   * the listed ones only.
+   */
+  untrackedPlan: UntrackedPlan | null;
   /** lstat signatures of the paths with worktree changes and of the fully staged paths. */
   signatures: Map<string, string>;
   /**
@@ -212,7 +218,10 @@ const PLAIN = new Set(['.', 'M']);
  * of a rename), and the paths of signatures that changed without an event (a missed one).
  * Null when they cannot be passed as literal UTF-8 argv or are too many.
  */
-export function regionFor(track: SummaryTrack, keys: Iterable<string>): Region | null {
+export function regionFor(
+  track: Pick<SummaryTrack, 'tracked'>,
+  keys: Iterable<string>,
+): Region | null {
   const specs = new Set<string>(keys);
   for (const entry of track.tracked.values()) {
     if (!isRenameCandidate(entry)) continue;
@@ -650,6 +659,8 @@ export function changedKeys(
   if (previous.stamp.config !== next.stamp.config) return null;
   if (previous.degraded || next.degraded) return null;
   if (previous.readContent !== next.readContent) return null;
+  // Other untracked files listed: lists are seeded again rather than patched (#43).
+  if ((previous.untrackedPlan?.id ?? null) !== (next.untrackedPlan?.id ?? null)) return null;
   const out = new Set<string>();
   const all = keysOf(previous, untrackedCandidates === null);
   for (const key of keysOf(next, untrackedCandidates === null)) all.add(key);

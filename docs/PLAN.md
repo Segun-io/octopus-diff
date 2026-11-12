@@ -353,6 +353,11 @@ All git access goes through **one runner** in `packages/git-core`:
   HEAD, same lstat signature before and after the read) is one `git diff <base> -- <path>` (none for an untracked
   file) instead of the whole-repository `status` and `diff --raw`; patch text and `patchHash` are the whole route's,
   which still answers everything else.
+- Untracked-heavy worktrees (DECISIONS #305-#314): above `maxListedUntracked` (2000) untracked files, git-core
+  inspects and lists at most that many (whole directories omitted first, then a cut in path order); the rest are
+  counted (`counts.untracked`, `changedFiles`), never read, listed or reviewable, and described by
+  `WorktreeSummary.untrackedOmitted` / `FilesResponse.untrackedOmitted` with copyable `.gitignore` lines the web
+  shows (we never write to a repository). git's untracked cache is used only if the repository already has it.
 - Must degrade gracefully on inotify limits (WSL, big trees): log a clear warning and fall back to polling.
 - A subscription that reports an error is dropped (never unsubscribed) and re-made with a backoff; polling covers
   the gap (DECISIONS #131).

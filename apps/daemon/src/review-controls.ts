@@ -13,6 +13,7 @@ import {
   type BulkFile,
   type BulkWorktree,
   filterByPaths,
+  listsUntracked,
   type MarkChange,
   mayHaveFiles,
   ownWork,
@@ -148,6 +149,12 @@ export class ReviewControls {
     /** Worktrees whose bookmark moves to the HEAD of the state that was marked. */
     const advanceTo: Array<{ worktreeId: string; head: string }> = [];
     let worktrees = 0;
+    /**
+     * Untracked files of the acted-on worktrees that no list holds (#43): they have no row and no
+     * patchHash, so they are neither marked nor counted, and the response says how many. Only for
+     * whole-worktree calls: `paths` come from a list, which never names them.
+     */
+    let untrackedOmitted = 0;
     for (const item of fetched) {
       if (!item) continue;
       // The worktree may have moved on while files were listed: never mark an unseen state.
@@ -161,6 +168,9 @@ export class ReviewControls {
       // Base files (the default branch's changes, #33) are never marked or counted, even when
       // named in `paths`; the bookmark below still moves past them.
       const files = ownWork(paths === undefined ? item.files : filterByPaths(item.files, paths));
+      if (paths === undefined && listsUntracked(scope)) {
+        untrackedOmitted += item.wt.summary?.untrackedOmitted?.count ?? 0;
+      }
       const head = item.wt.summary?.headSha ?? null;
       if (advance && head !== null) advanceTo.push({ worktreeId: item.wt.worktreeId, head });
       if (files.length === 0) continue;
@@ -236,6 +246,7 @@ export class ReviewControls {
       worktrees,
       stale: stale.length,
       skippedDisabled: skippedDisabled.length,
+      untrackedOmitted,
     });
     return {
       ok: true,
@@ -247,6 +258,7 @@ export class ReviewControls {
       stale,
       undoToken,
       ...(advance ? { bookmarks: bookmarks.length } : {}),
+      ...(untrackedOmitted > 0 ? { untrackedOmitted } : {}),
     };
   }
 

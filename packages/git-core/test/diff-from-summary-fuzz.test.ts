@@ -21,7 +21,16 @@ import { createGitCore } from '../src/index.js';
 import { locator } from './helpers/core.js';
 import { createFixture, type Fixture } from './helpers/fixture.js';
 import { worktreesFoldCase } from './helpers/folds.js';
-import { abs, BODIES, nextOp, PATHS, pick, prng, silentlyEdited } from './helpers/fuzz-ops.js';
+import {
+  abs,
+  BODIES,
+  nextOp,
+  PATHS,
+  pick,
+  prng,
+  silentlyEdited,
+  useUniverse,
+} from './helpers/fuzz-ops.js';
 
 const FOLDS = await worktreesFoldCase();
 const STEPS = Number(process.env.FUZZ_STEPS ?? (process.platform === 'darwin' ? 25 : 60));
@@ -83,9 +92,14 @@ const VIEWS: Array<DiffOptions | undefined> = [
   { full: true },
 ];
 
-async function runSeed(seed: number): Promise<{ summary: number; compared: number }> {
+async function runSeed(
+  seed: number,
+  cores: { fast: GitCore; reference: GitCore } = { fast, reference },
+  planShapes = false,
+): Promise<{ summary: number; compared: number }> {
   const r = prng(seed);
   silentlyEdited.length = 0;
+  useUniverse(planShapes);
   const repo = setupRepo(`dfuzz-${seed.toString(16)}`, r);
   const wt = locator(repo);
   const root = fx.git(repo, ['rev-list', '--max-parents=0', 'HEAD']).trim();
@@ -93,7 +107,7 @@ async function runSeed(seed: number): Promise<{ summary: number; compared: numbe
   const reasons = new Map<string, number>();
   const summaryBefore = fileDiffRoutes.summary;
   let compared = 0;
-  await fast.getSummary(wt);
+  await cores.fast.getSummary(wt);
   for (let step = 0; step < STEPS; step++) {
     const ops = 1 + Math.floor(r() * 3);
     const touched = new Set<string>();
@@ -113,12 +127,12 @@ async function runSeed(seed: number): Promise<{ summary: number; compared: numbe
     else if (roll < 0.25) mode = 'full';
     else if (roll < 0.35 && touched.size > 0) mode = 'fewer';
     else mode = 'exact';
-    if (mode === 'full') await fast.getSummary(wt);
+    if (mode === 'full') await cores.fast.getSummary(wt);
     else if (mode === 'fewer') {
       const kept = [...touched].filter(() => r() < 0.4);
-      await fast.getSummary(wt, { changedPaths: kept });
+      await cores.fast.getSummary(wt, { changedPaths: kept });
     } else if (mode === 'exact') {
-      await fast.getSummary(wt, { changedPaths: lost ? [] : [...touched] });
+      await cores.fast.getSummary(wt, { changedPaths: lost ? [] : [...touched] });
     }
     const head = fx.git(repo, ['rev-parse', 'HEAD'], { allowFail: true }).trim();
     const scopes: DiffScope[] = [
@@ -129,7 +143,7 @@ async function runSeed(seed: number): Promise<{ summary: number; compared: numbe
     ];
     // Several scopes per step: the list of one of them names the files to ask for.
     const scope = pick(r, scopes);
-    const listed = await reference.listChangedFiles(wt, scope, { defaultBranch: 'main' });
+    const listed = await cores.reference.listChangedFiles(wt, scope, { defaultBranch: 'main' });
     const candidates = new Set<string>(listed.map((file) => file.path));
     for (let i = 0; i < 3; i++) candidates.add(pick(r, PATHS));
     const picked = [...candidates].sort(() => r() - 0.5).slice(0, PER_STEP);
@@ -138,7 +152,7 @@ async function runSeed(seed: number): Promise<{ summary: number; compared: numbe
       const asked = `seed 0x${seed.toString(16)} step ${step} (${mode}) scope ${JSON.stringify(scope)} file ${JSON.stringify(file)} options ${JSON.stringify(options)}\n${log.slice(-12).join('\n')}`;
       const summaryNow = fileDiffRoutes.summary;
       const reasonsNow = new Map(fileDiffRoutes.reasons);
-      const got = await settle(fast.getFileDiff(wt, scope, { path: file }, options));
+      const got = await settle(cores.fast.getFileDiff(wt, scope, { path: file }, options));
       if (fileDiffRoutes.summary === summaryNow) {
         for (const [reason, count] of fileDiffRoutes.reasons) {
           if (count !== (reasonsNow.get(reason) ?? 0)) {
@@ -146,7 +160,7 @@ async function runSeed(seed: number): Promise<{ summary: number; compared: numbe
           }
         }
       }
-      const want = await settle(reference.getFileDiff(wt, scope, { path: file }, options));
+      const want = await settle(cores.reference.getFileDiff(wt, scope, { path: file }, options));
       compared++;
       if (process.env.FUZZ_DUMP && JSON.stringify(got) !== JSON.stringify(want)) {
         cpSync(repo, process.env.FUZZ_DUMP, { recursive: true });
@@ -173,6 +187,31 @@ describe('getFileDiff from the summary state fuzz', () => {
         // The route must actually be taken often, or the test proves nothing.
         expect(compared).toBeGreaterThan(STEPS);
         expect(summary).toBeGreaterThan(compared / 10);
+      }
+    }, 240_000);
+  }
+  // #43: above `maxListedUntracked` untracked files are omitted (never inspected): the summary route
+  // must refuse them and the whole route answer, with dependency/build-output shapes in the universe.
+  for (const [seed, cap] of [
+    [0xd1ca01, 1],
+    [0xd1ca02, 2],
+  ] as const) {
+    it(`seed 0x${seed.toString(16)}: capped untracked files (maxListedUntracked ${cap})`, async () => {
+      const cappedFast = createGitCore(fx.coreOptions({ maxListedUntracked: cap }));
+      const cappedReference = createGitCore(
+        fx.coreOptions({ maxListedUntracked: cap, incremental: false }),
+      );
+      try {
+        const { summary, compared } = await runSeed(
+          seed,
+          { fast: cappedFast, reference: cappedReference },
+          true,
+        );
+        if (FOLDS) expect(summary).toBe(0);
+        else expect(summary).toBeGreaterThan(compared / 20);
+      } finally {
+        await cappedFast.dispose();
+        await cappedReference.dispose();
       }
     }, 240_000);
   }

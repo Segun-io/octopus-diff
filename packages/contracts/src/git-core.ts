@@ -335,6 +335,12 @@ export interface GitCoreOptions {
   /** Max untracked files to read for line counts / patch hashes per worktree (default 2 000). */
   maxUntrackedFiles?: number;
   /**
+   * Max untracked files a summary inspects and a file list returns per worktree (#43, default
+   * `UNTRACKED_LISTED_DEFAULT`, 2 000; at least 1). Above it the rest are counted but neither
+   * inspected nor listed: `WorktreeSummary.untrackedOmitted` says how many and where.
+   */
+  maxListedUntracked?: number;
+  /**
    * Extra environment for git processes (tests use this to isolate config, e.g.
    * `GIT_CONFIG_GLOBAL`, `GIT_CONFIG_NOSYSTEM`). Safety variables set by the runner always win.
    */

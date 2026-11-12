@@ -37,6 +37,7 @@ import { HelpDialog } from './components/HelpDialog.tsx';
 import { Mark } from './components/Mark.tsx';
 import { OriginGroupHeader } from './components/OriginGroupHeader.tsx';
 import { Sidebar } from './components/Sidebar.tsx';
+import { UntrackedOmittedNotice } from './components/UntrackedOmittedNotice.tsx';
 import { SkeletonLines, StaleNote, WaitNote } from './components/WaitNote.tsx';
 import { useFaviconDot } from './lib/favicon.ts';
 import { toFileRef } from './lib/fileRef.ts';
@@ -535,6 +536,7 @@ function AppShell({ eventSourceFactory }: { eventSourceFactory?: EventSourceFact
             </>
           )}
           <FilePaneHeader />
+          <UntrackedOmittedNotice omission={model.files.data?.untrackedOmitted} />
           <div className="min-h-0 flex-1">
             {!model.viewReady && model.files.isError ? (
               <p role="alert" className="p-3 text-xs text-danger">

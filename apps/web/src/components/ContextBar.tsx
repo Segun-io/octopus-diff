@@ -11,6 +11,7 @@ import { actions, useUi, useUiStore } from '../state/ui.tsx';
 import { activeView } from '../views/registry.ts';
 import { MoonIcon, SunIcon } from './bits.tsx';
 import { ChangeRequestBadge, ChangeRequestGlyph } from './ChangeRequest.tsx';
+import { NotListedMarker } from './NotListedMarker.tsx';
 import { ReviewPolicyChip } from './ReviewPolicyChip.tsx';
 import { DefaultBranchChip, RowChips } from './WorktreeChips.tsx';
 
@@ -90,6 +91,7 @@ export function ContextBar() {
           <span className="flex items-center gap-1.5 text-[11px] text-muted">
             <DefaultBranchChip row={row} />
             <RowChips row={row} request={false} />
+            <NotListedMarker omission={row.summary?.untrackedOmitted} />
             {aheadBehind && (aheadBehind.ahead > 0 || aheadBehind.behind > 0) && (
               <span
                 className="font-mono tabular-nums"

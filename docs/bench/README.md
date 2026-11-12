@@ -55,6 +55,16 @@ not. `--no-incremental` gives the old numbers for comparison: `results-large-edi
 for the edit numbers (the UI's cold paint of the 8 MB inbox alone takes minutes there), and see the stale-index
 row, whose full refresh re-hashes every file.
 
+## Summary by worktree role (issue #43)
+
+Large layouts only: once the daemon is stopped, `e2e/bench/summary-roles.ts` times each worktree's summary through
+git-core in the bench process (nothing else running): one full summary with a new git-core (*cold*, as at daemon
+startup), three full ones with a kept state (*warm*: what the reconciliation, focus, polls and git-dir events cost),
+three incremental ones after a one-line append to `README.md`, and the size of the working list of the last summary.
+Report only. The untracked-heavy row is the #43 acceptance (a full summary under 600 ms, a small list): above
+2000 untracked files git-core counts the rest without inspecting or listing them (`untrackedOmitted`). The
+stale-index row's full summaries stay slow by design: git re-hashes every file there.
+
 ## Traffic per edit (issue #51)
 
 During the refresh loop the page sits on a worktree (no Inbox view since #83); each sample appends to `README.md` in a different worktree.

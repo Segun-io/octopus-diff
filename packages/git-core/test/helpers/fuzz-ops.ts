@@ -31,7 +31,7 @@ export function prng(seed: number): () => number {
 }
 
 /** The path universe: spaces, unicode, a newline, nesting, an ignored pattern, a binary. */
-export const PATHS = [
+const BASE_PATHS = [
   'a.txt',
   'b.txt',
   'c.txt',
@@ -50,7 +50,37 @@ export const PATHS = [
   'Case.txt',
   'case.txt',
 ];
-export const DIRS = ['dir', 'dir/sub', 'other', 'ünï', 'ign', 'fresh', 'fresh/deep'];
+const BASE_DIRS = ['dir', 'dir/sub', 'other', 'ünï', 'ign', 'fresh', 'fresh/deep'];
+/**
+ * Extra shapes for the capped seeds (#43, PR #91): dependency and build-output names at several
+ * depths (omitted first), an ordinary folder named `build` next to source, a bidi name (no ignore
+ * line). The plan and its description must still agree between incremental and full.
+ */
+const PLAN_PATHS = [
+  'node_modules/a.js',
+  'node_modules/p/b.js',
+  'pkg/node_modules/c.js',
+  'pkg/src.ts',
+  'dist/x.js',
+  'dist/assets/y.js',
+  'src/build/z.ts',
+  'src/build/gen/w.ts',
+  'out/v.txt',
+  '\u202eevil/e.txt',
+];
+const PLAN_DIRS = ['node_modules', 'pkg/node_modules', 'dist', 'src/build'];
+/**
+ * The path universe of the running seed (live bindings: `useUniverse` widens it for the capped
+ * seeds, importers see the change).
+ */
+export let PATHS: readonly string[] = BASE_PATHS;
+export let DIRS: readonly string[] = BASE_DIRS;
+
+/** Chooses the universe of the next seed: with the plan shapes (#43) or without. */
+export function useUniverse(planShapes: boolean): void {
+  PATHS = planShapes ? [...BASE_PATHS, ...PLAN_PATHS] : BASE_PATHS;
+  DIRS = planShapes ? [...BASE_DIRS, ...PLAN_DIRS] : BASE_DIRS;
+}
 
 export const BODIES = [
   (r: () => number) =>
