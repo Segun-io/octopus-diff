@@ -129,16 +129,35 @@ const STATES: Record<string, Step> = {
     await page.locator('[data-testid="review-policy-chip"]').click();
     await page.waitForTimeout(300);
   },
+  // The sidebar has no folder or project headers (#13): the Overviews open from a row's menu.
   folder: async (page) => {
-    await page.locator('[data-folder-id] button[title^="/home/dev/code"]').first().click();
+    await page
+      .locator('[data-testid="worktree-item"][data-project-name="octopus-api"]')
+      .first()
+      .click({ button: 'right' });
+    await page.getByRole('menuitem', { name: /^Overview of folder / }).click();
     await page.waitForTimeout(400);
   },
   project: async (page) => {
     await page
-      .locator('[data-testid="project-item"][data-project-name="octopus-api"] button[title]')
+      .locator('[data-testid="worktree-item"][data-project-name="octopus-api"]')
       .first()
-      .click();
+      .click({ button: 'right' });
+    await page.getByRole('menuitem', { name: 'Overview of octopus-api' }).click();
     await page.waitForTimeout(400);
+  },
+  // The flat sidebar (#13): one worktree hidden by hand, the closed "Hidden" section opened.
+  'sidebar-hidden': async (page) => {
+    const row = page.locator('[data-testid="worktree-item"][data-branch="fix/cache"]');
+    await row.hover();
+    await row.locator('xpath=..').getByRole('button', { name: 'Hide until it changes' }).click();
+    await page.getByRole('button', { name: 'Expand hidden' }).click();
+    await page.waitForTimeout(300);
+  },
+  // The filter picker with its Folders group (#13).
+  'sidebar-filter': async (page) => {
+    await page.locator('[data-testid="sidebar-filter"]').click();
+    await page.waitForTimeout(300);
   },
   'project-branches': async (page) => {
     await STATES.project?.(page);

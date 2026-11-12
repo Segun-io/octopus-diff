@@ -252,7 +252,7 @@ export function SidebarFilter() {
             aria-controls={listId}
             aria-activedescendant={options.length > 0 ? `${listId}-${current}` : undefined}
             aria-label="Search folders, projects and worktrees"
-            placeholder="Search folders, projects and worktrees"
+            placeholder="Search by name"
             value={query}
             onChange={(e) => {
               setQuery(e.target.value);

@@ -138,6 +138,10 @@ async function measure(base: string) {
             files: document.querySelectorAll('[data-testid="file-item"]').length,
             groups: document.querySelectorAll('[data-testid="file-group"]').length,
             worktrees: document.querySelectorAll('[data-testid="worktree-item"]').length,
+            // The sidebar list is virtual (#13): rows in it vs rows mounted.
+            listed: document
+              .querySelector('[data-testid="sidebar-list"]')
+              ?.getAttribute('data-total'),
             current: document
               .querySelector('[data-testid="worktree-item"][aria-current="true"]')
               ?.getAttribute('data-worktree-id'),
@@ -182,7 +186,10 @@ async function measure(base: string) {
               ?.getAttribute('data-scope')
               ?.startsWith(kind) &&
             document.querySelectorAll('[data-testid="file-item"]').length > 0 &&
-            document.querySelectorAll('[data-testid="worktree-item"]').length >= worktrees &&
+            // Every worktree is in the sidebar's list (it is virtual: only a window is mounted).
+            Number(
+              document.querySelector('[data-testid="sidebar-list"]')?.getAttribute('data-total'),
+            ) >= worktrees &&
             viewer?.getAttribute('data-state') === 'ready' &&
             // ...and not the previous scope's diff of the same file kept as placeholder data.
             viewer.getAttribute('data-placeholder') !== 'true'

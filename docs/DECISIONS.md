@@ -2948,3 +2948,63 @@ Numbers: #229-#232 (after #225-#228; other open branches may use these numbers).
      `setWatch`, `restart`), the two routes, `counts.deleted` in every mock summary, and `MockBackend.mutate` actions
      `delete` (blob kept), `delete-untracked`, `commit` next to `edit | add | revert`; `POST
      /api/__mock/mutate?action=` and `/api/__mock/activity?mode=polling&pollMs=5000` / `?restart=1` drive them.
+
+## Sidebar: a flat, virtualised list of worktrees by last activity (session, 2026-11-12; roadmap #13, step 15)
+
+233. **The sidebar is one flat list.** No Inbox entry, no folder headers, no project headers, no Pinned / To review /
+     Hidden split as the primary structure. Every worktree that passes the filters is a row of one list, **pinned rows
+     first, then most recent activity first** (`WorktreeSummary.activityAt`; rows without one last; ties by project
+     name, then main checkout first, then branch): `compareRows` in `lib/model.ts`, global across projects.
+     `SidebarModel` gains `flat`, `hidden` and `folderOptions`; `pinned` and `settled` are gone; `groups` and
+     `folders` stay (filters applied) because the Overviews and the palette read them, they are just not rendered.
+     `order` (what `J`/`K` walk) is `flat` then `hidden`. **Superseded:** the "folders and projects keep a static
+     order" part of PLAN §4.2 and "Pinned / shelf" of DECISIONS "UX round 4" (the shelf is now "Hidden", below).
+234. **What stays of the Inbox.** The sidebar entry (and its `data-count`) is removed. The Inbox *view* (the
+     cross-worktree list of changed files, the landing view, `g i`, the palette's "Go to Inbox", `J`/`K` stepping to it
+     from the first worktree) is **kept**: removing the view touches `App`, `DiffPane`, bulk review, the commands and
+     e2e specs that are other streams', and the issue's wording ("the Inbox section of the sidebar") is about the
+     section. Follow-up if the view should go too: drop `{ kind: 'inbox' }` from `ui.tsx`, land on the first row of the
+     flat list, and update `e2e/` (`app.inbox`, `inboxItem`). Reaching a folder or project Overview, which used to be a
+     click on its header, is now: the worktree's context menu (`Overview of <project>`, `Overview of folder <label>`)
+     and the palette. Project- and folder-level bulk review and review policy live in those Overviews (they already
+     did), no longer in sidebar header menus.
+235. **"Hidden" is only what the user hid by hand.** `WorktreeRow.hidden` = a "Hide until it changes" override that
+     still holds (same `stateHash`) and the row is not blocked. Everything else stays in the list: a reviewed, clean,
+     merged, closed, review-off, missing or failed worktree is a normal row. Hidden rows sit under a `Hidden N`
+     header at the end of the list, **closed by default** (`settledOpen` pref, unchanged: the key keeps its name), open
+     while any filter is on, and a closed section still lists the selected worktree so `J`/`K` and palette jumps have
+     a row. A pinned row is never hidden. The hover action and menu item are `Hide until it changes` / `Show again`
+     (`hideToggle` replaces `settleToggle`: it sets `settled` or removes the override, never writes `active`; old
+     persisted `active` overrides are harmless and expire with their hash). `row.state` and `data-state` keep their
+     values (`blocked | attention | active | settled`) for the Overviews and the e2e suite; only `data-hidden` is new.
+236. **No special state for rows that need no review.** The status slot says what is informative: `N conflicts`,
+     `N commits ·` and the unreviewed pill, an open request (`#42 · checks ✓`), `review off`, `merged`, `closed`,
+     `missing`, `error`, and `…` while loading. The words `reviewed` and `clean` are gone from the row (they stay in
+     the hover card). Counts are `row.unreviewed` = `unreviewedOwnFiles ?? unreviewedFiles`, so merge noise never
+     counts (DECISIONS #205-#208); the pill and the document title use it. Rethinking the statuses and the layout is
+     #14.
+237. **Every row names its repository** (a small repo glyph and name above the branch; `data-testid="row-repo"`,
+     `data-project-name` on the row) because rows are no longer under a project. This is the layout the Pinned and
+     Hidden rows already had; #14 redesigns it (a second line for branch and repo). Rows are measured, not fixed-height
+     (below), so that redesign needs no change to the list.
+238. **Virtualisation with `@tanstack/react-virtual` 3.14 (MIT, apps/web only).** `components/SidebarList.tsx`: one
+     `useVirtualizer` over `SidebarItem[]` (worktree rows and the Hidden header), `estimateSize` 58 px (header 30),
+     real heights from `measureElement` (a row may be taller: a wrapped chip line, the "N deleted" chip, #14),
+     `overscan` 6, stable keys (the worktree id). Rows are `position: absolute; top: <start>`; **not** a `transform`,
+     because a transformed ancestor would become the containing block of the hover card's `position: fixed`. The
+     selected row is always mounted (`rangeExtractor` adds its index), so focus, `aria-current` and `J`/`K` never lose
+     it, and a *change of selection* calls `scrollToIndex(…, 'auto')` (a reorder under a fixed selection does not
+     scroll). A header or row margin does not count in a measured height, so the Hidden header pads inside its box.
+     Tab walks only the mounted rows; the keyboard way across the whole list is `J`/`K` (as before) and the filter.
+     The scroller is `data-testid="sidebar-scroll"`, the list `data-testid="sidebar-list"` with `data-total` (items in
+     the list) and `data-mounted`; `scripts/perf.ts` waits on `data-total` instead of counting mounted rows.
+239. **The filter picker has a Folders group** (`filterFolders`, ids of scan roots or `direct`, new in `ui.tsx`;
+     `SidebarFilters.folders` optional) between Status and Projects: "the selected folders" of #13 are the picked
+     ones. The dropdown stays a searchable multi-select listbox (placeholder "Search by name"); picked folders,
+     projects and worktrees are one union as before. `SidebarModel.folderOptions` lists every folder regardless of the
+     filters.
+240. **Test shim for the virtual list (jsdom has no layout).** `test/layout.ts`, installed by `test/setup.ts`, overrides
+     `clientHeight` / `clientWidth` / `scrollHeight` / `scrollTop` / `scrollTo` for the sidebar's scroller and
+     `offsetHeight` for the virtual rows (the getters `@tanstack/virtual-core` reads). The default viewport (6000 px
+     ≈ 100 rows) shows every row of the small fixtures, so older tests are unaffected; a test that is about the window
+     calls `setSidebarLayout({ viewport })` before rendering and `scrollSidebarTo(el, top)` to scroll.

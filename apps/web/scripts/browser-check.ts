@@ -45,10 +45,7 @@ async function main() {
   await page.locator('[data-testid="diff-viewer"][data-state="ready"]').waitFor();
   await page.waitForTimeout(800);
   await page.screenshot({ path: `${outDir}/01-inbox-dark.png` });
-  console.log(
-    'inbox',
-    await attrs(page, '[data-testid="inbox-item"]', ['data-count', 'aria-current']),
-  );
+  console.log('inbox groups', await page.getByTestId('file-group').count());
   console.log(
     'files',
     await page.getByTestId('file-item').count(),
@@ -195,7 +192,7 @@ async function main() {
   await page.keyboard.press('Escape');
   await page.keyboard.press('g');
   await page.keyboard.press('i');
-  console.log('inbox current', await attrs(page, '[data-testid="inbox-item"]', ['aria-current']));
+  console.log('inbox groups', await page.getByTestId('file-group').count());
   await page.getByTestId('theme-toggle').click();
   await page.waitForTimeout(500);
   await page.screenshot({ path: `${outDir}/06-light.png` });

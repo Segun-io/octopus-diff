@@ -39,6 +39,15 @@ function isVirtualRow(el: Element): boolean {
   );
 }
 
+/** What a scroller's `scrollTop` is (jsdom keeps none): written by `scrollTo` and tests. */
+const scrollTops = new WeakMap<Element, number>();
+
+/** Scrolls the sidebar's scroller the way a browser does: set `scrollTop`, fire `scroll`. */
+export function scrollSidebarTo(el: Element, top: number): void {
+  scrollTops.set(el, Math.max(0, top));
+  el.dispatchEvent(new Event('scroll'));
+}
+
 export function installLayoutShim(): void {
   if (typeof HTMLElement === 'undefined') return;
   const define = (
@@ -52,6 +61,31 @@ export function installLayoutShim(): void {
       },
     });
   };
+  Object.defineProperty(HTMLElement.prototype, 'scrollTop', {
+    configurable: true,
+    get(this: HTMLElement) {
+      return scrollTops.get(this) ?? 0;
+    },
+    set(this: HTMLElement, value: number) {
+      if (isScroller(this)) scrollTops.set(this, value);
+    },
+  });
+  // `scrollToIndex` ends in `element.scrollTo({ top })`, which jsdom does not implement.
+  Object.defineProperty(HTMLElement.prototype, 'scrollTo', {
+    configurable: true,
+    value(this: HTMLElement, options?: ScrollToOptions) {
+      if (isScroller(this) && typeof options?.top === 'number') scrollSidebarTo(this, options.top);
+    },
+  });
+  // The browser's max scroll offset is `scrollHeight - clientHeight`: the list's own height.
+  Object.defineProperty(HTMLElement.prototype, 'scrollHeight', {
+    configurable: true,
+    get(this: HTMLElement) {
+      if (!isScroller(this)) return 0;
+      const list = this.querySelector<HTMLElement>('[data-testid="sidebar-list"]');
+      return Number.parseFloat(list?.style.height ?? '') || 0;
+    },
+  });
   define('clientHeight', (el) => (isScroller(el) ? current.viewport : 0));
   define('clientWidth', (el) => (isScroller(el) ? 260 : 0));
   define('offsetHeight', (el) => (isVirtualRow(el) ? current.row : 0));
