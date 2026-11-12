@@ -101,15 +101,46 @@ async function makeLayout() {
   };
 }
 
+interface RawEvent {
+  dir: string;
+  path: string;
+}
+
+/**
+ * Simulates FSEvents (macOS): it replays changes made just before subscribing (DECISIONS #164)
+ * some time after the subscription started, and in stream order: events made after subscribing
+ * arrive behind the replay. `events(dir)` lists the replayed events of one subscription.
+ */
+interface ReplayOptions {
+  delayMs: number;
+  events: (dir: string) => parcelWatcher.Event[];
+}
+
 /** Subscribe wrapper that counts subscriptions per directory and active ones. */
-function tracking(filter?: (dir: string, e: parcelWatcher.Event) => boolean) {
+function tracking(
+  filter?: (dir: string, e: parcelWatcher.Event) => boolean,
+  options: { replay?: ReplayOptions } = {},
+) {
   const subscribed: string[] = [];
+  /** Every event handed to the watcher, in order; recorded after the watcher handled it. */
+  const raw: RawEvent[] = [];
   let active = 0;
   const subscribe: SubscribeFn = async (dir, fn, opts) => {
     if (dir === '/') throw new Error('refusal failed: subscribed to /');
+    const deliver = (error: Error | null, events: parcelWatcher.Event[]) => {
+      fn(error, filter ? events.filter((e) => filter(dir, e)) : events);
+      for (const e of events) raw.push({ dir, path: e.path });
+    };
+    let gate: Promise<void> = Promise.resolve();
+    if (options.replay) {
+      const { delayMs, events } = options.replay;
+      gate = sleep(delayMs).then(() => deliver(null, events(dir)));
+    }
     const sub = await parcelWatcher.subscribe(
       dir,
-      (error, events) => fn(error, filter ? events.filter((e) => filter(dir, e)) : events),
+      (error, events) => {
+        gate = gate.then(() => deliver(error, events));
+      },
       opts,
     );
     subscribed.push(dir);
@@ -124,6 +155,7 @@ function tracking(filter?: (dir: string, e: parcelWatcher.Event) => boolean) {
   return {
     subscribe,
     subscribed,
+    raw,
     get active() {
       return active;
     },
@@ -308,9 +340,17 @@ describe('F3: submodules', { timeout: 20_000 }, () => {
 });
 
 describe('F5: build-output directories', { timeout: 20_000 }, () => {
+  type Layout = Awaited<ReturnType<typeof makeLayout>>;
+
+  /** The watcher's debounce in these tests (`makeWatcher`). */
+  const DEBOUNCE_MS = 150;
+
   async function layoutWith(files: Record<string, string>) {
     const layout = await makeLayout();
-    for (const [rel, content] of Object.entries(files)) {
+    // `app/build/` is ignored by a nested `.gitignore` in every layout (and by no root rule of
+    // these tests): the watcher still gets its events but drops them without refreshing, which
+    // makes it a quiet barrier (below). `app/out/` is the nested rule that the tests probe.
+    for (const [rel, content] of Object.entries({ 'app/.gitignore': '/out\n/build\n', ...files })) {
       const file = path.join(layout.main, rel);
       await mkdir(path.dirname(file), { recursive: true });
       await writeFile(file, content);
@@ -318,80 +358,156 @@ describe('F5: build-output directories', { timeout: 20_000 }, () => {
     return layout;
   }
 
-  async function changed(
-    layout: Awaited<ReturnType<typeof makeLayout>>,
-    rec: Recorder,
-    rel: string,
-  ): Promise<boolean> {
-    await sleep(300);
-    const mark = rec.dirty.length;
-    const file = path.join(layout.main, rel);
-    await mkdir(path.dirname(file), { recursive: true });
-    await writeFile(file, `changed ${Date.now()}`);
-    await sleep(500);
-    return rec.dirty.slice(mark).some((d) => d.id === 'main');
+  /** What FSEvents replays on macOS: the fixture files that are not build directories. */
+  function replayOf(layout: Layout): ReplayOptions {
+    const main = (rel: string): parcelWatcher.Event => ({
+      type: 'create',
+      path: path.join(layout.main, rel),
+    });
+    return {
+      // Longer than the 300 ms the test used to wait, so a fixed wait cannot pass by luck.
+      delayMs: 600,
+      events: (dir) => {
+        if (dir === layout.main) {
+          return [main('.gitignore'), main('app/.gitignore'), main('tools/build/run.sh')];
+        }
+        if (dir === layout.common) {
+          return [{ type: 'update', path: path.join(layout.common, 'info', 'exclude') }];
+        }
+        return [];
+      },
+    };
+  }
+
+  /**
+   * Probes whether a write under the main worktree marks it dirty, without guessing how long
+   * the file system takes to report things.
+   *
+   * Flaky on macOS CI (#65): FSEvents replays what happened just before the subscription (the
+   * fixture files, the `.gitignore` and `info/exclude` writes) some hundreds of ms late, and a
+   * fixed `sleep(300)` let a replayed `.gitignore` event mark the worktree dirty inside the
+   * probe's window. Both ways are ordered by the stream instead: a replay comes before any event
+   * of a write made after subscribing, so once a later write has come back, the replay is over.
+   *
+   * - `settle()` (after every subscription) writes a file into each stream and waits until
+   *   the watcher has seen them, then lets the debounce timers of the replayed events run out
+   *   (the timer set by an earlier event always expires before a later `sleep` of ours).
+   * - `changed()` writes the probe, then the quiet barrier: a write under `app/build/`, which the
+   *   watcher receives but drops, so it never makes the worktree dirty by itself. Once the
+   *   barrier has come back, the probe has been handled (kept: a refresh is pending; dropped:
+   *   nothing is), and one more debounce tells which.
+   */
+  function probe(layout: Layout, rec: Recorder, t: ReturnType<typeof tracking>) {
+    let n = 0;
+    const landed = (from: number, file: string) => t.raw.slice(from).some((e) => e.path === file);
+    const quiet = () => path.join(layout.main, 'app', 'build', `.barrier-${++n}`);
+    const write = async (file: string) => {
+      await mkdir(path.dirname(file), { recursive: true });
+      await writeFile(file, `${Date.now()} ${n}`);
+    };
+    const drained = () => sleep(DEBOUNCE_MS + 50);
+    return {
+      async settle(): Promise<void> {
+        const from = t.raw.length;
+        const files = [
+          path.join(layout.main, 'src', `.settle-${++n}`), // the worktree stream, refreshes
+          quiet(), // the worktree stream, dropped: also warms the nested .gitignore cache
+          path.join(layout.common, 'HEAD'), // the git dir stream, refreshes
+        ];
+        for (const file of files) await write(file);
+        await eventually(() => files.every((f) => landed(from, f)), 10_000);
+        await drained();
+      },
+      async changed(rel: string): Promise<boolean> {
+        const mark = rec.dirty.length;
+        const from = t.raw.length;
+        const barrier = quiet();
+        await write(path.join(layout.main, rel));
+        await write(barrier);
+        await eventually(() => landed(from, barrier), 10_000);
+        await drained();
+        return rec.dirty.slice(mark).some((d) => d.id === 'main');
+      },
+    };
+  }
+
+  async function started(
+    layout: Layout,
+    replay: boolean,
+    extra: Partial<WatcherServiceOptions> = {},
+  ) {
+    const t = tracking(undefined, replay ? { replay: replayOf(layout) } : {});
+    const { watcher, rec } = makeWatcher({ subscribe: t.subscribe, ...extra });
+    await watcher.setProject('p1', layout.common, layout.worktrees);
+    const p = probe(layout, rec, t);
+    await p.settle();
+    return { t, watcher, rec, ...p };
   }
 
   it('watches tracked dist/ and tools/build/ when git does not ignore them', async () => {
     const layout = await layoutWith({ 'dist/index.js': 'v1', 'tools/build/run.sh': 'v1' });
-    const { watcher, rec } = makeWatcher();
-    await watcher.setProject('p1', layout.common, layout.worktrees);
-    expect(await changed(layout, rec, 'dist/index.js')).toBe(true);
-    expect(await changed(layout, rec, 'tools/build/run.sh')).toBe(true);
+    const { changed } = await started(layout, false);
+    expect(await changed('dist/index.js')).toBe(true);
+    expect(await changed('tools/build/run.sh')).toBe(true);
   });
 
-  it('skips build directories that .gitignore / info/exclude ignore, and only those', async () => {
-    const layout = await layoutWith({
-      '.gitignore': 'node_modules\ndist/\n/build\n',
-      'dist/index.js': 'x',
-      'packages/a/dist/index.js': 'x',
-      'build/out.o': 'x',
-      'tools/build/run.sh': 'x',
-      'target/debug/app': 'x',
-      'app/.gitignore': '/out\n',
-      'app/out/bundle.js': 'x',
-      'lib/out/keep.js': 'x',
+  for (const replay of [false, true]) {
+    const variant = replay ? ' (FSEvents replays the fixture late)' : '';
+
+    it(`skips build directories that .gitignore / info/exclude ignore, and only those${variant}`, async () => {
+      const layout = await layoutWith({
+        '.gitignore': 'node_modules\ndist/\n/build\n',
+        'dist/index.js': 'x',
+        'packages/a/dist/index.js': 'x',
+        'build/out.o': 'x',
+        'tools/build/run.sh': 'x',
+        'target/debug/app': 'x',
+        'app/out/bundle.js': 'x',
+        'lib/out/keep.js': 'x',
+      });
+      await writeFile(path.join(layout.common, 'info', 'exclude'), 'target/\n');
+      const { changed } = await started(layout, replay);
+      expect(await changed('dist/index.js')).toBe(false);
+      expect(await changed('packages/a/dist/index.js')).toBe(false);
+      expect(await changed('build/out.o')).toBe(false);
+      expect(await changed('target/debug/app')).toBe(false);
+      expect(await changed('tools/build/run.sh')).toBe(true);
+      // Nested .gitignore: dropped by the event filter (the directory itself is watched).
+      expect(await changed('app/out/bundle.js')).toBe(false);
+      expect(await changed('lib/out/keep.js')).toBe(true);
+      expect(await changed('src/a.ts')).toBe(true);
     });
-    await writeFile(path.join(layout.common, 'info', 'exclude'), 'target/\n');
-    const t = tracking();
-    const { watcher, rec } = makeWatcher({ subscribe: t.subscribe });
-    await watcher.setProject('p1', layout.common, layout.worktrees);
-    expect(await changed(layout, rec, 'dist/index.js')).toBe(false);
-    expect(await changed(layout, rec, 'packages/a/dist/index.js')).toBe(false);
-    expect(await changed(layout, rec, 'build/out.o')).toBe(false);
-    expect(await changed(layout, rec, 'target/debug/app')).toBe(false);
-    expect(await changed(layout, rec, 'tools/build/run.sh')).toBe(true);
-    // Nested .gitignore: dropped by the event filter (the directory itself is watched).
-    expect(await changed(layout, rec, 'app/out/bundle.js')).toBe(false);
-    expect(await changed(layout, rec, 'lib/out/keep.js')).toBe(true);
-    expect(await changed(layout, rec, 'src/a.ts')).toBe(true);
-  });
+  }
 
   it('keeps watching a build directory re-included by a negation', async () => {
     const layout = await layoutWith({
       '.gitignore': 'dist/*\n!dist/action.js\n',
       'dist/action.js': 'x',
     });
-    const { watcher, rec } = makeWatcher();
-    await watcher.setProject('p1', layout.common, layout.worktrees);
-    expect(await changed(layout, rec, 'dist/action.js')).toBe(true);
+    const { changed } = await started(layout, false);
+    expect(await changed('dist/action.js')).toBe(true);
   });
 
-  it('re-subscribes when the root .gitignore or info/exclude changes', async () => {
-    const layout = await layoutWith({ 'out/a.js': 'x', 'coverage/lcov.info': 'x' });
-    const t = tracking();
-    const { watcher, rec } = makeWatcher({ subscribe: t.subscribe });
-    await watcher.setProject('p1', layout.common, layout.worktrees);
-    expect(await changed(layout, rec, 'out/a.js')).toBe(true);
-    await writeFile(path.join(layout.main, '.gitignore'), 'out/\n');
-    await eventually(() => t.subscribed.filter((d) => d === layout.main).length === 2, 5000);
-    expect(await changed(layout, rec, 'out/a.js')).toBe(false);
+  for (const replay of [false, true]) {
+    const variant = replay ? ' (FSEvents replays the fixture late)' : '';
 
-    expect(await changed(layout, rec, 'coverage/lcov.info')).toBe(true);
-    await writeFile(path.join(layout.common, 'info', 'exclude'), 'coverage\n');
-    await eventually(() => t.subscribed.filter((d) => d === layout.main).length === 3, 5000);
-    expect(await changed(layout, rec, 'coverage/lcov.info')).toBe(false);
-  });
+    it(`re-subscribes when the root .gitignore or info/exclude changes${variant}`, async () => {
+      const layout = await layoutWith({ 'out/a.js': 'x', 'coverage/lcov.info': 'x' });
+      const { t, changed, settle } = await started(layout, replay);
+      const subscriptions = () => t.subscribed.filter((d) => d === layout.main).length;
+      expect(await changed('out/a.js')).toBe(true);
+      await writeFile(path.join(layout.main, '.gitignore'), 'out/\n');
+      await eventually(() => subscriptions() === 2, 5000);
+      await settle();
+      expect(await changed('out/a.js')).toBe(false);
+
+      expect(await changed('coverage/lcov.info')).toBe(true);
+      await writeFile(path.join(layout.common, 'info', 'exclude'), 'coverage\n');
+      await eventually(() => subscriptions() === 3, 5000);
+      await settle();
+      expect(await changed('coverage/lcov.info')).toBe(false);
+    });
+  }
 
   it('watches an ignored build directory once a file list shows tracked files in it', async () => {
     const layout = await layoutWith({
@@ -399,14 +515,14 @@ describe('F5: build-output directories', { timeout: 20_000 }, () => {
       'dist/index.js': 'force-added',
       'pkg/dist/bundle.js': 'really ignored',
     });
-    const { watcher, rec } = makeWatcher();
-    await watcher.setProject('p1', layout.common, layout.worktrees);
-    expect(await changed(layout, rec, 'dist/index.js')).toBe(false);
+    const { t, watcher, changed, settle } = await started(layout, false);
+    expect(await changed('dist/index.js')).toBe(false);
     watcher.noteTrackedPaths('main', ['src/a.ts', 'dist/index.js']);
-    await sleep(300);
-    expect(await changed(layout, rec, 'dist/index.js')).toBe(true);
+    await eventually(() => t.subscribed.filter((d) => d === layout.main).length === 2, 5000);
+    await settle();
+    expect(await changed('dist/index.js')).toBe(true);
     // Other dist directories stay filtered (the root rule still ignores them).
-    expect(await changed(layout, rec, 'pkg/dist/bundle.js')).toBe(false);
+    expect(await changed('pkg/dist/bundle.js')).toBe(false);
   });
 
   it('parses only rules that ignore a whole build directory', () => {
