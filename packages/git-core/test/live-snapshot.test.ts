@@ -655,6 +655,10 @@ describe('snapshot contentHash (PR #77 review)', () => {
       expect((await core.getSummary(wt)).stateHash).not.toBe(stateBefore);
       expect(await hash(1)).toBe(first);
 
+      // Staging is not an edit: the status letters and the index object id change, the file does not.
+      git(repo, ['add', 'a.txt', 'b.txt', 'c.txt']);
+      expect(await hash(1)).toBe(first);
+
       // An edit to a path the cap cut off moves it (the retained entry and `total` do not change).
       const kept = (await core.getSummary(wt, { snapshot: { maxEntries: 1 } })).snapshot;
       const beyond = ['a.txt', 'b.txt', 'c.txt'].filter((n) => n !== kept?.entries[0]?.path)[1];
