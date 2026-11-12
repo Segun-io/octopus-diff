@@ -30,10 +30,10 @@ import { hashParts, PATCH_HASH_LENGTH, PatchHasher, STATE_HASH_LENGTH } from './
 import { excludesFileState, ignoreRulesMoved } from './ignore-sources.js';
 import { imageComparison } from './images.js';
 import {
+  ancestorProblem,
   changedSince,
   foldsCase,
   keysInRegion,
-  nestedRepositoryAbove,
   Region,
   readStamp,
   regionOfKeys,
@@ -1589,18 +1589,17 @@ async function diffFromSummary(
    * the thread pool, so rounds, not calls, are what a diff opened then pays for.
    */
   const check = async (signed: boolean): Promise<{ moved: string | null; signature: string }> => {
-    const [stamp, head, signature, nested] = await Promise.all([
+    const [stamp, head, signature, chain] = await Promise.all([
       readStamp(repo, env),
       resolveHead(ctx, repo),
       signed ? lstatSignature(repo.cwd, key) : Promise.resolve(''),
-      // A repository created in a directory above the file since the state: the path belongs to it
-      // (the whole scope lists the directory as one entry), and no stamp or signature of the
-      // parent's moves (PR #93 review). The incremental summary's own ancestor check.
-      nestedRepositoryAbove(repo.cwd, [key]),
+      // The directory chain above the file: a repository created in a directory since the state (the
+      // path belongs to it), or an ancestor replaced by a symlink (the file looks unchanged through
+      // it); neither moves the parent's stamp, HEAD, ignore files or the file's signature (PR #93).
+      ancestorProblem(repo.cwd, key),
     ]);
     const changed = stampChange(track.stamp, stamp);
-    const moved =
-      changed ?? (head !== headSha ? 'head-moved' : nested ? 'nested-repository' : null);
+    const moved = changed ?? (head !== headSha ? 'head-moved' : chain);
     return { moved, signature };
   };
 

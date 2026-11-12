@@ -187,3 +187,13 @@ untracked file 2 ms (20 ms in the untracked-heavy worktree) / 0 spawns; a file t
 - **Verification (round 4):** lint, typecheck, build exit 0; `pnpm test` exit 0 (git-core 434 + 1 skipped, daemon 398 + 4 skipped; both run twice more, same counts); folding mode git-core 419 + 16 skipped,
   daemon 396 + 6 skipped; `pnpm test:e2e` 102 passed (3.4 min), read-only proof 12 repos, 4916 lock polls, 0 violations; `perf:smoke` exit 0; 100k diff-open: tracked 15-16 ms / 1 spawn,
   untracked 2 ms (21 ms in the untracked-heavy worktree) / 0 spawns, 300k-line rewrite 280 ms (first call).
+
+## PR #93 review, round 5: symlinked ancestors
+
+- **Bug (Greptile):** a directory moved outside the worktree and replaced by a symlink to it: every signature stays (the kernel follows the link), no `.git`;
+  the route returned an addition, the whole route says `not_found`. Fix (DECISIONS #347): `ancestorProblem` refuses a symlinked ancestor (`symlinked-ancestor`)
+  in the route's ancestor round, for tracked and untracked files. Class review: copy-replace is caught by the inode/ctime in the signature, move away and
+  back is the same files (route may answer, pinned), directory-to-file fails the lstat, bind mounts are not distinguishable from directories (device not in
+  the signature; not added: it would change the state hash).
+- **Tests:** 5 golden cases (the repro for untracked and tracked, deep symlink, copy, away-and-back, directory-to-file; two failed first), 5 mutations killed; fuzz
+  gained the shapes (honestly, it does not isolate the case).

@@ -7,6 +7,7 @@
 import { spawnSync } from 'node:child_process';
 import {
   chmodSync,
+  cpSync,
   lstatSync,
   lutimesSync,
   mkdirSync,
@@ -84,6 +85,13 @@ export let DIRS: readonly string[] = BASE_DIRS;
 let nestedBudget = 0;
 export function allowNestedRepositories(count: number): void {
   nestedBudget = count;
+}
+
+/** How many directory-chain changes (symlinked away, moved back, copied) the operations may still make. */
+let shapeBudget = 0;
+let shapeCount = 0;
+export function allowDirectoryShapes(count: number): void {
+  shapeBudget = count;
 }
 
 /** Chooses the universe of the next seed: with the plan shapes (#43) or without. */
@@ -376,6 +384,33 @@ export const OPS: Array<[number, Op]> = [
       fx.git(full, ['add', '-A'], { allowFail: true });
       fx.git(full, ['commit', '-q', '-m', 'inner', '--allow-empty'], { allowFail: true });
       return { name: `nested repository in ${dir}`, touched: [], silent: true };
+    },
+  ],
+  [
+    2,
+    (_fx, repo, r) => {
+      // The directory chain changes under unchanged files, with its event lost (PR #93 P1): a
+      // directory moved outside the worktree and a symlink put in its place, moved away and back, or
+      // replaced by a copy (new inodes, same content). Few per seed: a link stays for the run.
+      if (shapeBudget <= 0) return null;
+      const dir = pick(r, ['dir', 'dir/sub', 'other', 'ünï', 'nest']);
+      const full = abs(repo, dir);
+      if (!exists(full) || !lstatSync(full).isDirectory()) return null;
+      shapeBudget -= 1;
+      const away = `${repo}.moved-${shapeCount++}`;
+      const how = pick(r, ['symlink', 'back', 'copy']);
+      if (how === 'symlink') {
+        renameSync(full, away);
+        symlinkSync(away, full);
+      } else if (how === 'back') {
+        renameSync(full, away);
+        renameSync(away, full);
+      } else {
+        cpSync(full, away, { recursive: true, preserveTimestamps: true });
+        rmSync(full, { recursive: true, force: true });
+        renameSync(away, full);
+      }
+      return { name: `directory ${dir}: ${how}`, touched: [], silent: true };
     },
   ],
   // Git operations: the index or HEAD changes (the daemon would see git-dir events and refresh

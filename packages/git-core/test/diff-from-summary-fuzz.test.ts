@@ -24,6 +24,7 @@ import { createFixture, type Fixture } from './helpers/fixture.js';
 import { worktreesFoldCase } from './helpers/folds.js';
 import {
   abs,
+  allowDirectoryShapes,
   allowNestedRepositories,
   BODIES,
   nextOp,
@@ -107,6 +108,8 @@ async function runSeed(
   silentlyEdited.length = 0;
   useUniverse(planShapes);
   allowNestedRepositories(0);
+  // A few changes of the directory chain per seed (symlinked away, moved back, copied; PR #93 P1).
+  allowDirectoryShapes(2);
   const repo = setupRepo(`dfuzz-${seed.toString(16)}`, r);
   const wt = locator(repo);
   const root = fx.git(repo, ['rev-list', '--max-parents=0', 'HEAD']).trim();
@@ -144,14 +147,16 @@ async function runSeed(
       if (!done) continue;
       if (done.silent) lost = true;
       log.push(`${step}: ${done.name}`);
-      if (done.name.startsWith('nested repository')) nested = true;
+      if (done.name.startsWith('nested repository') || done.name.startsWith('directory ')) {
+        nested = true;
+      }
       for (const p of done.touched) touched.add(p);
     }
     // The state: brought up to date from the touched paths (a watcher), from fewer (events lost),
     // by a full summary, or not at all (the diff is asked before any summary has seen the step).
     const roll = r();
     let mode: string;
-    // A step that created a nested repository is asked about before any summary has seen it.
+    // A step that created a nested repository or changed a directory chain is asked about before any summary has seen it.
     if (roll < 0.15 || nested) mode = 'none';
     else if (roll < 0.25) mode = 'full';
     else if (roll < 0.35 && touched.size > 0) mode = 'fewer';

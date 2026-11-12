@@ -4083,3 +4083,36 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      no summary in between): it keeps the equality but its random history rarely isolates the case (other refusals
      come first, files get committed), so the deterministic tests are the guard and the fuzz did **not** kill the
      check-removed mutant.
+
+### The directory chain above the file (PR #93, another P1, 2026-11-12)
+
+347. **The summary route refuses a path whose ancestor is a symlink, and the rest of "the chain is not what the summary
+     saw" was reviewed.** (Review: untracked `dir/file.txt` with old, harmless `.gitignore` files in the root and in `dir`;
+     `dir` moved outside the worktree on the same file system and a symlink to it put in its place. The file's and the
+     ignore files' signatures are unchanged because the kernel follows the link when `lstat` resolves the path, and there
+     is no `.git`, so the route returned an addition through the link; the whole route lists only the symlink and says
+     `not_found`.) `ancestorProblem(root, key)` (`incremental.ts`, next to the shared `nestedRepositoryAbove`) now does, in
+     the route's existing file-system round, for every directory above the file (root excluded) two parallel `lstat`s: of
+     `<dir>/.git` (`nested-repository`, #346) and of `<dir>` itself (`symlinked-ancestor` when `isSymbolicLink`). Both
+     tracked and untracked files go through it (tracked: git refuses to look through the link, the route refuses first).
+     Test with the reference core: the repro for an untracked and a tracked file, and `a/b/c/file.txt` with `b` becoming the
+     link and old rule files at every level (both failed first); mutations killed: check removed, symlink never seen, only
+     the parent examined, the nested precedence, the route ignoring the chain.
+     **The class, one by one.** *The file's signature* is `size:mtimeNs:ctimeNs:ino:mode`: it includes the inode, not the
+     device. A directory **replaced by a copy** (new files: new inode and ctime even with preserved mtimes) is caught as a
+     stale signature (test; same answer as the whole route). A directory **moved away and moved back** leaves the files
+     with the same inode, mtime and ctime, and the chain as it was: the whole route's answer is identical, so the route
+     may serve it (test pins it as safe, not as refused). A directory **replaced by a file** makes the file's `lstat` fail
+     (`missing` against the recorded signature; test). A **bind mount** (or any mount) over a directory puts other files
+     there: their inode, size and times would all have to coincide with the recorded ones (the device is not in the
+     signature, and adding it would change every worktree's state hash, so it is not done); git itself walks through mount
+     points like directories, so there is no other rule to mirror. Recording each ancestor's `(dev, ino)` at summary time
+     was weighed and not done: the symlink case is the one that leaves everything else unchanged, every other replacement
+     moves the file's own inode or ctime, and the record would cost memory and stats on every summary for no further case.
+     Cost: one more `lstat` per ancestor (the same set as the `.git` ones, about 7 for the bench paths) in the existing
+     round: tracked 15-16 ms and untracked 2 ms are unchanged. `diff-from-summary-fuzz` has the shapes as random operations
+     (`helpers/fuzz-ops.ts` `allowDirectoryShapes`: moved outside and symlinked, moved away and back, replaced by a copy;
+     two per seed, the step is asked with no summary in between); as with nested repositories the random history rarely
+     isolates the case (other refusals come first), so it keeps the equality but did not kill the check-removed mutant:
+     the deterministic tests are the guard.
+

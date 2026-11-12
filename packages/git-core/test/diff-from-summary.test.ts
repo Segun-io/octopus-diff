@@ -10,7 +10,15 @@
  * On a case-folding filesystem (macOS, `OCTOPUS_DIFF_TEST_FOLDS_CASE=1`) the summary route is off by
  * design (#288): the expected route becomes `case-insensitive` and equality is still asserted.
  */
-import { chmodSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  cpSync,
+  mkdirSync,
+  renameSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import path from 'node:path';
 import {
   type DiffOptions,
@@ -740,9 +748,13 @@ describe('a repository created above the file since the summary (PR #93 review, 
     symlinkSync(elsewhere, path.join(repo, 'dir'));
     const outcome = await diffBoth(repo, WORKING, 'dir/file.txt');
     // `dir` is a symlink entry now: the file is not listed. Whatever refuses it, the answer is the whole route's.
-    expect(['nested-repository', 'stale-signature', 'ignore-rules', 'case-insensitive']).toContain(
-      outcome.route,
-    );
+    expect([
+      'nested-repository',
+      'symlinked-ancestor',
+      'stale-signature',
+      'ignore-rules',
+      'case-insensitive',
+    ]).toContain(outcome.route);
     expect(outcome.result).toEqual({ error: 'not_found' });
   });
 
@@ -755,6 +767,90 @@ describe('a repository created above the file since the summary (PR #93 review, 
     nest(repo, 'dir');
     const outcome = await diffBoth(repo, WORKING, 'dir/t.txt');
     expect(outcome.route).toBe(REASON('nested-repository'));
+  });
+});
+
+describe('a directory chain that is not what the summary saw (PR #93 review, P1)', () => {
+  const REASON = (reason: string): string => (FOLDS ? 'case-insensitive' : reason);
+  const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 250));
+  let moves = 0;
+  /** Where a directory is moved to: outside the worktree, on the same file system. */
+  const outside = (): string => path.join(fx.root, `moved-away-${moves++}`);
+
+  /** An untracked `dir/file.txt` and a tracked, edited `dir/t.txt`, old `.gitignore` files above. */
+  async function shaped(name: string, dir = 'dir') {
+    const repo = fx.repo(name, { files: { 'a.txt': 'a\n', [`${dir}/t.txt`]: lines(5) } });
+    text(repo, '.gitignore', '*.tmp\n');
+    text(repo, `${dir}/.gitignore`, '*.tmp\n');
+    text(repo, `${dir}/file.txt`, 'f\n');
+    text(repo, `${dir}/t.txt`, lines(6));
+    await settle();
+    await fast.getSummary(locator(repo));
+    return repo;
+  }
+
+  it('the reviewer’s repro: the directory moved outside the worktree and a symlink put in its place', async () => {
+    const repo = await shaped('chain-symlink');
+    expect((await diffBoth(repo, WORKING, 'dir/file.txt')).route).toBe(SUMMARY);
+    expect((await diffBoth(repo, WORKING, 'dir/t.txt')).route).toBe(SUMMARY);
+    const away = outside();
+    renameSync(path.join(repo, 'dir'), away);
+    symlinkSync(away, path.join(repo, 'dir'));
+    // Untracked: the whole scope lists only the symlink; tracked: git refuses to look through it.
+    const untracked = await diffBoth(repo, WORKING, 'dir/file.txt');
+    expect(untracked.route).toBe(REASON('symlinked-ancestor'));
+    expect(untracked.result).toEqual({ error: 'not_found' });
+    expect((await diffBoth(repo, WORKING, 'dir/t.txt')).route).toBe(REASON('symlinked-ancestor'));
+  });
+
+  it('a symlink deeper in the chain (a/b/c where b becomes the link)', async () => {
+    const repo = fx.repo('chain-deep', { files: { 'a.txt': 'a\n' } });
+    text(repo, 'a/b/c/file.txt', 'deep\n');
+    // Old rule files all the way down, so nothing but the link itself can tell.
+    for (const dir of ['', 'a/', 'a/b/', 'a/b/c/']) text(repo, `${dir}.gitignore`, '*.tmp\n');
+    await settle();
+    await fast.getSummary(locator(repo));
+    expect((await diffBoth(repo, WORKING, 'a/b/c/file.txt')).route).toBe(SUMMARY);
+    const away = outside();
+    renameSync(path.join(repo, 'a', 'b'), away);
+    symlinkSync(away, path.join(repo, 'a', 'b'));
+    const outcome = await diffBoth(repo, WORKING, 'a/b/c/file.txt');
+    expect(outcome.route).toBe(REASON('symlinked-ancestor'));
+    expect(outcome.result).toEqual({ error: 'not_found' });
+  });
+
+  it('a directory replaced by a copy with identical content is a new file (inode, ctime): refused, same answer', async () => {
+    const repo = await shaped('chain-copy');
+    cpSync(path.join(repo, 'dir'), path.join(fx.root, 'chain-copy-tmp'), {
+      recursive: true,
+      preserveTimestamps: true,
+    });
+    rmSync(path.join(repo, 'dir'), { recursive: true });
+    renameSync(path.join(fx.root, 'chain-copy-tmp'), path.join(repo, 'dir'));
+    for (const file of ['dir/file.txt', 'dir/t.txt']) {
+      const outcome = await diffBoth(repo, WORKING, file);
+      expect(outcome.route, file).not.toBe('summary');
+    }
+  });
+
+  it('a directory moved away and moved back is the same files: nothing differs, and the route may answer', async () => {
+    const repo = await shaped('chain-back');
+    const away = outside();
+    renameSync(path.join(repo, 'dir'), away);
+    renameSync(away, path.join(repo, 'dir'));
+    for (const file of ['dir/file.txt', 'dir/t.txt']) {
+      expect((await diffBoth(repo, WORKING, file)).route, file).toBe(SUMMARY);
+    }
+  });
+
+  it('a directory replaced by a file', async () => {
+    const repo = await shaped('chain-file');
+    rmSync(path.join(repo, 'dir'), { recursive: true });
+    text(repo, 'dir', 'now a file\n');
+    for (const file of ['dir/file.txt', 'dir/t.txt']) {
+      const outcome = await diffBoth(repo, WORKING, file);
+      expect(outcome.route, file).not.toBe('summary');
+    }
   });
 });
 
