@@ -82,7 +82,7 @@ export function RequestView({ worktreeId }: { worktreeId: string }) {
             className="od-btn ml-auto"
             disabled={refresh.isPending}
             onClick={() => refresh.mutate()}
-            title={`Ask the forge again (at most every 15 s)${response?.fetchedAt ? `. Loaded ${relativeTime(response.fetchedAt)}` : ''}`}
+            title={`Ask the forge again${response?.fetchedAt ? `. Loaded ${relativeTime(response.fetchedAt)}` : ''}`}
           >
             Refresh
           </button>

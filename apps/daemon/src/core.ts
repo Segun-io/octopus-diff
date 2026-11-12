@@ -87,6 +87,12 @@ export interface CoreOptions {
   cwd?: string;
   /** Review policy (UX round 1). Without it no `review` is attached (older-daemon behaviour). */
   reviewPolicy?: ReviewPolicyProvider;
+  /**
+   * Called when the watcher saw a git change (HEAD, refs, index, config) in one of a project's
+   * worktrees, whether or not the summary's state hash moved. The forge service uses it to notice
+   * push configuration changes, which the state hash does not cover.
+   */
+  onGitChange?: (projectId: string) => void;
 }
 
 interface WorktreeEntry {
@@ -223,6 +229,7 @@ export class DaemonCore {
   readonly #store: Store;
   readonly #hub: EventHub;
   readonly #log: Logger;
+  readonly #onGitChange: ((projectId: string) => void) | undefined;
   readonly #version: string;
   readonly #startedAt: Date;
   readonly #now: () => Date;
@@ -267,6 +274,7 @@ export class DaemonCore {
     this.#store = options.store;
     this.#hub = options.hub;
     this.#log = options.logger;
+    this.#onGitChange = options.onGitChange;
     this.#version = options.version;
     this.#startedAt = options.startedAt;
     this.#now = options.now ?? (() => new Date());
@@ -927,6 +935,7 @@ export class DaemonCore {
       if (entry) {
         this.#log.debug('worktree dirty', { worktreeId, reason });
         void this.#refresh(entry);
+        if (reason === 'git') this.#onGitChange?.(entry.projectId);
         return;
       }
     }

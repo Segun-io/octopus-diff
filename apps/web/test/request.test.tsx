@@ -417,3 +417,75 @@ describe('Request tab (mock daemon)', () => {
     expect(screen.queryByTestId(TEST_IDS.requestView)).toBeNull();
   });
 });
+
+describe('Refresh in the Request tab (#12)', () => {
+  /** A daemon whose forge changes the title when "refresh" is asked (reads before are cached). */
+  function setupRefresh() {
+    const backend = new MockBackend({ dataset: 'demo' });
+    const inner = createMockFetch(backend);
+    const calls: string[] = [];
+    let renamed = false;
+    const retitle = async (res: Response, match: boolean) => {
+      if (!renamed || !match) return res;
+      const body = await res.json();
+      if (body.request) body.request = { ...body.request, title: 'Renamed on the forge' };
+      for (const project of body.projects ?? []) {
+        for (const w of project.worktrees) {
+          if (w.changeRequest?.headBranch === 'feat/auth') {
+            w.changeRequest = { ...w.changeRequest, title: 'Renamed on the forge' };
+          }
+        }
+      }
+      return new Response(JSON.stringify(body), {
+        status: res.status,
+        headers: { 'content-type': 'application/json' },
+      });
+    };
+    const mockFetch: typeof fetch = async (input, init) => {
+      const url = new URL(
+        typeof input === 'string' ? input : input instanceof URL ? input.href : input.url,
+      );
+      const method = init?.method ?? 'GET';
+      calls.push(`${method} ${url.pathname}`);
+      if (method === 'POST' && url.pathname.endsWith('/request/refresh')) renamed = true;
+      const res = await inner(url.href, init);
+      return retitle(
+        res,
+        url.pathname === '/api/forges' || /\/forges\/worktrees\/[^/]+\/request$/.test(url.pathname),
+      );
+    };
+    const api = createApiClient({ baseUrl: 'http://mock.local', fetch: mockFetch });
+    const store = createUiStore(
+      { confirmBulk: false, settledOpen: true, scope: scopeForPref('review') },
+      false,
+    );
+    render(
+      <App api={api} queryClient={createQueryClient()} uiStore={store} eventSourceFactory={null} />,
+    );
+    return { calls, store };
+  }
+
+  it('shows the refreshed version everywhere and refetches the forge batch', async () => {
+    const { calls, store } = setupRefresh();
+    await screen.findAllByTestId(TEST_IDS.changeRequestChip);
+    const row = openRow('feat/auth');
+    store.setState({
+      view: { kind: 'worktree', worktreeId: row.dataset.worktreeId ?? '', tab: 'request' },
+    });
+    const view = await screen.findByTestId(TEST_IDS.requestView);
+    await waitFor(() => expect(view.dataset.status).toBe('ok'));
+    expect(screen.getByRole('heading', { level: 1, name: 'feat auth' })).toBeTruthy();
+    const batches = calls.filter((c) => c === 'GET /api/forges').length;
+    fireEvent.click(within(view).getByRole('button', { name: 'Refresh' }));
+    expect(
+      await screen.findByRole('heading', { level: 1, name: 'Renamed on the forge' }),
+    ).toBeTruthy();
+    // The batch (chip, hover card, cache keys) was refetched, not only the detail.
+    await waitFor(() =>
+      expect(calls.filter((c) => c === 'GET /api/forges').length).toBeGreaterThan(batches),
+    );
+    expect(
+      calls.filter((c) => c.startsWith('POST') && c.endsWith('/request/refresh')),
+    ).toHaveLength(1);
+  });
+});

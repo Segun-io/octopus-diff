@@ -138,14 +138,22 @@ export function useChangeRequestConversation(
   });
 }
 
-/** "Refresh": refetches detail and conversation (the daemon spaces it to 15 s). */
+/**
+ * "Refresh": the daemon refetches the project's batch, the detail and the conversation (no
+ * spacing, DECISIONS #195), so everything derived from them is invalidated here: the request's
+ * own queries and the forge batch (chip, header, hover card and the keys above derive from it).
+ * The daemon also emits `forge.updated` when the batch changed; this does not wait for it.
+ */
 export function useRefreshChangeRequest(worktreeId: string) {
   const api = useApi();
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: () => api.refreshChangeRequest(worktreeId),
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: requestKeys.all(worktreeId) });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: requestKeys.all(worktreeId) }),
+        queryClient.invalidateQueries({ queryKey: ['forges'] }),
+      ]);
     },
   });
 }
