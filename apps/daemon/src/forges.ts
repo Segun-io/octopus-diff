@@ -122,6 +122,8 @@ interface Entry<T> {
   /** Batch fingerprint the value was fetched for (`updatedAt|headSha|checks`). */
   fingerprint: string;
   inflight: Promise<void> | null;
+  /** The in-flight fetch was forced (a later forced call can share it). */
+  inflightForced: boolean;
 }
 
 function emptyEntry<T>(): Entry<T> {
@@ -134,6 +136,7 @@ function emptyEntry<T>(): Entry<T> {
     error: null,
     fingerprint: '',
     inflight: null,
+    inflightForced: false,
   };
 }
 
@@ -159,6 +162,12 @@ export interface ForgeServiceOptions {
   cliTtlMs?: number;
   /** Debounce for event-triggered refreshes (default 1500 ms). */
   debounceMs?: number;
+  /**
+   * After a branch was pushed (its upstream or push configuration changed) and no request was
+   * found for it, the project is looked up again after each of these delays: a pull request is
+   * usually created a moment after the push (default 30 s and 90 s).
+   */
+  followUpMs?: readonly number[];
   now?: () => Date;
 }
 
@@ -170,6 +179,8 @@ interface ProjectCache {
   lastFetch: number;
   /** Sorted head branches of the last fetch. */
   fetchedKey: string;
+  /** The candidates' branch configuration (upstream, push remote) at the last look; a push changes it. */
+  pushKey: string | null;
   config: GitRemoteConfig | null;
   /** Local branch -> where it is pushed. */
   heads: Map<string, BranchHead>;
@@ -197,6 +208,23 @@ function candidatesOf(item: ProjectListItem): Candidate[] {
   return out;
 }
 
+/** What a `git push -u` / `gh pr create` changes for the worktrees' branches. */
+function pushKeyOf(config: GitRemoteConfig, candidates: readonly Candidate[]): string {
+  return JSON.stringify([
+    config.pushDefault,
+    candidates.map((c) => [c.branch, config.branches[c.branch] ?? null]),
+  ]);
+}
+
+/** Which requests the batch knows (number and state): the repository list depends on it. */
+function requestsSignature(cache: ProjectCache): string {
+  const parts: string[] = [];
+  for (const list of cache.requests.values()) {
+    for (const cr of list) parts.push(`${cr.number}:${cr.state}`);
+  }
+  return parts.sort().join(',');
+}
+
 function emptyCache(): ProjectCache {
   return {
     forge: null,
@@ -205,6 +233,7 @@ function emptyCache(): ProjectCache {
     fetchedAt: null,
     lastFetch: 0,
     fetchedKey: '',
+    pushKey: null,
     config: null,
     heads: new Map(),
     requests: new Map(),
@@ -235,6 +264,7 @@ export class ForgeService {
   #settingsKey: string;
   #timer: NodeJS.Timeout | null = null;
   readonly #debounce = new Map<string, NodeJS.Timeout>();
+  readonly #followUps = new Map<string, NodeJS.Timeout[]>();
   #unsubscribe: (() => void) | null = null;
   #closed = false;
 
@@ -252,6 +282,7 @@ export class ForgeService {
       minRefetchMs: options.minRefetchMs ?? FORGE_MIN_REFETCH_MS,
       cliTtlMs: options.cliTtlMs ?? 10 * 60_000,
       debounceMs: options.debounceMs ?? 1500,
+      followUpMs: options.followUpMs ?? [30_000, 90_000],
       now: options.now ?? (() => new Date()),
     };
     this.#settingsKey = JSON.stringify(this.#forgeSettings());
@@ -285,6 +316,8 @@ export class ForgeService {
     if (this.#timer) clearInterval(this.#timer);
     for (const t of this.#debounce.values()) clearTimeout(t);
     this.#debounce.clear();
+    for (const timers of this.#followUps.values()) for (const t of timers) clearTimeout(t);
+    this.#followUps.clear();
     await Promise.allSettled([...this.#projects.values()].map((c) => c.inflight));
   }
 
@@ -327,6 +360,20 @@ export class ForgeService {
     }, this.#o.debounceMs);
     timer.unref();
     this.#debounce.set(projectId, timer);
+  }
+
+  /** Looks the project up again later (forced: the 15 s spacing must not swallow it). */
+  #followUp(projectId: string): void {
+    if (this.#closed) return;
+    for (const t of this.#followUps.get(projectId) ?? []) clearTimeout(t);
+    const timers = this.#o.followUpMs.map((ms) => {
+      const timer = setTimeout(() => {
+        void this.refresh([projectId], { force: true }).catch(() => {});
+      }, ms);
+      timer.unref();
+      return timer;
+    });
+    this.#followUps.set(projectId, timers);
   }
 
   async #ensureClis(force: boolean): Promise<Map<ForgeKind, ForgeCliStatus>> {
@@ -393,7 +440,11 @@ export class ForgeService {
       cache = emptyCache();
       this.#projects.set(id, cache);
     }
-    if (cache.inflight) return cache.inflight;
+    if (cache.inflight) {
+      if (!options.force) return cache.inflight;
+      // A forced refresh must see the forge as it is now, not a lookup that started earlier.
+      return cache.inflight.then(() => this.#refreshProject(item, options));
+    }
     const run = this.#doRefresh(item, cache, options)
       .catch((error) => {
         // Shutting down: git-core may already be disposed.
@@ -438,7 +489,14 @@ export class ForgeService {
     if (options.onlyIfBranchesChanged && cache.status !== 'pending') {
       const known = [...cache.heads.keys()].sort().join('\n');
       const fresh = this.#o.now().getTime() - cache.lastFetch < this.#o.pollMs;
-      if (known === branchKeyLocal && fresh) return;
+      // A pushed branch can have a new request even though the branch set is the same.
+      if (
+        known === branchKeyLocal &&
+        fresh &&
+        !(await this.#pushChanged(item, cache, candidates))
+      ) {
+        return;
+      }
     }
 
     if (!this.#o.gitCore.readRemoteConfig) {
@@ -499,6 +557,9 @@ export class ForgeService {
     cache.heads = new Map(
       candidates.map((c) => [c.branch, resolveBranchHead(c.branch, config, forge, sshAliases)]),
     );
+    const pushKey = pushKeyOf(config, candidates);
+    const pushed = cache.pushKey !== null && cache.pushKey !== pushKey;
+    cache.pushKey = pushKey;
     if (candidates.length === 0) {
       set('idle', null);
       return finish();
@@ -518,6 +579,7 @@ export class ForgeService {
     const now = this.#o.now().getTime();
     if (
       !options.force &&
+      !pushed &&
       key === cache.fetchedKey &&
       now - cache.lastFetch < this.#o.minRefetchMs
     ) {
@@ -531,11 +593,32 @@ export class ForgeService {
       cache.fetchedKey = key;
       cache.fetchedAt = this.#o.now().toISOString();
       set('ok', null);
+      if (pushed) {
+        const waiting = [...cache.heads.values()].some(
+          (head) =>
+            pickChangeRequest(fetched.get(head.headBranch) ?? [], head, forge.repository) === null,
+        );
+        if (waiting) this.#followUp(projectId);
+      }
     } catch (error) {
       set('error', error instanceof Error ? error.message : String(error));
       this.#o.logger.debug('forge fetch failed', { projectId, error });
     }
     return finish();
+  }
+
+  /** Did a candidate's upstream or push configuration change since the last look? (one git config read) */
+  async #pushChanged(
+    item: ProjectListItem,
+    cache: ProjectCache,
+    candidates: readonly Candidate[],
+  ): Promise<boolean> {
+    if (cache.pushKey === null || !this.#o.gitCore.readRemoteConfig) return false;
+    const config = await this.#o.gitCore.readRemoteConfig({
+      id: item.project.id,
+      commonDir: item.project.commonDir,
+    });
+    return pushKeyOf(config, candidates) !== cache.pushKey;
   }
 
   /** What subscribers can see change (ignores timestamps of identical results). */
@@ -598,8 +681,10 @@ export class ForgeService {
 
   /**
    * Serves `entry` from cache when fresh, else fetches (deduped). A failed fetch keeps the old
-   * value (stale-while-error). `force` refetches unless the last attempt is under
-   * `minRefetchMs` old.
+   * value (stale-while-error). `force` (the user pressed Refresh) always refetches, with no
+   * spacing: a fetch already running is shared when it was forced too, else it is awaited and a
+   * new one follows (its answer may predate the click). Without `force`, a retry after an error
+   * or a missing object waits `minRefetchMs` (a changed fingerprint or an expired TTL does not).
    */
   async #load<T>(
     entry: Entry<T>,
@@ -614,10 +699,17 @@ export class ForgeService {
       (entry.value !== null || entry.missing) &&
       now - entry.fetchedAt < ttl &&
       entry.fingerprint === fingerprint;
-    if (entry.inflight) return entry.inflight;
+    if (entry.inflight) {
+      if (!force || entry.inflightForced) return entry.inflight;
+      await entry.inflight;
+      return this.#load(entry, ttl, fingerprint, force, fetch);
+    }
     if (fresh && !force) return;
-    if (!spaced && (entry.value !== null || entry.missing || entry.error !== null)) return;
+    if (!force && !spaced && (entry.missing || entry.error !== null)) {
+      return;
+    }
     entry.lastAttempt = now;
+    entry.inflightForced = force;
     entry.inflight = (async () => {
       try {
         const value = await fetch();
@@ -757,8 +849,17 @@ export class ForgeService {
     } satisfies ChangeRequestConversationResponse;
   }
 
-  /** `POST /api/forges/worktrees/:worktreeId/request/refresh`: both caches, 15 s spacing. */
+  /**
+   * `POST /api/forges/worktrees/:worktreeId/request/refresh`: the user asked the forge again, so
+   * nothing may be served from a cache. The project's batch (the chip, the header, the matched
+   * request and the cache keys derive from it) is refetched first, then the detail and the
+   * conversation, each with no spacing. Costs three queries (3 points).
+   */
   async refreshRequest(worktreeId: string): Promise<ChangeRequestDetailResponse> {
+    const items = await this.#o.core.listProjects();
+    const item = items.find((i) => i.worktrees.some((w) => w.worktree.id === worktreeId));
+    if (!item) throw new ApiError('not_found', `unknown worktree: ${worktreeId}`);
+    if (this.enabled) await this.refresh([item.project.id], { force: true });
     const detail = await this.detail(worktreeId, { force: true });
     if (detail.status === 'ok') {
       await this.conversation(worktreeId, { force: true }).catch(() => undefined);
@@ -821,8 +922,14 @@ export class ForgeService {
       entry = emptyEntry();
       this.#repositories.set(key, entry);
     }
-    await this.#load(entry, FORGE_REPOSITORY_TTL_MS, '', options.force ?? false, () =>
-      fetchRepository(forge),
+    // The batch's set of requests is part of the key: a request it just discovered (or one that
+    // was merged) makes the cached list of open requests wrong long before its 10 minutes.
+    await this.#load(
+      entry,
+      FORGE_REPOSITORY_TTL_MS,
+      requestsSignature(cache),
+      options.force ?? false,
+      () => fetchRepository(forge),
     );
     if (entry.value === null) {
       return empty('error', entry.error ?? 'Not loaded yet.', forge);

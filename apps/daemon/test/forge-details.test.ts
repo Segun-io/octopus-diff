@@ -9,6 +9,7 @@ import {
   type ForgeCliStatus,
   type ForgeKind,
   type ForgeRepositoryInfo,
+  type ForgesResponse,
   type ProjectForge,
   RepositoriesResponseSchema,
   RepositoryForgeResponseSchema,
@@ -111,6 +112,8 @@ class FakeDetailClient implements ForgeClientLike {
   fail: string | null = null;
   gate: Promise<void> | null = null;
   missing = false;
+  /** Open requests the repository query lists besides 7 and 8. */
+  extraOpen: number[] = [];
 
   async probe(kind: ForgeKind) {
     return this.clis[kind];
@@ -124,10 +127,11 @@ class FakeDetailClient implements ForgeClientLike {
   }
   async fetchDetail(_forge: ForgeTargetLike, number: number) {
     this.details.push(number);
+    // What the forge says when the request is made (a gate models a slow answer).
+    const cr = [...this.requests.values()].flat().find((r) => r.number === number);
     await this.gate;
     if (this.fail) throw new Error(this.fail);
     if (this.missing) return null;
-    const cr = [...this.requests.values()].flat().find((r) => r.number === number);
     return cr ? detailOf(cr) : null;
   }
   async fetchConversation(_forge: ForgeTargetLike, number: number) {
@@ -169,7 +173,7 @@ class FakeDetailClient implements ForgeClientLike {
       pushedAt: NOW,
       openRequests: 3,
       openIssues: 1,
-      requests: [open(7), open(8)],
+      requests: [open(7), open(8), ...this.extraOpen.map(open)],
       requestsTruncated: true,
     };
   }
@@ -211,7 +215,12 @@ describe('request detail and repository routes (fake git-core, fake gh)', () => 
       stateDir: await tempDir(),
       projects: [alpha.mainPath, beta.mainPath],
       internal: {
-        forges: { client: forge, debounceMs: 20, readSshConfig: async () => null },
+        forges: {
+          client: forge,
+          debounceMs: 20,
+          followUpMs: [100],
+          readSshConfig: async () => null,
+        },
         now: () => new Date(Date.now() + clock),
       },
     });
@@ -244,12 +253,57 @@ describe('request detail and repository routes (fake git-core, fake gh)', () => 
     expect(forge.details).toEqual([7, 7]);
   });
 
-  it('a forced refresh is spaced 15 s; errors keep the last good data', async () => {
+  it('a refresh right after loading refetches and shows the new version (#12)', async () => {
     await api.getChangeRequest(featId());
+    await api.getChangeRequestConversation(featId());
     expect(forge.details).toEqual([7]);
-    await api.refreshChangeRequest(featId());
-    expect(forge.details).toEqual([7]); // under 15 s
-    clock += 16_000;
+    const batches = forge.batchFetches;
+    // The PR changed on the forge a moment ago; the user presses Refresh well under 15 s later.
+    forge.requests.set('org/alpha#feat', [
+      pr({
+        title: 'Renamed',
+        updatedAt: '2026-11-08T10:00:05.000Z',
+        checks: { state: 'success', passed: 2, failed: 0, pending: 0, total: 2 },
+      }),
+    ]);
+    const fresh = await api.refreshChangeRequest(featId());
+    expect(fresh.request?.title).toBe('Renamed');
+    expect(fresh.request?.checks?.state).toBe('success');
+    expect(forge.details).toEqual([7, 7]);
+    expect(forge.conversations).toEqual([7, 7]);
+    // The batch data (sidebar chip, header, hover card) is refreshed with it.
+    expect(forge.batchFetches).toBe(batches + 1);
+    const listed = await api.getForges();
+    const mine = listed.projects.find((p) => p.projectId === alpha.projectId);
+    expect(mine?.worktrees.find((w) => w.worktreeId === featId())?.changeRequest).toMatchObject({
+      title: 'Renamed',
+      checks: { state: 'success' },
+    });
+    // And the next plain read is served from the fresh cache.
+    expect((await api.getChangeRequest(featId())).request?.title).toBe('Renamed');
+    expect(forge.details).toEqual([7, 7]);
+  });
+
+  it('a refresh during a slower plain fetch still returns data newer than the click (#12)', async () => {
+    let release = () => {};
+    forge.gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const plain = api.getChangeRequest(featId());
+    await eventually(() => forge.details.length === 1);
+    forge.requests.set('org/alpha#feat', [
+      pr({ title: 'Renamed', updatedAt: '2026-11-08T10:00:05.000Z' }),
+    ]);
+    const refreshed = api.refreshChangeRequest(featId());
+    forge.gate = null;
+    release();
+    await plain;
+    expect((await refreshed).request?.title).toBe('Renamed');
+    expect(forge.details).toEqual([7, 7]);
+  });
+
+  it('errors on a refresh keep the last good data', async () => {
+    await api.getChangeRequest(featId());
     forge.fail = 'HTTP 502';
     const stale = await api.refreshChangeRequest(featId());
     expect(forge.details).toEqual([7, 7]);
@@ -331,6 +385,62 @@ describe('request detail and repository routes (fake git-core, fake gh)', () => 
     // A project without a forge: its status, no query.
     expect((await api.getRepositoryForge(beta.projectId)).status).toBe('no-forge');
     expect(forge.repositories).toEqual(['org/alpha', 'org/alpha']);
+  });
+
+  it('the open-requests list follows a request the batch just discovered (#12)', async () => {
+    const first = await api.getRepositoryForge(alpha.projectId);
+    expect(first.repository?.requests.map((r) => r.number)).toEqual([7, 8]);
+    // A PR is created for the `other` branch; the batch refresh sees it.
+    forge.extraOpen = [9];
+    forge.requests.set('org/alpha#other', [
+      pr({ number: 9, headBranch: 'other', url: 'https://github.com/org/alpha/pull/9' }),
+    ]);
+    await api.refreshForges({ projectIds: [alpha.projectId] });
+    const again = await api.getRepositoryForge(alpha.projectId);
+    expect(again.repository?.requests.map((r) => [r.number, r.worktreeId])).toEqual([
+      [7, featId()],
+      [8, null],
+      [9, alpha.worktrees[2]?.id],
+    ]);
+    // Nothing changed in the batch: still the cached list (10 min).
+    await api.getRepositoryForge(alpha.projectId);
+    expect(forge.repositories).toHaveLength(2);
+  });
+
+  it('a branch that was just pushed is looked up again at once, and a bit later (#12)', async () => {
+    const other = alpha.worktrees[2]?.id ?? '';
+    const prFor = (state: ForgesResponse) =>
+      state.projects
+        .find((p) => p.projectId === alpha.projectId)
+        ?.worktrees.find((w) => w.worktreeId === other)?.changeRequest;
+    expect(prFor(await api.getForges())).toBeNull();
+    const batches = forge.batchFetches;
+    // `git push -u` (what `gh pr create` does first): the branch gets an upstream.
+    fake.remoteConfigs.set(alpha.commonDir, {
+      remotes: [
+        {
+          name: 'origin',
+          url: 'https://github.com/org/alpha.git',
+          pushUrl: null,
+          ghResolved: null,
+        },
+      ],
+      branches: { other: { remote: 'origin', merge: 'refs/heads/other', pushRemote: null } },
+      pushDefault: null,
+    });
+    daemon.hub.emit({
+      type: 'worktree.changed',
+      projectId: alpha.projectId,
+      worktreeId: other,
+      stateHash: 'pushed',
+    });
+    // The PR is created a moment after the push: the first lookup cannot see it yet.
+    await eventually(() => forge.batchFetches > batches);
+    forge.requests.set('org/alpha#other', [
+      pr({ number: 9, headBranch: 'other', url: 'https://github.com/org/alpha/pull/9' }),
+    ]);
+    const found = await eventually(async () => prFor(await api.getForges()));
+    expect(found.number).toBe(9);
   });
 
   it('the folder Overview route runs no forge query', async () => {
