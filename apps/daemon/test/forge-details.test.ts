@@ -660,8 +660,16 @@ describe('a changed push destination reaches the forge service through the real 
     onCleanup(() => daemon.close());
     const api = client(daemon);
     const projectId = (await api.listProjects()).projects[0]?.project.id ?? '';
-    await eventually(() => forge.batchFetches >= 1, 8000);
-    // Let the watcher settle (the startup refreshes) before the config change.
+    await eventually(() => forge.batchFetches >= 1, 20_000);
+    // The watcher's subscription can come up several seconds after the startup lookups on a slow
+    // runner, and a config change made in that gap raises no event: wait until file events reach
+    // the worktree (the daemon's own liveness report), then let the startup refreshes settle.
+    const worktreeId = (await api.listProjects()).projects[0]?.worktrees[0]?.worktree.id ?? '';
+    await eventually(
+      async () => (await api.getActivity(worktreeId)).watch.mode === 'native',
+      20_000,
+      50,
+    );
     await new Promise((resolve) => setTimeout(resolve, 1000));
     const batches = forge.batchFetches;
     const before = await api.getForges();
@@ -673,6 +681,6 @@ describe('a changed push destination reaches the forge service through the real 
       pr({ number: 9, headBranch: 'other', url: 'https://github.com/org/alpha/pull/9' }),
     ]);
     fx.git(repo, 'config', 'branch.other.pushRemote', 'origin');
-    await eventually(() => forge.batchFetches > batches, 8000);
-  }, 20_000);
+    await eventually(() => forge.batchFetches > batches, 20_000);
+  }, 60_000);
 });

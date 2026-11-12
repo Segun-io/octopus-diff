@@ -299,9 +299,26 @@ describe('incremental refresh in the daemon (#40)', () => {
         const mark = events.events.length;
         const before = spawns().length;
         await appendFile(path.join(s.repo, 'a.txt'), `edit ${i}\n`);
-        const event = await changedAfter(events, mark, s.repoId);
+        // The event of THIS edit: the one whose totals are what a full refresh says now (each edit
+        // appends a line, so the additions differ from the previous edit's). FSEvents
+        // (macOS) can deliver an earlier, unrelated event first, and `quiet` can return before the
+        // edit's refresh has started, so the first event after the mark proves nothing.
+        const full = await fullSummary(s.fx, s.repo);
+        const event = await eventually(
+          () =>
+            events.events
+              .slice(mark)
+              .find(
+                (e): e is Changed =>
+                  e.type === 'worktree.changed' &&
+                  e.worktreeId === s.repoId &&
+                  e.summary?.additions === full.additions &&
+                  e.summary?.changedFiles === full.changedFiles,
+              ),
+          20_000,
+        );
         await quiet(spawns);
-        sameState(event.summary, await fullSummary(s.fx, s.repo));
+        sameState(event.summary, full);
         const statuses = spawns()
           .slice(before)
           .filter((argv) => argv[0] === 'status');
