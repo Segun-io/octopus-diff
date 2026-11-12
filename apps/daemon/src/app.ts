@@ -355,7 +355,9 @@ export function createApp(deps: AppDeps): Hono {
 
   route('inbox', async (c) => {
     const query = parseWith(InboxQuerySchema, c.req.query(), 'query');
-    return c.json(await core.inbox(query.scope, query.onlyUnreviewed, query.projectIds));
+    return c.json(
+      await core.inbox(query.scope, query.onlyUnreviewed, query.projectIds, query.worktreeIds),
+    );
   });
 
   route('listFiles', async (c) => {

@@ -36,12 +36,18 @@ import {
   type ReviewResponse,
   type ScanRoot,
   type ScopeKind,
+  type ServerEventOf,
   type SummarySnapshot,
   scopeKey,
   type UpdateProjectRequest,
   type WatchOptions,
   type WatchTargets,
+  WORKTREE_CHANGED_PATHS_MAX,
+  WORKTREE_CHANGED_PATHS_MAX_CHARS,
   type Worktree,
+  WorktreeChangedEventSchema,
+  type WorktreeChangedPaths,
+  type WorktreeListItem,
   type WorktreeLocator,
   type WorktreeSummary,
 } from '@octopus-diff/contracts';
@@ -322,6 +328,30 @@ function withBase(summary: WorktreeSummary, base: string | null | undefined): Wo
     .digest('hex')
     .slice(0, Math.max(summary.stateHash.length, 16));
   return { ...summary, stateHash: hash };
+}
+
+/**
+ * The bounded path list of `worktree.changed` (#51): every file, or none with `truncated` when there
+ * are more than `WORKTREE_CHANGED_PATHS_MAX` files or more path text than the character cap.
+ */
+export function changedPathsOf(
+  scope: DiffScope,
+  files: readonly GitChangedFile[],
+): WorktreeChangedPaths {
+  const none = { scope, files: [], total: files.length, truncated: true };
+  if (files.length > WORKTREE_CHANGED_PATHS_MAX) return none;
+  let chars = 0;
+  const out: WorktreeChangedPaths['files'] = [];
+  for (const f of files) {
+    chars += f.path.length + (f.rawPath?.length ?? 0);
+    if (chars > WORKTREE_CHANGED_PATHS_MAX_CHARS) return none;
+    out.push(
+      f.rawPath !== undefined
+        ? { path: f.path, rawPath: f.rawPath, patchHash: f.patchHash }
+        : { path: f.path, patchHash: f.patchHash },
+    );
+  }
+  return { scope, files: out, total: files.length, truncated: false };
 }
 
 /** A bookmark target must be a full commit id (the daemon never stores abbreviations). */
@@ -1034,17 +1064,20 @@ export class DaemonCore {
   #item(entry: ProjectEntry): ProjectListItem {
     const worktrees = [...entry.worktrees.values()]
       .sort((a, b) => compareWorktrees(a.worktree, b.worktree))
-      .map((e) => {
-        const review = this.#policy(entry, e);
-        const summary = e.summary && e.review ? { ...e.summary, review: e.review.info } : e.summary;
-        return {
-          worktree: e.worktree,
-          summary,
-          error: e.error,
-          ...(review ? { review } : {}),
-        };
-      });
+      .map((e) => this.#row(entry, e));
     return { project: this.#toProject(entry.row), worktrees };
+  }
+
+  /** A worktree's row of `GET /api/projects` (and of `worktree.changed`, #51). */
+  #row(project: ProjectEntry, e: WorktreeEntry): WorktreeListItem {
+    const review = this.#policy(project, e);
+    const summary = e.summary && e.review ? { ...e.summary, review: e.review.info } : e.summary;
+    return {
+      worktree: e.worktree,
+      summary,
+      error: e.error,
+      ...(review ? { review } : {}),
+    };
   }
 
   /** Effective review policy of a worktree (UX round 1), or undefined without a provider. */
@@ -1163,7 +1196,9 @@ export class DaemonCore {
         await this.#recordActivity(entry, summary, snapshot);
         if (this.#closed || project.worktrees.get(entry.worktree.id) !== entry) return;
       }
-      this.#announce(entry, summary.stateHash);
+      const paths = await this.#cachedPaths(project, entry, summary);
+      if (this.#closed || project.worktrees.get(entry.worktree.id) !== entry) return;
+      this.#announce(entry, summary.stateHash, paths);
     } catch (error) {
       if (this.#closed || isShutdownError(error)) return;
       if (project.worktrees.get(entry.worktree.id) !== entry) return;
@@ -1262,18 +1297,75 @@ export class DaemonCore {
     this.#activity.observe(id, cur, drafts, this.#now());
   }
 
-  /** Emits `worktree.changed` only when the state hash actually changed (PLAN §5.6). */
-  #announce(entry: WorktreeEntry, stateHash: string): void {
+  /**
+   * Emits `worktree.changed` only when the state hash actually changed (PLAN §5.6). The event
+   * carries the worktree's row of `/api/projects` and, when given, the changed paths (#51): what
+   * the daemon already holds, so a client neither refetches the projects list nor re-derives it.
+   * Replayed after a reconnect (`Last-Event-ID`) without them: that client resyncs anyway, and the
+   * replay buffer keeps its old size.
+   */
+  #announce(entry: WorktreeEntry, stateHash: string, paths?: WorktreeChangedPaths): void {
     if (entry.lastHash === stateHash) return;
     entry.lastHash = stateHash;
     const activitySeq = this.#activity.seqOf(entry.worktree.id);
-    this.#hub.emit({
+    const slim: ServerEventOf<'worktree.changed'> = {
       type: 'worktree.changed',
       projectId: entry.projectId,
       worktreeId: entry.worktree.id,
       stateHash,
       ...(activitySeq > 0 ? { activitySeq } : {}),
-    });
+    };
+    const project = this.#projects.get(entry.projectId);
+    if (!project || project.worktrees.get(entry.worktree.id) !== entry) {
+      this.#hub.emit(slim);
+      return;
+    }
+    const full: ServerEventOf<'worktree.changed'> = {
+      ...slim,
+      ...this.#row(project, entry),
+      ...(paths ? { paths } : {}),
+    };
+    // A client drops an event its schema rejects, so a field it would reject (a path the list
+    // schema refuses) must cost the delta, not the event.
+    if (WorktreeChangedEventSchema.safeParse(full).success) {
+      this.#hub.emit(full, slim);
+    } else {
+      this.#log.debug('worktree.changed: delta left out (schema)', {
+        worktreeId: entry.worktree.id,
+      });
+      this.#hub.emit(slim);
+    }
+  }
+
+  /**
+   * The worktree's changed paths with their patch hashes for `worktree.changed` (#51), from what is
+   * already known for this state: no git process. An empty `working` list when the summary counts
+   * no changed file; else the `working` list, else the review state's list (computed before the
+   * announcement for a worktree that changed, `#reviewWanted`), when `#filesCache` holds it for
+   * this `stateHash` (and the same attributes). Undefined when there is none.
+   */
+  async #cachedPaths(
+    project: ProjectEntry,
+    entry: WorktreeEntry,
+    summary: WorktreeSummary,
+  ): Promise<WorktreeChangedPaths | undefined> {
+    if (summary.changedFiles === 0) {
+      return { scope: { kind: 'working' }, files: [], total: 0, truncated: false };
+    }
+    const scopes: DiffScope[] = [{ kind: 'working' }];
+    const review = entry.review;
+    if (review?.key.startsWith(`${summary.stateHash}\u0000`) && isCacheableScope(review.scope)) {
+      scopes.push(review.scope);
+    }
+    let attrs: string | null = null;
+    for (const scope of scopes) {
+      const cached = this.#filesCache.get(this.#filesKey(entry.worktree.id, scope));
+      if (!cached || cached.stateHash !== summary.stateHash) continue;
+      attrs ??= await this.#attributesStamp(project);
+      if (cached.attrs !== attrs) continue;
+      return changedPathsOf(scope, cached.files);
+    }
+    return undefined;
   }
 
   /** Waits (bounded) for reconciliation and first summaries of the given projects. */
@@ -1689,10 +1781,16 @@ export class DaemonCore {
     scope: DiffScope,
     onlyUnreviewed: boolean,
     projectIds?: readonly string[],
+    worktreeIds?: readonly string[],
   ): Promise<InboxResponse> {
     const only = projectIds ? new Set(projectIds) : null;
+    // Only these worktrees (#51: a client applying `worktree.changed`); unknown ids match nothing.
+    const onlyWorktrees = worktreeIds ? new Set(worktreeIds) : null;
     const projects = [...this.#projects.values()].filter(
-      (p) => !p.missing && (only === null || only.has(p.row.id)),
+      (p) =>
+        !p.missing &&
+        (only === null || only.has(p.row.id)) &&
+        (onlyWorktrees === null || [...p.worktrees.keys()].some((id) => onlyWorktrees.has(id))),
     );
     await this.#awaitInitial(projects);
     const candidates: Array<{
@@ -1703,6 +1801,7 @@ export class DaemonCore {
     }> = [];
     for (const project of projects) {
       for (const entry of project.worktrees.values()) {
+        if (onlyWorktrees !== null && !onlyWorktrees.has(entry.worktree.id)) continue;
         const summary = entry.summary;
         if (!summary || entry.worktree.bare || entry.worktree.missing) continue;
         // Review-disabled worktrees are out of the review loop: omitted from onlyUnreviewed.
@@ -1731,6 +1830,7 @@ export class DaemonCore {
     const hash = createHash('sha1')
       .update(`${scopeKey(scope)}\u0000${onlyUnreviewed}`)
       .update(`\u0000${only ? [...only].sort().join(',') : '*'}`)
+      .update(`\u0000${onlyWorktrees ? [...onlyWorktrees].sort().join(',') : '*'}`)
       .update(`\u0000${[...bases.values()].join('\u0001')}`);
     for (const c of candidates) {
       hash.update(
