@@ -282,11 +282,11 @@ describe('rows in the sidebar', () => {
     expect(pill('chore/nothing-to-review')).toBeNull();
     expect(pill('feat/reviewed')).toBeNull();
     expect(pill('feat/one')?.textContent).toBe('1');
-    expect(pill('feat/one')?.title).toBe('1 unreviewed file');
+    expect(pill('feat/one')?.title).toBe('1 unreviewed');
     expect(pill('feat/nine')?.textContent).toBe('9');
     expect(pill('feat/ninety-nine')?.textContent).toBe('99');
     expect(pill('feat/one-thousand-files')?.textContent).toBe('99+');
-    expect(pill('feat/one-thousand-files')?.title).toBe('1000 unreviewed files');
+    expect(pill('feat/one-thousand-files')?.title).toBe('1000 unreviewed');
     expect(item('feat/one-thousand-files').dataset.unreviewed).toBe('1000');
   });
 

@@ -220,7 +220,7 @@ function RowStatus({ row, indicator }: { row: WorktreeRow; indicator: RowIndicat
         </span>
       )}
       {row.unreviewed > 0 && (
-        <span className="od-pill" title={`${plural(row.unreviewed, 'unreviewed file')}`}>
+        <span className="od-pill" title={`${row.unreviewed} unreviewed`}>
           {countLabel(row.unreviewed)}
         </span>
       )}

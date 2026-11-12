@@ -3109,7 +3109,7 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      hover card says "reviewed" / "no changes"). This revisits #244 only in that the indicator makes "reviewed"
      visible again as a mark; the words stay off the row.
 251. **Counts stop at `99+`** (`countLabel`, `COUNT_CLAMP`): the pill and nothing else; the exact number is its
-     tooltip (`1000 unreviewed files`), `data-unreviewed` and the hover card. Merge noise is never counted: the pill
+     tooltip (`1000 unreviewed`; the e2e helper `unreviewedBadge` selects `[title$=" unreviewed"]`, so the format stays), `data-unreviewed` and the hover card. Merge noise is never counted: the pill
      is `row.unreviewed` = `unreviewedOwnFiles ?? unreviewedFiles` as in #244, and a test feeds a summary with 17
      base files to check it.
 252. **The indicator is a shape per kind, colour second** (12 px SVG, `aria-hidden`): filled accent dot = unreviewed
