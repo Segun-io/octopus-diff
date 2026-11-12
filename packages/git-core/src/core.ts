@@ -23,6 +23,7 @@ import {
   type DiffDeps,
   getFileDiff,
   listChangedFiles,
+  listChangedFilesWithState,
 } from './diff.js';
 import { detectDefaultBranch, listWorktrees, resolveProject, scan } from './discovery.js';
 import { readFileOrigins } from './file-origins.js';
@@ -223,6 +224,11 @@ export const createGitCore: CreateGitCore = (options: GitCoreOptions = {}): GitC
     ),
     listChangedFiles: guard(
       (worktree, scope, scopeOptions) => listChangedFiles(deps, worktree, scope, scopeOptions),
+      (_worktree, _scope, scopeOptions) => scopeOptions,
+    ),
+    listChangedFilesWithState: guard(
+      (worktree, scope, scopeOptions) =>
+        listChangedFilesWithState(deps, worktree, scope, scopeOptions),
       (_worktree, _scope, scopeOptions) => scopeOptions,
     ),
     getFileDiff: guard(

@@ -10,7 +10,9 @@ import {
   GitCoreError,
   type GitFileDiff,
   isGitCoreError,
+  type ListedChangedFiles,
   type ScopeOptions,
+  type UntrackedOmission,
   type WorktreeLocator,
 } from '@octopus-diff/contracts';
 import {
@@ -58,7 +60,13 @@ import {
   type UntrackedInfo,
   writeUntrackedPatch,
 } from './untracked.js';
-import { isOmitted, listedKeys, planUntracked, type UntrackedPlan } from './untracked-plan.js';
+import {
+  isOmitted,
+  listedKeys,
+  omissionOf,
+  planUntracked,
+  type UntrackedPlan,
+} from './untracked-plan.js';
 
 // ---------------------------------------------------------------------------------------------
 // Status
@@ -1238,6 +1246,20 @@ export async function listChangedFiles(
   scopeInput: unknown,
   options: ScopeOptions | undefined,
 ): Promise<GitChangedFile[]> {
+  return (await listChangedFilesWithState(deps, worktree, scopeInput, options)).files;
+}
+
+/**
+ * `listChangedFiles` with the state the list is of (Greptile on PR #95): `summaryState` is the
+ * held state when the list was built from it (`listFromSummary`), else null (the worktree as it
+ * is now), and then `untrackedOmitted` says what this list's own plan left out.
+ */
+export async function listChangedFilesWithState(
+  deps: DiffDeps,
+  worktree: WorktreeLocator,
+  scopeInput: unknown,
+  options: ScopeOptions | undefined,
+): Promise<ListedChangedFiles> {
   const { ctx } = deps;
   await ctx.ensureSupported();
   const scope = parseScope(scopeInput);
@@ -1247,13 +1269,13 @@ export async function listChangedFiles(
   // read `.gitattributes` from the worktree (binary, diff drivers), which can differ per
   // worktree and change over time. Scopes that read the worktree keep their last list per
   // worktree, updated from the summary's changed paths (#40).
-  if (plan.empty) return [];
+  if (plan.empty) return { files: [], summaryState: null };
   const incremental = deps.incremental && plan.vsWorktree && plan.statusBased;
   const key = listKeyOf(repo, plan);
   const held = options?.summaryState;
   if (incremental && held !== undefined && deps.tracks.get(repo.cwd)?.stateHash === held) {
     const listed = await listFromSummary(deps, repo, plan, key);
-    if (listed) return listed;
+    if (listed) return { files: listed, summaryState: held };
   }
   /** The summary state this list is at least as new as (its status runs after). */
   const track = incremental ? deps.tracks.get(repo.cwd) : undefined;
@@ -1317,8 +1339,19 @@ export async function listChangedFiles(
   }
 
   let readContent = false;
+  let omission: UntrackedOmission | undefined;
   if (plan.includeUntracked && index) {
     const keys = untrackedKeys(index, trackedKeys, omits);
+    if (omits !== null) {
+      // What this list left out, counted as the summary counts it (a path that is also a tracked
+      // row counts as that).
+      const duplicates = index.untracked.filter(
+        (raw) =>
+          trackedKeys.has(raw.endsWith('/') ? raw.slice(0, -1) : raw) && isOmitted(omits, raw),
+      );
+      const count = omits.omitted - duplicates.length;
+      if (count > 0) omission = omissionOf(omits, count, null, duplicates);
+    }
     const inspect = inspectOptions(ctx, repo, index.untracked.length, attributes);
     readContent = inspect.readContent;
     const infos = await inspectUntracked(repo.cwd, keys, deps.untrackedCache, inspect);
@@ -1351,7 +1384,10 @@ export async function listChangedFiles(
       }
     }
   }
-  return rows.map((row) => row.file);
+  const files = rows.map((row) => row.file);
+  return omission
+    ? { files, summaryState: null, untrackedOmitted: omission }
+    : { files, summaryState: null };
 }
 
 // ---------------------------------------------------------------------------------------------

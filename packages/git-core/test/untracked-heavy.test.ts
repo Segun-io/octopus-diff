@@ -928,3 +928,48 @@ describe('numstat alongside the status of a full summary (#43)', () => {
     });
   });
 });
+
+// Greptile on PR #95: a caller labels a list with the state git-core says it listed.
+describe('listChangedFilesWithState (#43 follow-up)', () => {
+  it('reports the summary state it followed, or none and its own omission', async () => {
+    const repo = heavyRepo('with-state');
+    const wt = locator(repo);
+    const summary = await core.getSummary(wt);
+    const listWith = core.listChangedFilesWithState;
+    if (!listWith) throw new Error('git-core lists with its state');
+    // Built from the held state: that state, and the summary says what is omitted.
+    const held = await listWith.call(
+      core,
+      wt,
+      { kind: 'working' },
+      { summaryState: summary.stateHash },
+    );
+    expect(held.summaryState).toBe(summary.stateHash);
+    expect(held.untrackedOmitted).toBeUndefined();
+    expect(held.files).toEqual(
+      await listFiles(core, wt, { kind: 'working' }, { summaryState: summary.stateHash }),
+    );
+    // The worktree moved on: the held state is no longer git-core's latest.
+    writeFileSync(path.join(repo, 'src', 'late.ts'), 'late\n');
+    await core.getSummary(wt);
+    const stale = await listWith.call(
+      core,
+      wt,
+      { kind: 'working' },
+      { summaryState: summary.stateHash },
+    );
+    expect(stale.summaryState).toBeNull();
+    expect(stale.files.map((f) => f.path)).toContain('src/late.ts');
+    // Its own omission: the same numbers as a summary of the same files.
+    const now = await full.getSummary(wt);
+    expect(stale.untrackedOmitted?.count).toBe(now.untrackedOmitted?.count);
+    expect(stale.untrackedOmitted?.directories.map((d) => [d.path, d.count])).toEqual(
+      now.untrackedOmitted?.directories.map((d) => [d.path, d.count]),
+    );
+    // Without any state asked for, and for a scope without untracked files: no omission.
+    expect((await listWith.call(core, wt, { kind: 'working' })).summaryState).toBeNull();
+    const staged = await listWith.call(core, wt, { kind: 'staged' });
+    expect(staged).toMatchObject({ summaryState: null });
+    expect(staged.untrackedOmitted).toBeUndefined();
+  });
+});
