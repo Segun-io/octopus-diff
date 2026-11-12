@@ -2725,3 +2725,46 @@ branches also use #213+: renumber at merge.
      pending,backoff,error` and `POST /api/__mock/forge-sim?...` (no parameters resets). `scripts/shots.ts` has
      `wait-forge`, `rate-limit`, `rate-limit-stale`, `stale-request`. No e2e was added: the e2e run the real daemon,
      whose forge and local answers cannot be slowed on demand without timing-dependent tests.
+## Watcher: new directories (session, 2026-11-12; roadmap #36, step 17)
+
+Numbers: #212. The parallel `feat/daemon-activity` branch also uses #212 and up; renumber at merge.
+
+212. **Linux: a directory that appears with subdirectories already inside is subscribed again; so is a tree after a
+     creation burst big enough to overflow the inotify queue (`apps/daemon/src/watch-subtree.ts`).** Cause of
+     issue #36, reproduced with the raw `@parcel/watcher`: its inotify backend answers `IN_CREATE` of a directory with
+     `watchDir(path)` for that one directory (`InotifyBackend::handleSubscription`; it never crawls the new
+     directory). A subdirectory that exists by then (`mkdir -p vendor/pkg/deep`, `cp -r`, `tar x`, a `mv` of a tree
+     into the worktree, `git branch a/b/c` or a fetch creating `refs/remotes/origin/a/b` in the git dir) is therefore
+     never watched: the stream is `create vendor` and nothing else, for the life of the subscription (an edit of an
+     existing file in `vendor/pkg/deep` is silent as well). `git status` lists no empty directory, so that one event
+     refreshes to an unchanged `stateHash`, `worktree.changed` is not emitted, and files written later are never
+     seen until the fallback poll (30 s focused, 5 min otherwise) or a restart. It is not the ignore list (`vendor*`
+     is not a build name; `dist`, `build`, `out`, `target` and `node_modules` behave the same), not event batching,
+     and not the EINTR area (the in-process watcher shows it; the watch host only adds a process boundary).
+     Measured with the raw watcher (500 ms after subscribing): `mkdir -p vendor-x/pkg/deep` then 100, 5000 or
+     30000 files: exactly 1 event, `create vendor-x`, 0 file events; `mkdir`, wait, `mkdir`, wait ... one by one: every
+     directory and file is reported; `mkdir -p`, wait 1 s, write: 1 event (`create A`), the later write and a later
+     edit are silent; unsubscribe, then subscribe again on the same root: the nested directory is watched
+     (subscribing a second time while the first subscription is alive reuses the first one's cached tree and
+     watches nothing new, so the order matters, and it is the one `#subscribeWorktree` already uses).
+     *Fix.* The watcher notes the `create` events of a burst (worktree and git dir). When the burst is quiet (the
+     debounce, at most `maxWaitMs`) one pass `readdir`s the created paths (read-only; at most 4096 of them, 64 at a
+     time) for a subdirectory that is not ignored by design (the default names, the user's names, build
+     directories git ignores, other worktrees' roots; `GIT_DIR_IGNORES` for the git dir) and that did not report its
+     own creation, in this pass or the previous one: such a directory was not watched. Then the tree is
+     re-subscribed (`#subscribeWorktree` / `#subscribeProject`, the path used for changed ignore rules), and the
+     worktree is marked dirty afterwards (`fs`, or `git` for the git dir) for what was written meanwhile. At most
+     one re-subscribe per gap: `max(2 s, 10 x the last re-subscribe's duration)`, coalesced; requests made while one
+     runs cause one more run. *Overflow:* @parcel/watcher skips `IN_Q_OVERFLOW` without a trace (no event, no error),
+     so a burst may have lost the creation of a directory (30000 files give about 29000 events here); a pass that saw
+     at least half of `fs.inotify.max_queued_events` creations (16384 by default, so 8192) re-subscribes without
+     looking. More than 4096 distinct created paths in a pass re-subscribe too (their directories were not
+     inspected). *Cost and limits.* Nothing runs without events, so idle CPU and the start-up spawn count are
+     unchanged. A re-subscribe is one crawl (about 0.3 s per 50k files, in the watch host process), only for a new
+     directory with unreported subdirectories, so `mkdir a` then `mkdir a/b` one after the other costs nothing. The
+     debounce is the trigger, so the first events of the new tree are caught by the refresh that follows the
+     re-subscribe, not by the stream. Not covered: a user ignore entry that is a glob or a path (the check treats
+     its directories as watchable, which can cost one extra re-subscribe, never a missed edit), and a `dist`-like
+     directory whose nested `.gitignore` is not read yet (treated as watchable). macOS and Windows get recursive
+     events from the OS and the check is off there (`watchNewSubtrees`, default `process.platform` is neither
+     `darwin` nor `win32`; tests force it on). `onSubtreeCheck` and `newSubtreeGapMs` are options for tests.
