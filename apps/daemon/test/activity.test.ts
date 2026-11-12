@@ -713,6 +713,30 @@ describe('long runs of commits (PR #77 review)', () => {
     });
   });
 
+  it('a reset onto a merge commit is a reset, not a merge (PR #77 review)', () => {
+    const A = 'a'.repeat(40);
+    const B = 'b'.repeat(40);
+    const M = 'c'.repeat(40);
+    const X = 'd'.repeat(40);
+    // X was committed on top of the merge M; `reset --hard HEAD~1` moves HEAD back to M.
+    const list = [commit(M, [A, B], 'merge'), commit(A, [], 'a'), commit(B, [], 'b')];
+    expect(classifyHead(head({ sha: X }), head({ sha: M }), list)).toEqual({
+      kind: 'head',
+      op: 'reset',
+    });
+    // A real merge on top of the previous HEAD (here its second parent) is still a merge.
+    expect(classifyHead(head({ sha: A }), head({ sha: M }), list)).toEqual({
+      kind: 'head',
+      op: 'merge',
+    });
+    // So is a merge above a few more commits.
+    const above = [commit(X, [M], 'on top'), ...list];
+    expect(classifyHead(head({ sha: B }), head({ sha: X }), above)).toEqual({
+      kind: 'head',
+      op: 'merge',
+    });
+  });
+
   it('a run that reaches the previous HEAD within the list is still a commit run or a merge label', () => {
     const short = chain(3, OLD);
     expect(classifyHead(head(), head({ sha: newest(short) }), short)).toMatchObject({

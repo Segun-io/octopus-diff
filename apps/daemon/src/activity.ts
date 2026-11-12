@@ -157,15 +157,19 @@ export function classifyHead(
   // The new commits since the previous HEAD, newest first, while they form a linear run.
   const run: CommitInfo[] = [];
   let reached = false;
+  // A merge commit among the new ones only says `merge` once the previous HEAD is known to be below
+  // it: a reset onto an older merge commit also lists one, and that is a reset.
+  let merged = false;
   for (const c of commits) {
     if (c.sha === prev.sha) {
       reached = true;
       break;
     }
-    if (c.parents.length > 1) return { kind: 'head', op: 'merge' };
+    if (c.parents.length > 1) merged = true;
     run.push(c);
-    // The first commit of an unborn branch, or the list ends right above the previous HEAD.
-    if (prev.sha === null ? c.parents.length === 0 : c.parents[0] === prev.sha) {
+    // The first commit of an unborn branch, or the list ends right above the previous HEAD (a
+    // parent of this commit; a merge of the previous HEAD into another line has it second).
+    if (prev.sha === null ? c.parents.length === 0 : c.parents.includes(prev.sha)) {
       reached = true;
       break;
     }
@@ -182,7 +186,7 @@ export function classifyHead(
     }
     return { kind: 'head', op: cur.detached ? 'checkout' : 'reset' };
   }
-  if (pulled) return { kind: 'head', op: 'merge' };
+  if (pulled || merged) return { kind: 'head', op: 'merge' };
   if (run.length > COMMIT_RUN_MAX) return { kind: 'head', op: 'merge' };
   return {
     kind: 'commit',

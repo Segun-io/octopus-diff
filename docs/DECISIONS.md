@@ -2836,7 +2836,7 @@ Numbers: #218 and up (renumbered after #212-#217 and the watcher entry #213 reac
      single-parent -> one `commit` entry each (sha, subject; at most 10, more is a `merge`), oldest first, the paths on
      the newest; a merge commit, or a lower `behind` against the same tracking ref (a pull), -> `merge`; the previous
      HEAD not reached -> `reset` (a reset, an amend, a rewrite; `checkout` when detached); a failed read -> `moved`.
-     So `reset --hard` of a dirty worktree is a `reset` with the paths it discarded, never a commit. (PR #77 review: a list that is *full* (32) and still does not reach the previous HEAD proves nothing, since the run may just be longer than the list: it is `merge` when the tracking ref's `behind` dropped (a long pull), else `moved`; only a shorter list that misses it is a `reset`.) No reflog parsing
+     So `reset --hard` of a dirty worktree is a `reset` with the paths it discarded, never a commit. (PR #77 review: a list that is *full* (32) and still does not reach the previous HEAD proves nothing, since the run may just be longer than the list: it is `merge` when the tracking ref's `behind` dropped (a long pull), else `moved`; only a shorter list that misses it is a `reset`.) (A merge commit among the listed ones says `merge` only after the previous HEAD was found below it: a reset onto an older merge commit lists one too and stays a `reset`.) No reflog parsing
      (that would be git internals outside git-core).
 223. **Blob route.** `GET /api/worktrees/:worktreeId/blob/:oid` validates the oid with `GitObjectIdSchema` (400 for
      abbreviations, uppercase, `HEAD`, the null id, options), `?maxBytes` <= 1 MiB, then serves only an oid that the
