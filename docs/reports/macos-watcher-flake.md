@@ -121,3 +121,7 @@ None added or removed (`pnpm credits` not needed).
 - After merging, watch the `test (macOS, Node 26)` job for a few runs; if F3 or the node_modules test
   start flaking, apply the follow-up above. #65 can be closed once macOS CI has been green for a few
   runs.
+
+## PR review round 1 (Greptile on #69)
+
+- **Positive probes could finish early** (valid). `changed()` waited the same short window (one more debounce after the barrier) for both outcomes, but a kept path can take the asynchronous ignore-file reads (`#resolveDeferred`) before its debounce even starts, so on a busy machine a valid refresh could arrive after a positive assertion had already failed. A negative answer still means "nothing within one more debounce after the barrier"; a positive one (`changed(rel, true)`) now waits until the dirty event comes (5 s deadline) and is only false after that. The nine positive assertions use it. The watcher test file passes 5 of 5 runs after the change (the six watcher files x 20 loop was on the previous version).

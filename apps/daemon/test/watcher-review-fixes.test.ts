@@ -422,15 +422,27 @@ describe('F5: build-output directories', { timeout: 20_000 }, () => {
         await eventually(() => files.every((f) => landed(from, f)), 10_000);
         await drained();
       },
-      async changed(rel: string): Promise<boolean> {
+      /**
+       * Does a write to `rel` mark the main worktree dirty? A negative answer (`wantDirty` false)
+       * is "nothing came within one more debounce after the barrier": the probe has been handled by
+       * then, so a refresh would be pending. A positive answer is waited for until it comes (a
+       * kept path can take the asynchronous ignore-file reads before its debounce even starts, so
+       * the same short window is not enough) and is only false after a generous deadline.
+       */
+      async changed(rel: string, wantDirty = false): Promise<boolean> {
         const mark = rec.dirty.length;
         const from = t.raw.length;
         const barrier = quiet();
         await write(path.join(layout.main, rel));
         await write(barrier);
         await eventually(() => landed(from, barrier), 10_000);
+        const dirtied = () => rec.dirty.slice(mark).some((d) => d.id === 'main');
+        if (wantDirty) {
+          await eventually(dirtied, 5000).catch(() => undefined);
+          return dirtied();
+        }
         await drained();
-        return rec.dirty.slice(mark).some((d) => d.id === 'main');
+        return dirtied();
       },
     };
   }
@@ -451,8 +463,8 @@ describe('F5: build-output directories', { timeout: 20_000 }, () => {
   it('watches tracked dist/ and tools/build/ when git does not ignore them', async () => {
     const layout = await layoutWith({ 'dist/index.js': 'v1', 'tools/build/run.sh': 'v1' });
     const { changed } = await started(layout, false);
-    expect(await changed('dist/index.js')).toBe(true);
-    expect(await changed('tools/build/run.sh')).toBe(true);
+    expect(await changed('dist/index.js', true)).toBe(true);
+    expect(await changed('tools/build/run.sh', true)).toBe(true);
   });
 
   for (const replay of [false, true]) {
@@ -475,11 +487,11 @@ describe('F5: build-output directories', { timeout: 20_000 }, () => {
       expect(await changed('packages/a/dist/index.js')).toBe(false);
       expect(await changed('build/out.o')).toBe(false);
       expect(await changed('target/debug/app')).toBe(false);
-      expect(await changed('tools/build/run.sh')).toBe(true);
+      expect(await changed('tools/build/run.sh', true)).toBe(true);
       // Nested .gitignore: dropped by the event filter (the directory itself is watched).
       expect(await changed('app/out/bundle.js')).toBe(false);
-      expect(await changed('lib/out/keep.js')).toBe(true);
-      expect(await changed('src/a.ts')).toBe(true);
+      expect(await changed('lib/out/keep.js', true)).toBe(true);
+      expect(await changed('src/a.ts', true)).toBe(true);
     });
   }
 
@@ -489,7 +501,7 @@ describe('F5: build-output directories', { timeout: 20_000 }, () => {
       'dist/action.js': 'x',
     });
     const { changed } = await started(layout, false);
-    expect(await changed('dist/action.js')).toBe(true);
+    expect(await changed('dist/action.js', true)).toBe(true);
   });
 
   for (const replay of [false, true]) {
@@ -499,13 +511,13 @@ describe('F5: build-output directories', { timeout: 20_000 }, () => {
       const layout = await layoutWith({ 'out/a.js': 'x', 'coverage/lcov.info': 'x' });
       const { t, changed, settle } = await started(layout, replay);
       const subscriptions = () => t.subscribed.filter((d) => d === layout.main).length;
-      expect(await changed('out/a.js')).toBe(true);
+      expect(await changed('out/a.js', true)).toBe(true);
       await writeFile(path.join(layout.main, '.gitignore'), 'out/\n');
       await eventually(() => subscriptions() === 2, 5000);
       await settle();
       expect(await changed('out/a.js')).toBe(false);
 
-      expect(await changed('coverage/lcov.info')).toBe(true);
+      expect(await changed('coverage/lcov.info', true)).toBe(true);
       await writeFile(path.join(layout.common, 'info', 'exclude'), 'coverage\n');
       await eventually(() => subscriptions() === 3, 5000);
       await settle();
@@ -524,7 +536,7 @@ describe('F5: build-output directories', { timeout: 20_000 }, () => {
     watcher.noteTrackedPaths('main', ['src/a.ts', 'dist/index.js']);
     await eventually(() => t.subscribed.filter((d) => d === layout.main).length === 2, 5000);
     await settle();
-    expect(await changed('dist/index.js')).toBe(true);
+    expect(await changed('dist/index.js', true)).toBe(true);
     // Other dist directories stay filtered (the root rule still ignores them).
     expect(await changed('pkg/dist/bundle.js')).toBe(false);
   });
