@@ -346,6 +346,33 @@ describe('virtualised sidebar', () => {
     await waitFor(() => expect(mountedRows()).not.toContain(opener));
   });
 
+  it('mounts the selected row once when its own menu is open and it is scrolled away (PR #82 review)', async () => {
+    setSidebarLayout({ viewport: 580, row: 58 });
+    const { store } = mount(LARGE);
+    await listed(TOTAL);
+    const selected = mountedRows()[2] as string;
+    act(() => store.setState({ view: { kind: 'worktree', worktreeId: selected } }));
+    await waitFor(() =>
+      expect(
+        document.querySelector('[aria-current="true"][data-testid="worktree-item"]'),
+      ).toBeTruthy(),
+    );
+    fireEvent.contextMenu(
+      document.querySelector(
+        `[data-testid="worktree-item"][data-worktree-id="${selected}"]`,
+      ) as HTMLElement,
+    );
+    await screen.findByRole('menu');
+    act(() => scrollSidebarTo(scroller(), 200 * 58));
+    await waitFor(() => expect(list().querySelector('li[data-index="200"]')).toBeTruthy());
+    // Selected and the menu's opener at once: one row, not two.
+    expect(mountedRows().filter((id) => id === selected)).toHaveLength(1);
+    const indexes = [...list().querySelectorAll('li[data-index]')].map((li) =>
+      li.getAttribute('data-index'),
+    );
+    expect(new Set(indexes).size).toBe(indexes.length);
+  });
+
   it('keeps every row of a small list mounted and names the repository on each', async () => {
     setSidebarLayout({ viewport: 6000 });
     mount({ dataset: 'demo' });

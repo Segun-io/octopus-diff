@@ -60,7 +60,10 @@ export function SidebarList({
   const rangeExtractor = useCallback(
     (range: Range) => {
       const indexes = defaultRangeExtractor(range);
-      const extra = [selectedIndex, menuIndex].filter((i) => i >= 0 && !indexes.includes(i));
+      // A Set: the menu may be open on the selected row, which must be mounted once.
+      const extra = [...new Set([selectedIndex, menuIndex])].filter(
+        (i) => i >= 0 && !indexes.includes(i),
+      );
       if (extra.length === 0) return indexes;
       return [...indexes, ...extra].sort((a, b) => a - b);
     },
