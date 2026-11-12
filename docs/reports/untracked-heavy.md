@@ -273,3 +273,10 @@ summary before the review scope's resolution and the list from the summary after
 from the one summary the list was built for, with one retry when it moved meanwhile (DECISIONS #339). Seven
 real-git tests with a gate on git-core calls, all failing on the previous code; mutations killed except two
 redundant layers named there.
+
+Second Greptile pass on that branch (PR #95): a refresh could overtake the retry as well, and git-core then listed the
+worktree as it is now while the daemon labelled the list with the summary it had asked for. git-core now reports the
+state it listed (`listChangedFilesWithState`, a `contracts:` commit); the daemon labels and caches only by that
+state, tries up to three times, and otherwise labels the list with git-core's own omission and a `stateHash` no
+summary has, leaves the inbox row out, and reports bulk review stale (DECISIONS #340, #341). Five new real-git
+tests, crossing the cap twice and three times.

@@ -3816,7 +3816,8 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
 
 ### A file list and its summary fields describe one state (2026-11-12; #43 follow-up, Greptile on PR #91)
 
-339. **Responses that pair a list with summary fields take both from one summary.** `GET /files` read `stateHash`
+339. **Responses that pair a list with summary fields take both from one summary.** (Amended by #341: the label is the
+     state git-core says it listed, not the one asked for, with up to three attempts.) `GET /files` read `stateHash`
      and `untrackedOmitted` before awaiting the review scope's resolution, while `#gitFiles` read the summary again
      afterwards (and git-core's state hash later still), so a refresh landing meanwhile, for example one that took
      the worktree across the untracked cap, could pair a newly capped list with no notice, or an old count with
@@ -3837,3 +3838,21 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      the list plus `summaryState` (the summary state it was built from, or null when git-core listed the worktree as
      it is now) and, for such a list, the `untrackedOmitted` it applied. Optional, so test doubles and older
      implementations need nothing; `listChangedFiles` is unchanged. See #341.
+341. **A list is labelled with the state git-core listed (Greptile on PR #95; amends #339).** #339 retried once and then
+     returned the list with the summary it had asked for. But a refresh can overtake the retry too: git-core then
+     finds the requested `summaryState` is no longer its latest, lists the worktree as it is now, and a move across
+     the cap left an omission notice beside listed files, or none beside a capped list. Now `#gitFilesAt` asks
+     `listChangedFilesWithState` (#340) and treats the list as the saved summary's only when git-core reports that
+     state (or nothing was asked: the kill switch, committed scopes, test doubles without the method). Only such lists
+     are cached under the summary's `stateHash`. `#listedAt` waits for a refresh in flight and lists again, up to three
+     attempts. If every attempt is overtaken: `GET /files` returns the list with the omission git-core applied to it
+     (exact ignore lines) and a `stateHash` of its own (`listed-…`, never a summary's), so the client sees a state it
+     does not hold and fetches again; an inbox row is left out (the overtaking refresh announces the worktree, and the
+     client asks for its row); bulk review reports the worktree in `stale` and marks nothing. Tests (failing first): a
+     second move across the cap during the retry, starting under and above it, whose response equals a fresh listing;
+     three moves across it for `/files`, the inbox and bulk review. Mutations killed: trusting the list as the asked
+     state's; two attempts; labelling the fallback with the current summary's hash; an overtaken inbox row kept with
+     its earlier summary; an overtaken bulk list marked. Survivors, by design: waiting for the refresh in flight, and
+     taking the fallback's omission from the current summary (the tests release their gates once the daemon has caught
+     up, where both are the same); caching a list of another state (the next attempt overwrites that cache entry
+     before anything reads it).
