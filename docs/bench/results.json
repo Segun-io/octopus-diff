@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-11-12T03:41:16.923Z",
+  "generatedAt": "2026-11-12T04:14:33.250Z",
   "environment": {
     "platform": "linux 6.18.58.1-microsoft-standard-WSL2",
     "cpu": "AMD Ryzen 7 7800X3D 8-Core Processor",
@@ -13,62 +13,56 @@
     "worktreesPerRepo": 3,
     "description": "30 repos × 3 worktrees (all dirty)",
     "worktrees": 90,
-    "generationMs": 4748
+    "generationMs": 4772
   },
   "startup": {
-    "listeningMs": 782,
-    "allSummariesMs": 1236,
-    "gitSpawns": 740,
-    "gitSpawnsPerWorktree": 8.2,
-    "gitWallMs": 4295,
+    "listeningMs": 788,
+    "allSummariesMs": 1241,
+    "gitSpawns": 626,
+    "gitSpawnsPerWorktree": 7,
+    "gitWallMs": 4253,
     "bySubcommand": {
-      "rev-parse": {
-        "count": 162,
-        "totalMs": 997,
-        "p50": 5.9,
-        "p95": 9.8
-      },
-      "for-each-ref": {
-        "count": 120,
-        "totalMs": 617,
-        "p50": 5,
-        "p95": 8.2
-      },
-      "config": {
-        "count": 97,
-        "totalMs": 549,
-        "p50": 5.7,
-        "p95": 8.2
-      },
       "status": {
-        "count": 90,
-        "totalMs": 616,
-        "p50": 6.3,
-        "p95": 10.2
+        "count": 180,
+        "totalMs": 1257,
+        "p50": 6.6,
+        "p95": 10.6
       },
       "diff": {
-        "count": 90,
-        "totalMs": 588,
-        "p50": 6.5,
-        "p95": 9.8
+        "count": 180,
+        "totalMs": 1295,
+        "p50": 6.8,
+        "p95": 10.5
       },
       "check-attr": {
         "count": 90,
-        "totalMs": 461,
-        "p50": 4.7,
-        "p95": 8
+        "totalMs": 587,
+        "p50": 6.1,
+        "p95": 10.6
       },
-      "rev-list": {
+      "rev-parse": {
         "count": 60,
-        "totalMs": 309,
-        "p50": 4.7,
-        "p95": 8.2
+        "totalMs": 385,
+        "p50": 6.4,
+        "p95": 8.9
+      },
+      "config": {
+        "count": 55,
+        "totalMs": 354,
+        "p50": 6.6,
+        "p95": 10.3
       },
       "worktree": {
         "count": 30,
-        "totalMs": 156,
-        "p50": 4.9,
-        "p95": 7.6
+        "totalMs": 179,
+        "p50": 5.6,
+        "p95": 8.7
+      },
+      "for-each-ref": {
+        "count": 30,
+        "totalMs": 193,
+        "p50": 5.9,
+        "p95": 10.9
       },
       "--version": {
         "count": 1,
@@ -79,174 +73,90 @@
     }
   },
   "firstPaint": {
-    "coldMs": 142,
-    "warmMs": 86,
+    "coldMs": 874,
+    "warmMs": 127,
     "warmSamplesMs": [
-      95,
-      77,
-      86
+      148,
+      123,
+      127
     ],
-    "firstContentfulPaintMs": 88,
+    "firstContentfulPaintMs": 84,
     "spawns": {
       "coldPaint": {
-        "spawns": 42,
-        "wallMs": 211,
+        "spawns": 363,
+        "wallMs": 2515,
         "bySub": {
-          "rev-parse": {
-            "count": 9,
-            "totalMs": 42,
-            "p50": 4.5,
-            "p95": 7.7
-          },
-          "for-each-ref": {
-            "count": 9,
-            "totalMs": 40,
-            "p50": 4.7,
-            "p95": 5.4
-          },
-          "merge-base": {
-            "count": 9,
-            "totalMs": 44,
-            "p50": 4.7,
-            "p95": 6.8
-          },
-          "config": {
-            "count": 9,
-            "totalMs": 46,
-            "p50": 5.7,
-            "p95": 6.9
+          "diff": {
+            "count": 182,
+            "totalMs": 1436,
+            "p50": 6,
+            "p95": 23.5
           },
           "status": {
-            "count": 4,
-            "totalMs": 24,
-            "p50": 5.8,
-            "p95": 8
-          },
-          "diff": {
-            "count": 2,
-            "totalMs": 14,
-            "p50": 6.7,
-            "p95": 7.2
+            "count": 181,
+            "totalMs": 1078,
+            "p50": 5.9,
+            "p95": 8.3
           }
         }
       },
       "warmReload1": {
-        "spawns": 33,
-        "wallMs": 175,
+        "spawns": 3,
+        "wallMs": 9,
         "bySub": {
-          "rev-parse": {
-            "count": 10,
-            "totalMs": 48,
-            "p50": 4.4,
-            "p95": 8
-          },
           "diff": {
-            "count": 7,
-            "totalMs": 36,
-            "p50": 4.9,
-            "p95": 7.5
-          },
-          "for-each-ref": {
-            "count": 7,
-            "totalMs": 38,
-            "p50": 5.6,
-            "p95": 6.8
+            "count": 2,
+            "totalMs": 6,
+            "p50": 2.2,
+            "p95": 3.3
           },
           "status": {
-            "count": 5,
-            "totalMs": 29,
-            "p50": 5.9,
-            "p95": 7.1
-          },
-          "merge-base": {
-            "count": 3,
-            "totalMs": 19,
-            "p50": 6,
-            "p95": 7.5
-          },
-          "config": {
             "count": 1,
-            "totalMs": 4,
-            "p50": 3.7,
-            "p95": 3.7
+            "totalMs": 3,
+            "p50": 2.9,
+            "p95": 2.9
           }
         }
       },
       "warmReload2": {
-        "spawns": 40,
-        "wallMs": 233,
+        "spawns": 3,
+        "wallMs": 9,
         "bySub": {
           "diff": {
-            "count": 11,
-            "totalMs": 73,
-            "p50": 6.8,
-            "p95": 7.8
+            "count": 2,
+            "totalMs": 6,
+            "p50": 2.7,
+            "p95": 3.4
           },
           "status": {
-            "count": 10,
-            "totalMs": 68,
-            "p50": 6.4,
-            "p95": 9.8
-          },
-          "config": {
-            "count": 9,
-            "totalMs": 43,
-            "p50": 4.9,
-            "p95": 5.8
-          },
-          "merge-base": {
-            "count": 7,
-            "totalMs": 35,
-            "p50": 5.4,
-            "p95": 6.1
-          },
-          "for-each-ref": {
-            "count": 3,
-            "totalMs": 14,
-            "p50": 5,
-            "p95": 6
+            "count": 1,
+            "totalMs": 3,
+            "p50": 3.2,
+            "p95": 3.2
           }
         }
       },
       "warmReload3": {
-        "spawns": 65,
-        "wallMs": 343,
+        "spawns": 11,
+        "wallMs": 35,
         "bySub": {
-          "rev-parse": {
-            "count": 11,
-            "totalMs": 55,
-            "p50": 5.1,
-            "p95": 7.6
-          },
-          "for-each-ref": {
-            "count": 11,
-            "totalMs": 49,
-            "p50": 4.5,
-            "p95": 7.5
-          },
-          "merge-base": {
-            "count": 11,
-            "totalMs": 53,
-            "p50": 4.6,
-            "p95": 8
-          },
           "config": {
-            "count": 11,
-            "totalMs": 56,
-            "p50": 5.8,
-            "p95": 7.5
+            "count": 8,
+            "totalMs": 22,
+            "p50": 2.1,
+            "p95": 5.1
           },
           "diff": {
-            "count": 11,
-            "totalMs": 71,
-            "p50": 6.3,
-            "p95": 8.4
+            "count": 2,
+            "totalMs": 8,
+            "p50": 2.3,
+            "p95": 6.2
           },
           "status": {
-            "count": 10,
-            "totalMs": 58,
-            "p50": 5.4,
-            "p95": 7.7
+            "count": 1,
+            "totalMs": 5,
+            "p50": 4.9,
+            "p95": 4.9
           }
         }
       }
@@ -254,10 +164,10 @@
   },
   "idleCpu": {
     "supported": true,
-    "durationMs": 60025,
-    "averagePercent": 0.23323621312889958,
-    "averageSelfPercent": 0.14993756558286403,
-    "maxIntervalPercent": 1.9991546954209736,
+    "durationMs": 60039,
+    "averagePercent": 0.23318322833411104,
+    "averageSelfPercent": 0.1499035039290714,
+    "maxIntervalPercent": 1.9990498056492318,
     "intervals": [
       0,
       0,
@@ -279,251 +189,251 @@
       0,
       0,
       0,
+      1,
+      0,
+      1,
       0,
       0,
       0,
       0,
       0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      1,
       2,
       0,
       0,
       0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
       1,
-      1,
+      0,
+      0,
       1,
       0,
       1,
       0,
+      1,
+      0,
+      0,
+      1,
       0,
       2,
       1,
-      0,
-      0,
-      0,
-      0,
-      2,
-      0,
-      0,
-      0,
-      2,
       1,
-      0,
       0
     ],
-    "rssBytes": 154570752
+    "rssBytes": 167714816
   },
   "memory": {
-    "rssBytes": 138371072,
-    "peakRssBytes": 163876864
+    "rssBytes": 110915584,
+    "peakRssBytes": 170602496
   },
   "refresh": {
     "iterations": 15,
     "sse": {
       "count": 15,
-      "min": 21,
+      "min": 14,
       "max": 31,
-      "mean": 27.4,
-      "p50": 29,
-      "p90": 30,
+      "mean": 17.133333333333333,
+      "p50": 15,
+      "p90": 26,
       "p95": 31
     },
     "sseByRole": {
       "bench": {
         "count": 15,
-        "min": 21,
+        "min": 14,
         "max": 31,
-        "mean": 27.4,
-        "p50": 29,
-        "p90": 30,
+        "mean": 17.133333333333333,
+        "p50": 15,
+        "p90": 26,
         "p95": 31
       }
     },
     "ui": {
       "count": 15,
-      "min": 34,
-      "max": 50,
-      "mean": 43.266666666666666,
-      "p50": 44,
-      "p90": 49,
-      "p95": 50
+      "min": 26,
+      "max": 64,
+      "mean": 35.4,
+      "p50": 32,
+      "p90": 45,
+      "p95": 64
     },
     "spawnsPerEdit": [
       {
         "role": "bench",
-        "spawns": 25,
-        "wallMs": 61
-      },
-      {
-        "role": "bench",
-        "spawns": 26,
-        "wallMs": 68
-      },
-      {
-        "role": "bench",
-        "spawns": 19,
-        "wallMs": 49
-      },
-      {
-        "role": "bench",
-        "spawns": 23,
-        "wallMs": 56
-      },
-      {
-        "role": "bench",
-        "spawns": 33,
-        "wallMs": 78
-      },
-      {
-        "role": "bench",
-        "spawns": 56,
-        "wallMs": 192
-      },
-      {
-        "role": "bench",
-        "spawns": 30,
-        "wallMs": 73
-      },
-      {
-        "role": "bench",
-        "spawns": 26,
-        "wallMs": 62
-      },
-      {
-        "role": "bench",
-        "spawns": 20,
-        "wallMs": 48
-      },
-      {
-        "role": "bench",
-        "spawns": 26,
+        "spawns": 24,
         "wallMs": 63
       },
       {
         "role": "bench",
-        "spawns": 25,
-        "wallMs": 61
+        "spawns": 9,
+        "wallMs": 27
       },
       {
         "role": "bench",
-        "spawns": 35,
-        "wallMs": 81
+        "spawns": 13,
+        "wallMs": 39
       },
       {
         "role": "bench",
-        "spawns": 20,
+        "spawns": 11,
+        "wallMs": 32
+      },
+      {
+        "role": "bench",
+        "spawns": 17,
         "wallMs": 46
       },
       {
         "role": "bench",
-        "spawns": 28,
-        "wallMs": 67
+        "spawns": 49,
+        "wallMs": 177
       },
       {
         "role": "bench",
-        "spawns": 22,
-        "wallMs": 52
+        "spawns": 16,
+        "wallMs": 45
+      },
+      {
+        "role": "bench",
+        "spawns": 14,
+        "wallMs": 38
+      },
+      {
+        "role": "bench",
+        "spawns": 13,
+        "wallMs": 38
+      },
+      {
+        "role": "bench",
+        "spawns": 15,
+        "wallMs": 39
+      },
+      {
+        "role": "bench",
+        "spawns": 15,
+        "wallMs": 41
+      },
+      {
+        "role": "bench",
+        "spawns": 17,
+        "wallMs": 66
+      },
+      {
+        "role": "bench",
+        "spawns": 16,
+        "wallMs": 76
+      },
+      {
+        "role": "bench",
+        "spawns": 15,
+        "wallMs": 42
+      },
+      {
+        "role": "bench",
+        "spawns": 13,
+        "wallMs": 36
       }
     ],
     "samples": [
       {
-        "worktree": "/tmp/octopus-diff-bench-YfZ8DE/bench/bench-01",
+        "worktree": "/tmp/octopus-diff-bench-68ljeF/bench/bench-01",
         "role": "bench",
-        "sseMs": 21,
-        "uiMs": 37
+        "sseMs": 17,
+        "uiMs": 45
       },
       {
-        "worktree": "/tmp/octopus-diff-bench-YfZ8DE/bench/worktrees/bench-01-wt1",
+        "worktree": "/tmp/octopus-diff-bench-68ljeF/bench/worktrees/bench-01-wt1",
         "role": "bench",
-        "sseMs": 27,
+        "sseMs": 15,
+        "uiMs": 26
+      },
+      {
+        "worktree": "/tmp/octopus-diff-bench-68ljeF/bench/worktrees/bench-01-wt2",
+        "role": "bench",
+        "sseMs": 15,
+        "uiMs": 32
+      },
+      {
+        "worktree": "/tmp/octopus-diff-bench-68ljeF/bench/bench-02",
+        "role": "bench",
+        "sseMs": 17,
+        "uiMs": 36
+      },
+      {
+        "worktree": "/tmp/octopus-diff-bench-68ljeF/bench/worktrees/bench-02-wt1",
+        "role": "bench",
+        "sseMs": 15,
+        "uiMs": 28
+      },
+      {
+        "worktree": "/tmp/octopus-diff-bench-68ljeF/bench/worktrees/bench-02-wt2",
+        "role": "bench",
+        "sseMs": 15,
+        "uiMs": 27
+      },
+      {
+        "worktree": "/tmp/octopus-diff-bench-68ljeF/bench/bench-03",
+        "role": "bench",
+        "sseMs": 16,
+        "uiMs": 36
+      },
+      {
+        "worktree": "/tmp/octopus-diff-bench-68ljeF/bench/worktrees/bench-03-wt1",
+        "role": "bench",
+        "sseMs": 15,
+        "uiMs": 32
+      },
+      {
+        "worktree": "/tmp/octopus-diff-bench-68ljeF/bench/worktrees/bench-03-wt2",
+        "role": "bench",
+        "sseMs": 15,
+        "uiMs": 31
+      },
+      {
+        "worktree": "/tmp/octopus-diff-bench-68ljeF/bench/bench-04",
+        "role": "bench",
+        "sseMs": 16,
+        "uiMs": 27
+      },
+      {
+        "worktree": "/tmp/octopus-diff-bench-68ljeF/bench/worktrees/bench-04-wt1",
+        "role": "bench",
+        "sseMs": 15,
+        "uiMs": 32
+      },
+      {
+        "worktree": "/tmp/octopus-diff-bench-68ljeF/bench/worktrees/bench-04-wt2",
+        "role": "bench",
+        "sseMs": 26,
         "uiMs": 40
       },
       {
-        "worktree": "/tmp/octopus-diff-bench-YfZ8DE/bench/worktrees/bench-01-wt2",
-        "role": "bench",
-        "sseMs": 30,
-        "uiMs": 41
-      },
-      {
-        "worktree": "/tmp/octopus-diff-bench-YfZ8DE/bench/bench-02",
-        "role": "bench",
-        "sseMs": 25,
-        "uiMs": 36
-      },
-      {
-        "worktree": "/tmp/octopus-diff-bench-YfZ8DE/bench/worktrees/bench-02-wt1",
-        "role": "bench",
-        "sseMs": 28,
-        "uiMs": 48
-      },
-      {
-        "worktree": "/tmp/octopus-diff-bench-YfZ8DE/bench/worktrees/bench-02-wt2",
-        "role": "bench",
-        "sseMs": 29,
-        "uiMs": 43
-      },
-      {
-        "worktree": "/tmp/octopus-diff-bench-YfZ8DE/bench/bench-03",
-        "role": "bench",
-        "sseMs": 26,
-        "uiMs": 36
-      },
-      {
-        "worktree": "/tmp/octopus-diff-bench-YfZ8DE/bench/worktrees/bench-03-wt1",
-        "role": "bench",
-        "sseMs": 29,
-        "uiMs": 49
-      },
-      {
-        "worktree": "/tmp/octopus-diff-bench-YfZ8DE/bench/worktrees/bench-03-wt2",
-        "role": "bench",
-        "sseMs": 29,
-        "uiMs": 44
-      },
-      {
-        "worktree": "/tmp/octopus-diff-bench-YfZ8DE/bench/bench-04",
-        "role": "bench",
-        "sseMs": 24,
-        "uiMs": 34
-      },
-      {
-        "worktree": "/tmp/octopus-diff-bench-YfZ8DE/bench/worktrees/bench-04-wt1",
+        "worktree": "/tmp/octopus-diff-bench-68ljeF/bench/bench-05",
         "role": "bench",
         "sseMs": 31,
-        "uiMs": 46
+        "uiMs": 64
       },
       {
-        "worktree": "/tmp/octopus-diff-bench-YfZ8DE/bench/worktrees/bench-04-wt2",
+        "worktree": "/tmp/octopus-diff-bench-68ljeF/bench/worktrees/bench-05-wt1",
         "role": "bench",
-        "sseMs": 29,
-        "uiMs": 50
+        "sseMs": 14,
+        "uiMs": 35
       },
       {
-        "worktree": "/tmp/octopus-diff-bench-YfZ8DE/bench/bench-05",
+        "worktree": "/tmp/octopus-diff-bench-68ljeF/bench/worktrees/bench-05-wt2",
         "role": "bench",
-        "sseMs": 24,
-        "uiMs": 49
-      },
-      {
-        "worktree": "/tmp/octopus-diff-bench-YfZ8DE/bench/worktrees/bench-05-wt1",
-        "role": "bench",
-        "sseMs": 30,
-        "uiMs": 47
-      },
-      {
-        "worktree": "/tmp/octopus-diff-bench-YfZ8DE/bench/worktrees/bench-05-wt2",
-        "role": "bench",
-        "sseMs": 29,
-        "uiMs": 49
+        "sseMs": 15,
+        "uiMs": 40
       }
     ]
   },
@@ -532,23 +442,23 @@
       "name": "projects",
       "path": "/api/projects",
       "status": 200,
-      "rawBytes": 88347,
-      "gzipBytes": 8225,
+      "rawBytes": 101472,
+      "gzipBytes": 8543,
       "wireEncoding": "gzip",
-      "wireBytes": 9759,
-      "firstMs": 8.274441999994451,
-      "warmMs": 1.951321000000462
+      "wireBytes": 10152,
+      "firstMs": 7.846571000001859,
+      "warmMs": 2.1187430000281893
     },
     {
       "name": "inbox, working",
       "path": "/api/inbox?scope=working",
       "status": 200,
       "rawBytes": 197215,
-      "gzipBytes": 20980,
+      "gzipBytes": 20975,
       "wireEncoding": "gzip",
-      "wireBytes": 24678,
-      "firstMs": 401.3870520000055,
-      "warmMs": 10.355644999974174
+      "wireBytes": 24855,
+      "firstMs": 11.530069000000367,
+      "warmMs": 9.305309000017587
     },
     {
       "name": "inbox, review (To review)",
@@ -557,31 +467,31 @@
       "rawBytes": 197214,
       "gzipBytes": 20970,
       "wireEncoding": "gzip",
-      "wireBytes": 24671,
-      "firstMs": 759.7734269999783,
-      "warmMs": 12.562796000012895
+      "wireBytes": 24852,
+      "firstMs": 9.973178000014741,
+      "warmMs": 7.172190000012051
     },
     {
       "name": "inbox, branch + working (All on branch)",
       "path": "/api/inbox?scope=branch&working=1",
       "status": 200,
       "rawBytes": 197236,
-      "gzipBytes": 20989,
+      "gzipBytes": 20993,
       "wireEncoding": "gzip",
-      "wireBytes": 24708,
-      "firstMs": 19.190197000018088,
-      "warmMs": 14.477408999984618
+      "wireBytes": 24891,
+      "firstMs": 17.936031999997795,
+      "warmMs": 14.03137000001152
     },
     {
       "name": "files bench, working",
-      "path": "/api/worktrees/ca847ac97a0ba323/files?scope=working",
+      "path": "/api/worktrees/f84895f4eb5cf062/files?scope=working",
       "status": 200,
       "rawBytes": 1359,
-      "gzipBytes": 448,
+      "gzipBytes": 447,
       "wireEncoding": "gzip",
-      "wireBytes": 453,
-      "firstMs": 0.8933979999856092,
-      "warmMs": 0.805940999998711
+      "wireBytes": 455,
+      "firstMs": 0.8711569999868516,
+      "warmMs": 0.7986129999917466
     }
   ],
   "targets": {
@@ -592,14 +502,14 @@
     "startupSpawnsPerWorktree": 8
   },
   "tracked": {
-    "startupSpawns": "#10 and #29 (compute each summary once; per-project git metadata)"
+    "warmReload": "#27 (cache the branch-scope inbox and files)"
   },
   "strict": false,
   "budgets": [
     {
       "id": "firstPaint",
       "label": "Time to first paint (cold, `data-ready`)",
-      "actual": 141.91429100000005,
+      "actual": 873.6464309999992,
       "limit": 3000,
       "unit": "ms",
       "applies": true,
@@ -609,27 +519,27 @@
     {
       "id": "warmReload",
       "label": "Time to first paint (warm reload, median of 3)",
-      "actual": 85.74573200000032,
+      "actual": 127.13025600000037,
       "limit": 300,
       "unit": "ms",
+      "applies": true,
+      "tracked": "#27 (cache the branch-scope inbox and files)",
+      "status": "tracked-pass"
+    },
+    {
+      "id": "startupSpawns",
+      "label": "Startup git spawns per worktree",
+      "actual": 6.955555555555556,
+      "limit": 8,
+      "unit": "spawns",
       "applies": true,
       "tracked": null,
       "status": "pass"
     },
     {
-      "id": "startupSpawns",
-      "label": "Startup git spawns per worktree",
-      "actual": 8.222222222222221,
-      "limit": 8,
-      "unit": "spawns",
-      "applies": true,
-      "tracked": "#10 and #29 (compute each summary once; per-project git metadata)",
-      "status": "tracked-fail"
-    },
-    {
       "id": "idleCpu",
       "label": "Idle CPU, daemon + git children (average)",
-      "actual": 0.23323621312889958,
+      "actual": 0.23318322833411104,
       "limit": 10,
       "unit": "%",
       "applies": true,
@@ -649,7 +559,7 @@
     {
       "id": "refreshUi",
       "label": "Refresh: write → UI sidebar update p95",
-      "actual": 50,
+      "actual": 64,
       "limit": 1000,
       "unit": "ms",
       "applies": true,
