@@ -125,6 +125,13 @@ const TARGETS = {
   editTrafficBytes: 100 * 1024,
   /** `/api/projects` requests per edit, worst edit: none since #51 (limit 1 = "below one"). */
   editProjectsRequests: 1,
+  /**
+   * #40, edits of a worktree after its first one in the run (the first computes the worktree's
+   * first review state): git processes from the write to its `worktree.changed` (at most 3), and
+   * the time to SSE, p95, on the 100k-file layout (report only, like the large layouts' timings).
+   */
+  steadyEditSpawns: 3,
+  steadyEditSseMs: 120,
 };
 
 /**
@@ -496,7 +503,10 @@ function judge(budgets: Budget[], strict: boolean): BudgetResult[] {
     const tracked = strict ? null : (TRACKED[b.id] ?? null);
     if (!b.applies) return { ...b, tracked, status: 'report-only' };
     if (b.actual === null || Number.isNaN(b.actual)) return { ...b, tracked, status: 'skipped' };
-    const ok = b.id === 'startupSpawns' ? b.actual <= b.limit : b.actual < b.limit;
+    const ok =
+      b.id === 'startupSpawns' || b.id === 'steadyEditSpawns'
+        ? b.actual <= b.limit
+        : b.actual < b.limit;
     if (ok) return { ...b, tracked, status: tracked ? 'tracked-pass' : 'pass' };
     return { ...b, tracked, status: tracked ? 'tracked-fail' : 'fail' };
   });
@@ -939,6 +949,13 @@ async function main() {
         )}\n`,
       );
     }
+    // #40: edits of a worktree after its first one in this run.
+    const seenWorktree = new Set<string>();
+    const steady = samples.map((sample) => {
+      const again = seenWorktree.has(sample.worktree);
+      seenWorktree.add(sample.worktree);
+      return again;
+    });
     const editSpawns = samples.map((sample) => {
       const s = spawnStats(within(allGit, sample.window[0], sample.window[1]));
       // Started between the write and the event (#40: the summary and the review state it waits on).
@@ -989,6 +1006,32 @@ async function main() {
           limit: TARGETS.warmReloadMs,
           unit: 'ms',
           applies: isDefault30x3,
+        },
+        {
+          id: 'steadyEditSpawns',
+          label: 'Git spawns from the write to SSE, worst later edit of a worktree (#40)',
+          actual: (() => {
+            const counts = editSpawns.flatMap((e, i) =>
+              steady[i] && typeof e.spawnsToSse === 'number' ? [e.spawnsToSse] : [],
+            );
+            return counts.length ? Math.max(...counts) : null;
+          })(),
+          limit: TARGETS.steadyEditSpawns,
+          unit: 'spawns',
+          applies: true,
+        },
+        {
+          id: 'steadyEditSse',
+          label: 'Edit → SSE p95, later edits of a worktree (#40, 100k-file target)',
+          actual: (() => {
+            const times = samples.flatMap((x, i) =>
+              steady[i] && x.sseMs !== null ? [x.sseMs] : [],
+            );
+            return times.length ? summarize(times).p95 : null;
+          })(),
+          limit: TARGETS.steadyEditSseMs,
+          unit: 'ms',
+          applies: false,
         },
         {
           id: 'startupSpawns',
@@ -1195,7 +1238,7 @@ function markdown(r: any): string {
   const budgets = r.budgets as BudgetResult[];
   const budgetRows = budgets
     .map((b) => {
-      const op = b.id === 'startupSpawns' ? '≤' : '<';
+      const op = b.id === 'startupSpawns' || b.id === 'steadyEditSpawns' ? '≤' : '<';
       const actual =
         b.actual === null || Number.isNaN(b.actual) || !Number.isFinite(b.actual)
           ? b.actual === null
