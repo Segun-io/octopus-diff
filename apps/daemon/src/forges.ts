@@ -68,6 +68,8 @@ import { type BudgetLimits, ForgeBudget, type ForgePriority } from './forge-budg
 const POLL_TARGET_ATTENTIVE = 1000;
 const POLL_TARGET_IDLE = 300;
 const POLL_MAX_MS = 30 * 60_000;
+/** A fresh daemon counts a browser as looking for this long before the first focus report. */
+const STARTUP_ATTENTION_MS = 6 * 60_000;
 const HOUR_MS = 3_600_000;
 /** While a project's Overview is in view its repository information is at most this old. */
 const REPOSITORY_HOT_TTL_MS = 2 * 60_000;
@@ -349,7 +351,11 @@ export class ForgeService {
   #attentionUntil = 0;
   /** The project the user is looking at, from the focus reports. */
   #hot: string | null = null;
+  /** The project's Overview (not just one of its worktrees) is what is in view. */
+  #hotOverview = false;
   #rounding = false;
+  /** The wait before the next fleet poll as last scheduled (base interval or stretched). */
+  #pollDelay = 0;
   #lastRoundAt = 0;
   readonly #debounce = new Map<string, NodeJS.Timeout>();
   readonly #followUps = new Map<string, NodeJS.Timeout[]>();
@@ -406,8 +412,9 @@ export class ForgeService {
   /** Subscribes to registry/settings events and starts the poll. The first refresh runs now. */
   start(): void {
     this.#unsubscribe = this.#o.hub.on((event) => this.#onEvent(event));
-    // The daemon is usually started with a browser: count it as looking until it says otherwise.
-    this.#attentionUntil = this.#now() + this.#o.attentionMs;
+    // The daemon is usually started with a browser (it reports within seconds of loading): count
+    // it as looking for a few minutes, then only while it keeps reporting.
+    this.#attentionUntil = this.#now() + Math.min(this.#o.attentionMs, STARTUP_ATTENTION_MS);
     void this.#pollRound();
     this.#hotTimer = setInterval(() => this.#hotTick(), this.#o.hotPollMs);
     this.#hotTimer.unref();
@@ -451,6 +458,7 @@ export class ForgeService {
     const target = this.#attentive() ? POLL_TARGET_ATTENTIVE : POLL_TARGET_IDLE;
     const stretched = ((this.#budget.totalSpent - before) / target) * HOUR_MS;
     const delay = Math.min(Math.max(base, stretched), Math.max(base, POLL_MAX_MS));
+    this.#pollDelay = delay;
     this.#timer = setTimeout(() => void this.#pollRound(), delay);
     this.#timer.unref();
   }
@@ -463,7 +471,7 @@ export class ForgeService {
       minAgeMs: Math.max(this.#o.hotPollMs / 2, this.#o.minRefetchMs),
       priority: 'event',
     }).catch(() => {});
-    void this.#revalidateRepository(hot).catch(() => {});
+    if (this.#hotOverview) void this.#revalidateRepository(hot).catch(() => {});
   }
 
   /**
@@ -495,17 +503,19 @@ export class ForgeService {
    * normal interval (coming back after a break). This is the cheap answer to "a request created
    * on the forge's web page": nothing reaches the network until a person looks.
    */
-  focusChanged(visible: boolean, projectId: string | null): void {
+  focusChanged(visible: boolean, projectId: string | null, overview = false): void {
     if (this.#closed) return;
     if (!visible) {
       this.#attentionUntil = 0;
       this.#hot = null;
+      this.#hotOverview = false;
       return;
     }
     const wasAttentive = this.#attentive();
     const previous = this.#hot;
     this.#attentionUntil = this.#now() + this.#o.attentionMs;
     this.#hot = projectId;
+    this.#hotOverview = overview;
     if (!this.enabled) return;
     if (!wasAttentive && this.#now() - this.#lastRoundAt >= this.#o.pollMs) {
       void this.#pollRound();
@@ -752,7 +762,8 @@ export class ForgeService {
 
     if (options.onlyIfBranchesChanged && cache.status !== 'pending') {
       const known = [...cache.heads.keys()].sort().join('\n');
-      const fresh = this.#now() - cache.lastFetch < this.#pollBase();
+      // An edit never makes a project older than the poll would have left it be fetched again.
+      const fresh = this.#now() - cache.lastFetch < Math.max(this.#pollBase(), this.#pollDelay);
       // A pushed branch can have a new request even though the branch set is the same.
       if (
         known === branchKeyLocal &&

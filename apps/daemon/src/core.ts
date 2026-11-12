@@ -95,10 +95,11 @@ export interface CoreOptions {
   onGitChange?: (projectId: string) => void;
   /**
    * Called on every `PUT /api/focus`: `visible` is false when the UI reports nothing focused (its
-   * tab is hidden), else `projectId` is the project of the focused worktree or the open Overview.
+   * tab is hidden), else `projectId` is the project of the focused worktree or the open Overview
+   * (`overview`: the project's Overview itself is open).
    * The forge service paces its polling by it (DECISIONS #197).
    */
-  onFocus?: (visible: boolean, projectId: string | null) => void;
+  onFocus?: (visible: boolean, projectId: string | null, overview: boolean) => void;
 }
 
 interface WorktreeEntry {
@@ -236,7 +237,9 @@ export class DaemonCore {
   readonly #hub: EventHub;
   readonly #log: Logger;
   readonly #onGitChange: ((projectId: string) => void) | undefined;
-  readonly #onFocus: ((visible: boolean, projectId: string | null) => void) | undefined;
+  readonly #onFocus:
+    | ((visible: boolean, projectId: string | null, overview: boolean) => void)
+    | undefined;
   readonly #version: string;
   readonly #startedAt: Date;
   readonly #now: () => Date;
@@ -1129,7 +1132,11 @@ export class DaemonCore {
     }
     project ??= projectId === null ? undefined : this.#projects.get(projectId);
     if (project) this.#openProject(project);
-    this.#onFocus?.(worktreeId !== null || projectId !== null, project?.row.id ?? null);
+    this.#onFocus?.(
+      worktreeId !== null || projectId !== null,
+      project?.row.id ?? null,
+      projectId !== null,
+    );
   }
 
   // --- files, diffs, commits -------------------------------------------------------------------

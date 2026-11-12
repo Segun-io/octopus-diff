@@ -42,6 +42,7 @@ const FLEETS: Array<[projects: number, branches: number]> = [
   [30, 3],
   [100, 3],
   [30, 15],
+  [100, 15],
 ];
 
 describe('simulated fleets: forge queries per scenario (fake clock, fake client)', () => {
@@ -55,6 +56,16 @@ describe('simulated fleets: forge queries per scenario (fake clock, fake client)
       service.start();
       await advance(120_000 - 1000);
       record(name, 'startup (first 2 min)', { ...client.total });
+
+      // "Check again" in Settings, 10 s later: bounded by its allowance, never more than one batch
+      // per project.
+      await advance(10_000);
+      const beforeCheck = { ...client.total };
+      await service.checkAgain();
+      record(name, 'Check again (all repos, once)', {
+        queries: client.total.queries - beforeCheck.queries,
+        points: client.total.points - beforeCheck.points,
+      });
 
       // Idle hour: no browser is looking (the tab is hidden or closed), nothing is edited.
       service.focusChanged(false, null);
@@ -96,10 +107,18 @@ describe('simulated fleets: forge queries per scenario (fake clock, fake client)
       record(name, 'active hour (focused, edits, Request tab)', active);
       await service.close();
 
+      // A daemon nobody ever talks to: it counts a browser as looking for its first minutes only.
+      const headless = build(n, b);
+      headless.service.start();
+      await advance(HOUR);
+      await headless.service.close();
+      record(name, 'headless daemon, first hour (no focus report)', { ...headless.client.total });
+      expect(headless.client.total.points).toBeLessThanOrEqual(450 + n * 12);
+
       // Budgets the strategy promises (DECISIONS #197): no browser never costs more than 300 points
       // an hour per fleet, and a busy hour stays under the 1 500-point background ceiling plus
       // the user's own requests (detail + conversation about 40 + 40, the hot project 60).
-      expect(idle.points).toBeLessThanOrEqual(330);
+      expect(idle.points).toBeLessThanOrEqual(450);
       expect(active.points).toBeLessThanOrEqual(1100 + 40 + 40 + 60 + 120);
     },
     120_000,

@@ -144,6 +144,7 @@ describe('forge service (fake git-core, fake gh/glab)', () => {
         forges: {
           client: forge,
           checkAgainSkipMs: 0,
+          focusStaleMs: 0,
           debounceMs: 20,
           readSshConfig: async () => null,
         },
@@ -204,6 +205,17 @@ describe('forge service (fake git-core, fake gh/glab)', () => {
     expect(count()).toBe(before);
     await api.refreshForges({ projectIds: [alpha.projectId] });
     expect(count()).toBe(before + 1);
+  });
+
+  it('PUT /api/focus brings the project in view up to date, and hiding the tab does not (#8)', async () => {
+    await eventually(async () => (await state(alpha))?.status === 'ok');
+    const count = () => forge.fetches.filter((f) => f.forge.repository === 'org/alpha').length;
+    const before = count();
+    await api.setFocus({ worktreeId: null });
+    await new Promise((r) => setTimeout(r, 100));
+    expect(count()).toBe(before);
+    await api.setFocus({ worktreeId: alpha.worktrees[1]?.id ?? null });
+    await eventually(() => count() === before + 1);
   });
 
   it('reports the rate-limit budget per host in GET /api/forges (#8)', async () => {

@@ -288,7 +288,7 @@ describe('the open project overview', () => {
     expect(first.repository?.requests).toHaveLength(1);
     expect(client.repository.queries).toBe(1);
     service.start();
-    service.focusChanged(true, 'p0');
+    service.focusChanged(true, 'p0', true);
     // A request appears on a branch no worktree has checked out.
     client.openNumbers = [1, 9];
     const events: ServerEvent[] = [];
@@ -306,9 +306,20 @@ describe('the open project overview', () => {
     const { service, client } = build(1, 1, { hotPollMs: 30_000, pollMs: 3_600_000 });
     await service.refresh();
     service.start();
-    service.focusChanged(true, 'p0');
+    service.focusChanged(true, 'p0', true);
     await advance(5 * 60_000);
     expect(client.repository.queries).toBe(0);
+    await service.close();
+  });
+
+  it('is not reloaded while the user works in a worktree of the project', async () => {
+    const { service, client } = build(1, 1, { hotPollMs: 30_000, pollMs: 3_600_000 });
+    await service.refresh();
+    await service.repository('p0');
+    service.start();
+    service.focusChanged(true, 'p0', false);
+    await advance(5 * 60_000);
+    expect(client.repository.queries).toBe(1);
     await service.close();
   });
 });
