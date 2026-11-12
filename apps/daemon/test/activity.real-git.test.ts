@@ -179,8 +179,16 @@ describe('live activity feed (real git, #38)', () => {
     const summaryOf = async () =>
       (await api.listProjects()).projects[0]?.worktrees.find((w) => w.worktree.id === id)?.summary;
     expect((await summaryOf())?.counts.deleted).toBe(1);
-    // The snapshot never reaches the API.
-    expect(JSON.stringify(await summaryOf())).not.toContain('"snapshot"');
+    // The snapshot never reaches the API (raw bodies: the typed client would strip unknown keys).
+    for (const route of ['/api/projects', '/api/inbox', `/api/worktrees/${id}/files`]) {
+      const raw = await (await http(s.daemon, route)).text();
+      if (route !== '/api/projects') expect(raw, route).toContain(DELETED_NAME);
+      expect(raw, route).not.toMatch(/"snapshot"|"sig"|"hI"/);
+    }
+    const refreshed = await (
+      await http(s.daemon, `/api/worktrees/${id}/refresh`, { method: 'POST' })
+    ).text();
+    expect(refreshed).not.toMatch(/"snapshot"|"sig"|"hI"/);
 
     // 3. An untracked file created then deleted: seen, but no content.
     await writeFile(path.join(dir, SCRATCH_NAME), 'temporary\n');
