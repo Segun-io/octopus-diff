@@ -1517,63 +1517,80 @@ async function diffFromSummary(
   }
 
   const env = (name: string): string | undefined => ctx.runner.envValue(name) || undefined;
-  /** The state's own facts about the file, as they are now (stat calls and ref files only). */
-  const unchanged = async (): Promise<string | null> => {
-    const changed = stampChange(track.stamp, await readStamp(repo, env));
-    if (changed) return changed;
-    if ((await resolveHead(ctx, repo)) !== headSha) return 'head-moved';
-    return null;
+  /**
+   * The state's own facts as they are now, read together (stat calls and ref files, no git process):
+   * the stamp and HEAD, and for a tracked file its signature. One round of file system calls
+   * instead of one after the other: under load (a burst of summaries) every call waits its turn in
+   * the thread pool, so rounds, not calls, are what a diff opened then pays for.
+   */
+  const check = async (signed: boolean): Promise<{ moved: string | null; signature: string }> => {
+    const [stamp, head, signature] = await Promise.all([
+      readStamp(repo, env),
+      resolveHead(ctx, repo),
+      signed ? lstatSignature(repo.cwd, key) : Promise.resolve(''),
+    ]);
+    const changed = stampChange(track.stamp, stamp);
+    return { moved: changed ?? (head !== headSha ? 'head-moved' : null), signature };
   };
 
-  const moved = await unchanged();
-  if (moved) return no(moved);
-
+  // The checks run while the file is read, and again once it was: unchanged from the state's time
+  // to the end of the read means unchanged during it (what they compare only moves forward), so
+  // the answer is of the state the record describes. A stale state costs the read it overlapped.
   if (tracked === undefined) {
     const held = track.untrackedInfos.get(key);
     if (!held) return no('no-inspection');
-    // Whether the file is ignored is decided by the `.gitignore` files above it, which no stamp
-    // covers: one written since the state was read may ignore it now.
-    if (await ignoreFileMoved(repo.cwd, key, track.stamp.at)) return no('ignore-rules');
-    const described = await describeUntracked(
-      deps,
-      repo,
-      plan,
-      limit,
-      view.full,
-      key,
-      track.untrackedOrder,
-      factsOf(track).attributeEntries,
-      // Above `maxUntrackedFiles` no content is read, the state asked for no verdicts and the hash
-      // is the stat signature's: only the signature counts then.
-      (info, attribute) =>
-        info.statSig === held.info.statSig && (!track.readContent || attribute === held.attribute),
-    );
+    const [before, ignored, described] = await Promise.all([
+      check(false),
+      // Whether the file is ignored is decided by the `.gitignore` files above it, which no stamp
+      // covers: one written since the state was read may ignore it now.
+      ignoreFileMoved(repo.cwd, key, track.stamp.at),
+      describeUntracked(
+        deps,
+        repo,
+        plan,
+        limit,
+        view.full,
+        key,
+        track.untrackedOrder,
+        factsOf(track).attributeEntries,
+        // Above `maxUntrackedFiles` no content is read, the state asked for no verdicts and the
+        // hash is the stat signature's: only the signature counts then.
+        (info, attribute) =>
+          info.statSig === held.info.statSig &&
+          (!track.readContent || attribute === held.attribute),
+      ),
+    ]);
+    if (before.moved) return no(before.moved);
+    if (ignored) return no('ignore-rules');
     if (!described) return no('stale-signature');
-    const after = await unchanged();
-    return after ? no(after) : { diff: described };
+    const after = await check(false);
+    return after.moved ? no(after.moved) : { diff: described };
   }
 
   const recorded = track.signatures.get(key);
   if (recorded === undefined) return no('no-signature');
-  if ((await lstatSignature(repo.cwd, key)) !== recorded) return no('stale-signature');
-
   const only = new Set([key]);
   const pathspecs = [bstrToUtf8(key)];
-  let run: DiffRun;
-  try {
-    run = await runScopeDiff(ctx, repo, plan, {
-      head: true,
-      patch: true,
-      only,
-      retain: view.ignoreWhitespace || view.context !== CANONICAL_CONTEXT ? new Set() : only,
-      retainLimit: limit,
-      pathspecs,
-    });
-  } catch (error) {
-    // An unreadable file, a vanished one, a lock: the whole-scope route explains it.
-    if (isGitCoreError(error, 'git_failed')) return no('git-failed');
-    throw error;
-  }
+  const read = async (): Promise<DiffRun | null> => {
+    try {
+      return await runScopeDiff(ctx, repo, plan, {
+        head: true,
+        patch: true,
+        only,
+        retain: view.ignoreWhitespace || view.context !== CANONICAL_CONTEXT ? new Set() : only,
+        retainLimit: limit,
+        pathspecs,
+      });
+    } catch (error) {
+      // An unreadable file, a vanished one, a lock: the whole-scope route explains it.
+      if (isGitCoreError(error, 'git_failed')) return null;
+      throw error;
+    }
+  };
+  const [before, run] = await Promise.all([check(true), read()]);
+  if (before.moved) return no(before.moved);
+  if (before.signature !== recorded) return no('stale-signature');
+  if (run === null) return no('git-failed');
   const entry = pickEntry(run.raw, key);
   if (!entry || entry.combined || entry.srcPath !== key) return no('entry');
   if (run.raw.some((other) => other.path !== key)) return no('other-paths');
@@ -1590,9 +1607,10 @@ async function diffFromSummary(
     pathspecs,
   });
   // The file, the index and HEAD are still what the state saw: the patch is of that state.
-  if ((await lstatSignature(repo.cwd, key)) !== recorded) return no('changed-while-reading');
-  const after = await unchanged();
-  return after ? no(after) : { diff };
+  const after = await check(true);
+  if (after.moved) return no(after.moved);
+  if (after.signature !== recorded) return no('changed-while-reading');
+  return { diff };
 }
 
 export async function getFileDiff(

@@ -164,7 +164,9 @@ describe.skipIf(FOLDS)('a file or the state moves while getFileDiff reads', () =
     hook('race-before', 'before', `printf 'early edit\\n' >> "${path.join(repo, 'a.txt')}"`);
     const before = mark();
     const got = await core.getFileDiff(wt, WORKING, { path: 'a.txt' });
-    expect(routeSince(before)).toBe('changed-while-reading');
+    // The checks run beside git's start: they see the edit either as a stale signature or, a
+    // moment later, as a change during the read. Either way the state does not vouch for it.
+    expect(['stale-signature', 'changed-while-reading']).toContain(routeSince(before));
     expect(got.patch).toContain('+early edit');
     expect(got).toEqual(await reference.getFileDiff(wt, WORKING, { path: 'a.txt' }));
   });
