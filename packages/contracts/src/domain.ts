@@ -460,6 +460,14 @@ export const InboxEntrySchema = z.object({
   files: z.array(ChangedFileSchema),
   /** Same meaning as `WorktreeListItem.review`; absent = enabled. */
   review: EffectiveReviewPolicySchema.optional(),
+  /**
+   * `overtaken`: refreshes kept overtaking the listing of this worktree's files, so the daemon has
+   * no list it can pair with a summary (#43 follow-up, Greptile on PR #95). `files` is empty and
+   * says nothing; `summary` is the latest. The worktree still has changes: keep it, and ask for its
+   * row again (`GET /api/inbox?worktreeIds=`) shortly. Absent on every other row and from older
+   * daemons.
+   */
+  listing: z.enum(['overtaken']).optional(),
 });
 export type InboxEntry = z.infer<typeof InboxEntrySchema>;
 

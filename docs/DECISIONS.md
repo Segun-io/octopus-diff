@@ -3813,3 +3813,76 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      with every refresh in full. It now takes the run's `incremental` setting, records the refresh mode of each edit
      (shown in the table) and the heading says when the run was `--no-incremental`. Unit test in `e2e/support`
      (both settings; on a case-folding filesystem both are full by design).
+
+### A file list and its summary fields describe one state (2026-11-12; #43 follow-up, Greptile on PR #91)
+
+339. **Responses that pair a list with summary fields take both from one summary.** (Amended by #341: the label is the
+     state git-core says it listed, not the one asked for, with up to three attempts.) `GET /files` read `stateHash`
+     and `untrackedOmitted` before awaiting the review scope's resolution, while `#gitFiles` read the summary again
+     afterwards (and git-core's state hash later still), so a refresh landing meanwhile, for example one that took
+     the worktree across the untracked cap, could pair a newly capped list with no notice, or an old count with
+     files now listed. Now `#gitFilesAt` reads the summary and git-core's state hash once, before anything is
+     awaited, lists (and caches) for that state only and returns the summary it used. `#listedAt` resolves the scope
+     and lists; if the summary moved during either, it does both once more, and the result is always labelled with
+     the summary the list was built for (a client that sees a `stateHash` other than the current one fetches again).
+     The same applies to inbox rows (a row's `summary` is its files' one) and bulk review (the reported
+     `untrackedOmitted`, the HEAD "Review all" moves the bookmark to, and the `expectedStateHashes` check also
+     against the listed state). `/diff` returns no summary field; event deltas read the files cache by the event's
+     `stateHash`, whose entries are now always of that state. Tests (`files-snapshot.real-git.test.ts`, a gate that
+     holds one git-core call): all seven fail on the previous code. Mutations killed: no retry; labels or notice
+     read from the current summary; inbox rows with the earlier summary; bulk omission and bookmark HEAD from the
+     earlier summary. Survivors, by design: the bulk check of the listed state against `expectedStateHashes`
+     (redundant unless a state hash comes back to an earlier value) and reading git-core's state hash after the
+     awaits (no test can land a refresh inside `#gitFiles` before the list starts without a gate there).
+340. **Contract (additive): `GitCore.listChangedFilesWithState?` and `ListedChangedFiles`** (Greptile on PR #95):
+     the list plus `summaryState` (the summary state it was built from, or null when git-core listed the worktree as
+     it is now) and, for such a list, the `untrackedOmitted` it applied. Optional, so test doubles and older
+     implementations need nothing; `listChangedFiles` is unchanged. See #341.
+341. **A list is labelled with the state git-core listed (Greptile on PR #95; amends #339).** (Amended by #343: an
+     overtaken inbox row is sent marked, not left out.) #339 retried once and then
+     returned the list with the summary it had asked for. But a refresh can overtake the retry too: git-core then
+     finds the requested `summaryState` is no longer its latest, lists the worktree as it is now, and a move across
+     the cap left an omission notice beside listed files, or none beside a capped list. Now `#gitFilesAt` asks
+     `listChangedFilesWithState` (#340) and treats the list as the saved summary's only when git-core reports that
+     state (or nothing was asked: the kill switch, test doubles without the method). git-core reports the held state
+     whenever it was its latest summary before and after listing, also for lists it builds in full (committed scopes,
+     conflicts, submodules: the first version reported null there, the daemon stopped caching them and ten daemon
+     tests caught it), and null only when a newer summary came in meanwhile. Only such lists are cached under the
+     summary's `stateHash`. `#listedAt` waits for a refresh in flight and lists again, up to three
+     attempts. If every attempt is overtaken: `GET /files` returns the list with the omission git-core applied to it
+     (exact ignore lines) and a `stateHash` of its own (`listed-…`, never a summary's), so the client sees a state it
+     does not hold and fetches again; an inbox row is left out (the overtaking refresh announces the worktree, and the
+     client asks for its row); bulk review reports the worktree in `stale` and marks nothing. Tests (failing first): a
+     second move across the cap during the retry, starting under and above it, whose response equals a fresh listing;
+     three moves across it for `/files`, the inbox and bulk review. Mutations killed: trusting the list as the asked
+     state's; two attempts; labelling the fallback with the current summary's hash; an overtaken inbox row kept with
+     its earlier summary; an overtaken bulk list marked. Survivors, by design: waiting for the refresh in flight, and
+     taking the fallback's omission from the current summary (the tests release their gates once the daemon has caught
+     up, where both are the same); caching a list of another state (the next attempt overwrites that cache entry
+     before anything reads it).
+342. **Contract (additive): `InboxEntry.listing?: 'overtaken'`** (Greptile P1 on PR #95): a row whose files the daemon
+     could not list for any summary (every attempt overtaken by refreshes) is sent with its latest summary, `files: []`
+     and this marker instead of being left out, which a client could not tell from "no changes". Older clients strip
+     the field and show the worktree with no files until their next fetch. See #343.
+343. **An overtaken inbox row is kept, marked, and asked for again (Greptile P1 on PR #95; amends #341).** #341 left a
+     row out of the inbox when every list attempt was overtaken, relying on the overtaking refresh's
+     `worktree.changed` to make the client ask again. But `applyInboxDelta` does nothing while the inbox query has no
+     data yet, so on a first load whose events arrived before the answer, a worktree with changes stayed missing once
+     editing stopped. Chosen: (a) an explicit row, not (b) a longer daemon retry with an older cached row, because only
+     the client can keep asking after the request is over, an older cached list is not always there, and pairing one
+     with an older summary would bring back the mix #339 removed. The daemon now sends the row with its latest
+     summary, `files: []` and `listing: 'overtaken'` (#342); the web (`settleOvertaken` in `apps/web/src/api/
+     queries.ts`) asks for such rows again (`?worktreeIds=`) after 250 ms, 1 s and 3 s, on the first load (batched or
+     not), on refetches and on the delta path; a row still overtaken after that stays visible with its marker, and the
+     next event or fetch asks again. Older clients drop the field and show the worktree with no files until their next
+     fetch. Tests: the daemon's real-git case (three moves overtake the first inbox load: the row is there and marked,
+     and one more request returns its files); four web tests with the mock backend (`overtakeInbox`): first load,
+     a row overtaken every time (exactly three follow-ups, still shown), a refetch, the delta path. Mutations killed:
+     the row left out again; no follow-up; the delta path, the single-request path or the batched path without it;
+     marked rows dropped.
+344. **The numstat-alongside tests age their files before summarizing (macOS CI on PR #95).** `ageFiles()` (80 ms)
+     runs after the last write before each summary in that describe block and in the margin-0 submodule test, as #96
+     did for the cold test. The macOS failure itself was `numstats: 0` on the warm summary (no numstat at all, so its
+     status saw no tracked change, or the wrapper's log lost its lines), which does not match the ctime explanation
+     and did not reproduce here (20 of 20 runs, plus folding mode): the shape checks now print the summary's counts,
+     its refresh and every logged git call, so a recurrence says which it was.

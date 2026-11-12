@@ -43,9 +43,15 @@ export interface ReviewSource extends TargetRegistry {
   worktrees(target: BulkReviewTarget): Promise<BulkWorktree[]>;
   /**
    * Changed files of a worktree in a scope (the same list `GET .../files` returns), with their
-   * origins where the scope has them (#33; `origin` absent = own).
+   * origins where the scope has them (#33; `origin` absent = own), and the summary the list was
+   * built for: what is marked and reported comes from that one state (Greptile on PR #91). A null
+   * summary: the list is of no summary held (every attempt overtaken by refreshes, PR #95), so
+   * the worktree is reported stale, never marked.
    */
-  changedFiles(worktreeId: string, scope: DiffScope): Promise<BulkFile[]>;
+  changedFiles(
+    worktreeId: string,
+    scope: DiffScope,
+  ): Promise<{ files: BulkFile[]; summary: WorktreeSummary | null }>;
   /** The worktree's current summary `stateHash`, or null when it has none right now. */
   currentStateHash(worktreeId: string): string | null;
   /** Status flow v2 (optional so test doubles need not provide it): move a review bookmark. */

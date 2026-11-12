@@ -51,6 +51,13 @@ async function startCounting(
           return target.listChangedFiles(...args);
         };
       }
+      // The daemon lists through the variant that reports its state (Greptile on PR #95).
+      if (prop === 'listChangedFilesWithState') {
+        return (...args: Parameters<typeof core.listChangedFiles>) => {
+          if (args[1].kind === 'branch') listings++;
+          return target.listChangedFilesWithState?.(...args);
+        };
+      }
       return Reflect.get(target, prop, receiver);
     },
   });

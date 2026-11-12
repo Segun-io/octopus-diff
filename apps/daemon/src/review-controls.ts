@@ -8,6 +8,7 @@ import type {
   SettingsResponse,
   UndoReviewRequest,
   UndoReviewResponse,
+  WorktreeSummary,
 } from '@octopus-diff/contracts';
 import {
   type BulkFile,
@@ -41,6 +42,8 @@ interface Considered {
   wt: BulkWorktree;
   expected: string | undefined;
   files: BulkFile[];
+  /** The summary `files` were listed for: its HEAD and omission go with them. */
+  summary: WorktreeSummary | null;
 }
 
 function toKey(change: MarkChange): string {
@@ -133,8 +136,8 @@ export class ReviewControls {
     const fetched = await Promise.all(
       selected.map(async ({ wt, expected }): Promise<Considered | null> => {
         try {
-          const files = await this.#source.changedFiles(wt.worktreeId, scope);
-          return { wt, expected, files };
+          const { files, summary } = await this.#source.changedFiles(wt.worktreeId, scope);
+          return { wt, expected, files, summary };
         } catch (error) {
           if (!isShutdownError(error)) {
             this.#log.debug('bulk review: skipping worktree', { worktreeId: wt.worktreeId, error });
@@ -158,9 +161,13 @@ export class ReviewControls {
     for (const item of fetched) {
       if (!item) continue;
       // The worktree may have moved on while files were listed: never mark an unseen state.
+      // The list must also be of the state the user saw (Greptile on PR #91), and of a state at
+      // all: a list of no held summary (every attempt overtaken, PR #95) is never marked.
       if (
-        item.expected !== undefined &&
-        this.#source.currentStateHash(item.wt.worktreeId) !== item.expected
+        item.summary === null ||
+        (item.expected !== undefined &&
+          (this.#source.currentStateHash(item.wt.worktreeId) !== item.expected ||
+            item.summary.stateHash !== item.expected))
       ) {
         stale.push(item.wt.worktreeId);
         continue;
@@ -169,9 +176,10 @@ export class ReviewControls {
       // named in `paths`; the bookmark below still moves past them.
       const files = ownWork(paths === undefined ? item.files : filterByPaths(item.files, paths));
       if (paths === undefined && listsUntracked(scope)) {
-        untrackedOmitted += item.wt.summary?.untrackedOmitted?.count ?? 0;
+        untrackedOmitted += item.summary.untrackedOmitted?.count ?? 0;
       }
-      const head = item.wt.summary?.headSha ?? null;
+      // The HEAD of the state that was listed (and marked), not of one read before or after.
+      const head = item.summary.headSha;
       if (advance && head !== null) advanceTo.push({ worktreeId: item.wt.worktreeId, head });
       if (files.length === 0) continue;
       worktrees++;
