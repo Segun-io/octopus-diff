@@ -22,6 +22,20 @@ const FOLDS = await (async () => {
   return foldsCase(dir);
 })();
 
+/**
+ * Index of the git subcommand in a logged argv: the first word after the global options, skipping
+ * `-c <key=value>` pairs and every other option (the shared rule of the other real-git tests). Never
+ * the first word that merely lacks a dash or an equals sign.
+ */
+function subcommandAt(argv: string[]): number {
+  for (let i = 0; i < argv.length; i++) {
+    const word = argv[i] as string;
+    if (word === '-c' || word === '-C') i++;
+    else if (!word.startsWith('-')) return i;
+  }
+  return argv.length;
+}
+
 async function startCounting(fx: RealGitFixture, internal: DaemonInternals = {}) {
   const log = path.join(await tempDir(), 'spawns.log');
   writeFileSync(log, '');
@@ -48,7 +62,7 @@ async function startCounting(fx: RealGitFixture, internal: DaemonInternals = {})
       .split('\n')
       .filter(Boolean)
       .map((line) => line.split('\u0001').filter(Boolean))
-      .map((argv) => argv.slice(argv.findIndex((a) => !a.startsWith('-') && !a.includes('='))))
+      .map((argv) => argv.slice(subcommandAt(argv)))
       .filter((argv) => argv[0] !== 'config');
   return { daemon, spawns };
 }
@@ -158,8 +172,10 @@ describe('GET /diff from the summary state (#41)', () => {
     const response = await api.getDiff(s.repoId, { scope: { kind: 'working' }, path: 'a.txt' });
     // The raw diff and the status side by side (either may start first), then the patch.
     const old = spawns().slice(before);
-    expect(old.map((argv) => argv[0]).sort()).toEqual(['diff', 'diff', 'status']);
-    expect(old[2]?.[0]).toBe('diff');
+    // The raw lines in the message: a platform that spawns something else shows what it was.
+    const lines = JSON.stringify(old);
+    expect(old.map((argv) => argv[0]).sort(), lines).toEqual(['diff', 'diff', 'status']);
+    expect(old[2]?.[0], lines).toBe('diff');
     expect(withoutReview(response)).toEqual(await wanted(s.fx, s.repo, 'a.txt'));
   });
 });
