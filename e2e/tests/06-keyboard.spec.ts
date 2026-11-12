@@ -88,7 +88,7 @@ test.describe('§8.7 keyboard', () => {
 
     await app.press('g');
     await app.press('i');
-    await expect(app.inbox).toHaveAttribute('aria-current', 'true');
+    await expect(app.contextBar).toHaveAttribute('data-view', 'inbox');
 
     await app.press('?');
     await expect(app.byTestId(TEST_IDS.helpDialog)).toBeVisible();

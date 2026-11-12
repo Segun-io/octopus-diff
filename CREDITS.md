@@ -38,6 +38,8 @@ they pull in.
 | `@shikijs/vscode-textmate` | 10.1.0 | MIT | via `shiki` | https://github.com/shikijs/vscode-textmate |
 | `@tanstack/query-core` | 5.107.1 | MIT | via `@tanstack/react-query` | https://github.com/TanStack/query |
 | `@tanstack/react-query` | 5.107.1 | MIT | apps/web | https://github.com/TanStack/query |
+| `@tanstack/react-virtual` | 3.14.26 | MIT | apps/web | https://github.com/TanStack/virtual |
+| `@tanstack/virtual-core` | 3.19.11 | MIT | via `@tanstack/react-virtual` | https://github.com/TanStack/virtual |
 | `@types/debug` | 4.1.13 | MIT | via `micromark` | https://github.com/DefinitelyTyped/DefinitelyTyped |
 | `@types/estree` | 1.0.10 | MIT | via `hast-util-to-jsx-runtime` | https://github.com/DefinitelyTyped/DefinitelyTyped |
 | `@types/estree-jsx` | 1.0.5 | MIT | via `mdast-util-mdx-expression` | https://github.com/DefinitelyTyped/DefinitelyTyped |

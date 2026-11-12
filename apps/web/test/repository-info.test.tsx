@@ -198,10 +198,13 @@ describe('Overview repository information (mock daemon)', () => {
   });
 
   it('the folder Overview adds repository columns and roll-ups without forge queries', async () => {
-    const { store, calls } = setup();
-    const sidebar = await screen.findByTestId(TEST_IDS.sidebar);
-    const code = sidebar.querySelector<HTMLElement>('[data-folder-id]') as HTMLElement;
-    store.setState({ view: { kind: 'folder', scanRootId: code.dataset.folderId ?? '' } });
+    const { store, calls, backend } = setup();
+    await screen.findAllByTestId(TEST_IDS.worktreeItem);
+    // No folder headers in the sidebar any more (#13): the Overview opens from the palette or a
+    // row's menu; here the view is set directly.
+    const code = backend.scanRoots[0];
+    expect(code).toBeDefined();
+    store.setState({ view: { kind: 'folder', scanRootId: code?.id ?? '' } });
     const header = await screen.findByRole('columnheader', { name: 'Default branch' });
     const table = header.closest('table') as HTMLElement;
     await waitFor(() => expect(table.textContent).toContain('github.com/octo-demo/octopus-api'));

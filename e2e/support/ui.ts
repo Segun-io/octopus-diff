@@ -12,7 +12,7 @@ import {
   type TestInfo,
   type TestType,
 } from '@playwright/test';
-import { AppPage } from './app.js';
+import { AppPage, cssValue } from './app.js';
 import type { TestDaemon } from './daemon.js';
 import { test as base, type FileEdits } from './test.js';
 
@@ -189,12 +189,44 @@ export class UiPage extends AppPage {
     return this.contextMenu;
   }
 
-  projectNameButton(name: string): Locator {
-    return this.projectItem(name).locator('button[title]').first();
+  /**
+   * Opens a Overview through the command palette (`Ctrl+K`): the sidebar has no project or folder
+   * headers any more (#13), and the palette lists every project and folder whatever the list's
+   * scroll position.
+   */
+  private async openOverviewVia(item: Locator): Promise<void> {
+    const palette = this.byTestId(TEST_IDS.commandPalette);
+    await item.first().click();
+    await expect(palette).toBeHidden();
   }
 
-  folderNameButton(scanRootId: string): Locator {
-    return this.page.locator(`li[data-folder-id="${scanRootId}"] button[title]`).first();
+  private async openPalette(query: string): Promise<void> {
+    await this.focusApp();
+    await this.press('Control+k');
+    const input = this.byTestId(TEST_IDS.commandPaletteInput);
+    await expect(input).toBeVisible();
+    await input.fill(query);
+  }
+
+  /** The project's Overview (palette: `Project <name>`). */
+  async openProjectOverview(name: string): Promise<void> {
+    await this.openPalette(`Project ${name}`);
+    const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    await this.openOverviewVia(
+      this.byTestId(TEST_IDS.commandPaletteItem)
+        .and(this.page.locator('[data-id^="go:project:"]'))
+        .filter({ hasText: new RegExp(`Project ${escaped}\\d+ worktrees?$`) }),
+    );
+  }
+
+  /** The folder's Overview (palette item `go:folder:<scanRootId>`). */
+  async openFolderOverview(scanRootId: string, query = 'Folder'): Promise<void> {
+    await this.openPalette(query);
+    await this.openOverviewVia(
+      this.page.locator(
+        `${tid(TEST_IDS.commandPaletteItem)}[data-id="go:folder:${cssValue(scanRootId)}"]`,
+      ),
+    );
   }
 
   async openSettings(

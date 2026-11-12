@@ -111,17 +111,18 @@ References to read (do not fork):
 
 Three-pane layout, dark and light themes:
 
-1. **Sidebar** (DECISIONS "UX round 4"). Top entry **Inbox** = every dirty worktree of every project. Then
-   **Pinned** worktrees. Then every folder (scan root) with its projects, and under each project the worktrees with
-   something to do: Blocked (a conflict or an in-progress operation), To review (unreviewed files of the To review
-   diff; `N commits ·` and the pill), In PR (`#42 · checks ✓`), or kept there by hand. Everything else (Reviewed,
-   Merged/closed for this HEAD, review off, missing, failed, or hidden until it changes) sits in the shelf at the
-   bottom, closed by default. A commit or a merge moves work into a bookmark range; it never settles it. Status
-   comes from `WorktreeSummary.review` (status flow v2), never from the toolbar scope. Folder and project headers
-   collapse, open their Overview on click, and show what they hide while closed. "Hide until it changes" / "Show"
-   on hover and in the row menu; it holds until the worktree's state hash changes. No activity pulse. Folders and
-   projects keep a static order; inside a project, worktrees are listed by recent activity, newest first
-   (`WorktreeSummary.activityAt`, DECISIONS #124). Filters: text filter, "only dirty", "only unreviewed" (chips).
+1. **Sidebar** (DECISIONS #241-#248, which supersede "UX round 4"). One **flat, virtualised list** of the worktrees of
+   every folder the filter lets through: pinned first, then most recent activity first (`WorktreeSummary.activityAt`,
+   DECISIONS #124). No Inbox entry, no folder or project headers, no On review / Hidden split. Each row names its
+   repository (a small repo label above the branch) and says only what is informative: `N conflicts`, `N commits ·` and
+   the unreviewed pill (own files only, `unreviewedOwnFiles`; merge noise never counts), an open request
+   (`#42 · checks ✓`), `N deleted`, `review off`, `merged`, `closed`, `missing`, `error`. A worktree that needs no
+   review has no special state. Status comes from `WorktreeSummary.review` (status flow v2), never from the toolbar
+   scope. "Hide until it changes" / "Show again" on hover and in the row menu: what the user hid by hand sits in a
+   closed **Hidden** section at the end (it holds until the worktree's state hash changes). Only a window of rows is
+   mounted (`@tanstack/react-virtual`); `J`/`K` walk the whole list. The filter is a searchable multi-select picker
+   (status, **folders**, projects, worktrees), the way to narrow the list; a folder's or project's Overview opens from
+   a row's menu or the palette. No activity pulse.
 2. **File list** (`@pierre/trees`): changed files for the selected worktree (or, in Inbox mode, grouped by
    project → worktree). Status icons, +/− counts, reviewed checkmark.
 3. **Diff viewer** (`@pierre/diffs`): split / unified toggle, hide-whitespace toggle, collapsed unchanged

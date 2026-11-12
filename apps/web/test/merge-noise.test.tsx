@@ -662,7 +662,7 @@ describe('merge noise: the chip', () => {
 
 describe('merge noise: counts', () => {
   it('the scope counts, the sidebar chip and the title use own + mixed only', async () => {
-    const { backend } = setup();
+    const { backend, store } = setup();
     await open('feat/auth');
     await screen.findByTestId(ORIGIN_TEST_IDS.group);
     const review = backend
@@ -678,7 +678,7 @@ describe('merge noise: counts', () => {
     // Sidebar row.
     expect(worktreeItem('feat/auth').dataset.unreviewed).toBe(String(own));
     // The group header of the inbox counts own + mixed only too.
-    fireEvent.click(screen.getByTestId(TEST_IDS.inboxItem));
+    act(() => store.setState({ view: { kind: 'inbox' } }));
     await waitFor(() =>
       expect(screen.queryAllByTestId(TEST_IDS.fileGroup).length).toBeGreaterThan(0),
     );
@@ -695,7 +695,7 @@ describe('merge noise: counts', () => {
   });
 
   it('expanding the group does not change the file count in the Inbox group header (PR #67 review)', async () => {
-    const { user } = setup();
+    const { user, store } = setup();
     await open('feat/auth');
     await screen.findByTestId(ORIGIN_TEST_IDS.group);
     // One own file is reviewed (hidden while "show reviewed" is off), so the header reads `k/total`:
@@ -705,7 +705,7 @@ describe('merge noise: counts', () => {
     await user.click(screen.getAllByTestId(TEST_IDS.fileItem)[0] as HTMLElement);
     await press(user, 'r');
     await waitFor(() => expect(paths().length).toBe(before - 1));
-    fireEvent.click(screen.getByTestId(TEST_IDS.inboxItem));
+    act(() => store.setState({ view: { kind: 'inbox' } }));
     await waitFor(() =>
       expect(screen.queryAllByTestId(TEST_IDS.fileGroup).length).toBeGreaterThan(0),
     );

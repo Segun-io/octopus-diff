@@ -486,7 +486,9 @@ async function main() {
         .locator(`[data-testid="${TEST_IDS.app}"][data-ready="true"]`)
         .waitFor({ timeout: 120_000 });
       const paintMs = Date.now() - started;
-      await page.locator(`[data-testid="${TEST_IDS.inboxItem}"]`).click();
+      // The sidebar has no Inbox entry since #13: `g i` opens the Inbox view (already the landing view).
+      await page.keyboard.press('g');
+      await page.keyboard.press('i');
       if (args['select-worktree']) {
         await page.locator(`[data-testid="${TEST_IDS.worktreeItem}"]`).first().click();
       }

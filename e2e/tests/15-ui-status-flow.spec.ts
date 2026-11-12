@@ -12,7 +12,7 @@ import type { AppPage } from '../support/app.js';
 import { addWorktree, createRepo } from '../support/repos.js';
 import { expect, test } from '../support/test.js';
 
-/** Where every worktree row sits: id, section (folder / pinned / settled), state and stage. */
+/** Where every worktree row sits: id, section (flat / hidden), state and stage. */
 async function rowPlaces(items: Locator): Promise<string[]> {
   const places = await items.evaluateAll((els) =>
     els.map((el) => {
@@ -86,11 +86,12 @@ test.describe('status flow v2 (UI)', () => {
       .getByRole('button', { name: 'Hide until it changes' })
       .click();
     await expect(row).toHaveAttribute('data-state', 'settled');
-    await expect(row.locator('xpath=ancestor::li[1]')).toHaveAttribute('data-section', 'settled');
+    // #13: a row hidden by hand sits in the Hidden section (open here: `settledOpen`).
+    await expect(row.locator('xpath=ancestor::li[1]')).toHaveAttribute('data-section', 'hidden');
 
     await appendFile(join(repo.dir, 'work.txt'), 'the agent wrote more\n');
     await expect(row).toHaveAttribute('data-state', 'attention', { timeout: 15_000 });
-    await expect(row.locator('xpath=ancestor::li[1]')).toHaveAttribute('data-section', 'folder');
+    await expect(row.locator('xpath=ancestor::li[1]')).toHaveAttribute('data-section', 'flat');
   });
 
   test('no activity pulse and no "verify" wording (acceptance 6)', async ({

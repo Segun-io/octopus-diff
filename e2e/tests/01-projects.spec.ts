@@ -21,7 +21,7 @@ test.describe('§8.2 projects and worktrees', () => {
       const alpha = findProject(manifest, 'alpha');
       await pathInput.fill(alpha.mainWorktreePath ?? '');
       await app.byTestId(TEST_IDS.addProjectSubmit).click();
-      await expect(app.projectItem('alpha')).toBeVisible({ timeout: 15_000 });
+      await app.expectProjectListed('alpha', undefined, 15_000);
       for (const worktree of alpha.worktrees) await app.expectWorktreeItem(worktree);
 
       // The folder picker lists the real filesystem: alpha's folder is a repository, now added.
@@ -56,7 +56,7 @@ test.describe('§8.2 projects and worktrees', () => {
       await expect(watchButton).toBeEnabled();
       await watchButton.click();
       for (const name of scan.expectedProjects) {
-        await expect(app.projectItem(name), `scan found ${name}`).toBeVisible({ timeout: 20_000 });
+        await app.expectProjectListed(name);
         for (const worktree of findProject(manifest, name).worktrees) {
           await app.expectWorktreeItem(worktree);
         }
@@ -150,7 +150,7 @@ test.describe('§8.2 projects and worktrees', () => {
   }) => {
     await app.open(daemon.authUrl);
     for (const project of registeredProjects(manifest)) {
-      await expect(app.projectItem(project.name)).toHaveAttribute('data-project-id', project.id);
+      await app.expectProjectListed(project.name, project.id);
     }
     for (const { worktree } of registeredCheckouts(manifest))
       await app.expectWorktreeItem(worktree);
