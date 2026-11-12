@@ -283,7 +283,7 @@ describe('process control', () => {
       fakeGit,
       [
         '#!/bin/sh',
-        `echo "start $$ $(date +%s%N) $PWD" >> "${log}"`,
+        `printf 'start %s %s %s\\n' "$$" "$(date +%s%N)" "$PWD" >> "${log}"`,
         'case "$FAKE_MODE" in',
         '  sleep) sleep 0.4 ;;',
         '  hang) sleep 30 ;;',
@@ -293,7 +293,7 @@ describe('process control', () => {
         '  env) env ;;',
         '  stdin) cat ;;',
         'esac',
-        `echo "end $$ $(date +%s%N)" >> "${log}"`,
+        `printf 'end %s %s\\n' "$$" "$(date +%s%N)" >> "${log}"`,
         'exit 0',
         '',
       ].join('\n'),

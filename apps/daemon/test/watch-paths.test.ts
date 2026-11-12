@@ -68,16 +68,32 @@ describe('watcher paths (#40)', () => {
     const l = await layout();
     const { watcher, fired } = makeWatcher();
     await watcher.setProject('p1', l.common, l.worktrees);
+    // The subscription may not be up yet: write probes until an event for one arrives (the first
+    // event proves the tree is watched), then let their refreshes finish before the real writes.
+    let n = 0;
+    await eventually(
+      async () => {
+        await writeFile(path.join(l.main, `probe-${n++}.txt`), 'x');
+        return fired.some((f) => f.paths?.some((p) => p.startsWith('probe-')));
+      },
+      10_000,
+      50,
+    );
     await settle();
     fired.length = 0;
     await writeFile(path.join(l.main, 'a b.txt'), 'x');
     await writeFile(path.join(l.main, 'src', 'deep', 'ünï.ts'), 'y');
-    await eventually(() => fired.find((f) => f.id === 'main'), 3000);
+    const named = () => new Set(fired.filter((f) => f.id === 'main').flatMap((f) => f.paths ?? []));
+    // Wait for each path, not for a fixed time: the two events may fall in different refreshes.
+    await eventually(() => named().has('a b.txt') && named().has('src/deep/ünï.ts'), 10_000, 50);
     await settle();
     const all = fired.filter((f) => f.id === 'main');
     expect(all.every((f) => f.reason === 'fs' && f.paths !== null)).toBe(true);
-    const named = new Set(all.flatMap((f) => f.paths ?? []));
-    expect(named).toEqual(new Set(['a b.txt', 'src/deep/ünï.ts']));
+    // Late events for the probes may still trail in; nothing else may be named.
+    expect([...named()].filter((p) => !p.startsWith('probe-')).sort()).toEqual([
+      'a b.txt',
+      'src/deep/ünï.ts',
+    ]);
   });
 
   it('null when focus, a caller without paths or a git-dir event asked too', async () => {

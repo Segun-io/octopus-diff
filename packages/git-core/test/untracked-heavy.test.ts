@@ -598,13 +598,13 @@ describe('numstat alongside the status of a full summary (#43)', () => {
       wrapper,
       [
         '#!/bin/sh',
-        `echo "start $*" >> '${log}'`,
+        `printf 'start %s\\n' "$*" >> '${log}'`,
         'for a in "$@"; do',
         `  if [ "$a" = "status" ] && [ -e '${slow}' ]; then sleep 0.3; fi`,
         'done',
         'git "$@"',
         'rc=$?',
-        `echo "end $*" >> '${log}'`,
+        `printf 'end %s\\n' "$*" >> '${log}'`,
         'exit $rc',
         '',
       ].join('\n'),
@@ -651,7 +651,7 @@ describe('numstat alongside the status of a full summary (#43)', () => {
       // What the status saw first (a numstat runs only for tracked changes), then the calls.
       expect(warm.counts.unstaged, probe.why(warm)).toBe(1);
       expect(probe.shape(), probe.why(warm)).toMatchObject({ alongside: true, numstats: 1 });
-      expect(warm.additions).toBe(1);
+      expect(warm.additions, probe.why(warm)).toBe(1);
       // A commit (PR #91 P3-1): the guess is the new HEAD, read from the ref files, so a commit with
       // changes left costs one numstat, side by side, at the new commit.
       fx.write(path.join(repo, 'b.txt'), 'b\nb2\nb3\n');
@@ -668,7 +668,7 @@ describe('numstat alongside the status of a full summary (#43)', () => {
       });
       const { updatedAt: _a, refresh: _b, ...got } = moved;
       const { updatedAt: _c, refresh: _d, ...want } = await full.getSummary(wt);
-      expect(got).toEqual(want);
+      expect(got, probe.why(moved)).toEqual(want);
       // HEAD moves while the status runs: the guess was the old HEAD, the status header says
       // otherwise, so numstat runs again at the new one; the result equals a full core's.
       probe.reset();
@@ -681,13 +681,13 @@ describe('numstat alongside the status of a full summary (#43)', () => {
       // The commit lands while the wrapper holds the status (300 ms), so the status sees it. The
       // ref files were read before it (two numstats); on a very slow runner perhaps after (one,
       // already at the new HEAD). Either way the numstat used is the new HEAD's.
-      expect(afterRace.headSha).toBe(raced);
-      expect(race.numstats).toBeGreaterThanOrEqual(1);
-      expect(race.commits.at(-1)).toBe(raced);
+      expect(afterRace.headSha, probe.why(afterRace)).toBe(raced);
+      expect(race.numstats, probe.why(afterRace)).toBeGreaterThanOrEqual(1);
+      expect(race.commits.at(-1), probe.why(afterRace)).toBe(raced);
       {
         const { updatedAt: _a, refresh: _b, ...got } = afterRace;
         const { updatedAt: _c, refresh: _d, ...want } = await full.getSummary(wt);
-        expect(got).toEqual(want);
+        expect(got, probe.why(afterRace)).toEqual(want);
       }
       await probe.core.getSummary(wt);
       // Clean now: the speculative run is waited for and discarded.
@@ -695,7 +695,7 @@ describe('numstat alongside the status of a full summary (#43)', () => {
       await ageFiles();
       probe.reset();
       const clean = await probe.core.getSummary(wt);
-      expect(clean.changedFiles).toBe(0);
+      expect(clean.changedFiles, probe.why(clean)).toBe(0);
       expect(probe.shape().numstats, probe.why(clean)).toBe(1);
     } finally {
       probe.slow(false);
@@ -722,31 +722,34 @@ describe('numstat alongside the status of a full summary (#43)', () => {
       probe.slow(true);
       off.slow(true);
       const cold = await probe.core.getSummary(wt);
-      expect(probe.shape()).toMatchObject({ alongside: true, numstats: 1 });
-      expect(probe.shape().commits).toEqual([fx.git(repo, ['rev-parse', 'HEAD']).trim()]);
-      expect(cold.additions).toBe(1);
+      expect(probe.shape(), probe.why(cold)).toMatchObject({ alongside: true, numstats: 1 });
+      expect(probe.shape().commits, probe.why(cold)).toEqual([
+        fx.git(repo, ['rev-parse', 'HEAD']).trim(),
+      ]);
+      expect(cold.additions, probe.why(cold)).toBe(1);
       // The default margin, a new core (no kept state): a numstat of a.txt alone after the status.
       summaryLimits.settleMs = saved.settleMs;
       const fresh = loggingCore('speculate-cold-margin');
       try {
         fresh.slow(true);
         const again = await fresh.core.getSummary(wt);
-        expect(fresh.shape()).toMatchObject({ alongside: true, numstats: 2 });
+        expect(fresh.shape(), fresh.why(again)).toMatchObject({ alongside: true, numstats: 2 });
         expect(
           fresh
             .lines()
             .filter((l) => l.startsWith('start') && l.includes('--numstat'))
             .at(-1),
+          fresh.why(again),
         ).toMatch(/-- a\.txt$/);
-        expect(again.additions).toBe(1);
+        expect(again.additions, fresh.why(again)).toBe(1);
       } finally {
         fresh.slow(false);
         await fresh.core.dispose();
       }
       // The kill switch keeps the old calls exactly: never side by side.
       await off.core.getSummary(wt);
-      await off.core.getSummary(wt);
-      expect(off.shape()).toMatchObject({ alongside: false, numstats: 2 });
+      const offLast = await off.core.getSummary(wt);
+      expect(off.shape(), off.why(offLast)).toMatchObject({ alongside: false, numstats: 2 });
     } finally {
       Object.assign(summaryLimits, saved);
       probe.slow(false);

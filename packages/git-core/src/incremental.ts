@@ -5,9 +5,10 @@ import path from 'node:path';
 import { bstrFromUtf8, compareBstr, isValidUtf8 } from './bstr.js';
 import type { RepoInfo } from './context.js';
 import { mapLimit } from './fs-utils.js';
+import type { IgnoreRecord } from './ignore-sources.js';
 import type { NumstatEntry } from './parse/diff-output.js';
 import type { StatusBranch, StatusEntry } from './parse/status.js';
-import type { UntrackedInfo } from './untracked.js';
+import { absolutePathBuffer, type UntrackedInfo } from './untracked.js';
 import type { UntrackedPlan } from './untracked-plan.js';
 
 /**
@@ -76,6 +77,12 @@ export interface Stamp {
    * writes only to its own `.git`, which no watcher event reports (PR #89 review, P2).
    */
   gitlinks: boolean;
+  /**
+   * Wall clock (ms) when the stamp was taken, before git ran. A file whose ctime or mtime is at or
+   * after it changed after the state was read (#41: `.gitignore` files, which no other record
+   * tells about). Not part of `stampChange`.
+   */
+  at: number;
 }
 
 /** A numstat line as git-core keeps it (bstr paths). */
@@ -114,6 +121,11 @@ export interface SummaryTrack {
   untrackedPlan: UntrackedPlan | null;
   /** lstat signatures of the paths with worktree changes and of the fully staged paths. */
   signatures: Map<string, string>;
+  /**
+   * The ignore rules the untracked files were listed under: the state of the `.gitignore` of every
+   * directory above one, and of `core.excludesFile` (#41, `ignore-sources.ts`).
+   */
+  ignore: IgnoreRecord;
   /** `SummaryOptions.defaultBranch` the summary used. */
   defaultBranch: string | null;
   /** HEAD's commit date when there is no reflog, by HEAD commit (one `git log` per commit). */
@@ -290,6 +302,67 @@ export function regionOfKeys(keys: ReadonlySet<string>): Region | null {
   return new Region([...keys].sort(compareBstr));
 }
 
+/** The directories above each of `keys` (bstr keys; the root itself is the repository). */
+function ancestorDirs(keys: Iterable<string>): Set<string> {
+  const ancestors = new Set<string>();
+  for (const key of keys) {
+    for (let slash = key.indexOf('/'); slash >= 0; slash = key.indexOf('/', slash + 1)) {
+      ancestors.add(key.slice(0, slash));
+    }
+  }
+  return ancestors;
+}
+
+/**
+ * Does any directory above one of `keys` hold a `.git` entry, directory or file (a nested
+ * repository, a linked worktree, a submodule's gitlink file)? Such a path belongs to that
+ * repository, not to this one: the superproject lists the directory as one entry (or none),
+ * whatever its own index says about the file. One `lstat` per ancestor, in parallel; a symlinked
+ * ancestor is followed by the kernel, as git itself would see what is behind it. Shared by the
+ * incremental summary (a hinted path) and the diff route (#41).
+ */
+export async function nestedRepositoryAbove(
+  root: string,
+  keys: Iterable<string>,
+): Promise<boolean> {
+  const nested = await mapLimit([...ancestorDirs(keys)], 16, (dir) =>
+    lstat(absolutePathBuffer(root, `${dir}/.git`)).then(
+      () => true,
+      () => false,
+    ),
+  );
+  return nested.some(Boolean);
+}
+
+/**
+ * What is wrong with the directory chain above `key` (null: nothing), for the diff route (#41):
+ * `nested-repository` (a `.git` in an ancestor, as `nestedRepositoryAbove`) or `symlinked-ancestor`
+ * (an ancestor that is a symlink now: the kernel follows it when the file is `lstat`ed, so the
+ * file's own signature, inode included, cannot show it, while the whole scope lists only the
+ * link). Two `lstat` per ancestor, all in parallel; the root itself is not an ancestor.
+ */
+export async function ancestorProblem(
+  root: string,
+  key: string,
+): Promise<'nested-repository' | 'symlinked-ancestor' | null> {
+  const found = await mapLimit([...ancestorDirs([key])], 16, async (dir) => {
+    const [git, self] = await Promise.all([
+      lstat(absolutePathBuffer(root, `${dir}/.git`)).then(
+        () => true,
+        () => false,
+      ),
+      lstat(absolutePathBuffer(root, dir)).then(
+        (info) => info.isSymbolicLink(),
+        () => false,
+      ),
+    ]);
+    return { git, link: self };
+  });
+  if (found.some((entry) => entry.link)) return 'symlinked-ancestor';
+  if (found.some((entry) => entry.git)) return 'nested-repository';
+  return null;
+}
+
 /** Why the last state cannot take an incremental update at all (or null when it can). */
 export function trackBlocker(track: SummaryTrack): string | null {
   if (track.degraded) return 'degraded';
@@ -378,6 +451,7 @@ export async function readStamp(
   envValue: (name: string) => string | undefined,
 ): Promise<Stamp> {
   stampReads.count++;
+  const stampedAt = Date.now();
   const root = repo.toplevel ?? repo.cwd;
   const outside = outsideFiles(envValue);
   const configFiles = [
@@ -411,7 +485,7 @@ export async function readStamp(
     at(0),
     repo.objectFormat,
   );
-  return { index: at(0), ignore, config, sparse, submodules, gitlinks };
+  return { index: at(0), ignore, config, sparse, submodules, gitlinks, at: stampedAt };
 }
 
 /** Index files above this size are not scanned: treated as holding a gitlink. */

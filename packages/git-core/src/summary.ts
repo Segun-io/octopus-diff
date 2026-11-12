@@ -26,12 +26,14 @@ import {
 } from './diff.js';
 import { exists, mapLimit } from './fs-utils.js';
 import { hashParts, STATE_HASH_LENGTH } from './hash.js';
+import { emptyIgnoreRecord, excludesFileState, recordIgnore } from './ignore-sources.js';
 import {
   checkHint,
   foldsCase,
   keysInRegion,
   mergeSorted,
   type NumstatRecord,
+  nestedRepositoryAbove,
   nextJournal,
   type Region,
   readStamp,
@@ -294,6 +296,7 @@ const UNSTAMPED: Stamp = {
   sparse: true,
   submodules: true,
   gitlinks: true,
+  at: 0,
 };
 
 /** Everything a summary is computed from: a full status, or the last state with a hint merged in. */
@@ -648,19 +651,7 @@ async function collectIncremental(
   if (kinds.some(Boolean)) return 'directory';
   // A path inside a nested repository (its own `.git` in an ancestor directory): the
   // superproject sees that repository as one entry whose state no event of ours describes.
-  const ancestors = new Set<string>();
-  for (const key of check.keys) {
-    for (let slash = key.indexOf('/'); slash >= 0; slash = key.indexOf('/', slash + 1)) {
-      ancestors.add(key.slice(0, slash));
-    }
-  }
-  const nested = await mapLimit([...ancestors], STAT_CONCURRENCY, (dir) =>
-    lstat(absolutePathBuffer(root, `${dir}/.git`)).then(
-      () => true,
-      () => false,
-    ),
-  );
-  if (nested.some(Boolean)) return 'nested-repository';
+  if (await nestedRepositoryAbove(root, check.keys)) return 'nested-repository';
   // A changed file whose event never came still shows in its signature: recompute it too.
   const presigs = new Map<string, string>();
   const missed: string[] = [];
@@ -1230,6 +1221,31 @@ async function finish(
   for (const info of untrackedInfos) {
     infosByKey.set(info.key, { info, attribute: untracked.attributes.get(info.key) ?? '' });
   }
+  // Under which ignore rules the untracked files were listed (a full refresh records afresh; an
+  // incremental one keeps what the last state recorded and adds the paths it recomputed).
+  let ignore = emptyIgnoreRecord();
+  if (c.stamp.at > 0 && untrackedEntries.length > 0) {
+    const root = repo.cwd;
+    const incremental = c.mode === 'incremental' && previous !== undefined;
+    const keys = incremental
+      ? [...(c.untrackedTouched ?? [])].filter((key) => c.untracked.has(key))
+      : untrackedRaw;
+    ignore = await recordIgnore(
+      root,
+      c.stamp.at,
+      keys,
+      incremental ? previous?.ignore : undefined,
+      async () =>
+        excludesFileState(
+          root,
+          (await ctx.configScan(repo)).excludesFiles,
+          ctx.runner.envValue('HOME') || undefined,
+          c.stamp.at,
+        ),
+      // The directories whose untracked entries this refresh listed again (its pathspecs).
+      (dir) => c.region?.has(dir) ?? false,
+    );
+  } else if (c.mode === 'incremental' && previous) ignore = previous.ignore;
   const track: SummaryTrack = {
     version: deps.tracks.nextVersion(),
     stateHash,
@@ -1243,6 +1259,7 @@ async function finish(
     numstat: c.numstat,
     degraded: c.statusOnly || c.unreadable.size > 0,
     untrackedInfos: infosByKey,
+    ignore,
     readContent: untracked.readContent,
     untrackedPlan: plan,
     signatures: keptSignatures,

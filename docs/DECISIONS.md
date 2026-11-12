@@ -3886,3 +3886,233 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      status saw no tracked change, or the wrapper's log lost its lines), which does not match the ctime explanation
      and did not reproduce here (20 of 20 runs, plus folding mode): the shape checks now print the summary's counts,
      its refresh and every logged git call, so a recurrence says which it was.
+
+## File diffs from the summary state (session, 2026-11-12; roadmap #41, step 24)
+
+330. **`getFileDiff` reads the file's patch alone when the kept summary state vouches for it.** Opening one file's diff
+     ran a whole-repository `git status` and `git diff --raw` to identify the file, then its patch (3-4 git processes,
+     346-398 ms on the 100k layout's main worktree, 804-832 ms on the stale-index one; not cached). The summary track git-core
+     already keeps per worktree (#285) now answers the identification (`diffFromSummary` in `diff.ts`): a tracked file
+     is **one** `git diff <base> --raw --numstat -z -p -U3 -- <path>` (the argv the whole route's narrowed patch run
+     already used: same pins, `--no-ext-diff --no-textconv`, literal pathspec after `--`), an untracked file **no** git
+     process (its inspection, `check-attr` once per file when an attributes source exists). Both routes end in the same
+     two functions (`describeTracked`, `describeUntracked`), so they cannot describe a file differently; patch text and
+     `patchHash` are unchanged by construction and by test. The subcommand allowlist and every flag are unchanged.
+     The route answers `working` and the scopes that read the worktree against HEAD's own commit (`review` with that
+     base, `branch` + working); against another base only a modification or an untracked file that the commits since
+     the base left alone (`diff-tree`, memoized with the lists': #290). `staged`, `unstaged`, `branch` and `commit`
+     scopes and every other base are the whole route's.
+331. **When the state vouches (every other case is the whole route's, with a reason: `fileDiffRoutes.reasons`).**
+     Checked in this order, all with stat calls and ref files, no git process: `incremental` on (#293: the kill switch
+     gives the old calls exactly, no stamp is read); the filesystem does not fold case (#288); a track exists and is the
+     state the caller holds (`DiffOptions.summaryState`, a hint the daemon passes from `entry.gitStateHash`; a mismatch is
+     `state-mismatch`); `trackBlocker` is empty (no conflicts, submodules, gitlinks, nested repositories, sparse
+     checkout, unreadable files); the path is valid UTF-8; the stamp (index, ignore, config, attributes, `.gitmodules`)
+     and HEAD are what the state saw. Then what the file's own record says: a status entry `M` on either side (`M.`,
+     `.M`, `MM`) can never be a rename or copy partner, so nothing else in the repository can change its patch; a
+     deletion (`.D`, `MD`, `D.`) only while no path is added anywhere (`TrackFacts.adds`: a staged addition,
+     intent-to-add, a rename or copy target), since a deletion pairs with any addition; an added, renamed, copied,
+     type-changed, intent-to-add or unmerged file is the whole route's (a deleted file elsewhere may pair with it); an
+     untracked file that is not also a tracked entry (`git rm --cached` leaves both) and not the source of a rename
+     entry. **The last one the fuzz found** (seed 0xd1ff01, step 39, review base `main`): a rename source recreated as an
+     untracked file is, in the whole scope, still a deleted path (`diff` reports it against HEAD or the base; the list
+     hides the untracked file for it), so the summary route answering "untracked" differed. It is now `rename-source`,
+     with a golden test.
+332. **Races: the file is read as it is, and the state only decides which route is safe.** Everything the answer
+     contains (status letter, modes, counts, patch, `patchHash`) comes from git's output about the file at the moment it
+     read, never from the track. The track's record is a precondition. The checks run **beside** the read, not before
+     it: the stamp, HEAD and the file's lstat signature (the inspection's `statSig` for an untracked file) are read
+     together (`check`, one round of file system calls) while the one `git diff` runs; what they compare only moves
+     forward (ctime, inode, mtime, the index and its stamp), so "equal to the state's now" means unchanged since the
+     state, and the read, a snapshot of one instant after the checks began, is of the state the record describes. A
+     file that moved is the whole route's, which reads it as it is. The one thing that can still move between the checks
+     and git's read is the file, so a tracked file's signature is taken once more after the read (`changed-while-reading`;
+     the answer is discarded and the whole route reads, one retry by construction). The index and HEAD are not read again:
+     staging something else or moving HEAD after git started does not change this file's patch against HEAD. A stale
+     state costs the spawn the checks overlapped, nothing else. git's answer must confirm the record (one entry, this
+     path, the predicted status, not stat-only), else the whole route answers. So the `patchHash` the client compares
+     with the list's, and the key of the review marks, is the hash of the bytes returned. A failed `git diff` (an
+     unreadable file, a lock) is not an answer: the whole route runs and fails or explains the same way. Nothing is
+     stored by the route: there is no result cache to poison, and an aborted call (#44) rejects with `aborted` from the
+     same `ctx.git` signal and starts no fallback process. `ScopeOptions.summaryState` is now also read by
+     `getFileDiff`; the contract change is a comment only (`contracts:` commit 579a1f1), and the daemon passes it.
+     **Why beside, not before and after** (measured with the default bench's burst phase: a diff opened while 60 edits
+     refresh 60 other worktrees): checks one after the other (stamp, HEAD, signature before the read and again after it)
+     gave a p95 of 74-79 ms, because under a burst each round of file system calls waits its turn in the 4-thread pool
+     behind the summaries' stats (about 8 rounds); beside the read with only the signature after it, **33 ms** (the old
+     route: 34-42 ms; quiet daemon: p50 5-6 ms; no re-check at all: 27 ms).
+333. **Known windows and one internal addition.** (a) Superseded by #334: ignore rules are now recorded and compared, not guessed from a ctime. (b) Whether an untracked
+     file's content is read (at most `maxUntrackedFiles` of them) is decided by the state's count of untracked files, as
+     the lists' hashes are, so the diff and the list at the same state agree; the whole route counts afresh, so they can
+     differ for a worktree that crosses the threshold between the summary and the open. (c) `core.excludesFile` is now recorded too (#334);
+     `core.attributesFile` and `.gitattributes` need nothing (#334). (d) Three checks are defense in depth that
+     no test can reach without forging a file's ctime: the predicted status letter, one raw entry, the stat-only test
+     (a mutation removing any of them survives; the signature checks come first). Mutations killed: the track blocker,
+     the stamp, HEAD, both signature checks, rename partner, rename source, ignore files, committed-since-base, the
+     base-deletion rule, tracked-and-untracked, the kill switch, `summaryState`, the untracked `statSig`, the
+     content-read clause, the git-failure fallback, added or renamed files vouched; the case probe is killed under
+     `OCTOPUS_DIFF_TEST_FOLDS_CASE=1`.
+
+### Ignore rules and the summary route (PR #93 review, P1, 2026-11-12)
+
+334. **An untracked file is vouched for only under the ignore rules it was listed under, recorded and compared.** The
+     review: `ignoreFileMoved` treated a *deleted* `.gitignore` as unchanged (a missing file gave `false`), so with a
+     root `*.log`, a `dir/.gitignore` holding `!keep.log` and an untracked `dir/keep.log`, deleting `dir/.gitignore`
+     made the file ignored (the whole route says `not_found`) while the summary route still returned its diff: the
+     file's own signature had not moved. The ctime heuristic of #333 (a) could never see an absence. Now the track
+     carries `ignore: IgnoreRecord` (`ignore-sources.ts`): for **every directory above an untracked file, the root
+     included, the state of its `.gitignore`: its lstat signature, `absent` (a recorded absence), or `unstable`** (written,
+     or in a directory whose entries changed, within 30 ms of the summary's stamp, so possibly under git's read: never
+     believed), plus the state of the file `core.excludesFile` names (a new `ConfigScan.excludesFiles`, read with the
+     same cached config scan as `core.attributesFile`; additive). A full refresh records afresh (all untracked keys'
+     directories: 323 directories for the 30.7k-untracked worktree, 27-37 ms; the full summary there takes 1.9 s). An
+     incremental refresh **keeps what the last state recorded** and reads only directories of the keys it recomputed, new
+     ones and ones recorded `unstable`: a file that moved without any event must still differ from the record, so a
+     later refresh elsewhere in the directory cannot launder it (test and mutation). The diff route reads the same
+     states again and refuses (`ignore-rules`) on any difference: a `.gitignore` that appeared, changed or disappeared at
+     any level, a moved or deleted excludes file, a directory or the excludes file the record does not hold, or an
+     unstable record. Cost at the diff: one `lstat` per ancestor directory (two when absent) beside the read, in
+     parallel; the 100k bench is unchanged (modified 16-19 ms, untracked 2 ms and 20 ms in the 30.7k-untracked
+     worktree, 1 / 0 spawns), an incremental summary pays 0.4 ms. `.git/info/exclude` and the default global ignore file
+     were already in the `Stamp`, which the route compares (`stampChange` reports `ignore`); the stamp
+     is the mechanism #40 uses for them and it is reused as is. `.gitignore` files are **not** in the stamp: the
+     incremental summary learns of them only from the watcher (a hint naming one is a full refresh) and the
+     reconciliation, so a lost event leaves it blind; the record is therefore stronger than the summary's own view, and
+     the diff route sees the removal case that the incremental summary would miss until the reconciliation. The clock
+     margin is now 30 ms (a jiffy is 10 ms; 100 ms made a new file in a just-written directory fall back, the commonest
+     untracked case); a directory's own times count only for an *absent* `.gitignore` (a creation or deletion updates
+     them), so creating or deleting any sibling entry after the summary sends untracked files of that directory the whole
+     way until the next summary (conservative, ~100 ms in the daemon).
+335. **Same class, other cases (checked, no change needed).** *Tracked files*: a tracked file that becomes ignored is
+     unchanged for git (`status` and `diff` follow the index, ignore rules never apply to tracked paths), so its diff does
+     not change; a test pins it (`.gitignore` gains `*.log` after the summary: the tracked `keep.log` and `a.txt` still
+     take the summary route and equal the whole route). *`.gitattributes` / `core.attributesFile`*: the route never
+     takes attributes from the state. A tracked file is read by `git diff` itself, which reads the attributes as they are
+     (`binary`, `-diff`, `text`/`eol`; textconv and external drivers are off); an untracked file's verdict comes from
+     `readDiffAttributes`, the function the whole route calls, which stats every `.gitattributes` above the file, the
+     info and global sources and the configured file on each call, so an added, changed or removed attribute file is seen
+     (and with content read, the summary's verdict is compared with the fresh one, so a changed verdict is the whole
+     route's). Nothing to record. Tests: `ignore-rules` cases in `diff-from-summary.test.ts` (the repro with the whole
+     route's `not_found`; a new `dir/.gitignore`; a changed and a deleted root `.gitignore`; `core.excludesFile` content
+     changed and deleted; `info/exclude`; an incremental refresh that must not launder a lost event; tracked files), all
+     written failing first, and the fuzz (`diff-from-summary-fuzz.test.ts`, ops in `helpers/fuzz-ops.ts`: `.gitignore`
+     files written (negations included) and deleted at any level, `core.excludesFile` content rewritten silently, a
+     `keep.log` path; some repositories name an excludes file; asked with no summary in between 15% of steps).
+     Mutations killed: rules never compared, the absent-directory probe, the excludes comparison, unstable records
+     believed, previous record not kept, recorded states not compared, the excludes file not recorded; two survive as
+     equivalent mutants (an unrecorded directory or a null excludes record believed: `undefined`/`null` never equal the
+     state read now, so they refuse anyway).
+
+### Ignore sources: symlinks and partial refreshes (PR #93, two more P1, 2026-11-12)
+
+336. **A symlinked ignore source is followed or refused, never lstat-only.** (Review: `core.excludesFile` naming a
+     symlink was signed by the link, so editing the target changed nothing recorded.) `excludesFileState` now records
+     the link's `lstat` **and the target's `stat`** (`<link sig>><target sig>`, `dangling` when the target is missing;
+     the target's age counts for the margin); a symlinked directory component needed nothing (`lstat` resolves every
+     component but the last, and a test pins it). A `~user` value, which git-core does not expand, is `unstable`; `~`
+     and `~/…` use the HOME of the git environment, as the attributes file does. **A `.gitignore` that is a symlink is
+     `unstable`** (refused). Git's real behaviour, checked: it prints `unable to access '.gitignore': Too many levels
+     of symbolic links` and skips the file, so the link is not an ignore source at all, but a different git version
+     may follow it and its target moves unseen, so we do not assume. `info/exclude` and the default global ignore file
+     are in the `Stamp`, which signs them with `stat` (it follows links), so they were already safe. Tests: the excludes
+     file as a symlink and through a symlinked directory (edit the target, compare with the reference core), a
+     symlinked `.gitignore` (git lists the file; the route refuses).
+337. **An `unstable` record is upgraded only by a refresh that lists the entries again; nothing else launders it.**
+     (Review: a summary right after creating an untracked file leaves its directory `unstable`; a `.gitignore` that hides
+     the file is created with the event lost; an incremental refresh of an unrelated file after the margin re-read the
+     directory, found the new rules stable, recorded them and kept the old entry: the diff of a now-ignored file was
+     served.) `recordIgnore` now re-reads an `unstable` directory only when the refresh's region (`Region.has`: its
+     pathspecs name the directory or an ancestor) covers it, which means the status listed every untracked entry under it
+     again; otherwise it stays `unstable` and the route refuses until a refresh that does (a full one at the latest: the
+     daemon reconciles 30 s after the first incremental refresh, and a hint naming a directory is a full refresh).
+     The excludes record is likewise only replaced by a full refresh, never by an incremental one (same laundering,
+     covered by a test and a mutation). Cost: the route stays on the whole way for a directory that was young at its
+     summary until the next full refresh (at most ~30 s in the daemon; with the 100 ms debounce a file created and
+     summarized by the watcher is older than the 30 ms margin, so the usual case is unaffected). Tests: the exact
+     scenario (summary at once, `.gitignore` hiding the file with the event lost, a refresh elsewhere after the margin:
+     the route refuses and equals `not_found`), the same for `core.excludesFile`, fuzz ops writing and deleting ignore
+     files silently. Mutations killed: unstable re-recorded without a re-listing, a symlinked `.gitignore` believed,
+     the excludes target not followed, the held excludes record replaced. (#334's sentence "ones recorded `unstable`
+     are read again" is amended by this entry.)
+338. **`watch-paths.test.ts` "passes the files its events named" no longer waits a fixed time (CI flake, Node 26 job).**
+     It slept 400 ms after `setProject` and 400 ms after the first event, so a slow runner's second event (a nested
+     path) could land after the assertion. It now writes probe files until an event for one arrives (the tree is watched),
+     lets their refreshes finish, then waits with `eventually` for each expected path and asserts that nothing but the
+     probes and those two paths was named. Product untouched. 20 serial runs and 20 under a 4-way parallel load pass.
+
+### Merge with untracked-heavy (PR #91) (2026-11-12)
+
+345. **The summary route and the omission cap (#305-#314).** An untracked file the cap omitted is in `track.untracked`
+     but has no inspection (`untrackedInfos` holds the listed ones only), so the route refuses it (`no-inspection`) and the
+     whole route answers: it reads that one file and serves its diff, as before #91 (`getFileDiff` never consulted the
+     plan: omitted files are not listed or reviewable, but opening one by path still works). Listed ones take the summary
+     route (`describeUntracked` is given every untracked path, as the whole route gives it, so the readContent regime and
+     the attribute verdicts are the same). A tracked file's `signatures` may now hold `unsettled` (#91's early-numstat
+     trust checks, for a path read mid-change): it equals no lstat signature, so the route refuses it (`stale-signature`).
+     The ignore record covers the directories of every untracked key, omitted ones included (more directories, same
+     rules). Tests: a core with `maxListedUntracked: 2` (omitted paths: `no-inspection`, equal to the reference; listed
+     ones: summary route; mutation killed) and two capped seeds of `diff-from-summary-fuzz.test.ts` (caps 1 and 2, with
+     #91's dependency/build/bidi path shapes). `incremental-fuzz.test.ts`: #91's capped-mode additions (path shapes,
+     `useUniverse` in `helpers/fuzz-ops.ts`, caps 1 and 2, the directory-count invariants and thresholds) were ported into
+     the shared-operations structure; the set of `it`/`describe` titles and every threshold is identical to main's.
+
+### Nested repositories above the file (PR #93, another P1, 2026-11-12)
+
+346. **The summary route refuses a path with a `.git` in any directory above it.** (Review: an untracked `dir/file.txt`
+     with an old, unchanged `dir/.gitignore`, then a repository created and committed inside `dir` before the next
+     summary: the parent's index, HEAD, ignore files and the file's signature are all unchanged, so every check passed
+     and the route returned an addition where the whole scope lists `dir/` and says `not_found`.) `check()` now also runs
+     `nestedRepositoryAbove(root, [key])` beside the read, one `lstat` of `<ancestor>/.git` per ancestor directory (root
+     excluded: its `.git` is this repository), in parallel with the stamp, HEAD and signature reads; the answer is the
+     reason `nested-repository`. The helper **is the incremental summary's own ancestor check, extracted** to
+     `incremental.ts` and now used by both (`collectIncremental` for hinted paths, the diff route), so the two cannot
+     disagree. It counts a `.git` directory or **file** (a gitlink to a separate git dir, a linked worktree) and covers
+     a repository created in any ancestor, deep or shallow, including one in a directory the summary recorded without
+     one; the kernel resolves symlinked ancestors, so a path through a link to a repository is seen too (and a directory
+     replaced by a symlink also moves the file's signature). Checked on the **tracked** route too: with the file in the
+     parent's index git keeps diffing it normally even inside a nested repository (the reference core and the stale
+     route returned the same bytes), so nothing was wrong there; the check refuses it anyway (a fallback costs one
+     whole route, a vendored repository above a tracked file is rare, and "the track cannot be stale about a repository
+     appearing" is simpler to state than the exception). Cost: one parallel `lstat` per ancestor inside the existing
+     file-system round (about 7 for the bench paths): not measurable (tracked 15-16 ms, untracked 2 ms, as before).
+     Tests: the exact repro, a `.git` file (`--separate-git-dir`), a repository in a deeper ancestor with a sibling
+     file, a directory replaced by a symlink to a repository, and a tracked file (all against the reference core;
+     four failed first with the check removed); mutations killed: check removed, parent-only, directory-only, reason
+     dropped. `diff-from-summary-fuzz` gained a nested repository per seed (a scripted one in the untracked `nest/`
+     in the second half and a random operation, `helpers/fuzz-ops.ts` `allowNestedRepositories`; the step is asked with
+     no summary in between): it keeps the equality but its random history rarely isolates the case (other refusals
+     come first, files get committed), so the deterministic tests are the guard and the fuzz did **not** kill the
+     check-removed mutant.
+
+### The directory chain above the file (PR #93, another P1, 2026-11-12)
+
+347. **The summary route refuses a path whose ancestor is a symlink, and the rest of "the chain is not what the summary
+     saw" was reviewed.** (Review: untracked `dir/file.txt` with old, harmless `.gitignore` files in the root and in `dir`;
+     `dir` moved outside the worktree on the same file system and a symlink to it put in its place. The file's and the
+     ignore files' signatures are unchanged because the kernel follows the link when `lstat` resolves the path, and there
+     is no `.git`, so the route returned an addition through the link; the whole route lists only the symlink and says
+     `not_found`.) `ancestorProblem(root, key)` (`incremental.ts`, next to the shared `nestedRepositoryAbove`) now does, in
+     the route's existing file-system round, for every directory above the file (root excluded) two parallel `lstat`s: of
+     `<dir>/.git` (`nested-repository`, #346) and of `<dir>` itself (`symlinked-ancestor` when `isSymbolicLink`). Both
+     tracked and untracked files go through it (tracked: git refuses to look through the link, the route refuses first).
+     Test with the reference core: the repro for an untracked and a tracked file, and `a/b/c/file.txt` with `b` becoming the
+     link and old rule files at every level (both failed first); mutations killed: check removed, symlink never seen, only
+     the parent examined, the nested precedence, the route ignoring the chain.
+     **The class, one by one.** *The file's signature* is `size:mtimeNs:ctimeNs:ino:mode`: it includes the inode, not the
+     device. A directory **replaced by a copy** (new files: new inode and ctime even with preserved mtimes) is caught as a
+     stale signature (test; same answer as the whole route). A directory **moved away and moved back** leaves the files
+     with the same inode, mtime and ctime, and the chain as it was: the whole route's answer is identical, so the route
+     may serve it (test pins it as safe, not as refused). A directory **replaced by a file** makes the file's `lstat` fail
+     (`missing` against the recorded signature; test). A **bind mount** (or any mount) over a directory puts other files
+     there: their inode, size and times would all have to coincide with the recorded ones (the device is not in the
+     signature, and adding it would change every worktree's state hash, so it is not done); git itself walks through mount
+     points like directories, so there is no other rule to mirror. Recording each ancestor's `(dev, ino)` at summary time
+     was weighed and not done: the symlink case is the one that leaves everything else unchanged, every other replacement
+     moves the file's own inode or ctime, and the record would cost memory and stats on every summary for no further case.
+     Cost: one more `lstat` per ancestor (the same set as the `.git` ones, about 7 for the bench paths) in the existing
+     round: tracked 15-16 ms and untracked 2 ms are unchanged. `diff-from-summary-fuzz` has the shapes as random operations
+     (`helpers/fuzz-ops.ts` `allowDirectoryShapes`: moved outside and symlinked, moved away and back, replaced by a copy;
+     two per seed, the step is asked with no summary in between); as with nested repositories the random history rarely
+     isolates the case (other refusals come first), so it keeps the equality but did not kill the check-removed mutant:
+     the deterministic tests are the guard.
+

@@ -32,7 +32,7 @@ beforeAll(() => {
     [
       '#!/bin/sh',
       'for last in "$@"; do :; done',
-      `echo "start $$ $last" >> "${log}"`,
+      `printf 'start %s %s\\n' "$$" "$last" >> "${log}"`,
       'case "$FAKE_MODE" in',
       "  stubborn) trap '' TERM; sleep 30 ;;",
       '  hang) sleep 30 ;;',
@@ -311,7 +311,7 @@ describe('GitCore calls with a signal and a lane (real git behind a gated wrappe
         'done',
         '[ -n "$sub" ] || sub=version',
         'dir=$(basename "$PWD")',
-        `echo "start $$ $sub $dir" >> "${wlog}"`,
+        `printf 'start %s %s %s\\n' "$$" "$sub" "$dir" >> "${wlog}"`,
         `while [ -e "${holds}/$sub" ] || [ -e "${holds}/$sub@$dir" ]; do sleep 0.01; done`,
         'exec git "$@"',
         '',

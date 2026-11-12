@@ -2083,6 +2083,11 @@ export class DaemonCore {
       defaultBranch: this.#defaultBranch(project),
       ignoreWhitespace: query.ignoreWhitespace,
       full: query.full,
+      // The state this daemon last published for the worktree: git-core reads the file from its kept
+      // summary state only while that is the state it holds (#41), else the whole-scope way.
+      ...(this.#incremental && entry.gitStateHash !== null
+        ? { summaryState: entry.gitStateHash }
+        : {}),
       ...callOptions({ signal, priority: 'interactive' }),
     };
     if (query.context !== undefined) options.contextLines = query.context;
