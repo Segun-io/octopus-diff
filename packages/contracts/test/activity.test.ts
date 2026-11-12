@@ -127,3 +127,14 @@ describe('activity contracts', () => {
     ]);
   });
 });
+
+describe('ActivityQuerySchema run (PR #77 review)', () => {
+  it('takes an optional run identifier next to the cursor', () => {
+    expect(ActivityQuerySchema.parse({})).toEqual({ after: 0 });
+    expect(ActivityQuerySchema.parse({ after: '5', run: '1731400000000' })).toEqual({
+      after: 5,
+      run: '1731400000000',
+    });
+    expect(ActivityQuerySchema.safeParse({ run: 'x'.repeat(65) }).success).toBe(false);
+  });
+});

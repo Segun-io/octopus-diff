@@ -191,7 +191,10 @@ export interface ApiClient {
   /** Local git facts for the listed projects (Overview). */
   listRepositories(projectIds: readonly string[]): Promise<RepositoriesResponse>;
   /** Live view (#38): the worktree's activity feed after `after` (default 0: all of it). */
-  getActivity(worktreeId: string, params?: { after?: number }): Promise<ActivityResponse>;
+  getActivity(
+    worktreeId: string,
+    params?: { after?: number; run?: string },
+  ): Promise<ActivityResponse>;
   /** Live view (#38): a blob of the worktree's feed (a deleted file's `oid`). */
   getBlob(worktreeId: string, oid: string, params?: { maxBytes?: number }): Promise<BlobResponse>;
   /** Absolute or same-origin URL of the SSE stream. */
@@ -455,6 +458,7 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
     getActivity: (worktreeId, params = {}) => {
       const query = new URLSearchParams();
       if (params.after !== undefined) query.set('after', String(params.after));
+      if (params.run !== undefined) query.set('run', params.run);
       return request(ActivityResponseSchema, 'GET', p(ROUTES.getActivity, { worktreeId }), {
         query,
       });

@@ -162,6 +162,11 @@ export type ActivityWatch = z.infer<typeof ActivityWatchSchema>;
 export const ActivityQuerySchema = z.object({
   /** Return entries with `seq` greater than this (default 0: the whole ring). */
   after: z.coerce.number().int().min(0).max(Number.MAX_SAFE_INTEGER).default(0),
+  /**
+   * The `run` an earlier response carried. A different one means the daemon restarted since (its
+   * sequence numbers start over and may overlap with `after`), so the answer is `dropped`.
+   */
+  run: z.string().max(64).optional(),
 });
 export type ActivityQuery = z.output<typeof ActivityQuerySchema>;
 
@@ -178,6 +183,11 @@ export const ActivityResponseSchema = z.object({
   dropped: z.boolean(),
   /** False until the worktree's baseline snapshot exists (nothing can be reported before it). */
   live: z.boolean(),
+  /**
+   * Identifies this daemon run: send it back as `run` with `after`, and a restart is detected even
+   * when the new run's sequence numbers overlap the old cursor. Absent from older daemons.
+   */
+  run: z.string().optional(),
   watch: ActivityWatchSchema,
 });
 export type ActivityResponse = z.infer<typeof ActivityResponseSchema>;
