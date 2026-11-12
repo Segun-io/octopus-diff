@@ -1101,6 +1101,7 @@ async function main() {
       summaryByRole = await summaryRoles(
         [...setup.roles].map(([path, role]) => ({ path, role })),
         setup.gitVars,
+        !args['no-incremental'],
       );
       for (const r of summaryByRole) {
         log(
@@ -1218,18 +1219,21 @@ async function main() {
 }
 
 /** The #43 table: summary cost per worktree role (large layouts only). */
-function summaryRolesSection(rows: RoleSummaryTimes[] | null | undefined): string {
+function summaryRolesSection(
+  rows: RoleSummaryTimes[] | null | undefined,
+  incremental: boolean,
+): string {
   if (!rows || rows.length === 0) return '';
   const lines = rows.map(
     (r) =>
-      `| ${r.role} | ${r.untracked}${r.omitted ? ` (${r.omitted} not listed)` : ''} | ${fmt(r.coldMs)} | ${r.warmMs.map((v) => fmt(v)).join(' / ')} | ${r.editMs.map((v) => fmt(v)).join(' / ')} | ${r.listRows} rows, ${bytes(r.listBytes)} |`,
+      `| ${r.role} | ${r.untracked}${r.omitted ? ` (${r.omitted} not listed)` : ''} | ${fmt(r.coldMs)} | ${r.warmMs.map((v) => fmt(v)).join(' / ')} | ${r.editMs.map((v) => fmt(v)).join(' / ')} (${[...new Set(r.editModes ?? [])].join(', ') || 'n/a'}) | ${r.listRows} rows, ${bytes(r.listBytes)} |`,
   );
   return `
-## Summary by worktree role (#43)
+## Summary by worktree role (#43)${incremental ? '' : ', `--no-incremental`'}
 
-git-core in the bench process after the daemon stopped (nothing else running): a full summary with a new git-core (*cold*, as at startup), full summaries with a kept state (*warm*: reconciliation, focus, polls, git-dir events), and incremental ones after a one-line append to \`README.md\` (*edit*); then the working list of the last summary as JSON.
+git-core in the bench process after the daemon stopped (nothing else running), created with ${incremental ? 'the default settings (incremental refreshes on)' : '`incremental: false`, as the daemon of this run (every summary in full)'}: a full summary with a new git-core (*cold*, as at startup), full summaries with a kept state (*warm*: reconciliation, focus, polls, git-dir events; with \`--no-incremental\` nothing is kept), and summaries after a one-line append to \`README.md\` with the path as the hint (*edit*; the refresh mode each one used is in brackets); then the working list of the last summary as JSON.
 
-| Role | Untracked files | Cold | Warm (3) | Edit (3) | Working list |
+| Role | Untracked files | Cold | Warm (3) | Edit (3, mode) | Working list |
 |---|---|---|---|---|---|
 ${lines.join('\n')}
 `;
@@ -1456,7 +1460,7 @@ ${roleRows}
 | Request | Raw | Gzipped (computed) | Sent when asked for gzip | First / warm request |
 |---|---|---|---|---|
 ${payloadRows}
-${summaryRolesSection(r.summaryByRole)}
+${summaryRolesSection(r.summaryByRole, r.incremental !== false)}
 ## Baseline: the 2026-11-11 profiling pass (issue #24)
 
 Static reference from the roadmap issue (12-core WSL2, Node 26, git 2.53), not measured by this run:

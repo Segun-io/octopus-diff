@@ -17,8 +17,10 @@ export interface RoleSummaryTimes {
   coldMs: number;
   /** Full refreshes with a kept state. */
   warmMs: number[];
-  /** Incremental refreshes after a one-line append to a tracked file. */
+  /** Refreshes after a one-line append to a tracked file (incremental unless the mode is off). */
   editMs: number[];
+  /** `SummaryRefresh.mode` of each of those refreshes: what the edit timings measured. */
+  editModes: string[];
   /** The working list (`summaryState` of the last summary): rows and JSON bytes. */
   listRows: number;
   listBytes: number;
@@ -26,14 +28,19 @@ export interface RoleSummaryTimes {
 
 const ms = (start: number): number => Math.round((performance.now() - start) * 10) / 10;
 
+/**
+ * `incremental`: the mode the run asked for (`--no-incremental` gives false, as the daemon gets),
+ * so the table measures the same settings as the rest of the run (Greptile on PR #91).
+ */
 export async function summaryRoles(
   worktrees: ReadonlyArray<{ path: string; role: string }>,
   env: Readonly<Record<string, string>>,
+  incremental: boolean,
   samples = 3,
 ): Promise<RoleSummaryTimes[]> {
   const out: RoleSummaryTimes[] = [];
   for (const { path, role } of worktrees) {
-    const core = createGitCore({ env: { ...env } });
+    const core = createGitCore({ env: { ...env }, incremental });
     const locator = { projectId: 'bench', worktreeId: role, path };
     try {
       let start = performance.now();
@@ -46,11 +53,13 @@ export async function summaryRoles(
         warmMs.push(ms(start));
       }
       const editMs: number[] = [];
+      const editModes: string[] = [];
       for (let i = 0; i < samples; i++) {
         await appendFile(join(path, 'README.md'), `summary bench ${i}\n`);
         start = performance.now();
         summary = await core.getSummary(locator, { snapshot: true, changedPaths: ['README.md'] });
         editMs.push(ms(start));
+        editModes.push(summary.refresh?.mode ?? 'unknown');
       }
       const files = await core.listChangedFiles(
         locator,
@@ -64,6 +73,7 @@ export async function summaryRoles(
         coldMs,
         warmMs,
         editMs,
+        editModes,
         listRows: files.length,
         listBytes: Buffer.byteLength(JSON.stringify(files)),
       });
