@@ -194,9 +194,21 @@ async function measure(base: string) {
       return {
         fcp,
         domContentLoaded: nav?.domContentLoadedEventEnd ?? null,
+        // First list of the scope shown; `inboxCompleteAt` (below) is when all groups are in.
         readyAt: performance.now(),
       };
     });
+    // The Inbox fills in project batches after the first list is shown (3 of 30 groups at the first
+    // paint, all of them ~1.4 s later): measure on the complete one, and report both times.
+    await waitStep(
+      'the Inbox never showed every worktree group',
+      page.waitForFunction(
+        (n) => document.querySelectorAll('[data-testid="file-group"]').length >= n,
+        DATASET.worktrees,
+        { timeout: 30_000 },
+      ),
+    );
+    const inboxCompleteAt = await now();
     const loadLongTasks = await longTasksSince(0);
     const fileRows = await page.getByTestId('file-item').count();
     const groups = await page.getByTestId('file-group').count();
@@ -363,7 +375,7 @@ async function measure(base: string) {
         inboxGroups: groups,
         mountedRowsAtLoad: fileRows,
       },
-      load: { ...load, longTasks: stats(loadLongTasks) },
+      load: { ...load, inboxCompleteAt, longTasks: stats(loadLongTasks) },
       jNavigation: { perPressToNextFrame: stats(jTimes), longTasks: stats(jLongTasks) },
       scroll: {
         listHeightPx: scroll.height,
