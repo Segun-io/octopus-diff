@@ -1,4 +1,4 @@
-import { lstat, stat } from 'node:fs/promises';
+import { lstat, readFile, stat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { bstrFromUtf8, compareBstr, isValidUtf8 } from './bstr.js';
@@ -68,6 +68,12 @@ export interface Stamp {
   sparse: boolean;
   /** `<root>/.gitmodules` exists: incremental refreshes are off. */
   submodules: boolean;
+  /**
+   * The index holds a gitlink (an embedded repository added without `.gitmodules`, or a submodule),
+   * or cannot be read to tell: incremental refreshes are off. A commit inside such a repository
+   * writes only to its own `.git`, which no watcher event reports (PR #89 review, P2).
+   */
+  gitlinks: boolean;
 }
 
 /** A numstat line as git-core keeps it (bstr paths). */
@@ -267,7 +273,7 @@ export function regionOfKeys(keys: ReadonlySet<string>): Region | null {
 export function trackBlocker(track: SummaryTrack): string | null {
   if (track.degraded) return 'degraded';
   if (track.stamp.sparse) return 'sparse-checkout';
-  if (track.stamp.submodules) return 'submodules';
+  if (track.stamp.submodules || track.stamp.gitlinks) return 'submodules';
   for (const entry of track.tracked.values()) {
     // With an unmerged path, git status can pair a deletion with it (a worktree-side rename) and
     // then print neither the rename nor the deletion (an unmerged line cannot show one): that
@@ -297,6 +303,7 @@ export function stampChange(a: Stamp, b: Stamp): string | null {
   if (a.config !== b.config) return 'config';
   if (a.sparse !== b.sparse) return 'sparse-checkout';
   if (a.submodules !== b.submodules) return 'submodules';
+  if (a.gitlinks !== b.gitlinks) return 'submodules';
   return null;
 }
 
@@ -374,7 +381,85 @@ export async function readStamp(
   const ignore = ignoreFiles.map(() => at(i++)).join('|');
   const sparse = sparseFiles.map(() => at(i++)).some((s) => s !== 'none');
   const submodules = at(i) !== 'none';
-  return { index: at(0), ignore, config, sparse, submodules };
+  const gitlinks = await indexHasGitlinks(
+    path.join(repo.gitDir, 'index'),
+    at(0),
+    repo.objectFormat,
+  );
+  return { index: at(0), ignore, config, sparse, submodules, gitlinks };
+}
+
+/** Index files above this size are not scanned: treated as holding a gitlink. */
+const MAX_INDEX_SCAN_BYTES = 256 * 1024 * 1024;
+const gitlinkScans = new Map<string, { signature: string; result: boolean }>();
+
+/**
+ * Does the index hold a gitlink (mode 160000)? Parses the entries of index versions 2-4 (a
+ * clean gitlink is in no `git status` line); true when the file cannot be parsed, is split
+ * (`link` extension: the entries live in a shared index) or is too big. Memoized by the
+ * index's stat signature, so it runs once per index write.
+ */
+export async function indexHasGitlinks(
+  file: string,
+  signature: string,
+  objectFormat: string,
+): Promise<boolean> {
+  if (signature === 'none') return false;
+  const known = gitlinkScans.get(file);
+  if (known?.signature === signature) return known.result;
+  let result = true;
+  try {
+    const info = await stat(file);
+    if (info.size <= MAX_INDEX_SCAN_BYTES) result = scanIndex(await readFile(file), objectFormat);
+  } catch {
+    result = true;
+  }
+  gitlinkScans.set(file, { signature, result });
+  if (gitlinkScans.size > MAX_TRACKS) {
+    const oldest = gitlinkScans.keys().next().value;
+    if (oldest !== undefined) gitlinkScans.delete(oldest);
+  }
+  return result;
+}
+
+/** True when an entry has mode 160000, or the index is not one this parser understands. */
+export function scanIndex(buf: Buffer, objectFormat: string): boolean {
+  if (buf.length < 12 || buf.toString('latin1', 0, 4) !== 'DIRC') return true;
+  const version = buf.readUInt32BE(4);
+  if (version < 2 || version > 4) return true;
+  const count = buf.readUInt32BE(8);
+  const oidLength = objectFormat === 'sha256' ? 32 : 20;
+  const hashLength = oidLength;
+  let off = 12;
+  for (let i = 0; i < count; i++) {
+    if (off + 42 + oidLength > buf.length) return true;
+    const mode = buf.readUInt32BE(off + 24);
+    if (mode >>> 12 === 0o16) return true;
+    const flagsAt = off + 40 + oidLength;
+    const flags = buf.readUInt16BE(flagsAt);
+    let p = flagsAt + 2;
+    if (version >= 3 && flags & 0x4000) p += 2;
+    if (version === 4) {
+      // Prefix-compressed name: a varint (how much of the previous name to drop), then the rest.
+      while (p < buf.length && (buf[p++] as number) & 0x80);
+      const nul = buf.indexOf(0, p);
+      if (nul < 0) return true;
+      off = nul + 1;
+    } else {
+      const length = flags & 0xfff;
+      const end = length < 0xfff ? p + length : buf.indexOf(0, p);
+      if (end < 0 || end > buf.length) return true;
+      // 1-8 NUL bytes pad the entry to a multiple of eight.
+      off += (end - off + 8) & ~7;
+    }
+  }
+  // Extensions: `link` means the entries are in a shared index this scan did not read.
+  while (off + 8 <= buf.length - hashLength) {
+    const signature = buf.toString('latin1', off, off + 4);
+    if (signature === 'link') return true;
+    off += 8 + buf.readUInt32BE(off + 4);
+  }
+  return false;
 }
 
 const caseProbe = new Map<string, Promise<boolean>>();

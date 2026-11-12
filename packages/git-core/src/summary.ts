@@ -14,7 +14,9 @@ import { aheadBehind as countAheadBehind } from './commits.js';
 import type { GitContext, RepoInfo } from './context.js';
 import type { DiffDeps } from './diff.js';
 import {
+  dropStaleLists,
   findUnreadable,
+  forgetLists,
   inspectOptions,
   lstatSignature,
   pathspecsExcluding,
@@ -383,6 +385,21 @@ async function collectIncremental(
     }
   });
   if (kinds.some(Boolean)) return 'directory';
+  // A path inside a nested repository (its own `.git` in an ancestor directory): the
+  // superproject sees that repository as one entry whose state no event of ours describes.
+  const ancestors = new Set<string>();
+  for (const key of check.keys) {
+    for (let slash = key.indexOf('/'); slash >= 0; slash = key.indexOf('/', slash + 1)) {
+      ancestors.add(key.slice(0, slash));
+    }
+  }
+  const nested = await mapLimit([...ancestors], STAT_CONCURRENCY, (dir) =>
+    lstat(absolutePathBuffer(root, `${dir}/.git`)).then(
+      () => true,
+      () => false,
+    ),
+  );
+  if (nested.some(Boolean)) return 'nested-repository';
   // A changed file whose event never came still shows in its signature: recompute it too.
   const presigs = new Map<string, string>();
   const missed: string[] = [];
@@ -568,17 +585,26 @@ export async function getSummary(
   }
   const hint = options?.changedPaths;
   return deps.tracks.serial(repo.cwd, async () => {
-    const previous = deps.tracks.get(repo.cwd);
     let reason: string | null = null;
+    if (options?.forgetState) {
+      deps.tracks.delete(repo.cwd);
+      forgetLists(deps, repo.cwd);
+      reason = 'forget';
+    }
+    const previous = deps.tracks.get(repo.cwd);
     let collected: Collected | null = null;
-    if (hint !== undefined && deps.incremental) {
+    if (hint !== undefined && deps.incremental && reason === null) {
       const attempt = await collectIncremental(deps, repo, previous, hint, options);
       if (typeof attempt === 'string') reason = attempt;
       else collected = attempt;
     }
     collected ??= await collectFull(deps, repo, previous);
     const { result, track } = await finish(deps, repo, worktree, options, collected, snapshotLimit);
-    if (deps.incremental) deps.tracks.set(repo.cwd, track);
+    if (deps.incremental) {
+      deps.tracks.set(repo.cwd, track);
+      // A full refresh is the ground truth: lists it does not explain are seeded again.
+      if (collected.mode === 'full') dropStaleLists(deps, repo.cwd, track);
+    }
     return {
       ...result,
       refresh: {

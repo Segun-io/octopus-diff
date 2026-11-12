@@ -141,6 +141,20 @@ const OPS: Array<[number, Op]> = [
   ],
   [
     3,
+    (fx, repo, r) => {
+      // Back to HEAD's content by a plain write (no index change): a clean file again, which is
+      // what leaves a phantom row in a list read while the edit was pending (PR #89 P1).
+      const rel = pick(r, PATHS);
+      const shown = spawnSync('git', ['show', `HEAD:${rel}`], {
+        cwd: repo,
+        env: { ...process.env, ...fx.env, LC_ALL: 'C' },
+      });
+      if (shown.status !== 0) return null;
+      return writeFile(repo, rel, shown.stdout);
+    },
+  ],
+  [
+    3,
     (_fx, repo, r) => {
       const rel = pick(r, PATHS);
       const full = abs(repo, rel);
@@ -392,19 +406,28 @@ async function runSeed(seed: number, config: string[][] = []): Promise<{ increme
   let incremental = 0;
   const reasons = new Map<string, number>();
   // Baseline: the first summary has no state to update.
-  await inc.getSummary(wt, { snapshot: true });
+  let held = (await inc.getSummary(wt, { snapshot: true })).stateHash;
   for (const scope of SCOPES) await inc.listChangedFiles(wt, scope);
   for (let step = 0; step < STEPS; step++) {
-    const ops = 1 + Math.floor(r() * 2);
+    const ops = 1 + Math.floor(r() * 3);
     const touched = new Set<string>();
     for (let i = 0; i < ops; i++) {
       const done = nextOp(r)(fx, repo, r);
       if (!done) continue;
       log.push(`${step}: ${done.name}`);
       for (const p of done.touched) touched.add(p);
+      // Lists asked for while this step's events are still pending (PR #89 P1), between its
+      // operations: read from the files after the last summary, with the held (now stale) state
+      // or none at all. A later operation may undo what they saw before any summary does.
+      for (const scope of SCOPES) {
+        const roll = r();
+        if (roll < 0.2) await inc.listChangedFiles(wt, scope, { summaryState: held });
+        else if (roll < 0.3) await inc.listChangedFiles(wt, scope);
+      }
     }
     const context = () => `seed 0x${seed.toString(16)} step ${step}\n${log.slice(-12).join('\n')}`;
     const got = await inc.getSummary(wt, { snapshot: true, changedPaths: [...touched] });
+    held = got.stateHash;
     const want = await full.getSummary(wt, { snapshot: true });
     if (got.refresh?.mode === 'incremental') incremental++;
     const why = got.refresh?.reason ?? got.refresh?.mode ?? 'none';

@@ -806,6 +806,13 @@ export interface ListEntry {
   rows: ListRow[];
   /** `rows`' keys, in the same order (binary search). */
   keys: string[];
+  /**
+   * Keys of rows the summary state at `version` does not explain (a row read from the files
+   * while their event was pending): re-diffed on every later use until they agree (PR #89 P1).
+   */
+  recheck: string[];
+  /** Paths that differ between the scope's base and HEAD (null: not computed, base is HEAD). */
+  committed: ReadonlySet<string> | null;
 }
 export type ListCache = LruCache<string, ListEntry>;
 
@@ -875,6 +882,72 @@ function mergeRows(a: readonly ListRow[], b: readonly ListRow[]): ListRow[] {
   }
   while (j < b.length) out.push(b[j++] as ListRow);
   return out;
+}
+
+/**
+ * Rows a summary state does not explain: a tracked row whose path (or old path) is neither a
+ * status path nor, against another base than HEAD, a path that differs between base and HEAD;
+ * an untracked row the state does not list. Such a row was read from the files after the state
+ * (its event pending). The journal re-diffs only paths whose records change between two states,
+ * so a file clean in both would keep the row for ever: the list re-checks these keys instead.
+ * `committed` null with such a tracked row: unknown, every unexplained key is returned.
+ */
+function unexplainedKeys(
+  track: SummaryTrack,
+  rows: readonly ListRow[],
+  committed: ReadonlySet<string> | null,
+): string[] {
+  const statusPaths = new Set<string>();
+  for (const entry of track.tracked.values()) {
+    statusPaths.add(entry.path);
+    if (entry.kind === 'renamed') statusPaths.add(entry.origPath);
+  }
+  const explained = (key: string): boolean =>
+    statusPaths.has(key) || (committed?.has(key) ?? false);
+  const out = new Set<string>();
+  for (const row of rows) {
+    if (row.file.status === 'untracked') {
+      if (!track.untracked.has(row.key) && !track.untracked.has(`${row.key}/`)) out.add(row.key);
+      continue;
+    }
+    if (!explained(row.key)) out.add(row.key);
+    if (row.oldKey !== null && !explained(row.oldKey)) out.add(row.oldKey);
+  }
+  return [...out].sort(compareBstr);
+}
+
+/** The paths that differ between a plan's base and HEAD, or null when its base is HEAD. */
+async function committedOf(
+  ctx: GitContext,
+  repo: RepoInfo,
+  plan: ScopePlan,
+  headSha: string | null,
+): Promise<ReadonlySet<string> | null | undefined> {
+  const base = plan.revArgs[0];
+  if (plan.revArgs.length !== 1 || base === undefined) return undefined;
+  if (base === 'HEAD' || base === headSha) return null;
+  if (headSha === null || !FULL_OID.test(base)) return undefined;
+  return committedKeys(ctx, repo, base, headSha);
+}
+
+/**
+ * After a full summary: drops the worktree's cached lists that the new state does not explain
+ * (another HEAD, or any unexplained row), so the next list is seeded from the state.
+ */
+export function dropStaleLists(deps: DiffDeps, cwd: string, track: SummaryTrack): void {
+  const prefix = `${cwd}\u0000`;
+  deps.lists.deleteWhere(
+    (key, entry) =>
+      key.startsWith(prefix) &&
+      (entry.headSha !== track.branch.oid ||
+        unexplainedKeys(track, entry.rows, entry.committed).length > 0),
+  );
+}
+
+/** Drops every cached list of a worktree (`SummaryOptions.forgetState`). */
+export function forgetLists(deps: DiffDeps, cwd: string): void {
+  const prefix = `${cwd}\u0000`;
+  deps.lists.deleteWhere((key) => key.startsWith(prefix));
 }
 
 function listKeyOf(repo: RepoInfo, plan: ScopePlan): string {
@@ -957,11 +1030,14 @@ async function listFromSummary(
   const cached = listed && listed.version >= 0 && listed.headSha === headSha ? listed : undefined;
   const changed = cached ? changedSince(track, cached.version) : null;
   const update = cached !== undefined && changed !== null;
-  if (update && changed.size === 0) return cached.rows.map((row) => row.file);
+  if (update && changed.size === 0 && cached.recheck.length === 0) {
+    return cached.rows.map((row) => row.file);
+  }
 
   const specs = new Set<string>();
   if (update) {
     for (const k of changed) specs.add(k);
+    for (const k of cached.recheck) specs.add(k);
     for (const row of cached.rows) {
       if (row.file.status === 'conflicted') return null;
       if (row.file.status === 'untracked' || row.file.status === 'modified') continue;
@@ -1050,12 +1126,15 @@ async function listFromSummary(
   else listRefreshCounts.seeded++;
   const latest = deps.lists.get(key);
   if (!latest || latest.version <= track.version) {
+    const committed = (await committedOf(ctx, repo, plan, headSha)) ?? null;
     deps.lists.set(key, {
       version: track.version,
       headSha,
       readContent: inspect.readContent,
       rows,
       keys: rows.map((row) => row.key),
+      recheck: unexplainedKeys(track, rows, committed),
+      committed,
     });
   }
   return rows.map((row) => row.file);
@@ -1148,14 +1227,21 @@ export async function listChangedFiles(
   if (incremental && unreadable.size === 0) {
     const previous = deps.lists.get(key);
     const version = track?.version ?? -1;
-    if (!previous || previous.version <= version) {
-      deps.lists.set(key, {
-        version,
-        headSha: track?.branch.oid ?? null,
-        readContent,
-        rows,
-        keys: rows.map((row) => row.key),
-      });
+    if (track && (!previous || previous.version <= version)) {
+      // Read from the files as they are now, which may be past the state: rows that state does
+      // not explain are re-checked on every later use.
+      const committed = await committedOf(ctx, repo, plan, track.branch.oid);
+      if (committed !== undefined) {
+        deps.lists.set(key, {
+          version,
+          headSha: track.branch.oid,
+          readContent,
+          rows,
+          keys: rows.map((row) => row.key),
+          recheck: unexplainedKeys(track, rows, committed),
+          committed,
+        });
+      }
     }
   }
   return rows.map((row) => row.file);
