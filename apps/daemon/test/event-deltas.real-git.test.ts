@@ -35,12 +35,14 @@ import { makeRealGitFixture, makeRealRepo, type RealGitFixture } from './real-gi
 type Changed = ServerEventOf<'worktree.changed'>;
 
 /**
- * Git processes three appends to a tracked file cost in this fixture (the summary, the review state
- * with its file list), measured on main before #51 with this same test (3 runs, identical):
- * `config status diff rev-parse config status diff`, `config status diff config status diff`, and
- * the same plus one `config`. The deltas must not add one.
+ * Git processes three appends to a tracked file cost in this fixture, `config` reads left out (the
+ * config scan is re-read while a config file is younger than 2 s, so how many there are depends on
+ * the timing of the run, not on the deltas): the summary (`status`, `diff`) and the review state
+ * with its file list (`status`, `diff`, plus a `rev-parse` the first time). Measured on main before
+ * #51 with this same test: `status diff rev-parse status diff`, then `status diff status diff`
+ * twice. The deltas must not add one.
  */
-const SPAWNS_PER_EDIT_BEFORE = [7, 6, 7];
+const SPAWNS_PER_EDIT_BEFORE = [5, 4, 4];
 
 interface Counting {
   daemon: Daemon;
@@ -158,7 +160,11 @@ describe('event deltas (#51)', () => {
       await appendFile(path.join(s.repo, 'a.txt'), `edit ${i}\n`);
       last = await changedAfter(events, mark, s.repoId);
       await quiet(spawns);
-      perEdit.push(spawns().slice(before));
+      perEdit.push(
+        spawns()
+          .slice(before)
+          .filter((sub) => sub !== 'config'),
+      );
     }
     // No more git processes per edit than before the deltas (and none of them a working listing).
     if (process.env.OCTOPUS_PRINT_SPAWNS) console.log(JSON.stringify(perEdit));
