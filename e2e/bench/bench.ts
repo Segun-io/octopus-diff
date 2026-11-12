@@ -84,6 +84,7 @@ const { values: args } = parseArgs({
     strict: { type: 'boolean', default: false },
     'after-fetch': { type: 'boolean', default: false },
     'to-review': { type: 'boolean', default: false },
+    'keep-trace': { type: 'string' },
   },
 });
 
@@ -628,6 +629,29 @@ async function main() {
       );
     }
 
+    // Warm reloads once the daemon is quiet (issue #74). The three reloads above start right after
+    // the cold paint, while the work the cold paint asked for (every review state and, with origins,
+    // every label) is still running, so their windows count that work too. These start only when no
+    // git process has run for a second, and each window stays open until the daemon is quiet again,
+    // so it holds exactly what one reload costs.
+    let settledReloads: Array<{ ms: number; spawns: number }> | null = null;
+    if (page) {
+      await settled(daemon.spawnFile, daemon.activeFile, 1000, 60_000);
+      settledReloads = [];
+      for (let i = 0; i < 3; i++) {
+        const from = Date.now();
+        const reload = await firstPaint(page, daemon.url);
+        await settled(daemon.spawnFile, daemon.activeFile, 750, 30_000);
+        const to = Date.now();
+        phases[`settledReload${i + 1}`] = [from, to];
+        const spawned = within(gitSpawns(await readSpawns(daemon.spawnFile)), from, to).length;
+        settledReloads.push({ ms: Math.round(reload.ms), spawns: spawned });
+      }
+      log(
+        `settled warm reloads: ${settledReloads.map((r) => `${r.ms} ms / ${r.spawns} spawns`).join(', ')}`,
+      );
+    }
+
     log(`idle CPU: settling 5 s, then sampling ${idleMs / 1000} s…`);
     await new Promise((resolve) => setTimeout(resolve, 5000));
     const idle = await sampleProcessCpu(daemon.child.pid as number, idleMs, 1000);
@@ -792,6 +816,15 @@ async function main() {
           return [name, { spawns: s.total, wallMs: s.wallMs, bySub: s.bySub }];
         }),
     );
+    if (args['keep-trace']) {
+      // Diagnosis: the raw spawn trace and the phase windows (epoch ms), kept after the cleanup.
+      await mkdir(args['keep-trace'], { recursive: true });
+      await writeFile(join(args['keep-trace'], 'spawns.jsonl'), await readFile(daemon.spawnFile));
+      await writeFile(
+        join(args['keep-trace'], 'phases.json'),
+        `${JSON.stringify({ root: setup.root, ...phases }, null, 2)}\n`,
+      );
+    }
     const editSpawns = samples.map((sample) => {
       const s = spawnStats(within(allGit, sample.window[0], sample.window[1]));
       return { role: sample.role, spawns: s.total, wallMs: s.wallMs };
@@ -897,6 +930,13 @@ async function main() {
             warmSamplesMs: paint.warm.map((w) => Math.round(w)),
             firstContentfulPaintMs: paint.fcp,
             spawns: phaseSpawns,
+            // Issue #74: reloads once the daemon is quiet (reported, not judged).
+            settledReloads,
+            settledReloadSpawnsPerWorktree: settledReloads?.length
+              ? Math.round(
+                  (Math.max(...settledReloads.map((r) => r.spawns)) / worktreeCount) * 100,
+                ) / 100
+              : null,
           }
         : { skipped: uiProblem },
       idleCpu: idle,
@@ -1127,6 +1167,7 @@ Tracked budgets are known to fail until the issue they name lands: they are list
 |---|---|
 | Time to first paint (cold) | ${fp ? fmt(fp.coldMs) : 'skipped'} |
 | Time to first paint (warm reload; 3 samples) | ${fp ? `${fmt(fp.warmMs)} (${fp.warmSamplesMs.join(' / ')} ms)` : 'skipped'} |
+| Warm reload once the daemon is quiet: git spawns (per worktree, worst of 3; reported, not judged) | ${fp?.settledReloads?.length ? `${(fp.settledReloads as Array<{ spawns: number }>).map((x) => x.spawns).join(' / ')} (${fp.settledReloadSpawnsPerWorktree})` : 'n/a'} |
 | Idle CPU, daemon + git children (avg over ${Math.round(r.idleCpu.durationMs / 1000)} s / worst 1 s) | ${r.idleCpu.supported ? `${r.idleCpu.averagePercent.toFixed(2)} % / ${r.idleCpu.maxIntervalPercent.toFixed(2)} %` : 'n/a'} |
 | Refresh: write → SSE \`worktree.changed\` (p50 / p95 / max) | ${fmt(r.refresh.sse.p50)} / ${fmt(r.refresh.sse.p95)} / ${fmt(r.refresh.sse.max)} (${r.refresh.sse.count}/${r.refresh.iterations}) |
 | Refresh: write → UI sidebar update (p50 / p95 / max) | ${ui ? `${fmt(ui.p50)} / ${fmt(ui.p95)} / ${fmt(ui.max)} (${ui.count}/${r.refresh.iterations})` : 'skipped'} |
@@ -1146,6 +1187,8 @@ ${
 | Phase | Git spawns | Wall time (sum) |
 |---|---|---|
 ${phaseRows}
+
+\`warmReload1-3\` start right after the cold paint and end at \`data-ready\`, so they also count the work the cold paint started (review states and labels still being computed). \`settledReload1-3\` start once no git process ran for 1 s and last until the daemon is quiet again: what one reload costs on its own (issue #74).
 `
     : ''
 }

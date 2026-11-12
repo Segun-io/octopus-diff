@@ -1,9 +1,10 @@
 // Preload for perf profiling (`node --import ./spawn-trace.mjs`): wraps child_process.spawn and
 // writes one JSON line per finished child to $OCTOPUS_SPAWN_TRACE:
-//   { t0, t1, ms, cmd, sub, args, cwd, code }
+//   { t0, t1, ms, cmd, sub, args, argv, cwd, code }
 // t0/t1 are epoch milliseconds (fractional). `sub` is the git subcommand (global options and
-// `-c key=value` pins skipped); `args` the next few arguments, enough to tell calls apart; `cmd`
-// the executable's base name (`git`, `gh`, ...).
+// `-c key=value` pins skipped); `args` the next few arguments, enough to group calls; `argv` every
+// argument after the subcommand (at most 40, each cut at 200 characters), enough to tell two calls
+// apart (object ids come after `--end-of-options`); `cmd` the executable's base name (`git`, `gh`, ...).
 // Used by e2e/bench/profile.ts and bench.ts only; the daemon itself is unchanged.
 import childProcess from 'node:child_process';
 import { openSync, writeSync } from 'node:fs';
@@ -33,10 +34,17 @@ if (file) {
       .map(String)
       .filter((a) => !['--no-ext-diff', '--no-textconv', '--no-color'].includes(a))
       .slice(0, 6);
+    const full = argv
+      .slice(i + 1)
+      .slice(0, 40)
+      .map((a) => String(a).slice(0, 200));
     const cwd = options && typeof options === 'object' ? options.cwd : undefined;
-    // $OCTOPUS_SPAWN_ACTIVE: one '+' when a child starts and one '-' when it is gone, so a reader can tell
-    // how many children are still running (the trace above only grows when one finishes).
-    if (activeFd !== null) {
+    // $OCTOPUS_SPAWN_ACTIVE: one '+' when a git child starts and one '-' when it is gone, so a reader can
+    // tell how many git processes are still running (the trace above only grows when one finishes).
+    // Only git: the daemon's long-lived helpers (the watch host is a `node` child) would otherwise
+    // count as running forever, and a "quiet" wait would always run into its timeout (#74).
+    const cmd = String(command).split(/[\\/]/).pop();
+    if (activeFd !== null && /^git(\.exe)?$/i.test(cmd ?? '')) {
       writeSync(activeFd, '+');
       let ended = false;
       const end = () => {
@@ -51,7 +59,7 @@ if (file) {
       const t1 = now();
       writeSync(
         fd,
-        `${JSON.stringify({ t0, t1, ms: Math.round((t1 - t0) * 100) / 100, cmd: String(command).split('/').pop(), sub, args: rest, cwd: cwd === undefined ? null : String(cwd), code })}\n`,
+        `${JSON.stringify({ t0, t1, ms: Math.round((t1 - t0) * 100) / 100, cmd: String(command).split('/').pop(), sub, args: rest, argv: full, cwd: cwd === undefined ? null : String(cwd), code })}\n`,
       );
     });
     return child;
