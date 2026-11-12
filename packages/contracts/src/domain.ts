@@ -113,6 +113,23 @@ export const WorktreeReviewSchema = z.object({
   unreviewedFiles: Count,
   /** The bookmark is not an ancestor of HEAD (rebase, reset, force-push). */
   historyRewritten: z.boolean(),
+  /**
+   * Files of the "To review" diff whose change came from the default branch (`origin: 'base'`:
+   * a merge, rebase or update of `main`, or a change identical to it), counted whether reviewed or
+   * not (#31). Absent from older daemons.
+   */
+  baseFiles: Count.optional(),
+  /**
+   * Files of the "To review" diff that are not reviewed and not `base` (own and mixed work): the
+   * count to show when present, instead of `unreviewedFiles` (which keeps its meaning and still
+   * counts base files). Absent from older daemons: then use `unreviewedFiles`.
+   */
+  unreviewedOwnFiles: Count.optional(),
+  /**
+   * The default-branch ref base files came from, for labels (e.g. `origin/main` or `main`).
+   * Absent when no default branch is known, and from older daemons.
+   */
+  integrationRef: z.string().min(1).optional(),
 });
 export type WorktreeReview = z.infer<typeof WorktreeReviewSchema>;
 
@@ -186,6 +203,36 @@ export const FILE_STATUSES = [
 export const FileStatusSchema = z.enum(FILE_STATUSES);
 export type FileStatus = z.infer<typeof FileStatusSchema>;
 
+/**
+ * Where a changed file's change comes from (merge noise, #31/#32): `own` = work done on this
+ * branch or worktree; `base` = the default branch's change, brought in by a merge, rebase or
+ * update, or own work identical to it ("same as main"); `mixed` = both (the file has own changes
+ * and the default branch changed it too). An absent `origin` means `own` (older daemons).
+ */
+export const FILE_ORIGINS = ['own', 'mixed', 'base'] as const;
+export const FileOriginSchema = z.enum(FILE_ORIGINS);
+export type FileOrigin = z.infer<typeof FileOriginSchema>;
+
+/**
+ * How the default branch's part of a `base` or `mixed` file arrived: `merge` (a merge commit),
+ * `rebase` (no merge commit: the branch was rebased or reset onto newer default-branch history),
+ * `cherry-pick` (reserved: git-core reports cherry-picks as `same-as-base`, see DECISIONS),
+ * `update` (the branch only moved along the default branch: fast-forward, pull, reset),
+ * `same-as-base` (the branch's version equals the newest default-branch version without having
+ * merged it: cherry-picks, squash-landed work, the same fix), `in-progress` (staged by a merge or
+ * cherry-pick that is not committed yet). Clients must tolerate values added later.
+ */
+export const FILE_ORIGIN_VIAS = [
+  'merge',
+  'rebase',
+  'cherry-pick',
+  'update',
+  'same-as-base',
+  'in-progress',
+] as const;
+export const FileOriginViaSchema = z.enum(FILE_ORIGIN_VIAS);
+export type FileOriginVia = z.infer<typeof FileOriginViaSchema>;
+
 const fileIdentityShape = {
   /** Repo-relative display path (UTF-8; lossy with U+FFFD if `rawPath` is present). */
   path: RepoPathSchema,
@@ -226,6 +273,13 @@ export const ChangedFileSchema = GitChangedFileSchema.extend({
    * touched the file is already reviewed and it has no uncommitted change.
    */
   reviewed: z.boolean(),
+  /**
+   * Where the change comes from (merge noise, #31): set by the daemon in scopes that know it.
+   * Absent = `own` (also from older daemons).
+   */
+  origin: FileOriginSchema.optional(),
+  /** How the default branch's part arrived; present only with `origin` `base` or `mixed`. */
+  originVia: FileOriginViaSchema.optional(),
 });
 export type ChangedFile = z.infer<typeof ChangedFileSchema>;
 

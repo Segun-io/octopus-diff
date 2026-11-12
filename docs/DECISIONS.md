@@ -2414,3 +2414,28 @@ clock with a fake client (`apps/daemon/test/forge-fleet.test.ts`); nothing was m
      PR #62 review (contracts, additive): `FocusRequest.visible?: boolean`. The focus report used "nothing
      selected" as "tab hidden", so a visible Inbox or folder Overview (which selects no worktree) switched the
      forge polling to its idle pace. Newer clients send `visible`; without it the old inference applies.
+## File origins: merge noise in contracts and git-core (session, 2026-11-11; roadmap #31 and #32, steps 10 and 11)
+
+Numbers: #198 and up (#197 is used by the forge-fetching branch for #8; renumber at merge if they collide).
+
+198. **Contracts: file origin fields (#31), additive and optional.** `FileOriginSchema` (`own`, `mixed`, `base`)
+     and `FileOriginViaSchema` (`merge`, `rebase`, `cherry-pick`, `update`, `same-as-base`, `in-progress`), with
+     `FILE_ORIGINS` / `FILE_ORIGIN_VIAS`. `ChangedFile.origin?` / `originVia?` (absent = own; `originVia` only with
+     `base` or `mixed`). `WorktreeReview.baseFiles?` (base files of the To review diff, reviewed or not),
+     `unreviewedOwnFiles?` (not reviewed and not base: the count the web prefers when present; `unreviewedFiles`
+     keeps its meaning) and `integrationRef?` (label, e.g. `origin/main`). Optional
+     `GitCore.readFileOrigins(worktree, {base, defaultBranch?, files?})` returning
+     `{integrationRef, n, tip, origins: Map<pathKey, {origin, via}>}`, where `pathKey` is the review-mark form
+     `rawPath ?? path` (as `CommitDetails.paths` and the daemon's `pathKey`), `via` is null for own, and `n`/`tip`
+     are commit ids (the daemon needs `n` for the "only this branch's changes" toggle of #34). Two choices beyond
+     the issue text: (a) **`files` input.** The issue's signature has `{base, defaultBranch}`; rule 1 (uncommitted
+     files) needs each file's `staged`/`unstaged`/`status`, which the daemon already has from the listing it
+     attaches origins to. Reading `git status` again inside `readFileOrigins` would add a whole-worktree scan per
+     call (100-330 ms in big repos, outside the issue's 2-5 spawn budget), so the caller passes the listed files
+     (`FileOriginInput = Pick<GitChangedFile, path | rawPath | oldPath | status | staged | unstaged>`); without
+     `files` git-core lists `base..HEAD` and runs `git status` itself (tests, other callers). It also removes the
+     `diff-tree base HEAD` the map would otherwise need. (b) **`cherry-pick` is in the enum but git-core does not
+     emit it in v1**: a cherry-pick, squash-landed own work and the same fix made twice look identical by trees
+     (the branch's version equals the newest default-branch version), so all are `same-as-base` (decision 5 of
+     #25: "same as main"). The value stays for a later, costlier detection (patch-ids); clients must tolerate it.
+     Old daemons and clients still parse: every field is optional (`packages/contracts/test/file-origins.test.ts`).
