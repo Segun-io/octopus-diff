@@ -261,7 +261,12 @@ export function FileList({
                 <GroupHeader
                   onMenu={onGroupMenu}
                   group={g.group}
-                  shown={g.rows.length}
+                  // Expanded base files are rows too, but not part of the own-only count they are compared with.
+                  shown={
+                    fromMainOnly
+                      ? g.rows.length
+                      : g.rows.reduce((n, r) => (isBaseFile(r.file) ? n : n + 1), 0)
+                  }
                   fromMainOnly={fromMainOnly}
                   height={HEADER_HEIGHT}
                   reviewOff={disabled?.has(g.group.worktree.id) ?? false}

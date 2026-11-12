@@ -140,3 +140,13 @@ None added or removed (`pnpm credits:check` passes inside `pnpm lint`).
 - #35 (e2e/bench): selectors are `[data-testid="from-main-group"]` (`aria-expanded`, `data-count`, `data-worktree-id`),
   `from-main-chip` (`aria-pressed`, `data-count`), `branch-only-toggle`, `origin-tag`, and `file-item[data-origin]` /
   `[data-origin-via]` on rows (absent for own files).
+
+## PR review round 1 (Greptile on #67)
+
+All three findings were valid.
+
+- **Expanded groups skewed the Inbox group header's file count.** `GroupHeader` was given `g.rows.length`, which includes the expanded base files, but compares it with an own-only total, so with reviewed own files hidden it read `22 files` instead of `21/22 files` once the group was expanded. It now gets the own-only row count (the base files too only with the "From main" chip on, where they are the count). Test: mark one own file reviewed, open the Inbox, expand the group: the header text must not change (it showed `22 f…` instead of `21/22` without the change).
+- **The bulk test did not look at base files.** It checked the `branch` list, where the mock has no base files, so it passed even if bulk review marked every base file. It now captures the To review base files before the request and asserts that no review mark exists for any of them afterwards (and that own files were marked). Mutation check: letting the mock mark base files fails it.
+- **The perf load wait accepted an old diff.** When a file is in both scopes, `useDiffQuery` keeps the previous scope's diff as placeholder data and `DiffPane` called that `ready`. The diff viewer now exposes `data-placeholder` (true while the patch shown is the previous view's) and `scripts/perf.ts` waits for it to be clear.
+
+**The perf script itself is broken on `main`, independently of this PR** (found while checking this): on a clean checkout of `main`, `pnpm --filter @octopus-diff/web perf` times out in its load wait; on this branch it gets past the load wait and fails later, in the "J through every worktree" step (a worktree switch whose first file row never matches the current worktree). The perf numbers in the PR description were measured by the original session before the rebase onto `main` and are therefore not reproduced here; a follow-up issue tracks fixing the script.

@@ -75,7 +75,11 @@ async function main() {
         ?.getAttribute('data-scope')
         ?.startsWith(kind) &&
       document.querySelectorAll('[data-testid="file-item"]').length > 0 &&
-      document.querySelector('[data-testid="diff-viewer"]')?.getAttribute('data-state') === 'ready',
+      document.querySelector('[data-testid="diff-viewer"]')?.getAttribute('data-state') ===
+        'ready' &&
+      // ...and not the previous scope's diff of the same file kept as placeholder data.
+      document.querySelector('[data-testid="diff-viewer"]')?.getAttribute('data-placeholder') !==
+        'true',
     scopeKind,
     { timeout: 30_000 },
   );

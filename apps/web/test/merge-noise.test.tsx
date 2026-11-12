@@ -610,6 +610,38 @@ describe('merge noise: counts', () => {
     await waitFor(() => expect(document.title).toBe(`(${total}) octopus-diff`));
   });
 
+  it('expanding the group does not change the file count in the Inbox group header (PR #67 review)', async () => {
+    const { user } = setup();
+    await open('feat/auth');
+    await screen.findByTestId(ORIGIN_TEST_IDS.group);
+    // One own file is reviewed (hidden while "show reviewed" is off), so the header reads `k/total`:
+    // the case where counting the expanded base files as shown used to make it read `total`.
+    const before = paths().length;
+    expect(before).toBeGreaterThan(1);
+    await user.click(screen.getAllByTestId(TEST_IDS.fileItem)[0] as HTMLElement);
+    await press(user, 'r');
+    await waitFor(() => expect(paths().length).toBe(before - 1));
+    fireEvent.click(screen.getByTestId(TEST_IDS.inboxItem));
+    await waitFor(() =>
+      expect(screen.queryAllByTestId(TEST_IDS.fileGroup).length).toBeGreaterThan(0),
+    );
+    const headerOf = () =>
+      screen
+        .getAllByTestId(TEST_IDS.fileGroup)
+        .find((el) => el.dataset.worktreeId === worktreeItem('feat/auth').dataset.worktreeId)
+        ?.querySelector('div.flex')?.textContent ?? '';
+    const collapsed = headerOf();
+    expect(collapsed).toMatch(/\d+\/\d+ files/);
+    const noise = screen
+      .getAllByTestId(ORIGIN_TEST_IDS.group)
+      .find((el) => el.dataset.worktreeId === worktreeItem('feat/auth').dataset.worktreeId);
+    expect(noise).toBeDefined();
+    fireEvent.click(noise as HTMLElement);
+    await waitFor(() => expect(paths().length).toBeGreaterThan(0));
+    // Same text with the base files expanded: they are rows, but not part of the own-only count.
+    expect(headerOf()).toBe(collapsed);
+  });
+
   it('Review N shown counts own + mixed; Review all leaves the base files alone', async () => {
     const { backend, user, requests } = setup();
     await open('feat/auth');
@@ -623,14 +655,23 @@ describe('merge noise: counts', () => {
     fireEvent.click(screen.getByTestId(ORIGIN_TEST_IDS.group));
     await waitFor(() => expect(paths()).toContain('src/lib/http.ts'));
     expect(button.dataset.count).toBe(String(own));
+    // The base files of the To review list, captured before the request moves the bookmark.
+    const worktreeId = worktreeItem('feat/auth').dataset.worktreeId as string;
+    const baseFiles = backend
+      .listFiles(worktreeId, { kind: 'review' })
+      .files.filter((f) => f.origin === 'base');
+    expect(baseFiles.length).toBeGreaterThan(0);
     await press(user, 'R');
     await screen.findByTestId(TEST_IDS.bulkReviewToast);
     const bulk = requests.find((r) => r.url.endsWith('/api/review/bulk'));
     expect(bulk?.body).toMatchObject({ scope: { kind: 'review' }, advanceBookmarks: true });
-    const marked = backend
-      .listFiles(worktreeItem('feat/auth').dataset.worktreeId as string, { kind: 'branch' })
-      .files.filter((f) => f.reviewed);
-    expect(marked.length).toBe(0);
+    // The own files were marked, and not one base file has a review mark (the marks are keyed by
+    // project, scope, path and patch: `|review|<path>|<patchHash>`).
+    expect(backend.reviews.size).toBeGreaterThan(0);
+    for (const f of baseFiles) {
+      const marked = [...backend.reviews].filter((k) => k.includes(`|${f.rawPath ?? f.path}|`));
+      expect(marked, `review marks of base file ${f.path}`).toEqual([]);
+    }
   });
 });
 
