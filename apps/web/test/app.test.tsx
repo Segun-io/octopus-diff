@@ -615,6 +615,51 @@ describe('live updates', () => {
     );
   });
 
+  it('applies the event delta (#51): no /api/projects refetch, the open diff stays when another file moves', async () => {
+    const { backend, requests } = setup();
+    await ready();
+    fireEvent.click(
+      screen
+        .getAllByTestId(TEST_IDS.worktreeItem)
+        .find((el) => el.dataset.branch === 'feat/auth') as HTMLElement,
+    );
+    await waitFor(() => expect(viewer().getAttribute('data-state')).toBe('ready'));
+    fireEvent.click(
+      within(await screen.findByTestId(TEST_IDS.fileList))
+        .getAllByTestId(TEST_IDS.fileItem)
+        .find((el) => el.dataset.path === 'src/auth/session.ts') as HTMLElement,
+    );
+    await waitFor(() => expect(viewerPath()).toBe('src/auth/session.ts'));
+    await waitFor(() => expect(viewer().getAttribute('data-state')).toBe('ready'));
+    const worktreeId = viewer().getAttribute('data-worktree-id') ?? '';
+    const hash = viewer().getAttribute('data-patch-hash');
+    const row = () =>
+      screen
+        .getAllByTestId(TEST_IDS.worktreeItem)
+        .find((el) => el.dataset.worktreeId === worktreeId) as HTMLElement;
+    const additions = row().getAttribute('data-additions');
+    const before = requests.length;
+
+    act(() => {
+      backend.mutate(worktreeId, 'edit', 'src/format.ts');
+    });
+    // The sidebar follows the event's row; the file list follows its refetch.
+    await waitFor(() => expect(row().getAttribute('data-additions')).not.toBe(additions));
+    await waitFor(() =>
+      expect(
+        requests
+          .slice(before)
+          .filter((r) => r.includes(`/api/worktrees/${worktreeId}/files?scope=working`)),
+      ).toHaveLength(1),
+    );
+    await new Promise((r) => setTimeout(r, 50));
+    const after = requests.slice(before);
+    expect(after.filter((r) => r.includes('/api/projects'))).toEqual([]);
+    expect(after.filter((r) => r.includes('/diff'))).toEqual([]);
+    expect(viewerPath()).toBe('src/auth/session.ts');
+    expect(viewer().getAttribute('data-patch-hash')).toBe(hash);
+  });
+
   it('a reverted open file hands the selection to its neighbor', async () => {
     const { backend } = setup();
     await ready();

@@ -145,7 +145,7 @@ describe('SSE → cache invalidation', () => {
     expect(invalid(queryKeys.files(b.worktree.id, { kind: 'working' }))).toBe(false);
   });
 
-  it('patches the changed worktree into the inbox instead of refetching the whole inbox', async () => {
+  it("an older daemon's event (no delta) refetches the whole inbox; no client-side reconstruction (#51)", async () => {
     const { backend, qc, a } = seeded();
     const requests: string[] = [];
     const mockFetch = createMockFetch(backend);
@@ -179,12 +179,13 @@ describe('SSE → cache invalidation', () => {
     const byId = (r: InboxResponse | undefined) =>
       Object.fromEntries((r?.entries ?? []).map((e) => [e.worktree.id, e]));
     expect(byId(patched)).toEqual(byId(expected));
-    expect(requests.some((r) => r.includes('/api/inbox'))).toBe(false);
-    expect(requests.some((r) => r.includes(`/api/worktrees/${a.worktree.id}/files`))).toBe(true);
+    expect(requests.filter((r) => r.includes('/api/inbox'))).toHaveLength(1);
+    expect(requests.some((r) => r.includes('worktreeIds='))).toBe(false);
+    expect(requests.some((r) => r.includes(`/api/worktrees/${a.worktree.id}/files`))).toBe(false);
     for (const fn of unsubscribe) fn();
   });
 
-  it("fetches the changed worktree's file list once per edit, though the inbox patch and the open file list both want it (#27)", async () => {
+  it("fetches the changed worktree's file list once per edit, with the inbox and the open file list on screen (#27)", async () => {
     const { backend, qc, a } = seeded();
     const requests: string[] = [];
     const mockFetch = createMockFetch(backend);
@@ -229,7 +230,8 @@ describe('SSE → cache invalidation', () => {
     await flushEffects(qc, effects, api);
     const filesRequests = requests.filter((r) => r.includes(`/api/worktrees/${wid}/files`));
     expect(filesRequests).toHaveLength(1);
-    expect(requests.some((r) => r.includes('/api/inbox'))).toBe(false);
+    // An older daemon's event: the inbox is refetched whole (#51 removed the patch from /files).
+    expect(requests.filter((r) => r.includes('/api/inbox'))).toHaveLength(1);
     // The inbox entry and the file list agree on the new state.
     const fresh = qc.getQueryData<FilesResponse>(queryKeys.files(wid, scope));
     expect(fresh?.stateHash).toBe(stateHash);
@@ -240,7 +242,7 @@ describe('SSE → cache invalidation', () => {
     for (const fn of unsubscribe) fn();
   });
 
-  it('fetches the file list once for the patch when no file query is open', async () => {
+  it('fetches no file list for the inbox when no file query is open (#51)', async () => {
     const { backend, qc, a } = seeded();
     const requests: string[] = [];
     const mockFetch = createMockFetch(backend);
@@ -270,7 +272,8 @@ describe('SSE → cache invalidation', () => {
       { reconnect: false },
     );
     await flushEffects(qc, effects, api);
-    expect(requests.filter((r) => r.includes(`/api/worktrees/${wid}/files`))).toHaveLength(1);
+    expect(requests.filter((r) => r.includes(`/api/worktrees/${wid}/files`))).toHaveLength(0);
+    expect(requests.filter((r) => r.includes('/api/inbox'))).toHaveLength(1);
     for (const fn of unsubscribe) fn();
   });
 
