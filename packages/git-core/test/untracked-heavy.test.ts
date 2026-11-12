@@ -52,10 +52,10 @@ describe('planUntracked (#43)', () => {
     const keys = [...files('node_modules/x', 50), ...files('dist/assets', 45), ...files('src', 3)];
     const plan = planUntracked(keys, 5);
     if (!plan) throw new Error('expected a plan');
-    // 98 - 5 = 93 > 50: node_modules first; then 48 - 5 = 43 <= 45: the deepest, dist/assets.
+    // Both are generated names (PR #91 P2-2): omitted first, biggest first, as whole directories.
     expect([...plan.dirs]).toEqual([
       ['node_modules', 50],
-      ['dist/assets', 45],
+      ['dist', 45],
     ]);
     expect(listedKeys(plan, keys)).toEqual(files('src', 3));
   });
@@ -106,11 +106,14 @@ describe('planUntracked (#43)', () => {
   });
 
   it('describes the plan with copyable .gitignore lines', () => {
-    expect(ignoreLineFor('scratch/many')).toBe('/scratch/many/');
-    expect(ignoreLineFor('packages/a/node_modules/.pnpm')).toBe('node_modules/');
-    expect(ignoreLineFor('packages/a/dist/assets')).toBe('/packages/a/dist/');
-    expect(ignoreLineFor('we*rd [dir]')).toBe('/we\\*rd \\[dir]/');
-    expect(ignoreLineFor('new\nline')).toBeNull();
+    const none = { listed: [], trackedDirs: new Set<string>(), trackedNames: new Set<string>() };
+    expect(ignoreLineFor('scratch/many', none)).toBe('/scratch/many/');
+    expect(ignoreLineFor('packages/a/node_modules/.pnpm', none)).toBe('node_modules/');
+    expect(ignoreLineFor('packages/a/dist/assets', none)).toBe('/packages/a/dist/');
+    // Without knowing what else is there (no context), only the exact directory.
+    expect(ignoreLineFor('packages/a/node_modules/.pnpm')).toBe('/packages/a/node_modules/.pnpm/');
+    expect(ignoreLineFor('we*rd [dir]', none)).toBe('/we\\*rd \\[dir]/');
+    expect(ignoreLineFor('new\nline', none)).toBeNull();
     const keys = [...files('big', 40), ...files('small', 2)];
     const plan = planUntracked(keys, 5);
     if (!plan) throw new Error('expected a plan');
@@ -118,8 +121,87 @@ describe('planUntracked (#43)', () => {
     expect(omission).toEqual({
       count: 40,
       limit: 5,
-      directories: [{ path: 'big', count: 40, ignoreLine: '/big/' }],
+      directories: [{ path: 'big', count: 40, ignoreLine: '/big/', generated: false }],
     });
+  });
+
+  // PR #91 P2-3: a broader line must not ignore a listed untracked file or a tracked one.
+  it('broadens a line only when nothing listed or tracked falls under it', () => {
+    const ctx = (listed: string[], tracked: string[] = []) => {
+      const trackedDirs = new Set<string>();
+      const trackedNames = new Set<string>();
+      for (const t of tracked) {
+        const parts = t.split('/').slice(0, -1);
+        parts.forEach((part, i) => {
+          trackedDirs.add(parts.slice(0, i + 1).join('/'));
+          trackedNames.add(part);
+        });
+      }
+      return { listed, trackedDirs, trackedNames };
+    };
+    // tools/build is a source folder: its new-script.ts is listed.
+    expect(ignoreLineFor('tools/build/cache', ctx(['tools/build/new-script.ts']))).toBe(
+      '/tools/build/cache/',
+    );
+    expect(ignoreLineFor('tools/build/cache', ctx(['src/x.ts']))).toBe('/tools/build/');
+    expect(ignoreLineFor('src/build/gen', ctx([], ['src/build/real/a.ts']))).toBe(
+      '/src/build/gen/',
+    );
+    // `node_modules/` anywhere would also ignore a listed file in another node_modules.
+    expect(ignoreLineFor('a/node_modules', ctx(['b/node_modules/x.js']))).toBe('/a/node_modules/');
+    expect(ignoreLineFor('a/node_modules', ctx([], ['vendor/node_modules/keep.js']))).toBe(
+      '/a/node_modules/',
+    );
+    expect(ignoreLineFor('a/node_modules', ctx(['a/src.ts']))).toBe('node_modules/');
+  });
+
+  // PR #91 P2-4 (SEC-05): bidi, zero-width and other format characters make no line to copy.
+  it('makes no line for names with bidi, zero-width or format characters', () => {
+    for (const name of [
+      '\u202eevil',
+      'a\u200bb',
+      'x\u2066y',
+      'bom\ufeff',
+      'soft\u00adhy',
+      'ls\u2028',
+    ]) {
+      expect(ignoreLineFor(name), JSON.stringify(name)).toBeNull();
+    }
+    expect(ignoreLineFor('ünï/çödé')).toBe('/ünï/çödé/');
+  });
+
+  // PR #91 P2-2: generated directories go first, so the plan does not hide source behind them.
+  it('omits dependency and build-output directories before others', () => {
+    const keys = [
+      ...range(5).flatMap((m) => files(`src/m${m}`, 5)),
+      ...files('dist/assets', 15),
+      'top.txt',
+    ];
+    const plan = planUntracked(keys, 30);
+    if (!plan) throw new Error('expected a plan');
+    // 41 > 30: dist first (15), then 26 remain, under the cap: src stays listed (size alone
+    // would have omitted src, 25, and listed dist).
+    expect([...plan.dirs]).toEqual([['dist', 15]]);
+    expect(listedKeys(plan, keys)).toHaveLength(26);
+    const omission = omissionOf(plan);
+    expect(omission.directories).toEqual([
+      { path: 'dist', count: 15, ignoreLine: '/dist/', generated: true },
+    ]);
+    // Above the cap even without dist: dist first, then the deepest source directory needed.
+    const more = [...keys, ...files('src/m0', 10).map((k) => k.replace('/f', '/g'))];
+    const second = planUntracked(more, 30);
+    if (!second) throw new Error('expected a plan');
+    expect([...second.dirs]).toEqual([
+      ['dist', 15],
+      ['src/m0', 15],
+    ]);
+    expect(omissionOf(second).directories.map((d) => [d.path, d.generated])).toEqual([
+      ['dist', true],
+      ['src/m0', false],
+    ]);
+    // Nested: the outermost generated directory, never one inside it separately.
+    const nested = planUntracked([...files('node_modules/a/dist', 30), ...files('src', 3)], 5);
+    expect([...(nested?.dirs ?? [])]).toEqual([['node_modules', 30]]);
   });
 });
 
@@ -167,7 +249,7 @@ describe('summaries and lists above the cap (#43)', () => {
     expect(summary.untrackedOmitted).toEqual({
       count: 100,
       limit: CAP,
-      directories: [{ path: 'build', count: 100, ignoreLine: '/build/' }],
+      directories: [{ path: 'build', count: 100, ignoreLine: '/build/', generated: true }],
     });
     const snapshot = SummarySnapshotSchema.parse(summary.snapshot);
     expect(snapshot.entries.map((e) => e.path)).toEqual(['a.txt', 'src/new.ts']);
@@ -308,6 +390,108 @@ describe('summaries and lists above the cap (#43)', () => {
     },
   );
 
+  // PR #91 P2-3, checked with git itself: every suggested line ignores every file of its directory
+  // and no listed untracked file; a tracked file only under the exact line of its own directory.
+  async function checkIgnore(
+    name: string,
+    files: Record<string, string>,
+    untracked: Record<string, number>,
+    loose: string[],
+  ): Promise<Map<string, string | null>> {
+    const repo = fx.repo(name, { files });
+    for (const [dir, n] of Object.entries(untracked)) {
+      for (const i of range(n)) fx.write(path.join(repo, dir, `f${i}.txt`), `${i}\n`);
+    }
+    for (const rel of loose) fx.write(path.join(repo, rel), 'listed\n');
+    const wt = locator(repo);
+    const capped = createGitCore(fx.coreOptions({ maxListedUntracked: 5 }));
+    try {
+      const omission = (await capped.getSummary(wt)).untrackedOmitted;
+      if (!omission) throw new Error('expected an omission');
+      const lines = omission.directories.map((d) => d.ignoreLine);
+      expect(lines.every((line) => line !== null)).toBe(true);
+      const listed = (await listFiles(capped, wt, { kind: 'working' }))
+        .filter((f) => f.status === 'untracked')
+        .map((f) => f.path);
+      expect(listed.sort()).toEqual([...loose].sort());
+      const tracked = fx.git(repo, ['ls-files']).split('\n').filter(Boolean);
+      const excludes = path.join(fx.root, `${name}.excludes`);
+      writeFileSync(excludes, `${lines.join('\n')}\n`);
+      const ignored = (paths: string[]): string[] =>
+        fx
+          .git(
+            repo,
+            ['-c', `core.excludesFile=${excludes}`, 'check-ignore', '--no-index', '--stdin'],
+            { allowFail: true, input: `${paths.join('\n')}\n` },
+          )
+          .split('\n')
+          .filter(Boolean);
+      expect(ignored(listed)).toEqual([]);
+      const exactDirs = omission.directories.filter((d) => d.ignoreLine === `/${d.path}/`);
+      expect(
+        ignored(tracked).filter((t) => !exactDirs.some((d) => t.startsWith(`${d.path}/`))),
+      ).toEqual([]);
+      for (const dir of omission.directories) {
+        const inside = fx
+          .git(repo, ['ls-files', '--others', '--', dir.path])
+          .split('\n')
+          .filter(Boolean);
+        expect(inside.length, dir.path).toBe(dir.count);
+        expect(ignored(inside), dir.path).toEqual(inside);
+      }
+      return new Map(omission.directories.map((d) => [d.path, d.ignoreLine]));
+    } finally {
+      await capped.dispose();
+    }
+  }
+
+  it('suggested lines ignore the omitted files and nothing listed or tracked (git check-ignore)', async () => {
+    // `node_modules/` anywhere would also ignore web/node_modules/one.js (listed) and the tracked
+    // vendor/node_modules: the exact line instead.
+    expect(
+      await checkIgnore(
+        'check-ignore',
+        { 'a.txt': 'a\n', 'vendor/node_modules/keep.js': 'k\n', 'dist/README.md': 'r\n' },
+        { 'pkg/node_modules/x': 12, 'dist/assets': 12 },
+        ['web/node_modules/one.js', 'src/new.ts'],
+      ),
+    ).toEqual(
+      new Map([
+        ['dist', '/dist/'],
+        ['pkg/node_modules', '/pkg/node_modules/'],
+      ]),
+    );
+    // Nothing else named node_modules: the broad line.
+    expect(
+      await checkIgnore('check-ignore-broad', { 'a.txt': 'a\n' }, { 'app/node_modules/x': 12 }, [
+        'app/src.ts',
+      ]),
+    ).toEqual(new Map([['app/node_modules', 'node_modules/']]));
+    // Only a tracked vendor/node_modules: still the exact line (found by the `ls-files` scan).
+    expect(
+      await checkIgnore(
+        'check-ignore-tracked',
+        { 'a.txt': 'a\n', 'vendor/node_modules/keep.js': 'k\n' },
+        { 'app/node_modules/x': 12 },
+        ['app/src.ts'],
+      ),
+    ).toEqual(new Map([['app/node_modules', '/app/node_modules/']]));
+  });
+
+  it('an omitted directory named with bidi characters has no line', async () => {
+    const repo = fx.repo('bidi', { files: { 'a.txt': 'a\n' } });
+    for (const i of range(10)) fx.write(path.join(repo, '\u202egnp.exe', `f${i}`), 'x\n');
+    const capped = createGitCore(fx.coreOptions({ maxListedUntracked: 3 }));
+    try {
+      const summary = await capped.getSummary(locator(repo));
+      expect(summary.untrackedOmitted?.directories).toEqual([
+        { path: '\u202egnp.exe', count: 10, ignoreLine: null, generated: false },
+      ]);
+    } finally {
+      await capped.dispose();
+    }
+  });
+
   it('a file that is both a staged deletion and untracked counts once', async () => {
     const repo = fx.repo('dup', { files: { 'a.txt': 'a\n', 'build/kept.txt': 'k\n' } });
     fx.git(repo, ['rm', '-q', '--cached', '--', 'build/kept.txt']);
@@ -379,18 +563,37 @@ describe('numstat alongside the status of a full summary (#43)', () => {
       const warm = await probe.core.getSummary(wt);
       expect(probe.shape()).toMatchObject({ alongside: true, numstats: 1 });
       expect(warm.additions).toBe(1);
-      // HEAD moved: the speculative run used the old HEAD, so numstat runs again at the new one.
+      // A commit (PR #91 P3-1): the guess is the new HEAD, read from the ref files, so a commit with
+      // changes left costs one numstat, side by side, at the new commit.
       fx.write(path.join(repo, 'b.txt'), 'b\nb2\nb3\n');
       const head = fx.commitAll(repo, 'move');
       fx.write(path.join(repo, 'a.txt'), 'a\nmore\nand more\n');
       probe.reset();
       const moved = await probe.core.getSummary(wt);
       const shape = probe.shape();
-      expect(shape.numstats).toBe(2);
-      expect(shape.commits.at(-1)).toBe(head);
+      expect(shape).toMatchObject({ alongside: true, numstats: 1, commits: [head] });
       const { updatedAt: _a, refresh: _b, ...got } = moved;
       const { updatedAt: _c, refresh: _d, ...want } = await full.getSummary(wt);
       expect(got).toEqual(want);
+      // HEAD moves while the status runs: the guess was the old HEAD, the status header says
+      // otherwise, so numstat runs again at the new one; the result equals a full core's.
+      probe.reset();
+      const racing = probe.core.getSummary(wt);
+      await new Promise((resolve) => setTimeout(resolve, 120));
+      const raced = fx.commitAll(repo, 'during the status');
+      fx.write(path.join(repo, 'a.txt'), 'a\nmore\nand more\nand again\n');
+      const afterRace = await racing;
+      const race = probe.shape();
+      // The commit lands while the wrapper holds the status (300 ms), so the status sees it.
+      expect(afterRace.headSha).toBe(raced);
+      expect(race.numstats).toBe(2);
+      expect(race.commits.at(-1)).toBe(raced);
+      {
+        const { updatedAt: _a, refresh: _b, ...got } = afterRace;
+        const { updatedAt: _c, refresh: _d, ...want } = await full.getSummary(wt);
+        expect(got).toEqual(want);
+      }
+      await probe.core.getSummary(wt);
       // Clean now: the speculative run is waited for and discarded.
       fx.git(repo, ['checkout', '-q', '--', '.']);
       probe.reset();

@@ -58,11 +58,13 @@ import {
   type UntrackedInfo,
 } from './untracked.js';
 import {
+  type IgnoreContext,
   isOmitted,
   listedKeys,
   omissionOf,
   planUntracked,
   type UntrackedPlan,
+  wantsIgnoreContext,
 } from './untracked-plan.js';
 
 const STAT_CONCURRENCY = 32;
@@ -374,14 +376,18 @@ async function collectFull(
   // gives the old calls exactly (no index scan, PR #89 F3).
   const stamp = deps.incremental ? await readStamp(repo, envOf(ctx)) : UNSTAMPED;
   // A worktree that had tracked changes most likely still has them: numstat runs alongside the
-  // status, at the last state's HEAD, which the status then confirms (#43: in a 100k-file worktree
-  // each one refreshes the index, 300-400 ms, so in sequence they were most of a full summary).
-  // Only with a kept state (never with `incremental: false`, which keeps the old calls).
-  // Without a kept state (the first summary in a session), only where numstat is expensive: an
-  // index of `summaryLimits.speculateIndexBytes` or more, HEAD read from the ref files.
+  // status, at HEAD as the ref files say (the last state's when they cannot tell), which the status
+  // header then confirms (#43: in a 100k-file worktree each one refreshes the index, 300-400 ms, so
+  // in sequence they were most of a full summary). After a commit that is the new HEAD, so a commit
+  // costs one numstat, not two (PR #91 P3-1). Only with a kept state (never with
+  // `incremental: false`, which keeps the old calls). Without a kept state (the first summary in a
+  // session), only where numstat is expensive: an index of `summaryLimits.speculateIndexBytes`.
   let speculated: string | null | undefined;
   if (previous !== undefined) {
-    speculated = previous.tracked.size > 0 ? previous.branch.oid : undefined;
+    if (previous.tracked.size > 0) {
+      const head = await readHeadFromFiles(repo.gitDir, repo.commonDir);
+      speculated = head === undefined ? previous.branch.oid : head.sha;
+    }
   } else if (deps.incremental && indexBytes(stamp) >= summaryLimits.speculateIndexBytes) {
     speculated = (await readHeadFromFiles(repo.gitDir, repo.commonDir))?.sha;
   }
@@ -592,6 +598,61 @@ async function collectIncremental(
     region,
     presigs,
     previous,
+  };
+}
+
+/** Directories of the tracked files, per index file, while its stat signature holds. */
+const trackedDirScans = new Map<
+  string,
+  { signature: string; dirs: Set<string>; names: Set<string> } | null
+>();
+
+/**
+ * What a broader `.gitignore` line would cover (PR #91 P2-3): the listed untracked files and the
+ * directories of the tracked files, from one `git ls-files -z` per index write (memoized by the
+ * index's stat signature). Null (exact lines only) when the index cannot be listed.
+ */
+async function ignoreContext(
+  deps: DiffDeps,
+  repo: RepoInfo,
+  listed: readonly string[],
+): Promise<IgnoreContext | null> {
+  const index = path.join(repo.gitDir, 'index');
+  let signature = 'missing';
+  try {
+    const info = await lstat(index, { bigint: true });
+    signature = `${info.size}:${info.mtimeNs}:${info.ctimeNs}:${info.ino}`;
+  } catch {
+    // No index: nothing tracked, or an odd repository; listed below either way.
+  }
+  let scan = trackedDirScans.get(index);
+  if (scan === undefined || scan === null || scan.signature !== signature) {
+    try {
+      const out = await deps.ctx.git(repo, ['ls-files', '-z']);
+      const dirs = new Set<string>();
+      const names = new Set<string>();
+      for (const file of bstrToUtf8(bstrFromBuffer(out.stdout)).split('\u0000')) {
+        for (let slash = file.indexOf('/'); slash >= 0; slash = file.indexOf('/', slash + 1)) {
+          dirs.add(file.slice(0, slash));
+          names.add(file.slice(file.lastIndexOf('/', slash - 1) + 1, slash));
+        }
+      }
+      scan = { signature, dirs, names };
+    } catch (error) {
+      if (!isGitCoreError(error, 'git_failed')) throw error;
+      scan = null;
+    }
+    trackedDirScans.set(index, scan);
+    if (trackedDirScans.size > 256) {
+      const oldest = trackedDirScans.keys().next().value;
+      if (oldest !== undefined) trackedDirScans.delete(oldest);
+    }
+  }
+  if (scan === null) return null;
+  return {
+    listed: listed.map(bstrToUtf8),
+    trackedDirs: scan.dirs,
+    trackedNames: scan.names,
   };
 }
 
@@ -933,7 +994,19 @@ async function finish(
     deletions,
     inProgress,
     ...(plan !== null && omittedCount > 0
-      ? { untrackedOmitted: omissionOf(plan, omittedCount) }
+      ? {
+          untrackedOmitted: omissionOf(
+            plan,
+            omittedCount,
+            wantsIgnoreContext(plan)
+              ? await ignoreContext(
+                  deps,
+                  repo,
+                  untrackedInfos.map((info) => info.key),
+                )
+              : null,
+          ),
+        }
       : {}),
     stateHash,
     updatedAt: new Date().toISOString(),

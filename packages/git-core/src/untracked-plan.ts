@@ -18,6 +18,9 @@ import { hashParts } from './hash.js';
  * a full and an incremental refresh of the same state omit the same files, and so do the summary
  * and every list built from the same status:
  *
+ * 0. Directories with a well-known dependency, cache or build-output name (`node_modules`, `dist`,
+ *    `__pycache__`, ...; the outermost one of a path), biggest first, while more than `limit`
+ *    remain (PR #91 P2-2: size alone could hide a big new source tree and list the build output).
  * 1. While more than `limit` remain: from the root, step into the biggest child directory as long
  *    as that child alone holds at least the excess (remaining - limit); omit the deepest one
  *    reached. If no top-level directory holds the excess, omit the biggest top-level directory
@@ -28,6 +31,39 @@ import { hashParts } from './hash.js';
  *
  * A nested repository (git prints `dir/`) is one entry, like a file.
  */
+
+/**
+ * Dependency and cache directories that are never source: suggested as `<name>/` (any depth).
+ * Build-output names (`dist`, ...) are suggested anchored at that component instead.
+ */
+const ANY_DEPTH = new Set([
+  'node_modules',
+  'bower_components',
+  '__pycache__',
+  '.pytest_cache',
+  '.mypy_cache',
+  '.ruff_cache',
+  '.venv',
+  '.tox',
+  '.gradle',
+  '.turbo',
+  '.next',
+  '.nuxt',
+  '.svelte-kit',
+  '.parcel-cache',
+  '.cache',
+]);
+const OUTPUT = new Set(['dist', 'build', 'out', 'target', 'coverage']);
+
+/** A path component is a well-known dependency, cache or build-output directory name. */
+function generatedName(part: string): boolean {
+  return ANY_DEPTH.has(part) || OUTPUT.has(part);
+}
+
+/** The directory (bstr or UTF-8, `/`-separated) or one of its ancestors has a generated name. */
+export function isGenerated(dir: string): boolean {
+  return dir.split('/').some(generatedName);
+}
 
 /** Most directories a plan omits before it cuts in path order. */
 export const MAX_OMITTED_DIRS = 64;
@@ -102,6 +138,19 @@ export function planUntracked(rawKeys: readonly string[], limit: number): Untrac
     }
     return best;
   };
+  // 0. Generated directories first, the outermost of each path, biggest first.
+  const generated = [...counts]
+    .filter(([dir]) => {
+      const parts = dir.split('/');
+      return (
+        generatedName(parts[parts.length - 1] as string) && !parts.slice(0, -1).some(generatedName)
+      );
+    })
+    .sort((a, b) => b[1] - a[1] || compareBstr(a[0], b[0]));
+  for (const [dir] of generated) {
+    if (remaining <= limit || dirs.size >= MAX_OMITTED_DIRS) break;
+    omit(dir);
+  }
   while (remaining > limit && dirs.size < MAX_OMITTED_DIRS) {
     const excess = remaining - limit;
     const top = biggestChild('');
@@ -129,7 +178,7 @@ export function planUntracked(rawKeys: readonly string[], limit: number): Untrac
     omitted += rest.length - limit;
   }
   const sortedDirs = [...dirs.keys()].sort(compareBstr);
-  const id = hashParts(['untracked-plan-v1', limit, sortedDirs.join('\u0000'), after], 16);
+  const id = hashParts(['untracked-plan-v2', limit, sortedDirs.join('\u0000'), after], 16);
   return { id, limit, omitted, dirs, after };
 }
 
@@ -155,66 +204,93 @@ export function listedKeys(plan: UntrackedPlan | null, raw: readonly string[]): 
 }
 
 /**
- * Dependency and cache directories that are never source: suggested as `<name>/` (any depth).
- * Build-output names (`dist`, ...) are suggested anchored at that component instead.
+ * Characters that make a name unsafe to offer as a line to copy (PR #91 P2-4, SEC-05): controls,
+ * bidi controls, zero-width and every other format character (`Cf`), line and paragraph
+ * separators. Escaping them for display would break the pattern; such a name gets no line.
  */
-const ANY_DEPTH = new Set([
-  'node_modules',
-  'bower_components',
-  '__pycache__',
-  '.pytest_cache',
-  '.mypy_cache',
-  '.ruff_cache',
-  '.venv',
-  '.tox',
-  '.gradle',
-  '.turbo',
-  '.next',
-  '.nuxt',
-  '.svelte-kit',
-  '.parcel-cache',
-  '.cache',
-]);
-const OUTPUT = new Set(['dist', 'build', 'out', 'target', 'coverage']);
+const UNSAFE_IN_LINE = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff]/u;
 
-/** gitignore escaping of a pattern's literal text; null when it cannot be one line. */
-function escapeIgnore(text: string): string | null {
-  // biome-ignore lint/suspicious/noControlCharactersInRegex: control characters are rejected
-  if (/[\u0000-\u001f\u007f]/.test(text)) return null;
+/** gitignore escaping of a pattern's literal text. */
+function escapeIgnore(text: string): string {
   return text.replace(/[\\*?[]/g, '\\$&');
 }
 
-/** A `.gitignore` line (anchored at the worktree root) ignoring an omitted directory. */
-export function ignoreLineFor(path: string): string | null {
+/**
+ * What a broader line would also cover (PR #91 P2-3): the listed untracked files and the tracked
+ * paths' directories (UTF-8, `/`-separated). Without it, every line is the exact directory.
+ */
+export interface IgnoreContext {
+  /** Listed untracked files (keys without a trailing `/`). */
+  listed: readonly string[];
+  /** Every directory that holds a tracked file, and every directory name among them. */
+  trackedDirs: ReadonlySet<string>;
+  trackedNames: ReadonlySet<string>;
+}
+
+/**
+ * A `.gitignore` line ignoring an omitted directory: `/<path>/` (exact, anchored at the worktree
+ * root), broadened to `<name>/` at a dependency or cache component or to `/<path to a build-output
+ * component>/` only when that broader pattern covers no listed untracked file and no tracked file
+ * (`ctx`). Null for a name with unsafe characters.
+ */
+export function ignoreLineFor(path: string, ctx: IgnoreContext | null = null): string | null {
+  if (UNSAFE_IN_LINE.test(path)) return null;
+  const exact = `/${escapeIgnore(path)}/`;
+  if (ctx === null) return exact;
   const parts = path.split('/');
   for (const [i, part] of parts.entries()) {
     if (ANY_DEPTH.has(part)) {
-      const name = escapeIgnore(part);
-      return name === null ? null : `${name}/`;
+      const covered =
+        ctx.trackedNames.has(part) ||
+        ctx.listed.some((key) => key.split('/').slice(0, -1).includes(part));
+      return covered ? exact : `${escapeIgnore(part)}/`;
     }
     if (OUTPUT.has(part)) {
-      const anchored = escapeIgnore(parts.slice(0, i + 1).join('/'));
-      return anchored === null ? null : `/${anchored}/`;
+      const prefix = parts.slice(0, i + 1).join('/');
+      const covered =
+        ctx.trackedDirs.has(prefix) || ctx.listed.some((key) => key.startsWith(`${prefix}/`));
+      return covered ? exact : `/${escapeIgnore(prefix)}/`;
     }
   }
-  const anchored = escapeIgnore(path);
-  return anchored === null ? null : `/${anchored}/`;
+  return exact;
+}
+
+/** Would a line for one of the plan's reported directories be broader than the directory? */
+export function wantsIgnoreContext(plan: UntrackedPlan): boolean {
+  for (const dir of reported(plan).map(([key]) => key)) {
+    const parts = dir.split('/');
+    if (
+      parts.some((part, i) => ANY_DEPTH.has(part) || (OUTPUT.has(part) && i < parts.length - 1))
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** The directories the contract reports: the biggest, at most `UNTRACKED_OMITTED_DIRS_MAX`. */
+function reported(plan: UntrackedPlan): Array<[string, number]> {
+  return [...plan.dirs]
+    .sort((a, b) => b[1] - a[1] || compareBstr(a[0], b[0]))
+    .slice(0, UNTRACKED_OMITTED_DIRS_MAX);
 }
 
 /**
  * The contract's description of a plan (the biggest directories, with ignore lines). `count`:
  * the omitted files as the summary counts them (a path that is also a tracked change counts as
- * that), default the plan's.
+ * that), default the plan's. `ctx`: what broader lines would cover (see `ignoreLineFor`).
  */
-export function omissionOf(plan: UntrackedPlan, count = plan.omitted): UntrackedOmission {
-  const biggest = [...plan.dirs]
-    .sort((a, b) => b[1] - a[1] || compareBstr(a[0], b[0]))
-    .slice(0, UNTRACKED_OMITTED_DIRS_MAX);
-  const directories = biggest.map(([key, count]): UntrackedOmittedDirectory => {
+export function omissionOf(
+  plan: UntrackedPlan,
+  count = plan.omitted,
+  ctx: IgnoreContext | null = null,
+): UntrackedOmission {
+  const directories = reported(plan).map(([key, count]): UntrackedOmittedDirectory => {
     const decoded = decodeRepoPath(key);
+    const generated = isGenerated(decoded.path);
     return decoded.rawPath === undefined
-      ? { path: decoded.path, count, ignoreLine: ignoreLineFor(decoded.path) }
-      : { path: decoded.path, rawPath: decoded.rawPath, count, ignoreLine: null };
+      ? { path: decoded.path, count, ignoreLine: ignoreLineFor(decoded.path, ctx), generated }
+      : { path: decoded.path, rawPath: decoded.rawPath, count, ignoreLine: null, generated };
   });
   return { count, limit: plan.limit, directories };
 }

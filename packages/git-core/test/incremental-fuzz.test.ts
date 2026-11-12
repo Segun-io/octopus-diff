@@ -59,7 +59,7 @@ function prng(seed: number): () => number {
 }
 
 /** The path universe: spaces, unicode, a newline, nesting, an ignored pattern, a binary. */
-const PATHS = [
+const BASE_PATHS = [
   'a.txt',
   'b.txt',
   'c.txt',
@@ -76,7 +76,28 @@ const PATHS = [
   'Case.txt',
   'case.txt',
 ];
-const DIRS = ['dir', 'dir/sub', 'other', 'ünï', 'ign', 'fresh', 'fresh/deep'];
+const BASE_DIRS = ['dir', 'dir/sub', 'other', 'ünï', 'ign', 'fresh', 'fresh/deep'];
+/**
+ * Extra shapes for the capped seeds (#43, PR #91): dependency and build-output names at several
+ * depths (omitted first), an ordinary folder named `build` next to source, a bidi name (no ignore
+ * line). The plan and its description must still agree between incremental and full.
+ */
+const PLAN_PATHS = [
+  'node_modules/a.js',
+  'node_modules/p/b.js',
+  'pkg/node_modules/c.js',
+  'pkg/src.ts',
+  'dist/x.js',
+  'dist/assets/y.js',
+  'src/build/z.ts',
+  'src/build/gen/w.ts',
+  'out/v.txt',
+  '\u202eevil/e.txt',
+];
+const PLAN_DIRS = ['node_modules', 'pkg/node_modules', 'dist', 'src/build'];
+/** The path universe of the running seed (`runSeed` widens it for the capped seeds). */
+let PATHS: readonly string[] = BASE_PATHS;
+let DIRS: readonly string[] = BASE_DIRS;
 
 const BODIES = [
   (r: () => number) =>
@@ -443,9 +464,12 @@ async function runSeed(
   seed: number,
   config: string[][] = [],
   cores: { inc: GitCore; full: GitCore } = { inc, full },
+  planShapes = false,
 ): Promise<{ incremental: number; hinted: number; omitted: number; omittedIncremental: number }> {
   const r = prng(seed);
   silentlyEdited.length = 0;
+  PATHS = planShapes ? [...BASE_PATHS, ...PLAN_PATHS] : BASE_PATHS;
+  DIRS = planShapes ? [...BASE_DIRS, ...PLAN_DIRS] : BASE_DIRS;
   repoCount += 1;
   const repo = setupRepo(`fuzz-${seed.toString(16)}-${config.length}-${repoCount}`, r, config);
   const wt = locator(repo);
@@ -660,7 +684,7 @@ describe('incremental summary fuzz', () => {
         fx.coreOptions({ maxListedUntracked: cap, incremental: false }),
       );
       try {
-        const result = await runSeed(seed, [], { inc: cappedInc, full: cappedFull });
+        const result = await runSeed(seed, [], { inc: cappedInc, full: cappedFull }, true);
         // The capped mode must really be exercised, and incrementally.
         expect(result.omitted).toBeGreaterThan(STEPS / 10);
         if (FOLDS) expect(result.incremental).toBe(0);
