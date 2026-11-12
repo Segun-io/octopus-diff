@@ -106,7 +106,16 @@ interface WorktreeEntry {
   reviewRun: { key: string; promise: Promise<ReviewComputed | null> } | null;
   /** `readReviewRange` result for (HEAD, bookmark) while the bookmark is reachable. */
   rangeCache: { key: string; range: ReviewRange } | null;
+  /**
+   * The state hash of the worktree's first summary in this session. The review state is
+   * computed on demand (#10): once the project is opened, or once the worktree changed after
+   * that first summary (live work an agent does), never for every repository at startup.
+   */
+  firstHash: string | null;
 }
+
+/** First review states that land within this window share one `review.ready` per project. */
+const REVIEW_READY_BATCH_MS = 50;
 
 /** How long a removed worktree id is remembered: git-core caches repository info for 5 min. */
 const RECYCLE_WINDOW_MS = 5 * 60_000;
@@ -240,6 +249,15 @@ export class DaemonCore {
   readonly #recentlyRemoved = new Map<string, number>();
   /** Bumped on every review write in a project (marks, bookmarks, reviewed commits). */
   readonly #reviewVersion = new Map<string, number>();
+  /**
+   * Projects the user opened in this session (a worktree or the project's Overview was focused):
+   * their worktrees' review state is computed and kept current. Others start without one (#10,
+   * decision 2 in #25): the sidebar shows their changes, not an inherited "to review" state.
+   */
+  readonly #openProjects = new Set<string>();
+  /** Projects whose review state became available since the last `review.ready` (batched). */
+  readonly #reviewReady = new Set<string>();
+  #reviewReadyTimer: NodeJS.Timeout | null = null;
   #gitVersion: string | null = null;
   #timers: NodeJS.Timeout[] = [];
   #closed = false;
@@ -337,6 +355,8 @@ export class DaemonCore {
     this.#closed = true;
     for (const t of this.#timers) clearInterval(t);
     this.#timers = [];
+    if (this.#reviewReadyTimer) clearTimeout(this.#reviewReadyTimer);
+    this.#reviewReadyTimer = null;
     const scans: Promise<void>[] = [];
     for (const st of this.#scanRoots.values()) {
       st.controller?.abort();
@@ -833,6 +853,7 @@ export class DaemonCore {
       review: null,
       reviewRun: null,
       rangeCache: null,
+      firstHash: null,
     };
     return entry;
   }
@@ -961,9 +982,16 @@ export class DaemonCore {
           detached: summary.detached,
         };
       }
-      // The review state is ready (cached) before clients are told to refetch.
-      await this.#reviewOf(project, entry);
-      if (this.#closed || project.worktrees.get(entry.worktree.id) !== entry) return;
+      if (entry.firstHash === null) {
+        entry.firstHash = summary.stateHash;
+        this.#seedBookmark(project, entry, summary);
+      }
+      // The review state is ready (cached) before clients are told to refetch, when it is
+      // wanted; at startup it is not (#10): the summary alone (status + numstat) is enough.
+      if (this.#reviewWanted(project, entry)) {
+        await this.#reviewOf(project, entry);
+        if (this.#closed || project.worktrees.get(entry.worktree.id) !== entry) return;
+      }
       this.#announce(entry, summary.stateHash);
     } catch (error) {
       if (this.#closed || isShutdownError(error)) return;
@@ -975,6 +1003,37 @@ export class DaemonCore {
       this.#announce(entry, `error:${apiError.code}`);
     } finally {
       entry.attempted = true;
+    }
+  }
+
+  /**
+   * First sight of a worktree that starts its bookmark at HEAD (the default branch, or detached):
+   * stores HEAD now, from the summary, without a git process. Its review state is computed later
+   * (#10), and commits made before that must still count as new. Other branches start at the
+   * merge base with the default branch, which their own commits do not move.
+   */
+  #seedBookmark(project: ProjectEntry, entry: WorktreeEntry, summary: WorktreeSummary): void {
+    const head = summary.headSha;
+    if (!head || !FULL_SHA.test(head) || !this.#git.readReviewRange) return;
+    const defaultBranch = this.#defaultBranch(project);
+    const branch = summary.branch;
+    const startsAtHead =
+      summary.detached ||
+      (branch !== null &&
+        defaultBranch !== null &&
+        (branch === defaultBranch ||
+          (defaultBranch.includes('/') &&
+            defaultBranch.slice(defaultBranch.indexOf('/') + 1) === branch)));
+    if (!startsAtHead) return;
+    const key = bookmarkKey({ id: entry.worktree.id, branch, detached: summary.detached });
+    try {
+      if (this.#store.getBookmark(project.row.id, key) !== null) return;
+      this.#store.setBookmark(project.row.id, key, head, this.#nowIso());
+    } catch (error) {
+      this.#log.debug('could not seed the review bookmark', {
+        worktreeId: entry.worktree.id,
+        error,
+      });
     }
   }
 
@@ -1032,8 +1091,23 @@ export class DaemonCore {
     return new ApiError(info.code, info.message, { details: info.details });
   }
 
-  setFocus(worktreeId: string | null): void {
+  /**
+   * The focused worktree (watch priority) and the project the user has open: a focused worktree
+   * opens its project, and so does `projectId` (its Overview). Opening computes review states.
+   */
+  setFocus(worktreeId: string | null, projectId: string | null = null): void {
     this.#watcher.setFocus(worktreeId);
+    let project: ProjectEntry | undefined;
+    if (worktreeId !== null) {
+      for (const p of this.#projects.values()) {
+        if (p.worktrees.has(worktreeId)) {
+          project = p;
+          break;
+        }
+      }
+    }
+    project ??= projectId === null ? undefined : this.#projects.get(projectId);
+    if (project) this.#openProject(project);
   }
 
   // --- files, diffs, commits -------------------------------------------------------------------
@@ -1340,13 +1414,56 @@ export class DaemonCore {
       this.#reviewVersion.set(id, (this.#reviewVersion.get(id) ?? 0) + 1);
   }
 
+  /** Waits (bounded) for the review states that are wanted (`#reviewWanted`), nothing else. */
   async #awaitReviews(projects: ProjectEntry[]): Promise<void> {
     const pending: Promise<unknown>[] = [];
     for (const project of projects) {
       if (project.missing) continue;
-      for (const e of project.worktrees.values()) pending.push(this.#reviewOf(project, e));
+      for (const e of project.worktrees.values()) {
+        if (this.#reviewWanted(project, e)) pending.push(this.#reviewOf(project, e));
+      }
     }
     if (pending.length) await settleWithin(Promise.all(pending), this.#initialWaitMs);
+  }
+
+  /**
+   * Whether a worktree's review state is computed and kept current (#10): its project was
+   * opened, it already has one (something asked for it: the To review scope, a bookmark move),
+   * or it changed after its first summary in this session (live work). Never at startup alone.
+   */
+  #reviewWanted(project: ProjectEntry, entry: WorktreeEntry): boolean {
+    if (this.#openProjects.has(project.row.id) || entry.review !== null) return true;
+    const summary = entry.summary;
+    return summary !== null && entry.firstHash !== null && entry.firstHash !== summary.stateHash;
+  }
+
+  /**
+   * Opens a project (#10): its worktrees' review states are computed now, in the background,
+   * and kept current from then on. Clients hear `review.ready` once they are available.
+   */
+  #openProject(project: ProjectEntry): void {
+    if (this.#closed || project.missing || this.#openProjects.has(project.row.id)) return;
+    this.#openProjects.add(project.row.id);
+    for (const e of project.worktrees.values()) {
+      void (e.refresher.current ?? Promise.resolve()).then(() => this.#reviewOf(project, e));
+    }
+  }
+
+  /** Batches `review.ready` per project: one event per burst of first review states. */
+  #noteReviewReady(projectId: string): void {
+    if (this.#closed) return;
+    this.#reviewReady.add(projectId);
+    if (this.#reviewReadyTimer) return;
+    this.#reviewReadyTimer = setTimeout(() => {
+      this.#reviewReadyTimer = null;
+      const ids = [...this.#reviewReady];
+      this.#reviewReady.clear();
+      if (this.#closed) return;
+      for (const id of ids) {
+        if (this.#projects.has(id)) this.#hub.emit({ type: 'review.ready', projectId: id });
+      }
+    }, REVIEW_READY_BATCH_MS);
+    this.#reviewReadyTimer.unref();
   }
 
   /**
@@ -1374,7 +1491,13 @@ export class DaemonCore {
     if (entry.reviewRun?.key === key) return entry.reviewRun.promise;
     const promise = this.#computeReview(project, entry, key).then(
       (review) => {
-        if (project.worktrees.get(entry.worktree.id) === entry) entry.review = review;
+        if (project.worktrees.get(entry.worktree.id) === entry) {
+          // First review state of this worktree (opened, or asked for by a request): rows that
+          // showed plain changes now show their review stage. Later ones ride on the usual
+          // events (`worktree.changed`, `review.*`).
+          if (entry.review === null) this.#noteReviewReady(project.row.id);
+          entry.review = review;
+        }
         return review;
       },
       (error: unknown) => {
