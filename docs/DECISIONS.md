@@ -2725,3 +2725,54 @@ branches also use #213+: renumber at merge.
      pending,backoff,error` and `POST /api/__mock/forge-sim?...` (no parameters resets). `scripts/shots.ts` has
      `wait-forge`, `rate-limit`, `rate-limit-stale`, `stale-request`. No e2e was added: the e2e run the real daemon,
      whose forge and local answers cannot be slowed on demand without timing-dependent tests.
+## Remote spawns: warm reload and startup config reads with a remote (session, 2026-11-12; GitHub #74)
+
+Numbers: #213-#216 (main already has #212; the `feat/daemon-activity` and `fix/watch-new-subtree` branches also
+use #212 and up, so renumber at merge). Report: `docs/reports/remote-spawns.md`.
+
+213. **What the 68-71 warm-reload spawns were: the cold paint's own work plus uncached forge config reads, not a
+     cache key that misses.** Traced with full argv (`e2e/bench/spawn-trace.mjs` now records every argument) on the
+     `--after-fetch` layout: the three `warmReload` windows start right after the cold paint, which asks for every
+     review state and label (To review default). That work is about 12 processes per linked worktree the first time
+     (`rev-list`, the review list's `status` + `diff`, `merge-base`, `log -p` + `patch-id`, `diff-tree`), runs
+     with at most 2 label calls at once (#201) and finishes 1.9-5 s after the paint, so the reload windows count
+     whatever of it is still running (the plain run has less of it: no labels). There were no repeated calls with
+     equal argv outside the open worktree. On top of that, the first focus report makes the forge service refresh
+     projects, and `readRemoteConfig` spawned one `git config` per project on every refresh (#214). Once the daemon
+     is quiet, a reload costs 3 processes: the open file's diff (`diff --raw`, `status`, `diff -p`; diffs are not
+     cached, by design, roadmap #41), plus one `status` when the focused worktree changes (`watcher.setFocus`
+     re-checks it on purpose: it catches what a degraded watcher missed) and a config scan when its 60 s age limit
+     ran out. The integration-base key (#196), the origin labels (#201) and the review state (#202) were all hit:
+     a repeat of every route in the remote layout costs 0 processes (`apps/daemon/test/remote-spawns.real-git.test.ts`).
+     The bench now also reports **settled reloads** (start after 1 s without a git process, end when the daemon is
+     quiet again) as a report-only figure: it cannot be stably 0 while the open file's diff is fetched on every
+     reload, so it is not judged (judge it once #41 lands).
+214. **`readRemoteConfig` goes through the config cache (git-core, `remotes.ts`).** The forge service reads it per
+     project on startup, on every focus refresh, poll round (every 2 min while someone looks), `gitChanged`
+     (debounced, twice when a push is detected: `#pushChanged` then the refresh) and forced refresh, and
+     `readRepositoryInfo` reads it too. It is now reused under the rules of the config scan (#191): same stat
+     signature of every config file git reads, none younger than 2 s, no `include.*` / `includeIf.*` key (the read's
+     regexp now also asks for those keys, which the parser ignores; `REMOTE_CONFIG_REGEX` itself is unchanged), and
+     an age limit, here **10 minutes** instead of 60 s: the age limit only bounds a change to a trusted config file
+     in a place we do not stat (a packager's system config), which for remotes can at worst mean a forge lookup with
+     an old URL rewrite, while 60 s would make every 2-minute poll round spawn one read per project again. Every
+     caller gets its own copy (`structuredClone`). A `push -u` / `remote set-url` / `git config` writes the
+     repository config, so the next read sees it (tests in `git-metadata.test.ts`, mutation-checked: caching
+     racy reads, ignoring `include*` and no cache each fail one).
+215. **Config reads are joined when their process started after the operation asked, even in the racy window.**
+     `GitContext.cachedConfigRead` (the scan and the remote read): an operation that finds a read of the same key
+     in flight whose git process started after it asked (or is still waiting for a process slot; the runner's new
+     internal `onSpawn` hook records the moment) takes that read's answer whatever the signature says, because git
+     reads the config files after its process starts: the answer is at least as new as a read the operation would
+     have started itself, and equal keys mean the same files in the same state at the operation's own `stat`
+     calls. Before, a config file younger than 2 s (a `git remote add`, `push -u` or `git config` just before the
+     daemon looked) made every operation read its own, so the worktrees of a project that refresh together read
+     config once each (3 instead of 1 per project in the tests; the likely part of the `--after-fetch` startup's
+     53 → 111 `config` count). The racy rule itself is unchanged: such a read is never *reused* by a later
+     operation. Tests: git-core (three summaries together right after a `remote add`: 1 read) and the daemon
+     (a startup right after a `remote add`: 1 scan for the project), both fail without the join.
+216. **Bench: only git children count as running.** `spawn-trace.mjs` wrote a `+`/`-` for every child the daemon
+     starts, including the long-lived watch host (`node`), so `settled()` never saw a quiet daemon once the watch
+     host was up (it starts with the first subscription), so every "wait until quiet" could only end at its
+     timeout (10 s per edit in the edit loop, 30 s after the live fetch). It now counts git processes only. Also: `argv` (every argument, cut) in each trace line,
+     and `--keep-trace <dir>` keeps the raw trace and the phase windows after the run for diagnosis.

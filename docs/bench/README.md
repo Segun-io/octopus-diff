@@ -15,7 +15,7 @@ dir, except `profile:real`, which reads your repositories and never writes to th
 | `pnpm --filter @octopus-diff/web build` then `pnpm --filter @octopus-diff/web perf` | Render bench in Chromium on the large mock dataset (30 worktrees × 200 files; no daemon). Starts its own mock + `vite preview` (fresh every run, about 15 s). `SCOPE=review`, `MOCK_MERGE_NOISE=0`, `PERF_OUT=<file>`, `BASE_URL` for a server you started (must serve `MOCK_DATASET=large`) | `web-perf.json` |
 | `pnpm --filter @octopus-diff/web perf:smoke` | Same script, fewer iterations (about 8 s); structural checks only. Runs in the CI `e2e` job | exit code |
 
-Options for `bench`: `--idle-seconds N`, `--iterations N`, `--no-ui`, `--out <dir>`, `--strict`, `--after-fetch`, `--to-review` (both small layout only). pnpm 12 forwards
+Options for `bench`: `--idle-seconds N`, `--iterations N`, `--no-ui`, `--out <dir>`, `--strict`, `--after-fetch`, `--to-review` (both small layout only), `--keep-trace <dir>` (keeps the raw spawn trace, one JSON line per git process with its full argv, and the phase windows in epoch ms, for diagnosis; the fixtures are still deleted). pnpm 12 forwards
 arguments as they are (no `--` needed; a literal `--` is tolerated). Build first (`pnpm build`).
 
 ## Budgets and the exit code
@@ -35,6 +35,17 @@ issue lands, delete the entry from `TRACKED` in `e2e/bench/bench.ts` (the bench 
 once it passes), so the budget is enforced from then on. `--strict` counts tracked budgets as failures.
 
 `--after-fetch` is judged by the same budgets as the plain 30 × 3 run (cold paint, warm reload, idle CPU, refresh, startup spawns per worktree); the fetch figures are report-only (no new budget). Its fixtures come from `addBenchOrigins` in `tools/fixtures/src/merge-noise.ts`, an opt-in: `generateFixtures({ bench })` and every other bench stay without remotes. The labels cost shows up as the live-fetch table: `merge-base` + `diff-tree` are the label work (about 3.3 per linked worktree, at most 2 at once); `status` and `diff` are the summary refreshes the moved ref triggers in every worktree.
+
+## Spawns per reload (issue #74)
+
+The UI table has two kinds of reload. `warmReload1-3` start right after the cold paint and end at `data-ready`: they
+are what the warm-reload *time* budget judges, but their spawn counts include whatever the cold paint started and has
+not finished (with To review that is every review state and, with origins, every label: about 12 processes per linked
+worktree, 1.9-5 s in all), so they say little about a reload itself. `settledReload1-3` start once no git process ran
+for 1 s and last until the daemon is quiet again: that is what one reload costs on its own. It is reported (per
+worktree, worst of three), not judged: a reload refetches the open file's diff (3 processes; diffs are not cached,
+roadmap #41), focusing a worktree re-checks it with one `status`, and timers (the worktree relist every 60 s, the
+forge poll) can fall into the window. Read it with `--keep-trace` when it is not 3-4.
 
 ## How the large layout is built
 
