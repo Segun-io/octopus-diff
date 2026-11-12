@@ -275,6 +275,11 @@ impostor; see DECISIONS Phase 2 #5, #7) and validate
 `Host` and `Origin` headers to defeat DNS-rebinding and cross-site requests from other browser tabs. The API
 returns file contents of local repos, so treat it as sensitive. Binding to non-loopback needs an explicit flag.
 
+Transfer (DECISIONS #171): JSON `GET` answers of 1 KiB or more are gzipped (level 1) when the client accepts it
+(`Vary: Accept-Encoding`; never the SSE stream). `/api/projects`, `/api/inbox` and `/api/worktrees/:id/files` carry a
+weak ETag (hash of the body) and answer `If-None-Match` with 304, only after the token check; those three use
+`Cache-Control: no-cache` so browsers can revalidate, every other API route stays `no-store`.
+
 ### 5.5 Git invocation rules (read-only guarantee)
 
 All git access goes through **one runner** in `packages/git-core`:
