@@ -274,7 +274,7 @@ function RowAge({ at }: { at: string | null | undefined }) {
       title={`Last change ${relativeTime(at, now)}`}
       className={`flex shrink-0 items-center gap-1 tabular-nums ${recent ? 'text-accent' : 'text-faint'}`}
     >
-      {recent && <span className="size-1.5 rounded-full bg-accent motion-safe:animate-pulse" />}
+      {recent && <span className="size-1.5 rounded-full bg-accent" />}
       {age}
     </span>
   );
