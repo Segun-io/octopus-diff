@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-11-12T18:13:44.534Z",
+  "generatedAt": "2026-11-12T19:24:51.211Z",
   "incremental": true,
   "environment": {
     "platform": "linux 6.18.58.1-microsoft-standard-WSL2",
@@ -16,132 +16,126 @@
     "afterFetch": false,
     "description": "30 repos × 3 worktrees (all dirty)",
     "worktrees": 90,
-    "generationMs": 5072
+    "generationMs": 4998
   },
   "startup": {
-    "listeningMs": 762,
-    "allSummariesMs": 956,
-    "gitSpawns": 407,
+    "listeningMs": 754,
+    "allSummariesMs": 957,
+    "gitSpawns": 406,
     "gitSpawnsPerWorktree": 4.5,
-    "gitWallMs": 3003,
+    "gitWallMs": 3010,
     "bySubcommand": {
       "status": {
         "count": 90,
-        "totalMs": 679,
-        "p50": 7.1,
-        "p95": 10.6
+        "totalMs": 649,
+        "p50": 6.9,
+        "p95": 10.8
       },
       "diff": {
         "count": 90,
-        "totalMs": 892,
-        "p50": 9,
-        "p95": 19.4
+        "totalMs": 957,
+        "p50": 9.3,
+        "p95": 20.4
       },
       "check-attr": {
         "count": 90,
-        "totalMs": 579,
-        "p50": 5.9,
-        "p95": 10
+        "totalMs": 595,
+        "p50": 6.4,
+        "p95": 10.8
       },
       "config": {
-        "count": 46,
-        "totalMs": 283,
-        "p50": 5.8,
-        "p95": 11.2
+        "count": 45,
+        "totalMs": 252,
+        "p50": 5.1,
+        "p95": 9.9
       },
       "rev-parse": {
         "count": 30,
-        "totalMs": 229,
-        "p50": 7.2,
-        "p95": 13.5
+        "totalMs": 210,
+        "p50": 6.4,
+        "p95": 13.6
       },
       "worktree": {
         "count": 30,
-        "totalMs": 146,
-        "p50": 4.7,
-        "p95": 6.6
+        "totalMs": 161,
+        "p50": 5.1,
+        "p95": 6.9
       },
       "for-each-ref": {
         "count": 30,
-        "totalMs": 193,
-        "p50": 6.1,
-        "p95": 9
+        "totalMs": 183,
+        "p50": 5.6,
+        "p95": 7.5
       },
       "--version": {
         "count": 1,
         "totalMs": 2,
-        "p50": 2.3,
-        "p95": 2.3
+        "p50": 2.2,
+        "p95": 2.2
       }
     }
   },
   "firstPaint": {
-    "coldMs": 143,
-    "warmMs": 68,
+    "coldMs": 145,
+    "warmMs": 61,
     "warmSamplesMs": [
-      85,
-      68,
-      58
+      87,
+      59,
+      61
     ],
     "firstContentfulPaintMs": 88,
     "spawns": {
       "coldPaint": {
         "spawns": 11,
-        "wallMs": 79,
+        "wallMs": 80,
         "bySub": {
           "diff": {
             "count": 10,
-            "totalMs": 72,
-            "p50": 6.6,
-            "p95": 11.5
+            "totalMs": 73,
+            "p50": 7.2,
+            "p95": 11.7
           },
           "log": {
             "count": 1,
             "totalMs": 7,
-            "p50": 7.2,
-            "p95": 7.2
+            "p50": 6.9,
+            "p95": 6.9
           }
         }
       },
       "warmReload1": {
-        "spawns": 12,
-        "wallMs": 68,
+        "spawns": 11,
+        "wallMs": 65,
         "bySub": {
           "diff": {
             "count": 10,
             "totalMs": 62,
-            "p50": 5.2,
-            "p95": 9.7
-          },
-          "status": {
-            "count": 1,
-            "totalMs": 3,
-            "p50": 3.4,
-            "p95": 3.4
+            "p50": 5.9,
+            "p95": 9.4
           },
           "log": {
             "count": 1,
             "totalMs": 3,
-            "p50": 2.9,
-            "p95": 2.9
+            "p50": 2.6,
+            "p95": 2.6
           }
         }
       },
       "warmReload2": {
-        "spawns": 16,
-        "wallMs": 82,
+        "spawns": 13,
+        "wallMs": 79,
         "bySub": {
           "diff": {
-            "count": 13,
+            "count": 11,
             "totalMs": 73,
-            "p50": 5.1,
-            "p95": 9.7
+            "p50": 5.8,
+            "p95": 11.2
           },
           "status": {
-            "count": 2,
-            "totalMs": 6,
-            "p50": 2.7,
-            "p95": 3.6
+            "count": 1,
+            "totalMs": 3,
+            "p50": 2.8,
+            "p95": 2.8
           },
           "log": {
             "count": 1,
@@ -152,20 +146,26 @@
         }
       },
       "warmReload3": {
-        "spawns": 11,
-        "wallMs": 70,
+        "spawns": 4,
+        "wallMs": 12,
         "bySub": {
           "diff": {
-            "count": 10,
-            "totalMs": 67,
-            "p50": 5.5,
-            "p95": 12.3
+            "count": 2,
+            "totalMs": 6,
+            "p50": 2.8,
+            "p95": 3.2
+          },
+          "status": {
+            "count": 1,
+            "totalMs": 4,
+            "p50": 3.5,
+            "p95": 3.5
           },
           "log": {
             "count": 1,
             "totalMs": 3,
-            "p50": 2.9,
-            "p95": 2.9
+            "p50": 2.7,
+            "p95": 2.7
           }
         }
       },
@@ -176,38 +176,62 @@
           "diff": {
             "count": 2,
             "totalMs": 6,
-            "p50": 3,
-            "p95": 3.3
+            "p50": 2.5,
+            "p95": 3.5
           },
           "log": {
             "count": 1,
             "totalMs": 3,
-            "p50": 2.9,
-            "p95": 2.9
+            "p50": 2.8,
+            "p95": 2.8
           },
           "status": {
             "count": 1,
-            "totalMs": 3,
-            "p50": 3.2,
-            "p95": 3.2
+            "totalMs": 4,
+            "p50": 3.6,
+            "p95": 3.6
           }
         }
       },
       "settledReload2": {
         "spawns": 4,
-        "wallMs": 12,
+        "wallMs": 13,
         "bySub": {
           "diff": {
             "count": 2,
-            "totalMs": 6,
-            "p50": 2.9,
-            "p95": 3
+            "totalMs": 7,
+            "p50": 3.1,
+            "p95": 3.5
           },
           "log": {
             "count": 1,
             "totalMs": 3,
+            "p50": 3.2,
+            "p95": 3.2
+          },
+          "status": {
+            "count": 1,
+            "totalMs": 4,
+            "p50": 3.5,
+            "p95": 3.5
+          }
+        }
+      },
+      "settledReload3": {
+        "spawns": 4,
+        "wallMs": 13,
+        "bySub": {
+          "diff": {
+            "count": 2,
+            "totalMs": 6,
             "p50": 3,
-            "p95": 3
+            "p95": 3.1
+          },
+          "log": {
+            "count": 1,
+            "totalMs": 4,
+            "p50": 3.7,
+            "p95": 3.7
           },
           "status": {
             "count": 1,
@@ -217,72 +241,48 @@
           }
         }
       },
-      "settledReload3": {
-        "spawns": 4,
-        "wallMs": 12,
-        "bySub": {
-          "diff": {
-            "count": 2,
-            "totalMs": 6,
-            "p50": 2.6,
-            "p95": 3.2
-          },
-          "log": {
-            "count": 1,
-            "totalMs": 3,
-            "p50": 3.1,
-            "p95": 3.1
-          },
-          "status": {
-            "count": 1,
-            "totalMs": 3,
-            "p50": 3.4,
-            "p95": 3.4
-          }
-        }
-      },
       "editBurst": {
-        "spawns": 331,
-        "wallMs": 2455,
+        "spawns": 329,
+        "wallMs": 2468,
         "bySub": {
           "diff": {
-            "count": 219,
-            "totalMs": 1556,
-            "p50": 7.4,
-            "p95": 11.8
+            "count": 218,
+            "totalMs": 1558,
+            "p50": 7.1,
+            "p95": 11.7
           },
           "status": {
-            "count": 80,
-            "totalMs": 642,
-            "p50": 7.9,
-            "p95": 12.9
+            "count": 79,
+            "totalMs": 648,
+            "p50": 8.5,
+            "p95": 13.7
           },
           "config": {
             "count": 16,
-            "totalMs": 89,
-            "p50": 5.5,
-            "p95": 7.2
+            "totalMs": 83,
+            "p50": 5.2,
+            "p95": 6.8
           },
           "rev-parse": {
             "count": 16,
-            "totalMs": 168,
-            "p50": 10.2,
-            "p95": 15.6
+            "totalMs": 180,
+            "p50": 12.2,
+            "p95": 15.3
           }
         }
       }
     },
     "settledReloads": [
       {
-        "ms": 69,
+        "ms": 77,
         "spawns": 4
       },
       {
-        "ms": 73,
+        "ms": 80,
         "spawns": 4
       },
       {
-        "ms": 76,
+        "ms": 82,
         "spawns": 4
       }
     ],
@@ -290,10 +290,10 @@
   },
   "idleCpu": {
     "supported": true,
-    "durationMs": 60035,
-    "averagePercent": 0.2498534793402399,
-    "averageSelfPercent": 0.18322588484950927,
-    "maxIntervalPercent": 2.998568903005353,
+    "durationMs": 60039,
+    "averagePercent": 0.3664313515675654,
+    "averageSelfPercent": 0.26649552841277485,
+    "maxIntervalPercent": 3.998237444992409,
     "intervals": [
       0,
       0,
@@ -313,6 +313,13 @@
       0,
       0,
       0,
+      4,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
       0,
       0,
       0,
@@ -325,79 +332,72 @@
       1,
       0,
       0,
-      0,
-      0,
-      0,
-      0,
+      1,
+      2,
       1,
       0,
+      1,
+      1,
       0,
+      1,
       3,
       0,
       0,
-      1,
-      0,
       0,
       0,
       1,
       0,
       1,
       1,
-      0,
       1,
-      0,
-      0,
-      1,
-      0,
-      1,
-      0,
-      0,
-      0,
       2,
-      1
+      1,
+      0,
+      0,
+      0
     ],
-    "rssBytes": 153022464
+    "rssBytes": 114618368
   },
   "memory": {
-    "rssBytes": 172445696,
-    "peakRssBytes": 173273088
+    "rssBytes": 148996096,
+    "peakRssBytes": 153976832
   },
   "refresh": {
     "iterations": 15,
     "sse": {
       "count": 15,
-      "min": 14,
-      "max": 23,
-      "mean": 16,
-      "p50": 15,
-      "p90": 21,
-      "p95": 23
+      "min": 13,
+      "max": 24,
+      "mean": 15.666666666666666,
+      "p50": 14,
+      "p90": 19,
+      "p95": 24
     },
     "sseByRole": {
       "bench": {
         "count": 15,
-        "min": 14,
-        "max": 23,
-        "mean": 16,
-        "p50": 15,
-        "p90": 21,
-        "p95": 23
+        "min": 13,
+        "max": 24,
+        "mean": 15.666666666666666,
+        "p50": 14,
+        "p90": 19,
+        "p95": 24
       }
     },
     "ui": {
       "count": 15,
-      "min": 23,
-      "max": 33,
-      "mean": 26,
+      "min": 22,
+      "max": 40,
+      "mean": 25.533333333333335,
       "p50": 25,
-      "p90": 29,
-      "p95": 33
+      "p90": 27,
+      "p95": 40
     },
     "spawnsPerEdit": [
       {
         "role": "bench",
-        "spawns": 8,
-        "wallMs": 19,
+        "spawns": 7,
+        "wallMs": 17,
         "spawnsToSse": 5,
         "bySubToSse": {
           "diff": 2,
@@ -408,8 +408,8 @@
       },
       {
         "role": "bench",
-        "spawns": 10,
-        "wallMs": 26,
+        "spawns": 5,
+        "wallMs": 13,
         "spawnsToSse": 3,
         "bySubToSse": {
           "diff": 2,
@@ -419,7 +419,7 @@
       {
         "role": "bench",
         "spawns": 4,
-        "wallMs": 10,
+        "wallMs": 11,
         "spawnsToSse": 3,
         "bySubToSse": {
           "diff": 2,
@@ -441,7 +441,7 @@
       {
         "role": "bench",
         "spawns": 4,
-        "wallMs": 11,
+        "wallMs": 10,
         "spawnsToSse": 3,
         "bySubToSse": {
           "diff": 2,
@@ -452,6 +452,38 @@
         "role": "bench",
         "spawns": 4,
         "wallMs": 11,
+        "spawnsToSse": 3,
+        "bySubToSse": {
+          "diff": 2,
+          "status": 1
+        }
+      },
+      {
+        "role": "bench",
+        "spawns": 6,
+        "wallMs": 14,
+        "spawnsToSse": 5,
+        "bySubToSse": {
+          "diff": 2,
+          "config": 1,
+          "status": 1,
+          "rev-parse": 1
+        }
+      },
+      {
+        "role": "bench",
+        "spawns": 4,
+        "wallMs": 11,
+        "spawnsToSse": 3,
+        "bySubToSse": {
+          "diff": 2,
+          "status": 1
+        }
+      },
+      {
+        "role": "bench",
+        "spawns": 4,
+        "wallMs": 10,
         "spawnsToSse": 3,
         "bySubToSse": {
           "diff": 2,
@@ -504,40 +536,8 @@
       },
       {
         "role": "bench",
-        "spawns": 4,
-        "wallMs": 11,
-        "spawnsToSse": 3,
-        "bySubToSse": {
-          "diff": 2,
-          "status": 1
-        }
-      },
-      {
-        "role": "bench",
-        "spawns": 4,
-        "wallMs": 11,
-        "spawnsToSse": 3,
-        "bySubToSse": {
-          "diff": 2,
-          "status": 1
-        }
-      },
-      {
-        "role": "bench",
         "spawns": 6,
-        "wallMs": 14,
-        "spawnsToSse": 5,
-        "bySubToSse": {
-          "diff": 2,
-          "config": 1,
-          "status": 1,
-          "rev-parse": 1
-        }
-      },
-      {
-        "role": "bench",
-        "spawns": 4,
-        "wallMs": 11,
+        "wallMs": 17,
         "spawnsToSse": 3,
         "bySubToSse": {
           "diff": 2,
@@ -547,7 +547,7 @@
       {
         "role": "bench",
         "spawns": 4,
-        "wallMs": 10,
+        "wallMs": 11,
         "spawnsToSse": 3,
         "bySubToSse": {
           "diff": 2,
@@ -559,7 +559,16 @@
       {
         "role": "bench",
         "requests": 1,
-        "bytes": 1395,
+        "bytes": 1393,
+        "projects": 0,
+        "byPath": {
+          "/api/inbox": 1
+        }
+      },
+      {
+        "role": "bench",
+        "requests": 1,
+        "bytes": 1417,
         "projects": 0,
         "byPath": {
           "/api/inbox": 1
@@ -577,43 +586,7 @@
       {
         "role": "bench",
         "requests": 1,
-        "bytes": 1412,
-        "projects": 0,
-        "byPath": {
-          "/api/inbox": 1
-        }
-      },
-      {
-        "role": "bench",
-        "requests": 1,
         "bytes": 1393,
-        "projects": 0,
-        "byPath": {
-          "/api/inbox": 1
-        }
-      },
-      {
-        "role": "bench",
-        "requests": 1,
-        "bytes": 1412,
-        "projects": 0,
-        "byPath": {
-          "/api/inbox": 1
-        }
-      },
-      {
-        "role": "bench",
-        "requests": 1,
-        "bytes": 1418,
-        "projects": 0,
-        "byPath": {
-          "/api/inbox": 1
-        }
-      },
-      {
-        "role": "bench",
-        "requests": 1,
-        "bytes": 1397,
         "projects": 0,
         "byPath": {
           "/api/inbox": 1
@@ -631,7 +604,7 @@
       {
         "role": "bench",
         "requests": 1,
-        "bytes": 1415,
+        "bytes": 1416,
         "projects": 0,
         "byPath": {
           "/api/inbox": 1
@@ -640,34 +613,7 @@
       {
         "role": "bench",
         "requests": 1,
-        "bytes": 1400,
-        "projects": 0,
-        "byPath": {
-          "/api/inbox": 1
-        }
-      },
-      {
-        "role": "bench",
-        "requests": 1,
-        "bytes": 1419,
-        "projects": 0,
-        "byPath": {
-          "/api/inbox": 1
-        }
-      },
-      {
-        "role": "bench",
-        "requests": 1,
-        "bytes": 1419,
-        "projects": 0,
-        "byPath": {
-          "/api/inbox": 1
-        }
-      },
-      {
-        "role": "bench",
-        "requests": 1,
-        "bytes": 1393,
+        "bytes": 1396,
         "projects": 0,
         "byPath": {
           "/api/inbox": 1
@@ -685,7 +631,61 @@
       {
         "role": "bench",
         "requests": 1,
+        "bytes": 1412,
+        "projects": 0,
+        "byPath": {
+          "/api/inbox": 1
+        }
+      },
+      {
+        "role": "bench",
+        "requests": 1,
+        "bytes": 1397,
+        "projects": 0,
+        "byPath": {
+          "/api/inbox": 1
+        }
+      },
+      {
+        "role": "bench",
+        "requests": 1,
+        "bytes": 1420,
+        "projects": 0,
+        "byPath": {
+          "/api/inbox": 1
+        }
+      },
+      {
+        "role": "bench",
+        "requests": 1,
         "bytes": 1415,
+        "projects": 0,
+        "byPath": {
+          "/api/inbox": 1
+        }
+      },
+      {
+        "role": "bench",
+        "requests": 1,
+        "bytes": 1394,
+        "projects": 0,
+        "byPath": {
+          "/api/inbox": 1
+        }
+      },
+      {
+        "role": "bench",
+        "requests": 1,
+        "bytes": 1415,
+        "projects": 0,
+        "byPath": {
+          "/api/inbox": 1
+        }
+      },
+      {
+        "role": "bench",
+        "requests": 1,
+        "bytes": 1419,
         "projects": 0,
         "byPath": {
           "/api/inbox": 1
@@ -694,109 +694,109 @@
     ],
     "samples": [
       {
-        "worktree": "/tmp/octopus-diff-bench-qy91z5/bench/bench-01",
+        "worktree": "/tmp/octopus-diff-bench-AsIRZj/bench/bench-01",
         "role": "bench",
-        "sseMs": 23,
-        "uiMs": 33,
-        "sseAt": 1794507200492
+        "sseMs": 24,
+        "uiMs": 40,
+        "sseAt": 1794511468393
       },
       {
-        "worktree": "/tmp/octopus-diff-bench-qy91z5/bench/worktrees/bench-01-wt1",
+        "worktree": "/tmp/octopus-diff-bench-AsIRZj/bench/worktrees/bench-01-wt1",
         "role": "bench",
-        "sseMs": 15,
-        "uiMs": 23,
-        "sseAt": 1794507201727
+        "sseMs": 13,
+        "uiMs": 22,
+        "sseAt": 1794511469933
       },
       {
-        "worktree": "/tmp/octopus-diff-bench-qy91z5/bench/worktrees/bench-01-wt2",
+        "worktree": "/tmp/octopus-diff-bench-AsIRZj/bench/worktrees/bench-01-wt2",
         "role": "bench",
         "sseMs": 14,
-        "uiMs": 24,
-        "sseAt": 1794507205470
+        "uiMs": 22,
+        "sseAt": 1794511471671
       },
       {
-        "worktree": "/tmp/octopus-diff-bench-qy91z5/bench/bench-02",
+        "worktree": "/tmp/octopus-diff-bench-AsIRZj/bench/bench-02",
         "role": "bench",
-        "sseMs": 17,
+        "sseMs": 18,
         "uiMs": 27,
-        "sseAt": 1794507206505
+        "sseAt": 1794511472704
       },
       {
-        "worktree": "/tmp/octopus-diff-bench-qy91z5/bench/worktrees/bench-02-wt1",
+        "worktree": "/tmp/octopus-diff-bench-AsIRZj/bench/worktrees/bench-02-wt1",
+        "role": "bench",
+        "sseMs": 13,
+        "uiMs": 22,
+        "sseAt": 1794511473735
+      },
+      {
+        "worktree": "/tmp/octopus-diff-bench-AsIRZj/bench/worktrees/bench-02-wt2",
         "role": "bench",
         "sseMs": 14,
         "uiMs": 24,
-        "sseAt": 1794507207536
+        "sseAt": 1794511474765
       },
       {
-        "worktree": "/tmp/octopus-diff-bench-qy91z5/bench/worktrees/bench-02-wt2",
-        "role": "bench",
-        "sseMs": 15,
-        "uiMs": 25,
-        "sseAt": 1794507208570
-      },
-      {
-        "worktree": "/tmp/octopus-diff-bench-qy91z5/bench/bench-03",
-        "role": "bench",
-        "sseMs": 17,
-        "uiMs": 25,
-        "sseAt": 1794507209604
-      },
-      {
-        "worktree": "/tmp/octopus-diff-bench-qy91z5/bench/worktrees/bench-03-wt1",
-        "role": "bench",
-        "sseMs": 15,
-        "uiMs": 26,
-        "sseAt": 1794507210634
-      },
-      {
-        "worktree": "/tmp/octopus-diff-bench-qy91z5/bench/worktrees/bench-03-wt2",
-        "role": "bench",
-        "sseMs": 14,
-        "uiMs": 26,
-        "sseAt": 1794507211667
-      },
-      {
-        "worktree": "/tmp/octopus-diff-bench-qy91z5/bench/bench-04",
-        "role": "bench",
-        "sseMs": 21,
-        "uiMs": 27,
-        "sseAt": 1794507212708
-      },
-      {
-        "worktree": "/tmp/octopus-diff-bench-qy91z5/bench/worktrees/bench-04-wt1",
-        "role": "bench",
-        "sseMs": 14,
-        "uiMs": 24,
-        "sseAt": 1794507213735
-      },
-      {
-        "worktree": "/tmp/octopus-diff-bench-qy91z5/bench/worktrees/bench-04-wt2",
-        "role": "bench",
-        "sseMs": 15,
-        "uiMs": 29,
-        "sseAt": 1794507214765
-      },
-      {
-        "worktree": "/tmp/octopus-diff-bench-qy91z5/bench/bench-05",
+        "worktree": "/tmp/octopus-diff-bench-AsIRZj/bench/bench-03",
         "role": "bench",
         "sseMs": 18,
         "uiMs": 25,
-        "sseAt": 1794507215805
+        "sseAt": 1794511475801
       },
       {
-        "worktree": "/tmp/octopus-diff-bench-qy91z5/bench/worktrees/bench-05-wt1",
+        "worktree": "/tmp/octopus-diff-bench-AsIRZj/bench/worktrees/bench-03-wt1",
         "role": "bench",
         "sseMs": 14,
-        "uiMs": 25,
-        "sseAt": 1794507216834
+        "uiMs": 24,
+        "sseAt": 1794511476831
       },
       {
-        "worktree": "/tmp/octopus-diff-bench-qy91z5/bench/worktrees/bench-05-wt2",
+        "worktree": "/tmp/octopus-diff-bench-AsIRZj/bench/worktrees/bench-03-wt2",
         "role": "bench",
         "sseMs": 14,
         "uiMs": 27,
-        "sseAt": 1794507217866
+        "sseAt": 1794511477862
+      },
+      {
+        "worktree": "/tmp/octopus-diff-bench-AsIRZj/bench/bench-04",
+        "role": "bench",
+        "sseMs": 19,
+        "uiMs": 25,
+        "sseAt": 1794511478902
+      },
+      {
+        "worktree": "/tmp/octopus-diff-bench-AsIRZj/bench/worktrees/bench-04-wt1",
+        "role": "bench",
+        "sseMs": 13,
+        "uiMs": 26,
+        "sseAt": 1794511479928
+      },
+      {
+        "worktree": "/tmp/octopus-diff-bench-AsIRZj/bench/worktrees/bench-04-wt2",
+        "role": "bench",
+        "sseMs": 14,
+        "uiMs": 26,
+        "sseAt": 1794511480963
+      },
+      {
+        "worktree": "/tmp/octopus-diff-bench-AsIRZj/bench/bench-05",
+        "role": "bench",
+        "sseMs": 18,
+        "uiMs": 26,
+        "sseAt": 1794511482001
+      },
+      {
+        "worktree": "/tmp/octopus-diff-bench-AsIRZj/bench/worktrees/bench-05-wt1",
+        "role": "bench",
+        "sseMs": 14,
+        "uiMs": 25,
+        "sseAt": 1794511483030
+      },
+      {
+        "worktree": "/tmp/octopus-diff-bench-AsIRZj/bench/worktrees/bench-05-wt2",
+        "role": "bench",
+        "sseMs": 15,
+        "uiMs": 22,
+        "sseAt": 1794511485069
       }
     ]
   },
@@ -804,26 +804,26 @@
     "edits": 60,
     "editedWorktrees": 60,
     "intervalMs": 0,
-    "burstMs": 3686,
+    "burstMs": 3160,
     "idle": {
       "count": 7,
-      "min": 7.772805000000517,
-      "max": 8.294777000002796,
-      "mean": 7.991301571430605,
-      "p50": 7.999035000000731,
-      "p90": 8.294777000002796,
-      "p95": 8.294777000002796
+      "min": 7.488609000007273,
+      "max": 8.546902999994927,
+      "mean": 7.9976419999979305,
+      "p50": 8.084702999985893,
+      "p90": 8.546902999994927,
+      "p95": 8.546902999994927
     },
     "underBurst": {
       "count": 19,
       "min": 7,
-      "max": 42,
-      "mean": 14.526315789473685,
-      "p50": 9,
-      "p90": 33,
-      "p95": 42
+      "max": 37,
+      "mean": 13.31578947368421,
+      "p50": 8,
+      "p90": 29,
+      "p95": 37
     },
-    "delayP95Ms": 34,
+    "delayP95Ms": 29,
     "probes": [
       {
         "atMs": 0,
@@ -834,100 +834,100 @@
         "ms": 8
       },
       {
-        "atMs": 218,
-        "ms": 22
+        "atMs": 219,
+        "ms": 21
       },
       {
-        "atMs": 340,
-        "ms": 33
+        "atMs": 339,
+        "ms": 27
       },
       {
-        "atMs": 473,
-        "ms": 42
+        "atMs": 467,
+        "ms": 37
       },
       {
-        "atMs": 615,
-        "ms": 26
+        "atMs": 604,
+        "ms": 29
       },
       {
-        "atMs": 741,
-        "ms": 20
-      },
-      {
-        "atMs": 861,
-        "ms": 23
-      },
-      {
-        "atMs": 984,
-        "ms": 9
-      },
-      {
-        "atMs": 1093,
+        "atMs": 733,
         "ms": 8
       },
       {
-        "atMs": 1202,
+        "atMs": 841,
+        "ms": 25
+      },
+      {
+        "atMs": 967,
+        "ms": 10
+      },
+      {
+        "atMs": 1077,
         "ms": 8
       },
       {
-        "atMs": 1310,
+        "atMs": 1185,
         "ms": 8
       },
       {
-        "atMs": 1418,
-        "ms": 9
-      },
-      {
-        "atMs": 1527,
-        "ms": 9
-      },
-      {
-        "atMs": 1636,
-        "ms": 9
-      },
-      {
-        "atMs": 1745,
-        "ms": 8
-      },
-      {
-        "atMs": 1853,
-        "ms": 8
-      },
-      {
-        "atMs": 1961,
+        "atMs": 1293,
         "ms": 7
       },
       {
-        "atMs": 2069,
+        "atMs": 1400,
+        "ms": 8
+      },
+      {
+        "atMs": 1508,
         "ms": 9
+      },
+      {
+        "atMs": 1617,
+        "ms": 8
+      },
+      {
+        "atMs": 1726,
+        "ms": 8
+      },
+      {
+        "atMs": 1834,
+        "ms": 7
+      },
+      {
+        "atMs": 1942,
+        "ms": 7
+      },
+      {
+        "atMs": 2049,
+        "ms": 8
       }
     ],
     "settled": true,
-    "spawns": 331,
+    "spawns": 329,
     "bySubcommand": {
       "diff": {
-        "count": 219,
-        "totalMs": 1556,
-        "p50": 7.4,
-        "p95": 11.8
+        "count": 218,
+        "totalMs": 1558,
+        "p50": 7.1,
+        "p95": 11.7
       },
       "status": {
-        "count": 80,
-        "totalMs": 642,
-        "p50": 7.9,
-        "p95": 12.9
+        "count": 79,
+        "totalMs": 648,
+        "p50": 8.5,
+        "p95": 13.7
       },
       "config": {
         "count": 16,
-        "totalMs": 89,
-        "p50": 5.5,
-        "p95": 7.2
+        "totalMs": 83,
+        "p50": 5.2,
+        "p95": 6.8
       },
       "rev-parse": {
         "count": 16,
-        "totalMs": 168,
-        "p50": 10.2,
-        "p95": 15.6
+        "totalMs": 180,
+        "p50": 12.2,
+        "p95": 15.3
       }
     }
   },
@@ -937,57 +937,58 @@
       "path": "/api/projects",
       "status": 200,
       "rawBytes": 103706,
-      "gzipBytes": 8684,
+      "gzipBytes": 8708,
       "wireEncoding": "gzip",
-      "wireBytes": 10573,
-      "firstMs": 5.7774199999985285,
-      "warmMs": 2.2562679999973625
+      "wireBytes": 10544,
+      "firstMs": 5.287876000002143,
+      "warmMs": 2.367764000009629
     },
     {
       "name": "inbox, working",
       "path": "/api/inbox?scope=working",
       "status": 200,
       "rawBytes": 209335,
-      "gzipBytes": 22025,
+      "gzipBytes": 22052,
       "wireEncoding": "gzip",
-      "wireBytes": 25814,
-      "firstMs": 212.27313400000276,
-      "warmMs": 7.868963999993866
+      "wireBytes": 25899,
+      "firstMs": 217.10843599999498,
+      "warmMs": 9.006759999989299
     },
     {
       "name": "inbox, review (To review)",
       "path": "/api/inbox?scope=review",
       "status": 200,
       "rawBytes": 209334,
-      "gzipBytes": 22026,
+      "gzipBytes": 22050,
       "wireEncoding": "gzip",
-      "wireBytes": 25812,
-      "firstMs": 114.25430499999493,
-      "warmMs": 8.925476999997045
+      "wireBytes": 25895,
+      "firstMs": 106.86082500001066,
+      "warmMs": 7.572708000006969
     },
     {
       "name": "inbox, branch + working (All on branch)",
       "path": "/api/inbox?scope=branch&working=1",
       "status": 200,
       "rawBytes": 209356,
-      "gzipBytes": 22043,
+      "gzipBytes": 22064,
       "wireEncoding": "gzip",
-      "wireBytes": 25847,
-      "firstMs": 28.36983799999871,
-      "warmMs": 26.111035000008997
+      "wireBytes": 25933,
+      "firstMs": 30.380908000006457,
+      "warmMs": 27.47928200000024
     },
     {
       "name": "files bench, working",
-      "path": "/api/worktrees/9e848384c98d3e83/files?scope=working",
+      "path": "/api/worktrees/4a5302404df86735/files?scope=working",
       "status": 200,
       "rawBytes": 1359,
-      "gzipBytes": 445,
+      "gzipBytes": 447,
       "wireEncoding": "gzip",
-      "wireBytes": 458,
-      "firstMs": 1.0119329999870388,
-      "warmMs": 1.0124240000004647
+      "wireBytes": 452,
+      "firstMs": 1.1720239999995101,
+      "warmMs": 0.9963980000029551
     }
   ],
+  "summaryByRole": null,
   "afterFetch": null,
   "targets": {
     "firstPaintMs": 3000,
@@ -1007,7 +1008,7 @@
     {
       "id": "firstPaint",
       "label": "Time to first paint (cold, `data-ready`)",
-      "actual": 143.22917400000006,
+      "actual": 145.05512700000054,
       "limit": 3000,
       "unit": "ms",
       "applies": true,
@@ -1017,7 +1018,7 @@
     {
       "id": "warmReload",
       "label": "Time to first paint (warm reload, median of 3)",
-      "actual": 67.77949199999966,
+      "actual": 60.81304699999964,
       "limit": 300,
       "unit": "ms",
       "applies": true,
@@ -1047,7 +1048,7 @@
     {
       "id": "startupSpawns",
       "label": "Startup git spawns per worktree",
-      "actual": 4.522222222222222,
+      "actual": 4.511111111111111,
       "limit": 8,
       "unit": "spawns",
       "applies": true,
@@ -1057,7 +1058,7 @@
     {
       "id": "idleCpu",
       "label": "Idle CPU, daemon + git children (average)",
-      "actual": 0.2498534793402399,
+      "actual": 0.3664313515675654,
       "limit": 10,
       "unit": "%",
       "applies": true,
@@ -1067,7 +1068,7 @@
     {
       "id": "refreshSse",
       "label": "Refresh: write → SSE `worktree.changed` p95",
-      "actual": 23,
+      "actual": 24,
       "limit": 1000,
       "unit": "ms",
       "applies": true,
@@ -1077,7 +1078,7 @@
     {
       "id": "burstDiff",
       "label": "Diff opened during a 60-edit burst, p95 (#44)",
-      "actual": 42,
+      "actual": 37,
       "limit": 100,
       "unit": "ms",
       "applies": true,
@@ -1087,7 +1088,7 @@
     {
       "id": "editTraffic",
       "label": "Browser traffic per edit (worst edit, #51)",
-      "actual": 1419,
+      "actual": 1420,
       "limit": 102400,
       "unit": "bytes",
       "applies": true,
@@ -1107,7 +1108,7 @@
     {
       "id": "refreshUi",
       "label": "Refresh: write → UI sidebar update p95",
-      "actual": 33,
+      "actual": 40,
       "limit": 1000,
       "unit": "ms",
       "applies": true,

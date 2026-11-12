@@ -3635,3 +3635,76 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      not mark). All optional and absent when nothing is omitted, so every existing payload is unchanged
      below the cap. Nothing is renamed or removed; `counts`, `changedFiles`, `additions` keep their
      meaning (see #306).
+306. **What a summary says about omitted untracked files (#43).** `counts.untracked` and `changedFiles` stay exact
+     (git status lists every file; a path that is also a tracked change counts once, as before). `additions` never
+     includes them: their line counts are unknown and are not invented (above 2000 untracked files they were already
+     0, `maxUntrackedFiles`). The state hash still hashes every untracked status line, so a file appearing or
+     disappearing moves it, but not the lstat signature of an omitted file: **what is lost** is that rewriting an
+     omitted file in place (same path, new content) gives no new state hash, no `worktree.changed` and no activity.
+     `activityAt` takes the mtimes of listed files only. Below the cap nothing changes: no new field, the same state
+     hash and snapshot `contentHash` bytes (tested against a core without the option).
+307. **Which files are omitted: a pure function of the untracked paths (`packages/git-core/src/untracked-plan.ts`).**
+     While more than the cap remain: from the root, step into the biggest child directory while that child alone holds
+     the excess (remaining - cap) and omit the deepest one reached; if no top-level directory holds the excess, omit
+     the biggest one when it holds at least a tenth of it, and repeat (at most 64 directories, a directory omitted
+     later absorbs the ones below it, ties to the smaller path). If still above the cap, keep the first `cap` paths in
+     path order and omit the rest. Directories first because the bulk is nearly always one tree (`node_modules`,
+     build output) and the files next to it are the user's real new work: in the bench's untracked-heavy worktree
+     `scratch/many` (30 000 files) is omitted and `scratch/gen` (400) stays listed. The plan depends only on the set
+     of paths and the cap, so the summary, every list built from the same status, a full and an incremental refresh
+     all omit the same files (fuzzed). Default cap `UNTRACKED_LISTED_DEFAULT` = 2000, the same as
+     `maxUntrackedFiles`: an untracked file row is about 250 bytes of JSON, so a list holds at most ~0.5 MB of them;
+     `GitCoreOptions.maxListedUntracked` changes it (tests use 1-20). The plan is reused while the set of untracked
+     paths is unchanged and recomputed (one pass over the paths' directories, a few ms for 30 000) otherwise.
+308. **Lists: a bounded set of rows plus a field, not a placeholder row.** Every list of a scope that holds untracked
+     files (working, review, branch with `includeWorking`) returns the listed untracked files only;
+     `FilesResponse.untrackedOmitted` (the summary's, for the response's `stateHash`) is the placeholder. A fake row
+     would break every consumer that counts, selects, navigates or bulk-marks rows, and #42's paging will add its
+     own cursor next to this field without touching it. Lists that follow the summary (`summaryState`) use the
+     state's plan; a list without one computes the same plan from its own status. A cached list is not updated
+     across a plan change: the journal entry of a summary whose plan changed is unknown (`null`) and every cached
+     list remembers the plan it was built with (`ListEntry.untrackedPlan`); either alone suffices (mutations removing
+     one survive; removing both is caught by the fuzz). An omitted file can still be diffed by path
+     (`getFileDiff`), byte for byte as before; it is only never listed.
+309. **Review and bulk review: omitted files are not reviewable, and that is said, not hidden.** They have no row and
+     no patchHash, so nothing can mark them; `review.unreviewedFiles` counts listed files only, so a worktree whose
+     listed files are reviewed reads as reviewed while the notice (and `counts.untracked`) still shows the omitted
+     ones: build output should not block a review, and the fix is a `.gitignore` line. A whole-worktree bulk call
+     ("Mark all", "Review all") answers `untrackedOmitted` with the number of files it could not mark (the scopes
+     that list untracked files only); a call with `paths` comes from a list, never names them, and a path that is
+     not listed marks nothing, as before (not counted). Nothing is marked or skipped silently.
+310. **Snapshot, activity feed and event deltas.** The snapshot never holds omitted files as entries; `total` counts
+     them (they are changed paths), `untrackedOmitted` says how many, and `truncated` keeps its meaning of "the entry
+     cap cut listed paths off" (it can only differ from `total > entries.length` when files are omitted, a state that
+     did not exist before). `contentHash` covers their paths (not their contents). The feed compares snapshots with
+     different `omittedPlan`s coarsely (one `bulk` entry at most): without that, a directory crossing the cap would
+     show its listed files as deleted untracked files (test, mutation killed). With the same plan, a new omitted file
+     makes no entry (noise) and listed files are compared per file as usual: a worktree with 30 000 untracked files
+     used to have a truncated (always coarse) snapshot; now its own edits are reported per file. The activity ring's
+     caps are unchanged. Event deltas (`worktree.changed.paths`, 200 files) are built from the list, so they never
+     name an omitted file; the event's `summary` carries `untrackedOmitted`.
+311. **A full summary runs numstat alongside its status when that is likely needed (#43).** In a 100k-file worktree
+     `status` and `diff --numstat` each refresh the index (300-400 ms); in sequence they were 680 ms of git per
+     full summary, over the 600 ms target alone. Now numstat starts with the status at the last state's HEAD when the
+     kept state had tracked changes, or, on a first summary (no kept state), when the index is at least 4 MiB
+     (`summaryLimits.speculateIndexBytes`, about 30 000 files) with HEAD read from the ref files. The status header
+     confirms the HEAD; if it moved, numstat runs again at the new one (tested with a git wrapper); if the worktree is
+     clean after all, the run is waited for and discarded (wasted CPU, bounded to these cases). Unreadable files (F7)
+     still go through the old fallback. `incremental: false` keeps no state and speculates never: the kill switch
+     gives the old calls exactly.
+312. **Untracked cache and fsmonitor: nothing done on purpose.** We never set config (`core.untrackedCache`) and
+     never write the index; `core.fsmonitor=false` stays pinned (it runs programs from untrusted config). git
+     itself uses an untracked-cache extension the user's index already has (`core.untrackedCache` unset means
+     "keep"), read-only under `--no-optional-locks`, so such repositories benefit with no code of ours. We do not
+     detect or report the extension (it would mean parsing index extensions; `indexHasGitlinks` parses entries
+     only): a possible follow-up for the notice.
+313. **Web: one line under the file pane header** (`apps/web/src/components/UntrackedOmittedNotice.tsx`): the count,
+     the cap, the three biggest omitted directories and their `.gitignore` lines with copy buttons (deduplicated:
+     two `node_modules` trees give one `node_modules/`). Ignore lines come from directory names only: `<name>/` for
+     dependency and cache directories (`node_modules`, `__pycache__`, `.venv`, ...), `/<path>/` anchored otherwise,
+     at the build-output component when there is one (`/packages/a/dist/`), gitignore-escaped, none for non-UTF-8 or
+     control characters. Nothing is ever written to the repository. The worktree row and context bar are untouched
+     (another session owns them); the summary carries the field for them.
+314. **Not done: the CLI config key.** `maxListedUntracked` is a `GitCoreOptions` and `StartDaemonOptions.git` field;
+     `~/.config/octopus-diff/config.json` (apps/cli, WS5) does not accept it yet (its schema is strict). A one-line
+     addition next to `maxUntrackedFiles` for the lead.
