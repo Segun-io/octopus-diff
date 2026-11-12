@@ -3426,3 +3426,14 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
 288. **An explicit Refresh is a full refresh that forgets (PR #89 review P3a).** `refreshWorktree` makes the next
      summary full whatever the watcher holds (`#noteHint(entry, null)`) and passes `forgetState` (#285), so
      git-core's kept state and lists of the worktree are rebuilt from scratch.
+289. **Tests on case-folding filesystems (macOS CI, PR #89).** macOS gets full refreshes only (#277), but the new
+     tests assumed the incremental path, and the fuzz ran 15 s per seed there. The tests now ask the
+     implementation's own probe (`foldsCase`, exported from git-core; `test/helpers/folds.ts`): where it says
+     folding, tests about the incremental path itself (spawn counts, a trusted stale hint, the daemon's edit,
+     lost-event and Refresh repairs, the full-summary drop, the `core.ignorecase` fuzz seed) are skipped with the
+     reason stated; refusals the case probe preempts expect `case-insensitive`; tests about lists keep running
+     (only the expected mode changes); new folding-only tests assert the fallback (every hinted refresh full with
+     reason `case-insensitive` and equal to a full summary, in git-core and through the daemon); the fuzz keeps its
+     per-step equality checks, asserts that no refresh was incremental, and runs 40 steps per seed on darwin
+     (120 elsewhere). Linux assertions are unchanged. `OCTOPUS_DIFF_TEST_FOLDS_CASE=1` makes the probe report
+     folding on any machine (test-only: it can only turn incremental refreshes off), so the macOS mode is run here.

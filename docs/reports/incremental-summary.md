@@ -177,3 +177,20 @@ None added or removed (`pnpm credits:check`: up to date).
   warm 78 ms, edit → SSE p95 20 ms, burst diff p95 40 ms, idle CPU 0.35 %). 100k files, `--no-ui`, 15 edits: later
   edits main 53-59 ms, stale-index 55-62 ms, untracked-heavy 96-115 ms (p95 115 ms), 3 git processes to SSE; first
   edits 550 / 253 / 313 ms (the first review state, as before).
+
+## macOS CI follow-up (PR #89)
+
+macOS folds case, so it gets full refreshes only (#277), but the new tests assumed the incremental path (DECISIONS
+#289). Tests now ask the implementation's probe: incremental-only tests are skipped there with a reason, refusals the
+probe preempts expect `case-insensitive`, list tests keep running, folding-only tests assert the fallback in git-core
+and through the daemon, and the fuzz asserts per-step equality and zero incremental refreshes, at 40 steps per seed
+on darwin. `OCTOPUS_DIFF_TEST_FOLDS_CASE=1` emulates folding on Linux. Runs here, both modes:
+
+- git-core: normal 338 passed + 1 skipped (29 s); folding 334 passed + 5 skipped (23 s). Fuzz in folding mode:
+  5.3-5.8 s per seed at 120 steps, 2.1-2.2 s at 40 (the whole file 8.7 s). Not measured on macOS itself.
+- daemon: normal 388 passed + 4 skipped; folding 386 passed + 6 skipped (25.5 s each).
+- Mutation: the implementation's case check removed while the tests see folding: 12 git-core tests and the daemon's
+  folding test fail.
+- Folding mode first failed two list tests (repro B's intermediate step, the full-summary drop). Both checked
+  incremental mechanics: with every summary full, the stale list is dropped and the list of s3 is seeded from s3, where
+  the reverted file is clean. Every final list still equals a full one; no list bug on macOS.
