@@ -140,6 +140,15 @@ lookups keep the last good data. `GET /api/forges` carries the state in `budgets
 `docs/reports/forge-fetching.md` has every call path with its trigger, frequency and cost, and the fleet estimates
 (arithmetic and simulation, kept apart).
 
+### 3a-bis. What the UI says while it waits (DECISIONS #213-#215)
+
+A forge request that takes longer than 700 ms is named ("Waiting for GitHub…"; "Loading from your computer…" for
+local work), not shown instantly. A host in `backoff` or `low` replaces that with "GitHub is rate-limiting requests,
+retrying at HH:MM" and its data is offered as "Last updated 3 min ago · Refresh"; `busy` is said only while a lookup
+on that host is waited for ("Using a lot of your GitHub quota, polling slower"). Project status `pending` shows
+in the sidebar ("Waiting for GitHub…"). All of it comes from `ForgesResponse` (`budgets`, `status`, `message`,
+`fetchedAt`) and the query cache, never from a timer.
+
 ### 3b. Detail, conversation and repository queries
 
 Each is one GraphQL query through the same runner and allowlist, fetched only when needed:
@@ -157,7 +166,7 @@ Every GitHub query asks for `rateLimit { cost remaining resetAt }`; the opt-in l
 numbers are inlined in the query text (`pullRequest(number: 42)`): `gh api graphql --raw-field` cannot pass an
 `Int!` and `-F` stays banned. GitLab's `iid` is a `String!` variable. The detail, conversation and repository caches keep the 64 most recently used entries per kind
 and drop entries unused for an hour. Errors keep the last good data (shown with a
-"Showing the last loaded data" note); a request that no longer exists answers `no-request`. A `basic` variant of
+"Could not refresh from GitHub. Last updated 3 min ago · Refresh" note, DECISIONS #214); a request that no longer exists answers `no-request`. A `basic` variant of
 each GitHub query without `mergeStateStatus` / `latestOpinionatedReviews` covers old GitHub Enterprise, and GitLab's
 `basic` variants drop newer fields (`mergeRequestInteraction`, `diffStatsSummary`, `languages`, ...); both are tried
 after an "unknown field" error.

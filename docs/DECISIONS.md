@@ -2677,3 +2677,51 @@ Number: #209 (another session working on `e2e/` may also have taken #209: renumb
      Playwright `locator.waitFor` polls on a 100 ms grid, which quantised a ~85 ms refresh to ~90 or ~190 ms (the
      "86 → 187 ms with merge noise" of #67 was that, not the UI). Structural checks make it exit 1; timings are never a
      gate. `perf:smoke` (fewer iterations, ~8 s) is a step of the CI `e2e` job (Chromium is installed there).
+
+## Web: loading states that say who is slow (session, 2026-11-12; roadmap #11, step 08)
+
+Numbers: #213-#216. The brief said #212 was next, but #212 is already the perf-script entry on this base; other open
+branches also use #213+: renumber at merge.
+
+213. **Two sources, one threshold, three placements.** A slow load is attributed to the forge ("Waiting for GitHub…",
+     "Waiting for GitLab…", "…GitHub and GitLab…" when both are pending) or to the computer ("Loading from your
+     computer…"). Forge means a request that really goes to the forge: the Request tab's detail, conversation and
+     refresh, the Overview's repository facts, a project whose forge status is `pending`. `GET /api/forges` and the
+     rest are reads of the daemon's own cache or of git and count as local, so a slow batch read is never blamed on
+     GitHub. The message appears only after `WAIT_NOTE_DELAY_MS` (700 ms, `lib/wait.ts`; a load that ends sooner shows
+     nothing: the skeleton alone, no text). Placement, so nothing moves: `block` (a line whose height is reserved,
+     under a skeleton: diff pane, file list first load, Request tab, conversation, Overview facts and branches),
+     `inline` (a span with no width until it has text, beside the Refresh buttons) and `float` (a pill over the foot
+     of the sidebar or the file pane, taking no space: PR chips, inbox batches, review states). Every note is one
+     always-mounted `role="status" aria-live="polite"` region whose text comes and goes, so it is announced once
+     per change and never when the wait was short. The old instant texts ("Loading diff…", "Loading files…",
+     "Loading the conversation…", "Reading the repository…", the cold-start "Connecting…") became skeleton bars plus
+     this note. Themed with the existing tokens (`text-muted`, `text-warn` for a held-back host, `od-overlay`).
+214. **"Stale" comes from real signals only (`describeStale`).** The data on screen is stale when: the host's budget
+     is `backoff` or `low` (the daemon holds lookups back, `ForgesResponse.budgets`), the last fetch failed (the
+     project's status `error`, or the detail/repository response's `message`: the daemon keeps the last good data),
+     or the browser's own refetch failed with data cached (`isError` and `dataUpdatedAt`: the projects list). The
+     note reads "<reason>. Last updated 3 min ago" plus a Refresh button, a plain `<button>`, so Tab reaches it like
+     every control. The time is the data's own (`fetchedAt`, oldest of the affected projects in the sidebar;
+     `dataUpdatedAt` for the browser case). Never a timer: data that is only old is not called stale. `busy` is not
+     stale: it is said only as the reason while a lookup on that host is being waited for ("Using a lot of your
+     GitHub quota, polling slower"); `backoff`/`low` replace "Waiting for GitHub…" with "GitHub is rate-limiting
+     requests, retrying at HH:MM" (`resumeAt`, local time). The sidebar pill's Refresh is "Check again"
+     (`POST /api/forges/refresh {}`, which the daemon bounds to 150 points), the Request tab's and the Overview's is
+     their own refresh. The stale state is not threshold-gated (it is a state, not a wait); "3 min ago" is
+     redrawn every 30 s (`STALE_CLOCK_MS`), a display clock only.
+215. **"The review states are being worked out" is read from the summaries.** After a project is opened (its Overview,
+     or one of its worktrees) the daemon computes its review states and sends `review.ready` (#180-#183). The web
+     says "Loading from your computer…" while a worktree of that project has changes and a `summary` without
+     `review` (`reviewPending`, the rule `rowVisible` already used), so the note ends exactly when the sidebar
+     refetch brings the states, with no extra bookkeeping. One limit: `REVIEW_WAIT_GIVE_UP_MS` (30 s) stops
+     the claim for a daemon that never sends them (older than #10), which would otherwise show it for ever.
+216. **Mock knobs (`apps/web/mock`).** `MockRouterOptions.gate({ path, method, side })` runs before a response and
+     the response waits for its promise (tests hold one request open and release it, no real timers);
+     `forgeLatencyMs` / `localLatencyMs` delay one side (`sideOf`: the routes that reach a forge vs the rest);
+     `MockBackend.setForgeSim({ pending, budget, error, fetchedAgoMs })` makes the forge side report pending
+     lookups, a `busy`/`low`/`backoff` budget (with `resumeAt`) or a failed fetch with the last good data kept, and
+     emits `forge.updated`. From outside: `MOCK_FORGE_LATENCY_MS`, `MOCK_LOCAL_LATENCY_MS`, `MOCK_FORGE_SIM=
+     pending,backoff,error` and `POST /api/__mock/forge-sim?...` (no parameters resets). `scripts/shots.ts` has
+     `wait-forge`, `rate-limit`, `rate-limit-stale`, `stale-request`. No e2e was added: the e2e run the real daemon,
+     whose forge and local answers cannot be slowed on demand without timing-dependent tests.
