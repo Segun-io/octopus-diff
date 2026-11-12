@@ -58,7 +58,7 @@ import {
   mockRepositoryForgeInfo,
   mockRepositoryInfo,
 } from './forge-details.js';
-import { mockForges } from './forges.js';
+import { type ForgeSim, mockForges } from './forges.js';
 import {
   byteLength,
   bytesToBase64,
@@ -916,7 +916,22 @@ export class MockBackend {
 
   /** Mock forge data (mock/forges.ts). */
   forges(): ForgesResponse {
-    return mockForges(this.listProjects(), this.settings, new Date().toISOString());
+    return mockForges(this.listProjects(), this.settings, new Date().toISOString(), this.forgeSim);
+  }
+
+  /** What the forge side reports (pending lookups, a held-back budget, a failed fetch): #11. */
+  private forgeSim: ForgeSim = {};
+
+  /** `fetchedAt` of a forge answer: now, or `fetchedAgoMs` ago when the knob is set. */
+  private simFetchedAt(): string {
+    return new Date(Date.now() - (this.forgeSim.fetchedAgoMs ?? 0)).toISOString();
+  }
+
+  /** Changes the forge knobs (`ForgeSim`) and tells every client like a real state change. */
+  setForgeSim(next: ForgeSim): ForgeSim {
+    this.forgeSim = { ...next };
+    this.emit({ type: 'forge.updated', projectIds: this.projects.map((p) => p.project.id) });
+    return this.forgeSim;
   }
 
   // --- request detail and repository information (mock/forge-details.ts) -------------------
@@ -954,9 +969,10 @@ export class MockBackend {
     return {
       worktreeId,
       status: 'ok',
-      message: null,
       request: mockDetail(entry.w, entry.n, local),
-      fetchedAt: new Date().toISOString(),
+      // A failed refresh keeps the last good data and says why (docs/FORGES.md 3b).
+      message: this.forgeSim.error ?? null,
+      fetchedAt: this.simFetchedAt(),
       imageHosts,
     };
   }
@@ -1000,11 +1016,11 @@ export class MockBackend {
     }
     return {
       projectId,
-      status: 'ok',
-      message: null,
+      status: this.forgeSim.pending ? 'pending' : 'ok',
+      message: this.forgeSim.pending ? null : (this.forgeSim.error ?? null),
       forge: state.forge,
-      repository: mockRepositoryForgeInfo(state, index),
-      fetchedAt: new Date().toISOString(),
+      repository: this.forgeSim.pending ? null : mockRepositoryForgeInfo(state, index),
+      fetchedAt: this.forgeSim.pending ? null : this.simFetchedAt(),
     };
   }
 

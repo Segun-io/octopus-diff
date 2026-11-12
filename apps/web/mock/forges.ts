@@ -35,12 +35,41 @@ const MERGE_STATES: NonNullable<ChangeRequest['mergeState']>[] = [
   'unstable',
 ];
 
+/**
+ * Knobs for the loading-state surfaces (#11, DECISIONS #212): what the forge side of the daemon
+ * reports while it is slow, held back or failing. Changed at run time through
+ * `MockBackend.setForgeSim` (or `POST /api/__mock/forge-sim`); all off = the plain fixture.
+ */
+export interface ForgeSim {
+  /** Every project's request lookup is running: status `pending`, no requests, nothing fetched. */
+  pending?: boolean;
+  /** github.com's budget state (docs/FORGES.md 3a). `backoff` and `low` carry `resumeAt`. */
+  budget?: 'ok' | 'busy' | 'low' | 'backoff';
+  /** The last fetch of every project failed with this message; the last good data is kept. */
+  error?: string | null;
+  /** How long ago the last successful fetch was (ms before `generatedAt`); default: a fixed stamp. */
+  fetchedAgoMs?: number;
+}
+
+/** When a held-back host resumes, relative to `generatedAt`. */
+export const MOCK_RESUME_AFTER_MS = 12 * 60_000;
+
 export function mockForges(
   projects: ProjectsResponse,
   settings: AppSettings,
   generatedAt: string,
+  sim: ForgeSim = {},
 ): ForgesResponse {
   const enabled = settings.forges?.enabled ?? true;
+  const fetchedAt =
+    sim.fetchedAgoMs === undefined
+      ? STAMP
+      : new Date(Date.parse(generatedAt) - sim.fetchedAgoMs).toISOString();
+  const budgetState = sim.budget ?? 'ok';
+  const resumeAt =
+    budgetState === 'backoff' || budgetState === 'low'
+      ? new Date(Date.parse(generatedAt) + MOCK_RESUME_AFTER_MS).toISOString()
+      : null;
   let n = 0;
   const states = projects.projects.map((item, index): ProjectForgeState => {
     const kind: ForgeKind = index % 2 === 0 ? 'github' : 'gitlab';
@@ -108,10 +137,19 @@ export function mockForges(
         remoteName: 'origin',
         detectedBy: 'hostname',
       },
-      status: enabled ? (worktrees.length > 0 ? 'ok' : 'idle') : 'disabled',
-      message: null,
-      worktrees: enabled ? worktrees : [],
-      fetchedAt: STAMP,
+      status: !enabled
+        ? 'disabled'
+        : sim.pending
+          ? 'pending'
+          : sim.error && worktrees.length > 0
+            ? 'error'
+            : worktrees.length > 0
+              ? 'ok'
+              : 'idle',
+      message: sim.error && !sim.pending ? sim.error : null,
+      // A lookup that has not answered yet has nothing to show (and nothing fetched).
+      worktrees: !enabled ? [] : sim.pending ? [] : worktrees,
+      fetchedAt: sim.pending ? null : fetchedAt,
     };
   });
   return {
@@ -145,14 +183,21 @@ export function mockForges(
       {
         host: 'github.com',
         kind: 'github',
-        state: 'ok',
-        spentLastHour: 214,
+        state: budgetState,
+        spentLastHour: budgetState === 'ok' ? 214 : 1500,
         backgroundLimit: 1500,
         hourlyLimit: 4000,
-        remaining: 4786,
-        resetAt: null,
-        resumeAt: null,
-        message: null,
+        remaining: budgetState === 'ok' ? 4786 : budgetState === 'busy' ? 900 : 0,
+        resetAt: resumeAt,
+        resumeAt,
+        message:
+          budgetState === 'backoff'
+            ? 'GitHub refused the last request (rate limit); lookups are paused.'
+            : budgetState === 'low'
+              ? 'Little quota left; only lookups you ask for run.'
+              : budgetState === 'busy'
+                ? 'Using a lot of the hourly quota; polling slower.'
+                : null,
       },
     ],
     generatedAt,

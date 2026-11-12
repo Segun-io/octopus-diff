@@ -31,6 +31,30 @@ export interface MockRouterOptions {
   token?: string;
   /** Artificial latency in ms for every response. */
   latencyMs?: number;
+  /** Extra latency for the routes that reach a forge (`/api/forges/...`, but not `GET /api/forges`). */
+  forgeLatencyMs?: number;
+  /** Extra latency for the local routes (files, diffs, inbox, projects, repositories...). */
+  localLatencyMs?: number;
+  /**
+   * Called before a request is answered with the side it is slow on; the response waits for the
+   * returned promise. Tests hold a request open with it and release it when they choose
+   * (#11: slow forge / slow local, without real timers).
+   */
+  gate?: (request: { path: string; method: string; side: RequestSide }) => Promise<void> | void;
+}
+
+export type RequestSide = 'forge' | 'local';
+
+/**
+ * Which side answers a route slowly in the real daemon: the forge for the lookups that may reach
+ * it (the Request tab's detail, conversation and refresh, the Overview's repository facts, the
+ * forge refresh), the local machine for everything else. `GET /api/forges` and `/api/settings`
+ * read the daemon's own cache, so they count as local.
+ */
+export function sideOf(path: string, method: string): RequestSide {
+  if (path === '/api/forges/refresh' && method === 'POST') return 'forge';
+  if (/^\/api\/forges\/(worktrees|projects)\//.test(path)) return 'forge';
+  return 'local';
 }
 
 function json(status: number, body: unknown): Response {
@@ -79,10 +103,16 @@ function authorized(request: Request, token: string): boolean {
 
 export function createMockRouter(backend: MockBackend, options: MockRouterOptions = {}) {
   return async function handle(request: Request): Promise<Response> {
-    if (options.latencyMs) await new Promise((r) => setTimeout(r, options.latencyMs));
     const url = new URL(request.url);
     const path = url.pathname;
     const method = request.method.toUpperCase();
+    if (options.latencyMs) await new Promise((r) => setTimeout(r, options.latencyMs));
+    if (path !== '/api/health' && !path.startsWith('/api/__mock/')) {
+      const side = sideOf(path, method);
+      const extra = side === 'forge' ? options.forgeLatencyMs : options.localLatencyMs;
+      if (extra) await new Promise((r) => setTimeout(r, extra));
+      await options.gate?.({ path, method, side });
+    }
     try {
       if (path === '/api/health' && method === 'GET') return json(200, backend.health());
       if (options.token && !authorized(request, options.token)) {
@@ -205,6 +235,22 @@ export function createMockRouter(backend: MockBackend, options: MockRouterOption
       if (path === '/api/repositories' && method === 'GET') {
         const q = parse(RepositoriesQuerySchema, queryObject(url));
         return json(200, backend.repositories(q.projectIds));
+      }
+      // Mock-only control endpoint: what the forge side reports (#11), e.g.
+      // `?pending=1&budget=backoff&error=rate%20limited&fetchedAgoMs=180000`; no parameters = reset.
+      if (path === '/api/__mock/forge-sim' && method === 'POST') {
+        const q = url.searchParams;
+        const budget = q.get('budget');
+        const ago = q.get('fetchedAgoMs');
+        return json(
+          200,
+          backend.setForgeSim({
+            ...(q.get('pending') === '1' ? { pending: true } : {}),
+            ...(budget === 'busy' || budget === 'low' || budget === 'backoff' ? { budget } : {}),
+            ...(q.get('error') ? { error: q.get('error') } : {}),
+            ...(ago !== null && Number.isFinite(Number(ago)) ? { fetchedAgoMs: Number(ago) } : {}),
+          }),
+        );
       }
       // Mock-only control endpoint: simulate an agent edit right now.
       if (path === '/api/__mock/mutate' && method === 'POST') {
