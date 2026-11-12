@@ -200,7 +200,12 @@ async function gutterBoxes(page: Page, type: 'change-addition' | 'change-deletio
   );
 }
 
-/** Presses on line number `from` and releases on `to` (both of `type`). */
+/**
+ * Presses on line number `from` and releases on `to` (both of `type`). The diff can re-render
+ * between measuring the line numbers and the mouse presses (a refresh of the patch, the viewer's
+ * own layout settling on a loaded runner), which moves the cells and makes the drag miss, so the
+ * positions are measured again and the drag repeated until the Copy bar shows (at most 4 times).
+ */
 async function dragLines(
   page: Page,
   type: 'change-addition' | 'change-deletion',
@@ -208,14 +213,22 @@ async function dragLines(
   to: number,
 ): Promise<void> {
   await expect.poll(async () => (await gutterBoxes(page, type)).length).toBeGreaterThan(to);
-  const boxes = await gutterBoxes(page, type);
-  const a = boxes.find((b) => b.n === from);
-  const b = boxes.find((x) => x.n === to);
-  if (!a || !b) throw new Error(`no line number ${from} / ${to}`);
-  await page.mouse.move(a.x, a.y);
-  await page.mouse.down();
-  await page.mouse.move(b.x, b.y, { steps: 5 });
-  await page.mouse.up();
+  const bar = page.locator(`[data-testid="${COPY.bar}"]`);
+  for (let attempt = 1; ; attempt++) {
+    const boxes = await gutterBoxes(page, type);
+    const a = boxes.find((b) => b.n === from);
+    const b = boxes.find((x) => x.n === to);
+    if (!a || !b) throw new Error(`no line number ${from} / ${to}`);
+    await page.mouse.move(a.x, a.y);
+    await page.mouse.down();
+    await page.mouse.move(b.x, b.y, { steps: 5 });
+    await page.mouse.up();
+    const shown = await bar
+      .waitFor({ state: 'visible', timeout: 2_000 })
+      .then(() => true)
+      .catch(() => false);
+    if (shown || attempt >= 4) return;
+  }
 }
 
 async function setMode(app: import('../support/app.js').AppPage, mode: 'split' | 'unified') {
