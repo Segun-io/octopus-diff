@@ -3863,3 +3863,25 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      could not list for any summary (every attempt overtaken by refreshes) is sent with its latest summary, `files: []`
      and this marker instead of being left out, which a client could not tell from "no changes". Older clients strip
      the field and show the worktree with no files until their next fetch. See #343.
+343. **An overtaken inbox row is kept, marked, and asked for again (Greptile P1 on PR #95; amends #341).** #341 left a
+     row out of the inbox when every list attempt was overtaken, relying on the overtaking refresh's
+     `worktree.changed` to make the client ask again. But `applyInboxDelta` does nothing while the inbox query has no
+     data yet, so on a first load whose events arrived before the answer, a worktree with changes stayed missing once
+     editing stopped. Chosen: (a) an explicit row, not (b) a longer daemon retry with an older cached row, because only
+     the client can keep asking after the request is over, an older cached list is not always there, and pairing one
+     with an older summary would bring back the mix #339 removed. The daemon now sends the row with its latest
+     summary, `files: []` and `listing: 'overtaken'` (#342); the web (`settleOvertaken` in `apps/web/src/api/
+     queries.ts`) asks for such rows again (`?worktreeIds=`) after 250 ms, 1 s and 3 s, on the first load (batched or
+     not), on refetches and on the delta path; a row still overtaken after that stays visible with its marker, and the
+     next event or fetch asks again. Older clients drop the field and show the worktree with no files until their next
+     fetch. Tests: the daemon's real-git case (three moves overtake the first inbox load: the row is there and marked,
+     and one more request returns its files); four web tests with the mock backend (`overtakeInbox`): first load,
+     a row overtaken every time (exactly three follow-ups, still shown), a refetch, the delta path. Mutations killed:
+     the row left out again; no follow-up; the delta path, the single-request path or the batched path without it;
+     marked rows dropped.
+344. **The numstat-alongside tests age their files before summarizing (macOS CI on PR #95).** `ageFiles()` (80 ms)
+     runs after the last write before each summary in that describe block and in the margin-0 submodule test, as #96
+     did for the cold test. The macOS failure itself was `numstats: 0` on the warm summary (no numstat at all, so its
+     status saw no tracked change, or the wrapper's log lost its lines), which does not match the ctime explanation
+     and did not reproduce here (20 of 20 runs, plus folding mode): the shape checks now print the summary's counts,
+     its refresh and every logged git call, so a recurrence says which it was.

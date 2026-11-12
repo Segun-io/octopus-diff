@@ -280,3 +280,8 @@ state it listed (`listChangedFilesWithState`, a `contracts:` commit); the daemon
 state, tries up to three times, and otherwise labels the list with git-core's own omission and a `stateHash` no
 summary has, leaves the inbox row out, and reports bulk review stale (DECISIONS #340, #341). Five new real-git
 tests, crossing the cap twice and three times.
+
+Third pass on PR #95: the inbox no longer leaves out a row it could not list (a first load whose events came before
+the answer would never have asked again); it sends the row marked `listing: 'overtaken'` with its latest summary and
+no files, and the web asks for it again with a bounded backoff (DECISIONS #342, #343). The macOS-only numstat test
+failure got `ageFiles()` and diagnostic messages (#344); its symptom (`numstats: 0`) did not reproduce here.
