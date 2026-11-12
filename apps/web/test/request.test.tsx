@@ -448,7 +448,7 @@ describe('Refresh in the Request tab (#12)', () => {
       const method = init?.method ?? 'GET';
       calls.push(`${method} ${url.pathname}`);
       if (method === 'POST' && url.pathname.endsWith('/request/refresh')) renamed = true;
-      const res = await inner(input, init);
+      const res = await inner(url.href, init);
       return retitle(
         res,
         url.pathname === '/api/forges' || /\/forges\/worktrees\/[^/]+\/request$/.test(url.pathname),
