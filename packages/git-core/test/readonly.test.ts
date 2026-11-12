@@ -98,6 +98,24 @@ describe('read-only proof', () => {
     fx.commitAll(conflict, 'main');
     fx.git(conflict, ['merge', 'other'], { allowFail: true });
 
+    // Merge noise (#32): a feature branch with `main` merged in, and a second merge of `main`
+    // stopped on a conflict (readFileOrigins' index-only `diff --cached MERGE_HEAD`).
+    const noisy = fx.repo('noisy', { files: { 'n.txt': 'base\n', 'm.txt': 'm\n' } });
+    fx.git(noisy, ['switch', '-q', '-c', 'feature']);
+    fx.write(path.join(noisy, 'n.txt'), 'feature\n');
+    fx.commitAll(noisy, 'feature');
+    fx.git(noisy, ['switch', '-q', 'main']);
+    fx.write(path.join(noisy, 'theirs.txt'), 't\n');
+    fx.commitAll(noisy, 'theirs');
+    fx.git(noisy, ['switch', '-q', 'feature']);
+    fx.git(noisy, ['merge', '-q', '--no-edit', 'main']);
+    fx.git(noisy, ['switch', '-q', 'main']);
+    fx.write(path.join(noisy, 'n.txt'), 'main\n');
+    fx.write(path.join(noisy, 'm.txt'), 'm2\n');
+    fx.commitAll(noisy, 'main again');
+    fx.git(noisy, ['switch', '-q', 'feature']);
+    fx.git(noisy, ['merge', 'main'], { allowFail: true });
+
     const unborn = fx.repo('unborn', { empty: true });
     fx.write(path.join(unborn, 'staged.txt'), 's\n');
     fx.git(unborn, ['add', 'staged.txt']);
@@ -125,10 +143,11 @@ describe('read-only proof', () => {
       chmodSync(unreadable, 0o000);
     }
 
-    worktrees = [main, linked, conflict, unborn, sup];
+    worktrees = [main, linked, conflict, noisy, unborn, sup];
     gitDirs = [
       path.join(main, '.git'),
       path.join(conflict, '.git'),
+      path.join(noisy, '.git'),
       path.join(unborn, '.git'),
       bare,
       path.join(sup, '.git'),
@@ -199,6 +218,8 @@ describe('read-only proof', () => {
     expect(locators.map((l) => l.worktreeId)).toContain(hashId(bare));
     let diffs = 0;
     let reviewCalls = 0;
+    let originCalls = 0;
+    const noise = new Set<string>();
     for (const wt of locators) {
       await core.getSummary(wt);
       await core.getSummary(wt, { defaultBranch: 'main' });
@@ -229,6 +250,20 @@ describe('read-only proof', () => {
       }
       const [newest, older] = commits;
       if (newest && older) await core.rangePatchId?.(wt, older.sha, newest.sha);
+      // Merge noise (#32): with the listed files and without (git-core lists them itself).
+      for (const bookmark of [null, commits.at(-1)?.sha ?? null]) {
+        const range = await core.readReviewRange?.(wt, { bookmark, defaultBranch: 'main' });
+        const base = range?.base ?? null;
+        const files = await core.listChangedFiles(
+          wt,
+          base ? { kind: 'review', base } : { kind: 'review' },
+        );
+        const given = await core.readFileOrigins?.(wt, { base, defaultBranch: 'main', files });
+        expect(given?.origins.size).toBe(files.length);
+        for (const info of given?.origins.values() ?? []) noise.add(`${info.origin}:${info.via}`);
+        await core.readFileOrigins?.(wt, { base, defaultBranch: 'main' });
+        originCalls += 1;
+      }
       for (const scope of scopes) {
         const files = await core.listChangedFiles(wt, scope).catch((error: unknown) => {
           // Branch scope on an unborn HEAD is expected to fail; anything else is not.
@@ -260,6 +295,10 @@ describe('read-only proof', () => {
     }
     expect(diffs).toBeGreaterThan(10);
     expect(reviewCalls).toBeGreaterThan(3);
+    expect(originCalls).toBeGreaterThan(6);
+    // The in-progress merge of `main` took the index-only path, and a committed merge was seen.
+    expect(noise).toContain('base:in-progress');
+    expect(noise).toContain('base:merge');
     await new Promise((resolve) => setTimeout(resolve, 200));
 
     // --- Nothing changed. ---
