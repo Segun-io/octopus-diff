@@ -87,6 +87,8 @@ const { values: args } = parseArgs({
     'after-fetch': { type: 'boolean', default: false },
     'to-review': { type: 'boolean', default: false },
     'keep-trace': { type: 'string' },
+    // #40: the daemon without incremental refreshes (A/B against the default).
+    'no-incremental': { type: 'boolean', default: false },
   },
 });
 
@@ -259,7 +261,8 @@ async function spawnDaemon(setup: BenchSetup, stateBase: string): Promise<ChildD
     configDir: join(stateBase, 'config'),
     webRoot: WEB_DIST,
     projects: setup.projectPaths,
-    git: { env: setup.gitVars },
+    git: { env: setup.gitVars, ...(args['no-incremental'] ? { incremental: false } : {}) },
+    ...(args['no-incremental'] ? { internal: { incremental: false } } : {}),
     logLevel: 'warn',
     version: 'bench',
   };
@@ -694,6 +697,8 @@ async function main() {
       sseMs: number | null;
       uiMs: number | null;
       window: [number, number];
+      /** Epoch ms of the `worktree.changed` (null: none came): spawns until then are the edit's path to SSE. */
+      sseAt: number | null;
     }> = [];
     // What the browser fetched (#51): every finished API request with its size on the wire.
     const traffic: Array<{ at: number; path: string; bytes: number }> = [];
@@ -763,6 +768,7 @@ async function main() {
         sseMs: sseAt === null ? null : sseAt - started,
         uiMs: uiAt === null ? null : uiAt - started,
         window: [started, started] as [number, number],
+        sseAt,
       };
       samples.push(sample);
       if (sample.sseMs !== null) sse.push(sample.sseMs);
@@ -927,7 +933,20 @@ async function main() {
     }
     const editSpawns = samples.map((sample) => {
       const s = spawnStats(within(allGit, sample.window[0], sample.window[1]));
-      return { role: sample.role, spawns: s.total, wallMs: s.wallMs };
+      // Started between the write and the event (#40: the summary and the review state it waits on).
+      const toSse =
+        sample.sseAt === null
+          ? null
+          : spawnStats(within(allGit, sample.window[0], sample.sseAt + 1));
+      return {
+        role: sample.role,
+        spawns: s.total,
+        wallMs: s.wallMs,
+        spawnsToSse: toSse?.total ?? null,
+        bySubToSse: toSse
+          ? Object.fromEntries(Object.entries(toSse.bySub).map(([k, g]) => [k, g.count]))
+          : null,
+      };
     });
 
     const gitVersion = (await runGit(['--version'], { cwd: setup.root, env: setup.gitEnv })).stdout
@@ -1025,6 +1044,7 @@ async function main() {
     const failed = budgets.filter((b) => b.status === 'fail');
     const result = {
       generatedAt: new Date().toISOString(),
+      incremental: !args['no-incremental'],
       environment: {
         platform: `${platform()} ${release()}`,
         cpu: cpus()[0]?.model ?? 'unknown',
@@ -1200,13 +1220,20 @@ function markdown(r: any): string {
     r.refresh.sseByRole as Record<string, { p50: number; p95: number; max: number; count: number }>,
   )
     .map(([role, s]) => {
-      const edits = (r.refresh.spawnsPerEdit as Array<{ role: string; spawns: number }>).filter(
-        (e) => e.role === role,
+      const edits = (
+        r.refresh.spawnsPerEdit as Array<{
+          role: string;
+          spawns: number;
+          spawnsToSse?: number | null;
+        }>
+      ).filter((e) => e.role === role);
+      const range = (values: number[]) =>
+        values.length ? `${Math.min(...values)}–${Math.max(...values)}` : 'n/a';
+      const spawns = range(edits.map((e) => e.spawns));
+      const toSse = range(
+        edits.flatMap((e) => (typeof e.spawnsToSse === 'number' ? [e.spawnsToSse] : [])),
       );
-      const spawns = edits.length
-        ? `${Math.min(...edits.map((e) => e.spawns))}–${Math.max(...edits.map((e) => e.spawns))}`
-        : 'n/a';
-      return `| ${role} | ${s.count} | ${fmt(s.p50)} / ${fmt(s.p95)} / ${fmt(s.max)} | ${spawns} |`;
+      return `| ${role} | ${s.count} | ${fmt(s.p50)} / ${fmt(s.p95)} / ${fmt(s.max)} | ${toSse} | ${spawns} |`;
     })
     .join('\n');
   const payloadRows = (r.payloads as PayloadRow[])
@@ -1333,9 +1360,11 @@ ${afterFetchSection}
 ${burstSection(r)}
 ## Edit → SSE by worktree role
 
-| Role | Edits | SSE p50 / p95 / max | Git spawns per edit |
-|---|---|---|---|
+| Role | Edits | SSE p50 / p95 / max | Git spawns to SSE | Git spawns per edit |
+|---|---|---|---|---|
 ${roleRows}
+
+*To SSE*: processes started between the write and the worktree's \`worktree.changed\` (the summary and the review state the event waits for). *Per edit*: until the daemon is quiet again, the UI's refetches included.${r.incremental === false ? ' **Run with `--no-incremental`** (every refresh in full).' : ''}
 
 ## API payloads
 
