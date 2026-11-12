@@ -16,6 +16,7 @@ import { readBranchBase } from './branch-base.js';
 import { GitContext } from './context.js';
 import { createAttributeCache, type DiffDeps, getFileDiff, listChangedFiles } from './diff.js';
 import { detectDefaultBranch, listWorktrees, resolveProject, scan } from './discovery.js';
+import { readFileOrigins } from './file-origins.js';
 import { LOG_FORMAT, parseLog } from './parse/log.js';
 import { readRemoteConfig } from './remotes.js';
 import { readRepositoryInfo } from './repository.js';
@@ -207,6 +208,9 @@ export const createGitCore: CreateGitCore = (options: GitCoreOptions = {}): GitC
     ),
     describeCommits: guard((worktree, shas) => describeCommits(reviewDeps, worktree, shas)),
     rangePatchId: guard((worktree, from, to) => rangePatchId(reviewDeps, worktree, from, to)),
+    readFileOrigins: guard((worktree, originOptions) =>
+      readFileOrigins(ctx, worktree, originOptions),
+    ),
     dispose: async () => {
       disposed = true;
       reviewDeps.commitCache.clear();

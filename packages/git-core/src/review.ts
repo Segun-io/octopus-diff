@@ -59,7 +59,7 @@ function fullSha(value: unknown, what: string): string {
 // ---------------------------------------------------------------------------------------------
 
 /** The full ref HEAD points at, or null when detached (from the files when they can tell). */
-async function headRef(ctx: GitContext, repo: RepoInfo): Promise<string | null> {
+export async function headRef(ctx: GitContext, repo: RepoInfo): Promise<string | null> {
   const fromFiles = await readHeadFromFiles(repo.gitDir, repo.commonDir);
   if (fromFiles !== undefined) return fromFiles.ref;
   const result = await ctx.git(repo, ['symbolic-ref', '-q', 'HEAD'], { okExitCodes: [0, 1] });
@@ -68,7 +68,7 @@ async function headRef(ctx: GitContext, repo: RepoInfo): Promise<string | null> 
 }
 
 /** HEAD's branch is the default branch (its local branch, when the default is remote-tracking). */
-function isDefaultBranch(ref: string, defaultRef: ResolvedRef | null): boolean {
+export function isDefaultBranch(ref: string, defaultRef: ResolvedRef | null): boolean {
   if (!defaultRef) return false;
   if (ref === defaultRef.ref) return true;
   const remote = /^refs\/remotes\/[^/]+\/(.+)$/.exec(defaultRef.ref);
@@ -79,7 +79,7 @@ function isDefaultBranch(ref: string, defaultRef: ResolvedRef | null): boolean {
 const RANGE_MEMO_MAX_COMMITS = 5000;
 
 /** `rev-list --parents base..head`, at most `maxCommits` (+1 to detect truncation). */
-async function rangeCommits(
+export async function rangeCommits(
   ctx: GitContext,
   repo: RepoInfo,
   base: string,

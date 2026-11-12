@@ -92,6 +92,18 @@ The scope select becomes a filter with live counts and never moves rows:
   squash or rebase merges, commits whose patch-id was reviewed are skipped. What remains: merge-commit
   resolutions and commits never seen.
 
+### 2.4a Merge noise: own, mixed, base (#31-#34)
+
+Files of the To review list that came from the default branch are tagged, not hidden. git-core's
+`readFileOrigins` (#32, DECISIONS #198-#200) classifies each listed file: **base** (the default branch's change:
+merged, rebased, fast-forwarded, or the branch's version equals the newest default-branch version: cherry-picks,
+squash-landed work), **mixed** (own changes and the default branch changed it too: shown with the combined patch,
+"only this branch's changes" is the file against `N`) or **own** (everything else, and every uncommitted change
+except what a merge or cherry-pick of a default-branch commit staged). The default branch's own worktree and a
+detached HEAD are all own (pulled work cannot be told from own work); merges of other branches are own. The
+daemon attaches it (#33: `ChangedFile.origin`, `WorktreeReview.baseFiles` / `unreviewedOwnFiles` /
+`integrationRef`) and the web collapses base files into a "From origin/main" group (#34).
+
 ### 2.5 Forge
 
 Uses existing `WorktreeForge` data (`changeRequest.state`, `headSha`, `sync`, `review`, `checks`):

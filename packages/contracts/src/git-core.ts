@@ -1,6 +1,8 @@
 import type { Logger } from './common.js';
 import type {
   CommitInfo,
+  FileOrigin,
+  FileOriginVia,
   FileSelector,
   GitChangedFile,
   GitFileDiff,
@@ -124,8 +126,68 @@ export interface GitCore {
     options?: ScopeOptions & { base?: string },
   ): Promise<BranchBase | null>;
 
+  /**
+   * Merge noise (#32): for each file of a review list, whether its change is the worktree's own
+   * work, the default branch's (`base`: merged, rebased, updated or identical to it) or both
+   * (`mixed`). Reads commits and trees only (name-only `diff-tree` between commits, `merge-base`,
+   * `rev-list`), memoized by commit ids; one index-only `diff --cached` while a merge or
+   * cherry-pick is in progress; never a working-tree diff for committed content. Optional (test
+   * doubles, older implementations): callers then treat every file as `own`.
+   */
+  readFileOrigins?(worktree: WorktreeLocator, options: FileOriginsOptions): Promise<FileOrigins>;
+
   /** Kills in-flight git processes and rejects queued work. */
   dispose(): Promise<void>;
+}
+
+/** A file to classify: the fields of a listed `GitChangedFile` that `readFileOrigins` reads. */
+export type FileOriginInput = Pick<
+  GitChangedFile,
+  'path' | 'rawPath' | 'oldPath' | 'status' | 'staged' | 'unstaged'
+>;
+
+export interface FileOriginsOptions extends ScopeOptions {
+  /**
+   * `O`: where the list's committed part starts, normally `ReviewRange.base` (a full commit id
+   * that HEAD contains). Null: nothing committed is in the list (an unborn branch).
+   */
+  base: string | null;
+  /**
+   * The files to classify, as listed (their `staged` / `unstaged` / `status` must come from the
+   * same `git status` as the list: `review`, `working` and `branch` + `includeWorking` scopes).
+   * Absent: git-core lists `base..HEAD` (committed) and `git status` (uncommitted) itself, at the
+   * cost of one `diff-tree` and one `status`.
+   */
+  files?: readonly FileOriginInput[];
+}
+
+/** One file's origin (see `FileOrigin`, `FileOriginVia`). */
+export interface FileOriginInfo {
+  origin: FileOrigin;
+  /** Null for `own`; set for `base` and `mixed`. */
+  via: FileOriginVia | null;
+}
+
+export interface FileOrigins {
+  /**
+   * Display name of the default-branch ref base files come from (the newer of the local default
+   * branch and `origin/<name>`, the remote when they are equal), e.g. `origin/main`; null when no
+   * default branch is known.
+   */
+  integrationRef: string | null;
+  /**
+   * `N`: the newest default-branch commit HEAD has absorbed (the branch scope's base, #30). Null
+   * when unknown (unborn branch, no default branch, no shared history). The "only this branch's
+   * changes" view of a mixed file is the file in the branch scope (against `N`).
+   */
+  n: string | null;
+  /** `TIP`: the newer of the two default-branch refs (commit id); null when no default branch. */
+  tip: string | null;
+  /**
+   * By review-mark path key (`rawPath ?? path`), one entry per input file (with `files`) or per
+   * listed file. A file missing from the map is `own`.
+   */
+  origins: Map<string, FileOriginInfo>;
 }
 
 /** The ref a branch scope is measured against (see `GitCore.readBranchBase`). */
