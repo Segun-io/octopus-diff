@@ -437,7 +437,10 @@ function checkCanonical(repo: string): void {
   expect(canonicalStatusOutput(parsed.header, sorted)).toBe(output);
 }
 
-async function runSeed(seed: number, config: string[][] = []): Promise<{ incremental: number }> {
+async function runSeed(
+  seed: number,
+  config: string[][] = [],
+): Promise<{ incremental: number; hinted: number }> {
   const r = prng(seed);
   silentlyEdited.length = 0;
   const repo = setupRepo(`fuzz-${seed.toString(16)}-${config.length}`, r, config);
@@ -446,6 +449,8 @@ async function runSeed(seed: number, config: string[][] = []): Promise<{ increme
   const SCOPES = scopesFor(root);
   const log: string[] = [];
   let incremental = 0;
+  /** Steps whose hint named at least one path (an empty hint is a full refresh by design). */
+  let hinted = 0;
   const reasons = new Map<string, number>();
   // Baseline: the first summary has no state to update.
   let held = (await inc.getSummary(wt, { snapshot: true })).stateHash;
@@ -500,6 +505,7 @@ async function runSeed(seed: number, config: string[][] = []): Promise<{ increme
       hint = kept;
     } else hints.exact++;
     let reconciled = false;
+    if (hint.length > 0) hinted++;
     let got = await inc.getSummary(wt, { snapshot: true, changedPaths: hint });
     if (lost) stale = true;
     if (got.refresh?.mode === 'full') stale = false;
@@ -589,25 +595,29 @@ async function runSeed(seed: number, config: string[][] = []): Promise<{ increme
       hints,
     );
   }
-  return { incremental };
+  return { incremental, hinted };
 }
 
 describe('incremental summary fuzz', () => {
   for (const seed of SEEDS) {
     it(`seed 0x${seed.toString(16)}: incremental == full after every step`, async () => {
-      const { incremental } = await runSeed(seed);
-      // The hint must actually be used most of the time, or the test proves nothing; on a
+      const { incremental, hinted } = await runSeed(seed);
+      // The hint must actually be used often, or the test proves nothing: in more than a fifth of
+      // the steps whose hint names a path (empty ones, from lost events, are full by design). On a
       // folding filesystem it must never be (the equality checks above still ran every step).
       if (FOLDS) expect(incremental).toBe(0);
-      else expect(incremental).toBeGreaterThan(STEPS / 5);
+      else {
+        expect(hinted).toBeGreaterThan(STEPS / 2);
+        expect(incremental).toBeGreaterThan(hinted / 5);
+      }
     }, 120_000);
   }
 
   it.skipIf(FOLDS)(
     skipped('core.ignorecase=true on a case-sensitive filesystem'),
     async () => {
-      const { incremental } = await runSeed(0xca5e, [['core.ignorecase', 'true']]);
-      expect(incremental).toBeGreaterThan(STEPS / 5);
+      const { incremental, hinted } = await runSeed(0xca5e, [['core.ignorecase', 'true']]);
+      expect(incremental).toBeGreaterThan(hinted / 5);
     },
     120_000,
   );
