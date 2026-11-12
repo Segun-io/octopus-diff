@@ -44,6 +44,37 @@ export function coveredByCommits(
   return !(file.oldPath !== null && uncovered.has(file.oldPath));
 }
 
+/**
+ * Merge noise (#33): the commits of a review range that are default-branch history, i.e. `N` (the
+ * newest default-branch commit HEAD has absorbed, `FileOrigins.n`) and its ancestors inside the
+ * range. A merge or rebase of the default branch brings them in; they are reviewed on the default
+ * branch's own worktree, not here. Walked in memory over the range's parent links (no git process):
+ * every ancestor of `N` that is in `base..HEAD` is reached through commits that are in it too (a
+ * commit on the path that `base` contained would make its ancestors `base`'s as well). Equal to
+ * "reachable from the local default branch or `origin/<d>`" whenever that merge base is unique
+ * (criss-cross histories: DECISIONS #200). `n` null (unknown, the default branch's own worktree, a
+ * detached HEAD): none. A truncated range only knows its listed commits.
+ */
+export function defaultBranchCommits(
+  range: Pick<ReviewRange, 'commits'>,
+  n: string | null,
+): ReadonlySet<string> {
+  const found = new Set<string>();
+  if (n === null || range.commits.length === 0) return found;
+  const parents = new Map<string, readonly string[]>();
+  for (const c of range.commits) parents.set(c.sha, c.parents);
+  const stack = [n];
+  while (stack.length > 0) {
+    const sha = stack.pop() as string;
+    if (found.has(sha)) continue;
+    const up = parents.get(sha);
+    if (up === undefined) continue;
+    found.add(sha);
+    for (const p of up) stack.push(p);
+  }
+  return found;
+}
+
 /** The review state of one worktree at one summary state and one app-state version. */
 export interface ReviewComputed {
   /** Cache key: summary stateHash, the project's review version, the default branch. */
@@ -54,7 +85,14 @@ export interface ReviewComputed {
   scope: DiffScope;
   /** Paths touched by unreviewed commits in the range; null = every committed change counts. */
   uncovered: Set<string> | null;
-  /** Unreviewed commits of the range (newest first). */
+  /** Unreviewed commits of the range (newest first), default-branch commits excluded (#33). */
   unreviewedCommits: string[];
+  /**
+   * Commits of the range that are default-branch history (`defaultBranchCommits`): never counted
+   * in `newCommits` and never recorded as reviewed by a bookmark move here (#33).
+   */
+  baseCommits: ReadonlySet<string>;
+  /** `N` from the file origins (null when unknown or not computed). */
+  integrationBase: string | null;
   info: WorktreeReview;
 }

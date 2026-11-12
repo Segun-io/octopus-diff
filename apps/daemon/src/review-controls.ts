@@ -1,7 +1,6 @@
 import type {
   BulkReviewRequestParsed,
   BulkReviewResponse,
-  GitChangedFile,
   Logger,
   SetBookmarkRequest,
   SetBookmarkResponse,
@@ -11,10 +10,12 @@ import type {
   UndoReviewResponse,
 } from '@octopus-diff/contracts';
 import {
+  type BulkFile,
   type BulkWorktree,
   filterByPaths,
   type MarkChange,
   mayHaveFiles,
+  ownWork,
   type ReviewSource,
   UndoStore,
 } from './bulk-review.js';
@@ -38,7 +39,7 @@ export interface ReviewControlsOptions {
 interface Considered {
   wt: BulkWorktree;
   expected: string | undefined;
-  files: GitChangedFile[];
+  files: BulkFile[];
 }
 
 function toKey(change: MarkChange): string {
@@ -157,7 +158,9 @@ export class ReviewControls {
         stale.push(item.wt.worktreeId);
         continue;
       }
-      const files = paths === undefined ? item.files : filterByPaths(item.files, paths);
+      // Base files (the default branch's changes, #33) are never marked or counted, even when
+      // named in `paths`; the bookmark below still moves past them.
+      const files = ownWork(paths === undefined ? item.files : filterByPaths(item.files, paths));
       const head = item.wt.summary?.headSha ?? null;
       if (advance && head !== null) advanceTo.push({ worktreeId: item.wt.worktreeId, head });
       if (files.length === 0) continue;
