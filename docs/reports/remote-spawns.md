@@ -74,7 +74,9 @@ Machine: 12-core WSL2, Node 26.13, git 2.53, shared with other sessions (timings
 - `pnpm check`: **exit 0**. contracts 99, forge 101 (+5 skipped), fixtures 58, git-core **279** (was 276), web 284,
   daemon **286 (+1 skipped)** (was 284), e2e unit 5, cli 139, scripts 34; lint (incl. `credits:check`), typecheck,
   build green.
-- `pnpm test:e2e`: see "e2e run" at the end.
+- `pnpm test:e2e`: **99 passed (3.0 min), exit 0**, no flaky or failed test (16-copy.spec.ts:226 passed this time). Read-only
+  proof: **12 control repos, 4276 lock polls, 0 violations**. No shutdown hang (BLOCKERS Open 2 did not trigger); the
+  log has the usual `git-core has been disposed` request errors between specs.
 - **Bench, before/after on the same machine, back to back** (`pnpm --filter @octopus-diff/e2e bench [--to-review |
   --after-fetch] --keep-trace …`). "Before" = this branch's bench commit `5471c34` on top of main, with no git-core
   change, built in a temporary worktree (removed afterwards); "after" = this branch. All six runs exit 0 with every
