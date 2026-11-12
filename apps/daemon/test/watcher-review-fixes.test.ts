@@ -355,6 +355,9 @@ describe('F5: build-output directories', { timeout: 20_000 }, () => {
       await mkdir(path.dirname(file), { recursive: true });
       await writeFile(file, content);
     }
+    // Created before subscribing, never during a test: inotify can miss a file written into a
+    // directory in the instant it appears (the new directory is not watched yet).
+    await mkdir(path.join(layout.main, 'app', 'build'), { recursive: true });
     return layout;
   }
 
