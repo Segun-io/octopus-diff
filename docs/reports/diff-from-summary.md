@@ -197,3 +197,6 @@ untracked file 2 ms (20 ms in the untracked-heavy worktree) / 0 spawns; a file t
   the signature; not added: it would change the state hash).
 - **Tests:** 5 golden cases (the repro for untracked and tracked, deep symlink, copy, away-and-back, directory-to-file; two failed first), 5 mutations killed; fuzz
   gained the shapes (honestly, it does not isolate the case).
+- **Verification (round 5):** lint, typecheck, build exit 0; `pnpm test` exit 0 (git-core 440 + 1 skipped, daemon 410 + 4 skipped; both run twice more, same counts); folding mode git-core 425 + 16 skipped, daemon
+  408 + 6 skipped; `pnpm test:e2e` 102 passed (3.2 min), read-only proof 12 repos, 4751 lock polls, 0 violations; `perf:smoke` exit 0; 100k diff-open: tracked 15-16 ms / 1 spawn, untracked 2 ms
+  (20 ms in the untracked-heavy worktree) / 0 spawns, 300k-line rewrite 277 ms, a cap-omitted file 394 ms / 2 spawns (the whole route, unchanged).
