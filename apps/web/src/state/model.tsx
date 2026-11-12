@@ -97,6 +97,12 @@ export interface AppModel {
    */
   viewListed: boolean;
   /**
+   * The open worktree's row has moved on (an event carried its new state) but the file list on
+   * screen is still the old one, for a moment: what a bulk mark would act on is not what the row
+   * says. "Review all" waits (it would send the old list's hash and the daemon would skip it).
+   */
+  listBehind: boolean;
+  /**
    * The worktrees of the list the sidebar shows (the filters apply): the one predicate of what a
    * pane can show, used by the pane, `n`, `J`/`K`, the landing and the bulk plans (DECISIONS #281).
    */
@@ -253,6 +259,16 @@ function useBuildAppModel(): AppModel {
     return out;
   }, [inboxEntries]);
 
+  const openRow = view.kind === 'worktree' ? sidebar.byId.get(view.worktreeId) : undefined;
+  // Not for the commit scope (its lists are immutable) or a row with no summary or an error.
+  const listBehind =
+    scope.kind !== 'commit' &&
+    filesData !== undefined &&
+    filesData.worktreeId === openRow?.worktree.id &&
+    openRow.summary !== null &&
+    openRow.error === null &&
+    filesData.stateHash !== openRow.summary.stateHash;
+
   const listedIds = useMemo<ReadonlySet<string>>(() => new Set(sidebar.order), [sidebar.order]);
   const viewListed = view.kind !== 'worktree' || listedIds.has(view.worktreeId);
 
@@ -354,6 +370,7 @@ function useBuildAppModel(): AppModel {
     stateHashes,
     inboxStateHashes,
     viewListed,
+    listBehind,
     listedIds,
     allUnfiltered,
     viewPolicy,

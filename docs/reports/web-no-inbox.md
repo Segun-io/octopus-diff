@@ -41,7 +41,7 @@ Run from the repo root on this machine (Node 26):
 - `pnpm lint`: pass (credits up to date; no dependency changed, `pnpm credits` not needed). One `info` from the daemon
   test file `apps/daemon/test/file-origins.real-git.test.ts` (another session's, not touched).
 - `pnpm typecheck`: pass (all packages incl. `e2e`).
-- `pnpm --filter @octopus-diff/web test`: **30 files, 437 tests pass (after the PR #86 follow-ups; 423 before them)** (before this work: 30 files / 416 tests).
+- `pnpm --filter @octopus-diff/web test`: **30 files, 440 tests pass (after the PR #86 follow-ups; 423 before them)** (before this work: 30 files / 416 tests).
 - `pnpm build`: pass.
 - `pnpm test:e2e` (full, `workers: 1`): first run 101 passed, 1 failed (`15-ui-status-flow` "a commit keeps the work out
   of the shelf", a real race, below); after the fix, final run **102 passed, 0 failed** (3.2 min; re-run after the PR #86 follow-up: 102 passed).
@@ -165,3 +165,26 @@ two picked worktrees, remove the open worktree so nothing is listed, edit the cl
 filters stay as set, no "Filters cleared" notice. The `n`, auto-advance and `J`/`K` cases now also assert the filters are
 untouched. Mutation checks: no clearing in `openView` (3 fail), the landing clearing filters (1, the reported bug),
 `J` and `K` each clearing (1 each), `n` clearing (2), no notice (2).
+
+## Review follow-up 5 (CI: `15-ui-status-flow` "a commit keeps the work out of the shelf")
+
+Root cause (DECISIONS #282): an event whose `stateHash` the cached projects list already held skipped the refetch of the
+open worktree's file list, which then stayed on the pre-commit state while the row was current; "Review all" sent that
+list's hash and the daemon reported "changed meanwhile". Fixed in `api/cache.ts` (`fileListBehind`) and, for the short
+refetch window, in the app (`listBehind`: the button is pending, `Shift+R` says the list is refreshing). The spec helper
+waits for `data-pending` to go instead of the refresh indicator.
+
+Stress, `pnpm exec playwright test tests/15-ui-status-flow.spec.ts -g "a commit keeps" --repeat-each 20 --workers 1`
+(12 cores; load = four `yes > /dev/null` processes, killed by PID):
+
+| | no load | 4 busy processes |
+|---|---|---|
+| before (c333feb, idle-indicator wait) | 18/20 and 17/20 | 14/20 |
+| after, app fix only (old spec wait) | 20/20 | 20/20 |
+| after, app fix + `data-pending` wait | 20/20 and 20/20 | 20/20 and 20/20 |
+
+Tests: `cache.test.ts` (an event whose hash the projects list holds still refetches a list that is behind; and refetches
+nothing when the list is current), `app.test.tsx` "Review all waits for the open worktree list to catch up with its row"
+(the file list held while the worktree changes: button pending, click and `Shift+R` send nothing and say why, then it
+sends the fresh list's hash). Mutation checks: no `fileListBehind` (1 fail), `listBehind` false (1), `markAll` unguarded
+(1), button not disabled while pending (1).

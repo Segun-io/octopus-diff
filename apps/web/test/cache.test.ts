@@ -145,6 +145,51 @@ describe('SSE → cache invalidation', () => {
     expect(invalid(queryKeys.files(b.worktree.id, { kind: 'working' }))).toBe(false);
   });
 
+  it('an event whose hash the projects list already holds still refetches a file list that is behind it', async () => {
+    const { backend, qc, a, file } = seeded();
+    const filesKey = queryKeys.files(a.worktree.id, { kind: 'working' });
+    const before = qc.getQueryData<FilesResponse>(filesKey);
+    const events: ServerEvent[] = [];
+    backend.subscribe((e) => events.push(e));
+    backend.mutate(a.worktree.id, 'edit', file.path);
+    const event = events.find(
+      (e) => e.type === 'worktree.changed' && e.worktreeId === a.worktree.id,
+    );
+    if (!event || event.type !== 'worktree.changed') throw new Error('no worktree.changed event');
+    // Some other fetch (the projects list) got there before the event: the row has the new hash.
+    qc.setQueryData(queryKeys.projects(), backend.listProjects());
+    expect(event.stateHash).not.toBe(before?.stateHash);
+    const api = createApiClient({
+      baseUrl: 'http://mock.local',
+      fetch: createMockFetch(backend),
+    });
+    const effects = collectEventEffects(qc, event, emptyEffects(), { reconnect: false });
+    await flushEffects(qc, effects, api);
+    // The file list on screen is the old state: it must be refetched, not left because the row is current.
+    expect(qc.getQueryState(filesKey)?.isInvalidated).toBe(true);
+  });
+
+  it('an event whose hash the projects list and the file lists already hold refetches nothing', async () => {
+    const { backend, qc, a, file } = seeded();
+    const filesKey = queryKeys.files(a.worktree.id, { kind: 'working' });
+    const events: ServerEvent[] = [];
+    backend.subscribe((e) => events.push(e));
+    backend.mutate(a.worktree.id, 'edit', file.path);
+    const event = events.find(
+      (e) => e.type === 'worktree.changed' && e.worktreeId === a.worktree.id,
+    );
+    if (!event || event.type !== 'worktree.changed') throw new Error('no worktree.changed event');
+    qc.setQueryData(queryKeys.projects(), backend.listProjects());
+    qc.setQueryData(filesKey, backend.listFiles(a.worktree.id, { kind: 'working' }));
+    const api = createApiClient({ baseUrl: 'http://mock.local', fetch: createMockFetch(backend) });
+    await flushEffects(
+      qc,
+      collectEventEffects(qc, event, emptyEffects(), { reconnect: false }),
+      api,
+    );
+    expect(qc.getQueryState(filesKey)?.isInvalidated).toBe(false);
+  });
+
   it("an older daemon's event (no delta) refetches the whole inbox; no client-side reconstruction (#51)", async () => {
     const { backend, qc, a } = seeded();
     const requests: string[] = [];

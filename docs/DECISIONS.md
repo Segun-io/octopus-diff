@@ -3390,3 +3390,21 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      taken: it would need a second source of truth for what the pane may show. Bulk plans never select. Filtering itself
      never navigates. Table-driven test: `app.test.tsx` "every navigation targets a worktree the pane can show" (n at the
      last unreviewed file, n wrapping, auto-advance, J/K, palette, Overview row, landing).
+
+282. **A file list behind its row is refetched, and "Review all" waits for it (PR #86, CI `15-ui-status-flow`, 2026-11-12).**
+     Root cause of the flaky "a commit keeps the work out of the shelf" spec, found with a stress (`--repeat-each 20
+     --workers 1`: 17-18 of 20 passed, 14 of 20 with four busy-loop processes) and the button's hashes at failure (row =
+     daemon = current, the open file list's hash the old one, `fetching=false`): `collectEventEffects` treated a
+     `worktree.changed` whose `stateHash` the *cached projects list* already held as "same git state, refetch nothing"
+     (#51 review). But the projects list is refreshed by other fetches too, so it can get the new hash before the event
+     arrives, and then nothing refetched the open worktree's file list: it stayed on the old state, "Review all" sent
+     that list's hash and the daemon (correctly) answered "changed meanwhile", with no way out but a reload. Fix at the
+     source (`api/cache.ts`): that shortcut now applies only when no cached file list of the worktree is built for another
+     state (`fileListBehind`; the commit scope is exempt). Also in the app (`model.listBehind`: the open worktree's row hash
+     differs from its file list's hash): while the list is catching up (the ~hundreds of ms between the event and the
+     refetch) the "Review N shown" button is pending (`data-pending="true"`, `aria-disabled`, title says why) and
+     `Shift+R` / a click mark nothing and say "This worktree just changed and its list is refreshing. Try again in a
+     moment." instead of sending a stale plan. No automatic retry: the stale check exists so that nobody marks a diff
+     they have not seen; the click is simply not accepted until the list on screen is current. The spec waits for that
+     condition (`data-pending` gone) instead of the refresh indicator. Result: 20 of 20 without load, 20 of 20 with load,
+     twice each (before the fix: 17-18 of 20 and 14 of 20).

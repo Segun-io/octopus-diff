@@ -168,6 +168,17 @@ export function emptyEffects(): EventEffects {
   };
 }
 
+/** A cached file list of the worktree (not the commit scope's) was built for another state. */
+function fileListBehind(queryClient: QueryClient, worktreeId: string, stateHash: string): boolean {
+  return queryClient
+    .getQueryCache()
+    .findAll({ queryKey: queryKeys.filesAll(worktreeId) })
+    .some((query) => {
+      const data = query.state.data as FilesResponse | undefined;
+      return data !== undefined && data.stateHash !== stateHash && data.stateHash !== 'immutable';
+    });
+}
+
 /**
  * Folds one server event into pending invalidations (applied in a batch by `flushEffects`).
  * `review.changed` is applied to the caches directly: it needs no refetch.
@@ -187,7 +198,13 @@ export function collectEventEffects(
       // The feed moves with the state, but the projects list may already hold the new hash (any
       // refetch refreshes it), so this is decided before the hash check below.
       if (event.activitySeq !== undefined) effects.activity.add(event.worktreeId);
-      if (cachedStateHash(queryClient, event.worktreeId) === event.stateHash) {
+      // ...unless a file list on screen is still an older state: the row being current says
+      // nothing about it (another fetch of the projects list can land before the event), so the
+      // event must still refetch it, or "Review all" would act on a list the daemon has moved past.
+      if (
+        cachedStateHash(queryClient, event.worktreeId) === event.stateHash &&
+        !fileListBehind(queryClient, event.worktreeId, event.stateHash)
+      ) {
         // Same git state, but the row may be later (its review state landed after a projects
         // answer already showed the summary, #51 review): apply the row, refetch nothing.
         const row = cachedRow(queryClient, event.worktreeId);

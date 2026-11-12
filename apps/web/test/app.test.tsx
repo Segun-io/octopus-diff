@@ -47,6 +47,8 @@ interface Harness {
   bulkBodies: { target: { kind: string }; expectedStateHashes: Record<string, string> }[];
   /** Holds the GETs of `/api/inbox` (the review data) while `held`, so a test can order two fetches. */
   inboxGate: { held: boolean; hold: () => void; release: () => void };
+  /** Holds the GETs of a worktree's file list. */
+  filesGate: { held: boolean; hold: () => void; release: () => void };
 }
 
 function setup(
@@ -65,21 +67,29 @@ function setup(
   });
   const requests: string[] = [];
   const bulkBodies: Harness['bulkBodies'] = [];
-  let opened: Promise<void> = Promise.resolve();
-  let open: () => void = () => undefined;
-  const inboxGate = {
-    held: false,
-    hold() {
-      inboxGate.held = true;
-      opened = new Promise<void>((resolve) => {
-        open = resolve;
-      });
-    },
-    release() {
-      inboxGate.held = false;
-      open();
-    },
+  /** A gate on the GETs a predicate matches: `hold()` parks them until `release()`. */
+  const makeGate = (matches: (url: string) => boolean) => {
+    let opened: Promise<void> = Promise.resolve();
+    let open: () => void = () => undefined;
+    const gate = {
+      held: false,
+      matches,
+      wait: () => opened,
+      hold() {
+        gate.held = true;
+        opened = new Promise<void>((resolve) => {
+          open = resolve;
+        });
+      },
+      release() {
+        gate.held = false;
+        open();
+      },
+    };
+    return gate;
   };
+  const inboxGate = makeGate((url) => url.includes('/api/inbox'));
+  const filesGate = makeGate((url) => /\/api\/worktrees\/[^/]+\/files/.test(url));
   const api = createApiClient({
     baseUrl: 'http://mock.local',
     fetch: async (input, init) => {
@@ -87,12 +97,10 @@ function setup(
       if (String(input).endsWith('/api/review/bulk') && typeof init?.body === 'string') {
         bulkBodies.push(JSON.parse(init.body));
       }
-      if (
-        inboxGate.held &&
-        (init?.method ?? 'GET') === 'GET' &&
-        String(input).includes('/api/inbox')
-      ) {
-        await opened;
+      for (const gate of [inboxGate, filesGate]) {
+        if (gate.held && (init?.method ?? 'GET') === 'GET' && gate.matches(String(input))) {
+          await gate.wait();
+        }
       }
       return mockFetch(input, init);
     },
@@ -123,7 +131,7 @@ function setup(
       eventSourceFactory={factory}
     />,
   );
-  return { backend, store, user: userEvent.setup(), requests, inboxGate, bulkBodies };
+  return { backend, store, user: userEvent.setup(), requests, inboxGate, filesGate, bulkBodies };
 }
 
 const app = () => screen.getByTestId(TEST_IDS.app);
@@ -756,6 +764,46 @@ describe('keyboard', () => {
     expect(screen.getByTestId(TEST_IDS.helpDialog)).toBeTruthy();
     await press(user, '{Escape}');
     expect(screen.queryByTestId(TEST_IDS.helpDialog)).toBeNull();
+  });
+});
+
+describe('Review all waits for the open worktree list to catch up with its row', () => {
+  /** The open worktree changes: its row moves on at once, its file list a moment later. */
+  async function changedUnderTheList() {
+    const h = setup();
+    await ready();
+    const id = currentWorktree() as string;
+    const patch = viewer().getAttribute('data-patch-hash');
+    h.filesGate.hold();
+    act(() => {
+      h.backend.mutate(id, 'edit', viewerPath() ?? undefined);
+    });
+    // The row has the new state (the event carries it); the file list on screen is the old one.
+    const button = screen.getByTestId(TEST_IDS.markAllButton);
+    await waitFor(() => expect(button.dataset.pending).toBe('true'));
+    return { ...h, id, patch, button };
+  }
+
+  it('the button is pending, a click or Shift+R marks nothing and says why, then it works on the fresh list', async () => {
+    const h = await changedUnderTheList();
+    expect(h.button.getAttribute('aria-disabled')).toBe('true');
+    fireEvent.click(h.button);
+    await press(h.user, 'R');
+    expect(h.bulkBodies).toHaveLength(0);
+    expect(screen.getByTestId('notice').textContent).toContain('refreshing');
+    // The list catches up: the button is live again and sends the hash of the list it counted.
+    h.filesGate.release();
+    await waitFor(() => expect(h.button.dataset.pending).toBeUndefined());
+    await waitFor(() => expect(viewer().getAttribute('data-patch-hash')).not.toBe(h.patch));
+    fireEvent.click(h.button);
+    await screen.findByTestId(TEST_IDS.bulkReviewToast);
+    expect(h.bulkBodies).toHaveLength(1);
+    const summary = h.backend
+      .listProjects()
+      .projects.flatMap((p) => p.worktrees)
+      .find((w) => w.worktree.id === h.id)?.summary;
+    expect(h.bulkBodies[0]?.expectedStateHashes[h.id]).toBe(summary?.stateHash);
+    expect(screen.getByTestId(TEST_IDS.bulkReviewToast).textContent).not.toContain('meanwhile');
   });
 });
 

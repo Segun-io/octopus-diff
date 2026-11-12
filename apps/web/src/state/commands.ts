@@ -368,6 +368,13 @@ export function useCommands(model: AppModel, resolvedTheme: 'light' | 'dark'): C
         void queryClient.invalidateQueries({ queryKey: ['diff'] });
       },
       markAll(reviewed) {
+        if (latest.current.model.listBehind) {
+          actions.notice(
+            store,
+            'This worktree just changed and its list is refreshing. Try again in a moment.',
+          );
+          return;
+        }
         runPlan(plan(reviewed), reviewed);
       },
       markEvery(reviewed) {
