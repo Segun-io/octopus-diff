@@ -50,8 +50,9 @@ export interface SnapshotState {
   truncated: boolean;
   head: HeadState;
   /**
-   * The summary's `stateHash`: it covers the whole worktree, including paths beyond a truncated
-   * snapshot's cap, which neither `total` nor the retained entries can show changing.
+   * The snapshot's `contentHash`: it covers every changed path of the worktree, including those
+   * beyond a truncated snapshot's cap, which neither `total` nor the retained entries can show
+   * changing, and nothing about refs (a fetch or a commit elsewhere must not look like activity).
    */
   stateHash?: string;
 }
@@ -63,14 +64,7 @@ export function entryKey(e: Pick<SummarySnapshotEntry, 'path' | 'rawPath'>): str
 export function snapshotState(
   summary: Pick<
     WorktreeSummary,
-    | 'headSha'
-    | 'branch'
-    | 'detached'
-    | 'inProgress'
-    | 'aheadBehindRef'
-    | 'ahead'
-    | 'behind'
-    | 'stateHash'
+    'headSha' | 'branch' | 'detached' | 'inProgress' | 'aheadBehindRef' | 'ahead' | 'behind'
   >,
   snapshot: SummarySnapshot,
 ): SnapshotState {
@@ -80,7 +74,7 @@ export function snapshotState(
     entries,
     total: snapshot.total,
     truncated: snapshot.truncated,
-    stateHash: summary.stateHash,
+    ...(snapshot.contentHash === undefined ? {} : { stateHash: snapshot.contentHash }),
     head: {
       sha: summary.headSha,
       branch: summary.branch,

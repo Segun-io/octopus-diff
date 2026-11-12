@@ -23,6 +23,7 @@ import {
   needsCommits,
   type OriginLabel,
   type SnapshotState,
+  snapshotState,
 } from '../src/activity.js';
 
 const A = 'a'.repeat(40);
@@ -375,6 +376,35 @@ describe('diffSnapshots: folding and labels', () => {
     const small1 = state([{ path: 'a' }], {}, { stateHash: 'h1' });
     const small2 = state([{ path: 'a' }], {}, { stateHash: 'h2' });
     expect(diff(small1, small2)).toEqual([]);
+  });
+
+  it('compares the snapshot content hash, not the summary state hash (PR #77 review)', () => {
+    // The summary's `stateHash` is extended by the default branch's commit, so a commit in another
+    // worktree or a fetch moves it while no file of this worktree changed.
+    const summary = (stateHash: string) => ({
+      headSha: 'h',
+      branch: 'main',
+      detached: false,
+      inProgress: null,
+      aheadBehindRef: null,
+      ahead: 0,
+      behind: 0,
+      stateHash,
+    });
+    const snapshot = (contentHash: string | undefined) => ({
+      entries: [],
+      total: 3000,
+      truncated: true,
+      ...(contentHash === undefined ? {} : { contentHash }),
+    });
+    const before = snapshotState(summary('base-1'), snapshot('files-1'));
+    const afterFetch = snapshotState(summary('base-2'), snapshot('files-1'));
+    const afterEdit = snapshotState(summary('base-2'), snapshot('files-2'));
+    expect(before.stateHash).toBe('files-1');
+    expect(diff(before, afterFetch)).toEqual([]);
+    expect(diff(before, afterEdit)).toEqual([{ kind: 'bulk', truncated: true, pathCount: 3000 }]);
+    // No hash from git-core: no signal beyond the entries (never the summary's).
+    expect(snapshotState(summary('base-1'), snapshot(undefined)).stateHash).toBeUndefined();
   });
 
   it('labels merge noise from the review state, and a bulk of base files', () => {
