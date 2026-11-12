@@ -2768,3 +2768,4 @@ Numbers: #213 (renumbered from #212 when the perf-script entry took #212).
      directory whose nested `.gitignore` is not read yet (treated as watchable). macOS and Windows get recursive
      events from the OS and the check is off there (`watchNewSubtrees`, default `process.platform` is neither
      `darwin` nor `win32`; tests force it on). `onSubtreeCheck` and `newSubtreeGapMs` are options for tests.
+     Follow-up (Greptile on PR #75, after it merged): a successful git-dir re-subscribe also asks for a worktree-list refresh (`#scheduleListDirty`), because a `git worktree add` / `remove` that completed while the old subscription was released leaves no event behind and the list would otherwise wait for the 60 s relist.

@@ -504,6 +504,10 @@ export class WatcherService {
               if (st) this.#scheduleIgnoreCheck(st);
               this.markDirty(id, 'git');
             }
+            // `git worktree add` / `remove` may have completed while the old subscription was
+            // released: its `worktrees/` events went by, so relist now rather than at the next
+            // periodic relist (a new worktree has no subscription until then).
+            this.#scheduleListDirty(created);
           }
         },
       );
