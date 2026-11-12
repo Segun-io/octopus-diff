@@ -1,5 +1,7 @@
 import { createHash } from 'node:crypto';
 import { realpath, stat } from 'node:fs/promises';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import {
   API_VERSION,
   APP_NAME,
@@ -229,7 +231,7 @@ export class DaemonCore {
    */
   readonly #filesCache = new Map<
     string,
-    { stateHash: string; base: string | null; files: GitChangedFile[] }
+    { stateHash: string; base: string | null; attrs: string; files: GitChangedFile[] }
   >();
   readonly #filesInflight = new Map<string, Promise<GitChangedFile[]>>();
   /** Identical inbox requests that overlap share one run (`inbox`), keyed by what it reads. */
@@ -1078,6 +1080,30 @@ export class DaemonCore {
   }
 
   /**
+   * Where git reads attributes that no worktree state covers: `<commonDir>/info/attributes` and the
+   * user's global attributes file in its default places. They decide how committed changes are
+   * diffed (`-diff`, `binary`), so an edit to one must not be served from the cache. A tracked or
+   * untracked `.gitattributes` is already in the `stateHash`. A custom `core.attributesFile` is not
+   * covered (reading it needs git config; the next HEAD or worktree change refreshes the entry).
+   */
+  async #attributesStamp(project: ProjectEntry): Promise<string> {
+    const xdg = process.env.XDG_CONFIG_HOME || join(homedir(), '.config');
+    const files = [
+      join(project.row.commonDir, 'info', 'attributes'),
+      join(xdg, 'git', 'attributes'),
+    ];
+    const stamps = await Promise.all(
+      files.map((file) =>
+        stat(file).then(
+          (info) => `${info.mtimeMs}:${info.size}`,
+          () => '-',
+        ),
+      ),
+    );
+    return stamps.join('|');
+  }
+
+  /**
    * Changed files from git-core, cached by (worktree, scope, stateHash, base commit) and
    * single-flight. The cache key is exactly "the state changed": the worktree's `stateHash`
    * covers HEAD, the index and the working tree; `base` the ref a branch scope is measured
@@ -1091,17 +1117,23 @@ export class DaemonCore {
     const key = this.#filesKey(entry.worktree.id, scope);
     const stateHash = scope.kind === 'commit' ? 'immutable' : (entry.summary?.stateHash ?? null);
     const base = (await this.#branchBase(project, scope)) ?? null;
+    const attrs = await this.#attributesStamp(project);
     const cacheable =
       isCacheableScope(scope) && stateHash !== null && (scope.kind !== 'branch' || base !== null);
     if (cacheable) {
       const cached = this.#filesCache.get(key);
-      if (cached && cached.stateHash === stateHash && cached.base === base) {
+      if (
+        cached &&
+        cached.stateHash === stateHash &&
+        cached.base === base &&
+        cached.attrs === attrs
+      ) {
         this.#filesCache.delete(key);
         this.#filesCache.set(key, cached);
         return cached.files;
       }
     }
-    const flightKey = `${key}\u0000${stateHash ?? ''}\u0000${base ?? ''}`;
+    const flightKey = `${key}\u0000${stateHash ?? ''}\u0000${base ?? ''}\u0000${attrs}`;
     const inflight = this.#filesInflight.get(flightKey);
     if (inflight) return inflight;
     const run = this.#git
@@ -1118,7 +1150,7 @@ export class DaemonCore {
         }
         if (tracked.length) this.#watcher.noteTrackedPaths(entry.worktree.id, tracked);
         if (cacheable && stateHash !== null && project.worktrees.get(entry.worktree.id) === entry) {
-          this.#filesCache.set(key, { stateHash, base, files });
+          this.#filesCache.set(key, { stateHash, base, attrs, files });
           while (this.#filesCache.size > CORE_DEFAULTS.filesCacheSize) {
             const oldest = this.#filesCache.keys().next().value;
             if (oldest === undefined) break;

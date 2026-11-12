@@ -93,3 +93,7 @@ None added or removed (`pnpm credits` not needed; `pnpm lint` ran `credits:check
   `stateHash` now changes on a default-branch move, which an ETag on `/api/projects` will pick up for free.
 - **#26** owns the bench: `e2e/bench/inbox-cache.ts` is a standalone script and can be folded into it.
 - **#12**: forced refresh drops the per-worktree file lists (and re-reads the base); forge caches are untouched.
+
+## PR review round 1 (Greptile on #55)
+
+- **Branch files stayed stale after an edit to `.git/info/attributes`** (valid). On a clean branch with committed changes, adding `a.txt -diff` changes how the committed file is diffed (binary flag, line counts, `patchHash`) but not the `stateHash` or the base, so the cache served the old list. The cache identity now also includes the `mtime:size` of `<commonDir>/info/attributes` and the global attributes file in its default places (`$XDG_CONFIG_HOME/git/attributes` or `~/.config/git/attributes`): two `stat` calls per listing, no git spawn. A tracked or untracked `.gitattributes` is already covered by `stateHash`. **Known gap:** a custom `core.attributesFile` is not covered (reading it needs git config); the entry refreshes on the next HEAD or worktree change. Regression test: `branch-cache.real-git.test.ts` "an edit to .git/info/attributes invalidates" (fails without the change).

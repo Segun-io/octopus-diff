@@ -199,6 +199,27 @@ describe('branch-scope inbox cache (#27)', () => {
     expect(spawns()).toBe(settled);
   });
 
+  it('an edit to .git/info/attributes invalidates (it changes how committed files are diffed)', async () => {
+    const s = await setup();
+    const { daemon } = await startCounting(s.fx, { watch: false });
+    const api = client(daemon);
+    await api.addProject({ path: s.repo });
+    // `feature` has a clean tree after this commit: only committed changes are in its branch diff.
+    s.fx.git(s.feature, 'add', '-A');
+    s.fx.git(s.feature, 'commit', '-q', '-m', 'commit the edit');
+    const first = await api.inbox({ scope: BRANCH_ALL });
+    const before = entryOf(first, s.featureId)?.files.find((f) => f.path === 'a.txt');
+    expect(before?.additions).toBeGreaterThan(0);
+    expect(before?.binary).toBeFalsy();
+
+    // Same HEAD, same index, same files: only the attributes source changed.
+    await appendFile(path.join(s.repo, '.git', 'info', 'attributes'), 'a.txt -diff\n');
+    const after = await api.inbox({ scope: BRANCH_ALL });
+    const marked = entryOf(after, s.featureId)?.files.find((f) => f.path === 'a.txt');
+    expect(marked?.binary).toBe(true);
+    expect(marked?.patchHash).not.toBe(before?.patchHash);
+  });
+
   it('a default-branch move invalidates, even before the watcher has noticed it', async () => {
     const s = await setup();
     // Watcher off: the summaries stay as they were, only the base ref changes.
