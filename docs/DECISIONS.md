@@ -2683,7 +2683,7 @@ Number: #209 (another session working on `e2e/` may also have taken #209: renumb
 Numbers: #213-#216. The brief said #212 was next, but #212 is already the perf-script entry on this base; other open
 branches also use #213+: renumber at merge.
 
-213. **Two sources, one threshold, three placements.** A slow load is attributed to the forge ("Waiting for GitHub…",
+214. **Two sources, one threshold, three placements.** A slow load is attributed to the forge ("Waiting for GitHub…",
      "Waiting for GitLab…", "…GitHub and GitLab…" when both are pending) or to the computer ("Loading from your
      computer…"). Forge means a request that really goes to the forge: the Request tab's detail, conversation and
      refresh, the Overview's repository facts, a project whose forge status is `pending`. `GET /api/forges` and the
@@ -2697,7 +2697,7 @@ branches also use #213+: renumber at merge.
      per change and never when the wait was short. The old instant texts ("Loading diff…", "Loading files…",
      "Loading the conversation…", "Reading the repository…", the cold-start "Connecting…") became skeleton bars plus
      this note. Themed with the existing tokens (`text-muted`, `text-warn` for a held-back host, `od-overlay`).
-214. **"Stale" comes from real signals only (`describeStale`).** The data on screen is stale when: the host's budget
+215. **"Stale" comes from real signals only (`describeStale`).** The data on screen is stale when: the host's budget
      is `backoff` or `low` (the daemon holds lookups back, `ForgesResponse.budgets`), the last fetch failed (the
      project's status `error`, or the detail/repository response's `message`: the daemon keeps the last good data),
      or the browser's own refetch failed with data cached (`isError` and `dataUpdatedAt`: the projects list). The
@@ -2710,13 +2710,13 @@ branches also use #213+: renumber at merge.
      (`POST /api/forges/refresh {}`, which the daemon bounds to 150 points), the Request tab's and the Overview's is
      their own refresh. The stale state is not threshold-gated (it is a state, not a wait); "3 min ago" is
      redrawn every 30 s (`STALE_CLOCK_MS`), a display clock only.
-215. **"The review states are being worked out" is read from the summaries.** After a project is opened (its Overview,
+216. **"The review states are being worked out" is read from the summaries.** After a project is opened (its Overview,
      or one of its worktrees) the daemon computes its review states and sends `review.ready` (#180-#183). The web
      says "Loading from your computer…" while a worktree of that project has changes and a `summary` without
      `review` (`reviewPending`, the rule `rowVisible` already used), so the note ends exactly when the sidebar
      refetch brings the states, with no extra bookkeeping. One limit: `REVIEW_WAIT_GIVE_UP_MS` (30 s) stops
      the claim for a daemon that never sends them (older than #10), which would otherwise show it for ever.
-216. **Mock knobs (`apps/web/mock`).** `MockRouterOptions.gate({ path, method, side })` runs before a response and
+217. **Mock knobs (`apps/web/mock`).** `MockRouterOptions.gate({ path, method, side })` runs before a response and
      the response waits for its promise (tests hold one request open and release it, no real timers);
      `forgeLatencyMs` / `localLatencyMs` delay one side (`sideOf`: the routes that reach a forge vs the rest);
      `MockBackend.setForgeSim({ pending, budget, error, fetchedAgoMs })` makes the forge side report pending

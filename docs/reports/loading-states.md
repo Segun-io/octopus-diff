@@ -1,8 +1,8 @@
 # loading-states report (GitHub #11, roadmap step 08)
 
-Branch `feat/loading-states`, from `main` at `152f90e`. Session of 2026-11-12. Decisions #213-#216 in
+Branch `feat/loading-states`, from `main` at `152f90e`. Session of 2026-11-12. Decisions #214-#217 in
 `docs/DECISIONS.md` (the brief said #212 was next, but #212 is already the perf-script entry on this base; other open
-branches also use #213+: renumber at merge).
+branches also use #214+: renumbered to leave #213 to the watcher entry (PR #75)).
 
 ## Shipped
 
@@ -85,8 +85,8 @@ fixed (the text now wraps inside the pill). Shots went to `/tmp/ls-shots*`, not 
 
 ## Decisions
 
-#213 (sources, threshold, placement), #214 (stale from real signals, rate-limit wording), #215 (review-state note read
-from the summaries, 30 s give-up), #216 (mock knobs). Numbers start at #213 because #212 is taken on this base.
+#214 (sources, threshold, placement), #215 (stale from real signals, rate-limit wording), #216 (review-state note read
+from the summaries, 30 s give-up), #217 (mock knobs). Numbers start at #214 because #212 is taken on this base.
 
 ## Contract changes
 
@@ -119,7 +119,7 @@ None added or removed (`pnpm credits` not needed; the credits check passes in `p
 
 ## Notes for integration
 
-- Renumber DECISIONS #213-#216 at merge (other branches use #212+).
+- Renumber DECISIONS #214-#217 at merge (other branches use #212+).
 - Web only; the mock knobs are `apps/web/mock` (dev/test, never imported from `src/`). Nothing in the daemon or the
   contracts changed, so it merges independently of the daemon branches. It reads `ForgesResponse.budgets` /
   `status` / `message` / `fetchedAt` and `WorktreeSummary.review` as #197 and #180 define them.
