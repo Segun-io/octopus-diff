@@ -49,7 +49,10 @@ async function startCounting(fx: RealGitFixture, internal: DaemonInternals = {})
   // One line per process: its arguments, NUL-separated (paths may hold spaces).
   writeFileSync(
     wrapper,
-    `#!/bin/sh\nfor a in "$@"; do printf '%s\\001' "$a"; done >> '${log}'\necho >> '${log}'\nexec git "$@"\n`,
+    // One write per spawn: git runs several processes at once (the old route's status and raw diff
+    // run side by side) and a log written argument by argument interleaves their lines on a slow
+    // runner (macOS CI saw one record made of two spawns' arguments).
+    `#!/bin/sh\nline=$(printf '%s\\001' "$@")\nprintf '%s\\n' "$line" >> '${log}'\nexec git "$@"\n`,
   );
   chmodSync(wrapper, 0o755);
   const incremental = internal.incremental !== false;
