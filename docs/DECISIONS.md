@@ -2400,7 +2400,7 @@ clock with a fake client (`apps/daemon/test/forge-fleet.test.ts`); nothing was m
      (f) **Push follow-ups** (30 s, 90 s) are only for branches whose upstream or push destination changed, and
      the second is skipped when the first (or the poll) found the request.
      (g) **The basic query variant is remembered** per host and query for an hour after a "unknown field" error.
-     (h) `pnpm`-level guard: `forge-fleet.test.ts` asserts the hourly points of simulated fleets stay under the
+     (h) Regression guard: `forge-fleet.test.ts` asserts the hourly points of simulated fleets stay under the
      numbers above, so a change to polling shows up as a failing test.
 
      *Contract change (additive).* `ForgesResponse.budgets?: ForgeBudgetState[]` (host, kind, state `ok | busy |
