@@ -5,6 +5,7 @@ import {
   type DiffResponse,
   type DiffScope,
   INBOX_PROJECTS_MAX,
+  INBOX_WORKTREES_MAX,
   type InboxResponse,
   type ProjectsResponse,
   scopeKey,
@@ -247,14 +248,27 @@ export async function settleOvertaken(
     const ids = current.entries.filter((e) => e.listing === 'overtaken').map((e) => e.worktree.id);
     if (ids.length === 0) break;
     await new Promise((resolve) => setTimeout(resolve, delay));
-    let again: InboxResponse;
-    try {
-      again = await api.inbox({ scope: current.scope, worktreeIds: ids });
-    } catch {
-      break; // the marked rows stay; the next fetch or event asks again
+    // At most INBOX_WORKTREES_MAX ids per request (the endpoint rejects more), in parallel; a
+    // chunk that fails keeps its marked rows and does not stop the others or the next try.
+    const chunks: string[][] = [];
+    for (let i = 0; i < ids.length; i += INBOX_WORKTREES_MAX) {
+      chunks.push(ids.slice(i, i + INBOX_WORKTREES_MAX));
     }
-    const asked = new Set(ids);
-    const fresh = new Map(again.entries.map((e) => [e.worktree.id, e]));
+    const answers = await Promise.all(
+      chunks.map(async (chunk) => {
+        try {
+          return { chunk, response: await api.inbox({ scope: current.scope, worktreeIds: chunk }) };
+        } catch {
+          return null; // the marked rows stay; the next fetch or event asks again
+        }
+      }),
+    );
+    const settled = answers.filter((a): a is NonNullable<typeof a> => a !== null);
+    if (settled.length === 0) break;
+    const asked = new Set(settled.flatMap((a) => a.chunk));
+    const fresh = new Map(
+      settled.flatMap((a) => a.response.entries.map((e) => [e.worktree.id, e] as const)),
+    );
     current = {
       ...current,
       entries: current.entries.flatMap((e) => {
@@ -262,7 +276,11 @@ export async function settleOvertaken(
         const next = fresh.get(e.worktree.id);
         return next ? [next] : [];
       }),
-      generatedAt: again.generatedAt,
+      generatedAt:
+        settled
+          .map((a) => a.response.generatedAt)
+          .sort()
+          .at(-1) ?? current.generatedAt,
     };
   }
   return current;
