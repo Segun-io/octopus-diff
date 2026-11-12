@@ -101,8 +101,13 @@ squash-landed work), **mixed** (own changes and the default branch changed it to
 "only this branch's changes" is the file against `N`) or **own** (everything else, and every uncommitted change
 except what a merge or cherry-pick of a default-branch commit staged). The default branch's own worktree and a
 detached HEAD are all own (pulled work cannot be told from own work); merges of other branches are own. The
-daemon attaches it (#33: `ChangedFile.origin`, `WorktreeReview.baseFiles` / `unreviewedOwnFiles` /
-`integrationRef`) and the web collapses base files into a "From origin/main" group (#34).
+daemon attaches it (#33, DECISIONS #201-#204: `ChangedFile.origin` in To review, All on branch and Uncommitted;
+`WorktreeReview.baseFiles` / `unreviewedOwnFiles` / `integrationRef`) and the web collapses base files into a "From
+origin/main" group (#34). All on branch is measured from `N`, so there a file both sides changed shows only this
+branch's patch and is own; only "same as main" and in-progress files are base. The default branch's commits that a
+merge or rebase brought into the range are not counted in `newCommits` and are not recorded as reviewed when the
+bookmark moves (so `main` does not inherit them); their files stay unreviewed but are not counted as own work.
+"Review all" never marks base files and still moves the bookmark past them.
 
 ### 2.5 Forge
 
