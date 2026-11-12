@@ -3673,11 +3673,10 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      same `ctx.git` signal and starts no fallback process. `ScopeOptions.summaryState` is now also read by
      `getFileDiff`; the contract change is a comment only (`contracts:` commit 579a1f1), and the daemon passes it.
      **Why beside, not before and after** (measured with the default bench's burst phase: a diff opened while 60 edits
-     refresh 60 other worktrees): checks run one after the other (stamp, HEAD, signature before the read and again after
-     it) gave a p95 of 74-79 ms, because under a burst each round of file system calls waits its turn in the 4-thread
-     pool behind the summaries' stats (about 8 rounds); checks beside the read with only the file's signature after it:
-     see the report. The earlier shape's p95 on the old route was 34-42 ms, so the budget (< 100 ms) held either way,
-     but the burst is what the interactive lane (#44) is for.
+     refresh 60 other worktrees): checks one after the other (stamp, HEAD, signature before the read and again after it)
+     gave a p95 of 74-79 ms, because under a burst each round of file system calls waits its turn in the 4-thread pool
+     behind the summaries' stats (about 8 rounds); beside the read with only the signature after it, **33 ms** (the old
+     route: 34-42 ms; quiet daemon: p50 5-6 ms; no re-check at all: 27 ms).
 308. **Known windows and one internal addition.** (a) An untracked file is ignored or not by the `.gitignore` files above
      it, which no stamp covers: `Stamp.at` (wall clock before git ran, an internal field of the kept track; not part of
      `stampChange`) lets the route refuse an untracked file whose ancestor `.gitignore` has a ctime or mtime within 100 ms

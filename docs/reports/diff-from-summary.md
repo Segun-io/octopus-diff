@@ -17,8 +17,11 @@
   anywhere (no rename partner), an untracked file that is not also a tracked entry nor a rename source; against another base than HEAD
   only a modification or untracked file the commits since the base left alone (`diff-tree`, memoized with the lists'). The lstat
   signature (the inspection's `statSig` when untracked) must equal the state's before the read and after it; for an untracked file the
-  ancestors' `.gitignore` files must be older than the state (`Stamp.at`, an internal field). Anything else, and a failed `git diff`,
-  falls back to the old whole route with a reason (`fileDiffRoutes.reasons`, process-wide counters for tests and diagnostics).
+  ancestors' `.gitignore` files must be older than the state (`Stamp.at`, an internal field). The checks (stamp, HEAD, signature) run
+  **beside** the one `git diff`, in one round of file system calls, and the file's signature is read once more after it (DECISIONS #307);
+  doing them one after the other made a diff opened during a 60-edit burst cost 74-79 ms at p95 instead of 33 ms, because under load each
+  round waits in the 4-thread pool behind the summaries' stats. Anything else, and a failed `git diff`, falls back to the old whole
+  route with a reason (`fileDiffRoutes.reasons`, process-wide counters for tests and diagnostics).
 - **Daemon** (`apps/daemon/src/core.ts`): `getDiff` passes `summaryState: entry.gitStateHash` (when incremental). No other daemon change:
   no result cache (there is nothing to poison; see Known gaps).
 - **Bench** (`packages/git-core/test/bench/diff-open.bench.ts`, documented in `docs/bench/README.md`): wall time and spawns of `getFileDiff`
@@ -33,10 +36,19 @@ times carry some noise).
 - `pnpm lint`: exit 0 (biome: 4 warnings and 1 info, all in files this task does not touch: `apps/web/test/cache.test.ts`,
   `apps/daemon/test/file-origins.real-git.test.ts`; credits up to date). `pnpm typecheck`: exit 0. `pnpm build`: exit 0.
 - `pnpm test`: exit 0. contracts 107, forge 101 (5 skipped), fixtures 58, web 446, **git-core 389 (1 skipped)**, **daemon 391 (4 skipped)**,
-  e2e unit 7, cli 139, scripts 34. git-core and daemon again: same counts (twice each in all; the known watcher-review-fixes F1 flake did
-  not show).
+  e2e unit 7, cli 139, scripts 34. git-core and daemon were run twice more on the final code with the same counts (the known
+  watcher-review-fixes F1 flake did not show). One run failed `incremental.test.ts` "an untracked file: one status" (the speculative numstat
+  of a new path started after the summary had settled, under the load of the whole suite running at once; it passes alone and is
+  unrelated to this change): that test now waits for the process to start, like the other load-flake fixes (`6b16055`).
 - `OCTOPUS_DIFF_TEST_FOLDS_CASE=1`: git-core 375 passed + 15 skipped; daemon 389 passed + 6 skipped. The new golden tests run in this mode
   and assert `case-insensitive` plus byte equality; the races suite is skipped there.
+- `pnpm test:e2e` (1 worker): **102 passed (3.2 min)**, read-only proof 12 control repos, 4720 lock polls, 0 violations (the subcommand
+  allowlist is unchanged). `perf:smoke`: exit 0. CLI smoke (`--version`, `doctor`): 0 problems, 1 warning. `.github/workflows/ci.yml` also has the
+  macOS job (`pnpm -r --workspace-concurrency=1 run test`: not run; emulated with `OCTOPUS_DIFF_TEST_FOLDS_CASE=1` above) and the tarball
+  package job (`pack:tarball` + `npm install` of the tarball in an empty directory): not run here, no package or dependency changed.
+- Default bench (`pnpm --filter @octopus-diff/e2e bench --out /tmp/...`, 30 x 3, written outside the repo so the committed results stay as
+  they are): every budget passes: cold paint 156 ms, warm reload 78 ms, startup spawns 4.5 per worktree, idle CPU 0.33 %, edit -> SSE p95
+  22 ms, **diff during a 60-edit burst p95 33 ms** (quiet p50 5-6 ms; 74-79 ms with the first version of the checks, 27 ms with no re-check at all).
 - New tests (git-core): `diff-from-summary.test.ts` (golden/differential, 30: modified, staged only, staged + unstaged, deleted, staged
   deletion, mode change, symlink, binary, whitespace only, CRLF, no final newline, very large, spaces and Unicode, non-UTF-8 names, image,
   untracked of every kind, rename, copy-like addition, type change, intent-to-add, conflicts, submodule, embedded repository, nested repository,
@@ -60,23 +72,23 @@ times carry some noise).
   `OCTOPUS_DIFF_TEST_FOLDS_CASE=1`. **Survivors, by design** (DECISIONS #308 d): the predicted-status check, the one-raw-entry check and the
   stat-only check are defense in depth behind the signature checks; reaching them needs a file whose size, mtime, ctime and inode all
   stayed the same.
-- `pnpm test:e2e` (1 worker), `perf:smoke`, default bench, CLI smoke and tarball package job: see the end of this section.
 - Bench, `packages/git-core/test/bench/diff-open.bench.ts`, 15 rounds, summary state held, median (first call in brackets):
 
   | 100k files, `getFileDiff` working scope | before: ms, git processes | after: ms, git processes |
   |---|---|---|
-  | main, a modified file | 393 (398), 3 | **19 (24), 1** |
-  | main, an untracked file | 378 (373), 2 | **3 (4), 0** |
-  | main, the 300k-line rewrite | 683, 3 | 334 (354), 1 (git's own diff of 300k lines) |
-  | stale-index, a modified file | 825 (832), 3 | **17 (18), 1** |
-  | stale-index, an untracked file | 823, 2 | **3 (3), 0** |
-  | untracked-heavy (30.7k untracked), a modified file | 389 (399), 3 | **18 (18), 1** |
-  | untracked-heavy, an untracked file | 395 (403), 2 | **22 (37), 0** (the first call runs `check-attr` once) |
+  | main, a modified file | 393 (398), 3 | **16 (24), 1** |
+  | main, an untracked file | 378 (373), 2 | **2 (2), 0** |
+  | main, the 300k-line rewrite | 683, 3 | 288 (301), 1 (git's own diff of 300k lines) |
+  | stale-index, a modified file | 825 (832), 3 | **16 (17), 1** |
+  | stale-index, an untracked file | 823, 2 | **2 (2), 0** |
+  | untracked-heavy (30.7k untracked), a modified file | 389 (399), 3 | **15 (17), 1** |
+  | untracked-heavy, an untracked file | 395 (403), 2 | **19 (35), 0** (the first call runs `check-attr` once) |
 
-  20k files (`large-ci`): modified 101 / 169 / 162 ms before, 8 / 8 / 8 ms after; untracked 96 / 164 / 202 ms before, 3 / 3 / 6 ms after.
-  **Acceptance: at most 1 git process and under 40 ms is met for every ordinary file** (tracked 17-19 ms, untracked 3-22 ms, first calls
-  18-37 ms). It cannot be met for a patch whose own `git diff` takes longer: the 300k-line rewrite costs git 334 ms (1 process, half of
+  20k files (`large-ci`): modified 101 / 169 / 162 ms before, 6 / 6 / 6 ms after; untracked 96 / 164 / 202 ms before, 2 / 1 / 5 ms after.
+  **Acceptance: at most 1 git process and under 40 ms is met for every ordinary file** (tracked 15-16 ms, untracked 2-19 ms, first calls
+  17-35 ms). It cannot be met for a patch whose own `git diff` takes longer: the 300k-line rewrite costs git 288 ms (1 process, 42 % of
   before). The 137-154 ms in the issue were measured on another machine and layout; here the same call cost 346-832 ms before.
+  The "before" column is a core with no summary route (`OCTOPUS_DIFF_BENCH_OLD=1`); a first, unloaded run gave 346 / 804 / 354 ms.
 
 ## Decisions
 
@@ -107,9 +119,7 @@ None added or removed (`pnpm credits:check`: up to date).
 - **`.gitignore` just before the state** (within 100 ms) sends an untracked file the whole way; `core.excludesFile` / `core.attributesFile`
   outside the stamp are as in #285. An untracked file's content is read or not by the state's untracked count, as the lists' hashes are
   (#308 b).
-- **A 300k-line patch** still costs git's own diff (334 ms).
-- **The first sweep tried to build a 100k fixture while /tmp (tmpfs) was full** (another agent's fixtures plus a killed run's): `ENOSPC`
-  from `git checkout`, unrelated to the change; rerun after cleaning my own leftover directory.
+- **A 300k-line patch** still costs git's own diff (288 ms).
 
 ## Notes for integration
 
