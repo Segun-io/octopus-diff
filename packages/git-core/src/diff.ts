@@ -1375,6 +1375,11 @@ interface TrackFacts {
    * rename or copy): a deleted file could pair with it as a rename in the whole scope.
    */
   adds: boolean;
+  /**
+   * Paths a rename or copy entry names as its source: removed from the index (HEAD has them), so the
+   * whole scope reports them as deleted even when an untracked file now has that name.
+   */
+  renameSources: Set<string>;
   /** Status entries `attributeState` looks at: the tracked ones and untracked `.gitattributes`. */
   attributeEntries: StatusEntry[];
 }
@@ -1384,16 +1389,19 @@ function factsOf(track: SummaryTrack): TrackFacts {
   const known = trackFacts.get(track);
   if (known) return known;
   let adds = false;
+  const renameSources = new Set<string>();
   const attributeEntries: StatusEntry[] = [];
   for (const entry of track.tracked.values()) {
     attributeEntries.push(entry);
-    if (entry.kind === 'renamed') adds = true;
-    else if (entry.kind === 'ordinary' && (entry.x === 'A' || entry.y === 'A')) adds = true;
+    if (entry.kind === 'renamed') {
+      adds = true;
+      renameSources.add(entry.origPath);
+    } else if (entry.kind === 'ordinary' && (entry.x === 'A' || entry.y === 'A')) adds = true;
   }
   for (const [key, entry] of track.untracked) {
     if (path.posix.basename(key) === '.gitattributes') attributeEntries.push(entry);
   }
-  const facts = { adds, attributeEntries };
+  const facts = { adds, renameSources, attributeEntries };
   trackFacts.set(track, facts);
   return facts;
 }
@@ -1434,14 +1442,16 @@ type FromSummary = { diff: GitFileDiff } | { reason: string };
  *
  * The state only decides which route is safe; the answer is read from the file as it is now:
  *
- * - the state must be usable (`trackBlocker`: no conflicts, submodules, nested repositories,
+ * - the state must be the one the caller holds (`ScopeOptions.summaryState`, when given) and be usable
+ *   (`trackBlocker`: no conflicts, submodules, nested repositories,
  *   sparse checkout, unreadable files), the filesystem must not fold case, and the stamp
  *   (index, ignore rules, config, attributes) and HEAD must be what the state saw;
  * - the file's own record must say that nothing but its content can differ in the whole scope:
  *   a modification (`M` on either side, so never a rename or copy partner), or a deletion when
  *   no path is added anywhere (no partner for a rename); against another base than HEAD only a
  *   modification of a file the base and HEAD agree on (`diff-tree`, memoized with the lists');
- *   an untracked file that is not also a tracked entry;
+ *   an untracked file that HEAD and the base do not have (not also a tracked entry, not a
+ *   rename's source);
  * - the file's lstat signature (the inspection's `statSig` for an untracked file) must still be
  *   the state's, before and after the read: a file that moved since is read by the whole-scope
  *   route, which describes it as it is, and so is one that moved while it was read;
@@ -1459,6 +1469,7 @@ async function diffFromSummary(
   key: string,
   view: { context: number; ignoreWhitespace: boolean; full: boolean },
   limit: number,
+  held: string | undefined,
 ): Promise<FromSummary> {
   const { ctx } = deps;
   const no = (reason: string): { reason: string } => ({ reason });
@@ -1469,6 +1480,9 @@ async function diffFromSummary(
   if (await foldsCase(repo.toplevel ?? repo.cwd)) return no('case-insensitive');
   const track = deps.tracks.get(repo.cwd);
   if (!track) return no('no-state');
+  // The caller holds another state than the one git-core has (a summary on its way, or an older
+  // one): it asked about that state, so it is read the whole way.
+  if (held !== undefined && held !== track.stateHash) return no('state-mismatch');
   const blocker = trackBlocker(track);
   if (blocker) return no(blocker);
   const headSha = track.branch.oid;
@@ -1479,6 +1493,9 @@ async function diffFromSummary(
   const untracked = track.untracked.has(key);
   if (tracked !== undefined && untracked) return no('tracked-and-untracked');
   if (tracked === undefined && !untracked) return no('not-in-state');
+  // An untracked file named like a path HEAD has and the index lost (a rename's source): the
+  // whole scope lists that path as deleted, and shows it so.
+  if (untracked && factsOf(track).renameSources.has(key)) return no('rename-source');
 
   // What the state says is true of this file, and what that makes the whole scope's entry.
   let expected: 'M' | 'D' | null = null;
@@ -1602,7 +1619,7 @@ export async function getFileDiff(
   const needsView = view.ignoreWhitespace || view.context !== CANONICAL_CONTEXT;
 
   // 0. The summary state vouches for the file: its patch alone is read (#41).
-  const fast = await diffFromSummary(deps, repo, plan, key, view, limit);
+  const fast = await diffFromSummary(deps, repo, plan, key, view, limit, options?.summaryState);
   if ('diff' in fast) {
     fileDiffRoutes.summary++;
     return fast.diff;

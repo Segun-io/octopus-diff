@@ -359,6 +359,37 @@ describe('untracked files: no git process at all', () => {
     expect(rows.filter((file) => file.status === 'untracked')).toHaveLength(6);
   });
 
+  it('more untracked files than are read: stat-based hashes, still the summary route', async () => {
+    const few = createGitCore(
+      fx.coreOptions({ maxUntrackedFiles: 2, logger: recordingLogger(), env: isolated() }),
+    );
+    const fewReference = createGitCore(
+      fx.coreOptions({ maxUntrackedFiles: 2, incremental: false, env: isolated() }),
+    );
+    try {
+      const repo = fx.repo('many-untracked', { files: { 'a.txt': 'a\n' } });
+      // An attributes source makes git-core ask for a verdict per file it is asked about.
+      const attributes = path.join(fx.root, 'many-untracked.attributes');
+      writeFileSync(attributes, '*.bin binary\n');
+      fx.git(repo, ['config', 'core.attributesFile', attributes]);
+      for (let i = 0; i < 5; i++) text(repo, `u${i}.txt`, `${i}\n`);
+      await few.getSummary(locator(repo));
+      const cores = { fast: few, reference: fewReference };
+      for (let i = 0; i < 5; i++) {
+        const outcome = await diffBoth(repo, WORKING, `u${i}.txt`, undefined, cores);
+        expect(outcome.route).toBe(SUMMARY);
+        // At most the verdict lookup (check-attr, once per file): never status or diff.
+        if (!FOLDS)
+          expect(outcome.spawned.map((args) => args[0]).filter((c) => c !== 'check-attr')).toEqual(
+            [],
+          );
+      }
+    } finally {
+      await few.dispose();
+      await fewReference.dispose();
+    }
+  });
+
   it('a path that is both a tracked entry and untracked goes the whole way', async () => {
     const { repo } = await prepare('both', { 'a.txt': lines(3), 'b.txt': 'b\n' }, (r) => {
       fx.git(r, ['rm', '-q', '--cached', 'a.txt']);
@@ -427,6 +458,22 @@ describe('what the summary route refuses (the whole-scope route answers, identic
     });
     expect((await diffBoth(repo, WORKING, 'f.txt')).route).toBe(REASON('status'));
     expect((await diffBoth(repo, WORKING, 'ita.txt')).route).toBe(REASON('status'));
+  });
+
+  it('an untracked file named like a rename’s source: the whole scope lists that path as deleted', async () => {
+    const { repo } = await prepare(
+      'rename-source',
+      { 'old.txt': lines(30), 'keep.txt': 'k\n' },
+      (r) => {
+        fx.git(r, ['mv', 'old.txt', 'moved.txt']);
+        // Nothing like the old content: unpaired, the diff reports old.txt deleted and moved.txt added.
+        text(r, 'moved.txt', lines(30, 'entirely different'));
+        text(r, 'old.txt', 'a new file that reuses the name\n');
+      },
+    );
+    const outcome = await diffBoth(repo, WORKING, 'old.txt');
+    expect(outcome.route).toBe(REASON('rename-source'));
+    expect((outcome.result as { ok: GitFileDiff }).ok.status).toBe('deleted');
   });
 
   it('a conflicted worktree: every file goes the whole way', async () => {
@@ -537,6 +584,23 @@ describe('the state is checked before it is believed', () => {
     for (const file of ['u1.txt', 'u2.txt', 'u3.txt']) {
       expect((await diffBoth(repo, WORKING, file)).route, file).toBe(REASON('stale-signature'));
     }
+  });
+
+  it('the caller holds another state than git-core has: read the whole way', async () => {
+    const { repo, stateHash } = await prepare('held-state', { 'a.txt': lines(5) }, (r) =>
+      text(r, 'a.txt', lines(6)),
+    );
+    expect((await diffBoth(repo, WORKING, 'a.txt', { summaryState: stateHash })).route).toBe(
+      SUMMARY,
+    );
+    const other = await diffBoth(repo, WORKING, 'a.txt', { summaryState: '0'.repeat(16) });
+    expect(other.route).toBe(REASON('state-mismatch'));
+    // A summary of a newer state makes the old hash a mismatch too.
+    text(repo, 'a.txt', lines(7));
+    await fast.getSummary(locator(repo));
+    expect((await diffBoth(repo, WORKING, 'a.txt', { summaryState: stateHash })).route).toBe(
+      REASON('state-mismatch'),
+    );
   });
 
   it('the index moved: a git add since the summary', async () => {
