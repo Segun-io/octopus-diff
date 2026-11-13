@@ -111,6 +111,18 @@ export class Timers {
     return () => fiber.interruptUnsafe();
   }
 
+  /**
+   * Runs `fn` every `ms` on the pipeline's clock (the first run after one period), until the
+   * returned cancel is called or `close()`. A throwing `fn` ends the loop like an uncaught timer
+   * error would end the process: callers that must survive it catch inside `fn`.
+   */
+  every(ms: number, fn: () => void): Cancel {
+    if (this.#closed) return () => {};
+    const period = Duration.millis(Math.max(1, ms));
+    const fiber = this.fork(Effect.forever(Effect.andThen(Effect.sleep(period), Effect.sync(fn))));
+    return () => fiber.interruptUnsafe();
+  }
+
   /** Interrupts every fiber still running; nothing starts afterwards. Idempotent. */
   close(): void {
     this.#closed = true;

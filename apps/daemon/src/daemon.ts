@@ -15,6 +15,7 @@ import {
   type StartDaemonOptions,
 } from '@octopus-diff/contracts';
 import { createGitCore } from '@octopus-diff/git-core';
+import type * as Context from 'effect/Context';
 import type { Hono } from 'hono';
 import { createApp } from './app.js';
 import { DaemonCore } from './core.js';
@@ -64,6 +65,12 @@ export interface DaemonInternals {
   gitHelper?: boolean;
   /** Max cached file lists (default 2000; `CoreOptions.filesCacheSize`). */
   filesCacheSize?: number;
+  /**
+   * Tests only: the Effect context of every daemon timer (the core's, the watcher's and the event
+   * hub's heartbeat): inside `it.effect`, `yield* Effect.context<never>()`, whose `TestClock`
+   * then drives them all.
+   */
+  context?: Context.Context<never>;
   /** Poll interval of the focused worktree when native watching is unavailable (default 5 s). */
   pollDegradedFocusedMs?: number;
   /** Replaces `@parcel/watcher`'s subscribe (simulate inotify failures). */
@@ -179,9 +186,10 @@ export const startDaemon = (async (options: DaemonOptions = {}): Promise<Daemon>
     logger.info('created a new auth token', { file: `${stateDir}/token` });
 
   const store = await Store.open(stateDir);
-  const hub = new EventHub(
-    internal.heartbeatMs !== undefined ? { heartbeatMs: internal.heartbeatMs } : {},
-  );
+  const hub = new EventHub({
+    ...(internal.heartbeatMs !== undefined ? { heartbeatMs: internal.heartbeatMs } : {}),
+    ...(internal.context ? { context: internal.context } : {}),
+  });
   const ownsGitCore = options.gitCore === undefined;
   // Kill switch (#40): any of the three turns incremental refreshes off, in git-core too.
   const incremental =
@@ -244,6 +252,7 @@ export const startDaemon = (async (options: DaemonOptions = {}): Promise<Daemon>
     ...(internal.now ? { now: internal.now } : {}),
     ...(internal.cwd ? { cwd: internal.cwd } : {}),
     ...(internal.filesCacheSize !== undefined ? { filesCacheSize: internal.filesCacheSize } : {}),
+    ...(internal.context ? { context: internal.context } : {}),
     reviewPolicy: settings,
   });
   const reviewControls = new ReviewControls({

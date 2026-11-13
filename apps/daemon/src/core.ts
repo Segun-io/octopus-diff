@@ -71,6 +71,7 @@ import {
   type WorktreeLocator,
   type WorktreeSummary,
 } from '@octopus-diff/contracts';
+import type * as Context from 'effect/Context';
 import {
   ActivityStore,
   classifyHead,
@@ -109,6 +110,7 @@ import {
   type ScanRootRow,
   type Store,
 } from './store.js';
+import { type Cancel, Timers } from './timers.js';
 import {
   bstrOf,
   decodeBstr,
@@ -279,6 +281,12 @@ export interface CoreOptions {
   incremental?: boolean | { reconcileMs?: number };
   /** Max cached file lists (default `CORE_DEFAULTS.filesCacheSize`; tests). */
   filesCacheSize?: number;
+  /**
+   * Tests only: the Effect context of the core's own timers (GC, the missing-project retry, the
+   * `review.ready` batch, the reconcile timer) and of the watcher's: a `TestClock` then drives
+   * all of them (`Timers`, DECISIONS #445).
+   */
+  context?: Context.Context<never>;
 }
 
 interface WorktreeEntry {
@@ -332,7 +340,7 @@ interface WorktreeEntry {
   /** git-core's own `stateHash` of `summary` (before `withBase`): `ScopeOptions.summaryState`. */
   gitStateHash: string | null;
   /** Full refresh after an incremental one (`CORE_DEFAULTS.reconcileMs`). */
-  reconcile: NodeJS.Timeout | null;
+  reconcile: Cancel | null;
   /** The next summary passes `forgetState` (an explicit Refresh). */
   forgetState: boolean;
   /** What the file explorer's directory deltas compare against: the last summary's (#9). */
@@ -584,11 +592,12 @@ export class DaemonCore {
   readonly #openProjects = new Set<string>();
   /** Projects whose review state became available since the last `review.ready` (batched). */
   readonly #reviewReady = new Set<string>();
-  #reviewReadyTimer: NodeJS.Timeout | null = null;
+  #reviewReadyTimer: Cancel | null = null;
   /** Last `WorktreeListItem.rev` handed out: strictly increasing, seeded with the start time in ms. */
   #rev = Date.now();
   #gitVersion: string | null = null;
-  #timers: NodeJS.Timeout[] = [];
+  /** GC, the missing-project retry, the `review.ready` batch and the reconcile timers (#49). */
+  readonly #timers: Timers;
   #closed = false;
   /** Incremental refreshes (#40): on unless `CoreOptions.incremental` is false. */
   readonly #incremental: boolean;
@@ -609,6 +618,7 @@ export class DaemonCore {
     this.#gcIntervalMs = options.gcIntervalMs ?? CORE_DEFAULTS.gcIntervalMs;
     this.#reviewPolicy = options.reviewPolicy ?? null;
     this.#activity = options.activity ?? new ActivityStore();
+    this.#timers = new Timers(options.context);
     const cacheSize = options.filesCacheSize ?? CORE_DEFAULTS.filesCacheSize;
     this.#filesCache = new StateCache({ capacity: cacheSize });
     this.#rangeCache = new StateCache({ capacity: cacheSize });
@@ -642,6 +652,7 @@ export class DaemonCore {
     if (options.pollDegradedFocusedMs !== undefined) {
       watcherOptions.pollDegradedFocusedMs = options.pollDegradedFocusedMs;
     }
+    if (options.context) watcherOptions.context = options.context;
     if (options.subscribe) watcherOptions.subscribe = options.subscribe;
     else if (options.watchHost) watcherOptions.host = options.watchHost;
     this.#watcher = new WatcherService(watcherOptions);
@@ -690,23 +701,18 @@ export class DaemonCore {
       this.#startScan(st);
     }
     this.gc();
-    const gcTimer = setInterval(() => this.gc(), this.#gcIntervalMs);
-    gcTimer.unref();
-    const retryTimer = setInterval(() => {
+    this.#timers.every(this.#gcIntervalMs, () => this.gc());
+    this.#timers.every(this.#relistMs, () => {
       for (const entry of this.#projects.values()) {
         if (entry.missing) void this.#reconcile(entry);
       }
-    }, this.#relistMs);
-    retryTimer.unref();
-    this.#timers.push(gcTimer, retryTimer);
+    });
   }
 
   async close(): Promise<void> {
     if (this.#closed) return;
     this.#closed = true;
-    for (const t of this.#timers) clearInterval(t);
-    this.#timers = [];
-    if (this.#reviewReadyTimer) clearTimeout(this.#reviewReadyTimer);
+    this.#timers.close();
     this.#reviewReadyTimer = null;
     for (const project of this.#projects.values()) {
       for (const e of project.worktrees.values()) this.#clearReconcile(e);
@@ -1357,7 +1363,7 @@ export class DaemonCore {
   }
 
   #clearReconcile(entry: WorktreeEntry): void {
-    if (entry.reconcile) clearTimeout(entry.reconcile);
+    entry.reconcile?.();
     entry.reconcile = null;
   }
 
@@ -1371,15 +1377,14 @@ export class DaemonCore {
       return;
     }
     if (entry.reconcile || this.#closed) return;
-    entry.reconcile = setTimeout(() => {
+    entry.reconcile = this.#timers.after(this.#reconcileMs, () => {
       entry.reconcile = null;
       if (this.#closed) return;
       const project = this.#projects.get(entry.projectId);
       if (project?.worktrees.get(entry.worktree.id) !== entry) return;
       this.#noteHint(entry, null);
       void this.#refresh(entry);
-    }, this.#reconcileMs);
-    entry.reconcile.unref();
+    });
   }
 
   #kickSummaries(project: ProjectEntry): void {
@@ -2697,7 +2702,7 @@ export class DaemonCore {
     if (this.#closed) return;
     this.#reviewReady.add(projectId);
     if (this.#reviewReadyTimer) return;
-    this.#reviewReadyTimer = setTimeout(() => {
+    this.#reviewReadyTimer = this.#timers.after(REVIEW_READY_BATCH_MS, () => {
       this.#reviewReadyTimer = null;
       const ids = [...this.#reviewReady];
       this.#reviewReady.clear();
@@ -2705,8 +2710,7 @@ export class DaemonCore {
       for (const id of ids) {
         if (this.#projects.has(id)) this.#hub.emit({ type: 'review.ready', projectId: id });
       }
-    }, REVIEW_READY_BATCH_MS);
-    this.#reviewReadyTimer.unref();
+    });
   }
 
   /**
