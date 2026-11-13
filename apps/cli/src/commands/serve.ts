@@ -1,6 +1,6 @@
-import { APP_NAME, type DaemonHandle } from '@octopus-diff/contracts';
+import { APP_NAME, type DaemonHandle, type ServeReady } from '@octopus-diff/contracts';
 import type { ServeFlags } from '../args.js';
-import type { CliDeps } from '../deps.js';
+import type { CliDeps, ReadyChannel } from '../deps.js';
 import {
   CliError,
   EXIT_FAILURE,
@@ -37,7 +37,23 @@ export function formatBanner(
   home: string,
   webRoot: string | null,
   lanUrls: readonly string[] = [],
+  /** With `--ready-fd` the token travels on that fd only: no `#token=` URL on stdout. */
+  readyFd?: number,
 ): string {
+  if (readyFd !== undefined) {
+    const lines = [
+      '',
+      `  ${APP_NAME} ${version} is running`,
+      '',
+      `  API:    ${handle.url}`,
+      `  State:  ${oneLine(tildify(handle.stateDir, home))}`,
+      `  Web UI: ${webRoot ? oneLine(tildify(webRoot, home)) : 'not found (API only; run `pnpm build`)'}`,
+      '',
+      `  The access URL was sent on file descriptor ${readyFd}.`,
+      '',
+    ];
+    return `${lines.join('\n')}\n`;
+  }
   const lines = [
     '',
     `  ${APP_NAME} ${version} is running`,
@@ -68,6 +84,20 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T | 'timeout'>
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
+/** One compact JSON line (the `ServeReadySchema` shape) ending in a newline. */
+export function formatReadyLine(ready: ServeReady): string {
+  return `${JSON.stringify(ready)}\n`;
+}
+
+function openReadyChannel(flags: ServeFlags, deps: CliDeps): ReadyChannel | undefined {
+  if (flags.readyFd === undefined) return undefined;
+  try {
+    return deps.openReadyChannel(flags.readyFd);
+  } catch (error) {
+    throw new CliError(`--ready-fd ${flags.readyFd}: ${errorMessage(error)}`);
+  }
+}
+
 export async function runServe(
   flags: ServeFlags,
   deps: CliDeps,
@@ -82,23 +112,43 @@ export async function runServe(
   const logger = createLogger(settings.logLevel, (line) => deps.stderr.write(line), deps.now);
   options.logger = logger;
   const wsl = detectWsl(deps.platform, deps.env, deps.readText);
+  // Fail before starting anything when the supervisor's channel is not there.
+  const ready = openReadyChannel(flags, deps);
 
   // One daemon per state dir: two would share the SQLite store and the token. The recorded
   // daemon must prove it holds the token before its URL is printed or opened (SEC-02).
   const running = await findRunningDaemon(paths.stateDir, deps);
   if (running?.verified && running.token) {
     const authUrl = authUrlFor(running.url, running.token);
-    const lan = lanAuthUrls(
-      running.info.host,
-      running.info.port,
-      running.token,
-      deps.networkInterfaces(),
-    );
-    deps.stdout.write(
-      `${APP_NAME} is already running (pid ${running.pid}) with this state directory.\n\n  Open:   ${authUrl}\n` +
-        lan.map((url) => `  LAN:    ${url}\n`).join('') +
-        '\n',
-    );
+    if (ready) {
+      // The token goes to the supervisor on its fd only, never to stdout.
+      deps.stdout.write(
+        `${APP_NAME} is already running (pid ${running.pid}) with this state directory.\n`,
+      );
+      const failure = sendReady(ready, flags.readyFd, {
+        mode: 'attached',
+        url: running.url,
+        authUrl,
+        pid: running.pid,
+        version: running.health.version,
+      });
+      if (failure) {
+        err(failure);
+        return EXIT_FAILURE;
+      }
+    } else {
+      const lan = lanAuthUrls(
+        running.info.host,
+        running.info.port,
+        running.token,
+        deps.networkInterfaces(),
+      );
+      deps.stdout.write(
+        `${APP_NAME} is already running (pid ${running.pid}) with this state directory.\n\n  Open:   ${authUrl}\n` +
+          lan.map((url) => `  LAN:    ${url}\n`).join('') +
+          '\n',
+      );
+    }
     if (settings.open) await openOrWarn(authUrl, wsl.wsl, deps, err, paths.stateDir);
     return EXIT_OK;
   }
@@ -140,11 +190,16 @@ export async function runServe(
 
   const startDaemon = await deps.loadStartDaemon();
   // Listen for signals before starting, so Ctrl+C during startup still shuts down cleanly.
-  const shutdown = deps.waitForShutdown();
+  const signals = deps.waitForShutdown();
+  // `--exit-with-stdin`: the end of stdin is the same request as a signal. Not read otherwise.
+  const stdin = flags.exitWithStdin ? deps.watchStdin() : undefined;
+  const shutdown = stdin ? Promise.race([signals, stdin.closed]) : signals;
   let handle: DaemonHandle;
   try {
     handle = await startDaemon(options);
   } catch (error) {
+    stdin?.stop();
+    ready?.close();
     const host = options.host ?? '';
     const port = options.port ?? 0;
     if (hasErrorCode(error, 'EADDRINUSE')) {
@@ -182,13 +237,37 @@ export async function runServe(
   }
 
   const lan = lanAuthUrls(handle.host, handle.port, handle.token, deps.networkInterfaces());
-  deps.stdout.write(formatBanner(handle, version, paths.home, options.webRoot ?? null, lan));
-  if (settings.open) await openOrWarn(handle.authUrl, wsl.wsl, deps, err, paths.stateDir);
-  hooks.onReady?.(handle);
-
-  const signal = await shutdown;
-  err(`\nreceived ${signal}, shutting down…`);
+  deps.stdout.write(
+    formatBanner(handle, version, paths.home, options.webRoot ?? null, lan, flags.readyFd),
+  );
   let exitCode = EXIT_OK;
+  let proceed = true;
+  if (ready) {
+    const failure = sendReady(ready, flags.readyFd, {
+      mode: 'started',
+      url: handle.url,
+      authUrl: handle.authUrl,
+      pid: deps.pid,
+      version,
+    });
+    if (failure) {
+      // Nobody can learn where this daemon is: do not leave it running unseen.
+      err(failure);
+      exitCode = EXIT_FAILURE;
+      proceed = false;
+    }
+  }
+  if (proceed) {
+    if (settings.open) await openOrWarn(handle.authUrl, wsl.wsl, deps, err, paths.stateDir);
+    hooks.onReady?.(handle);
+    const reason = await shutdown;
+    err(
+      reason.startsWith('SIG')
+        ? `\nreceived ${reason}, shutting down…`
+        : `\n${reason}, shutting down…`,
+    );
+  }
+  stdin?.stop();
   try {
     const result = await withTimeout(handle.close(), deps.shutdownTimeoutMs);
     if (result === 'timeout') {
@@ -201,6 +280,25 @@ export async function runServe(
   }
   await removeRuntimeInfo(paths.stateDir, deps.pid).catch(() => undefined);
   return exitCode;
+}
+
+/**
+ * Writes the ready line and closes the channel. Returns a message (never containing the token)
+ * when the line could not be delivered, e.g. the supervisor already closed its end.
+ */
+function sendReady(
+  channel: ReadyChannel,
+  fd: number | undefined,
+  ready: ServeReady,
+): string | undefined {
+  try {
+    channel.write(formatReadyLine(ready));
+    return undefined;
+  } catch (error) {
+    return `could not write the ready line to file descriptor ${fd}: ${errorMessage(error)}`;
+  } finally {
+    channel.close();
+  }
 }
 
 async function openOrWarn(

@@ -203,7 +203,7 @@ Settings → Folders → **Start browsing in** sets where the picker opens (defa
 
 | Command | Options |
 |---|---|
-| `serve [path…]` | `-p, --port <n>` (default 7428, `0` = any free port) · `--host <addr>` (default `127.0.0.1`) · `--allow-non-loopback` · `--allowed-host <name>`… · `-o, --open` / `--no-open` · `-s, --scan <dir>`… · `-d, --depth <n>` · `--watch` / `--no-watch` · `--poll` · `--web-root <dir>` |
+| `serve [path…]` | `-p, --port <n>` (default 7428, `0` = any free port) · `--host <addr>` (default `127.0.0.1`) · `--allow-non-loopback` · `--allowed-host <name>`… · `-o, --open` / `--no-open` · `-s, --scan <dir>`… · `-d, --depth <n>` · `--watch` / `--no-watch` · `--poll` · `--web-root <dir>` · `--ready-fd <n>` · `--exit-with-stdin` (for supervisors such as a desktop shell: one JSON ready line on fd `n`, shut down when stdin ends) |
 | `add <path…>` | `-s, --scan <dir>`… · `-d, --depth <n>` · `--url <url>` · `-p, --port <n>` · `--host <addr>` |
 | `status` | `-o, --open` · `--json` · `--url <url>` · `-p, --port <n>` · `--host <addr>` |
 | `doctor` | `--json` · `-p, --port <n>` · `--host <addr>` · `--web-root <dir>` |

@@ -258,6 +258,10 @@ export function makeDeps(dirs: TempDirs, overrides: Partial<CliDeps> = {}): Test
       return 'fake-open';
     },
     waitForShutdown: () => Promise.resolve('SIGTERM'),
+    openReadyChannel: () => {
+      throw new Error('this test did not provide a ready channel');
+    },
+    watchStdin: () => ({ closed: new Promise<string>(() => {}), stop: () => {} }),
     isProcessAlive: () => false,
     runProgram: async () => ({ stdout: 'git version 2.53.0\n', stderr: '' }),
     readText: () => null,
