@@ -41,6 +41,7 @@ import {
 import { abortedError, callContext, raceAbort, withCall } from './runner/call-context.js';
 import { defaultBigFileThreshold, GitRunner } from './runner/runner.js';
 import { getSummary } from './summary.js';
+import { countTreeFiles, listTree, TreeCache, type TreeDeps } from './tree.js';
 import { createUntrackedCache } from './untracked.js';
 
 const DEFAULTS = {
@@ -169,6 +170,7 @@ export const createGitCore: CreateGitCore = (options: GitCoreOptions = {}): GitC
     incremental: options.incremental !== false,
   };
   const reviewDeps: ReviewDeps = { ctx, commitCache: createCommitDetailsCache() };
+  const treeDeps: TreeDeps = { ctx, trees: new TreeCache() };
   let disposed = false;
 
   /**
@@ -267,8 +269,17 @@ export const createGitCore: CreateGitCore = (options: GitCoreOptions = {}): GitC
       (worktree, blobOptions) => readBlob(ctx, worktree, blobOptions),
       (_worktree, blobOptions) => blobOptions,
     ),
+    listTree: guard(
+      (worktree, treeOptions) => listTree(treeDeps, worktree, treeOptions),
+      (_worktree, treeOptions) => treeOptions,
+    ),
+    countTreeFiles: guard(
+      (worktree, countOptions) => countTreeFiles(treeDeps, worktree, countOptions),
+      (_worktree, countOptions) => countOptions,
+    ),
     dispose: async () => {
       disposed = true;
+      treeDeps.trees.clear();
       reviewDeps.commitCache.clear();
       deps.untrackedCache.clear();
       deps.attributeCache.clear();

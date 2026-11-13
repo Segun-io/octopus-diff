@@ -60,3 +60,4 @@ export const GIT_CORE_IMPLEMENTED: boolean = true;
 export { foldsCase } from './incremental.js';
 export { parseRemoteConfig, REMOTE_CONFIG_REGEX, rewriteUrl } from './remotes.js';
 export { readRepositoryInfo, stripUrlCredentials } from './repository.js';
+export { parseLsTree, TREE_CACHE_MAX_BYTES, TreeCache, treePathComponents } from './tree.js';
