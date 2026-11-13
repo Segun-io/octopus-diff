@@ -4116,3 +4116,63 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      isolates the case (other refusals come first), so it keeps the equality but did not kill the check-removed mutant:
      the deterministic tests are the guard.
 
+
+## Spawn helper for git (session, 2026-11-12; roadmap #45, step 28)
+
+348. **`contracts:` `GitCoreOptions.helper?: boolean | GitHelperOptions` and `GitHelperOptions { entry?, processes?,
+     execPath? }`.** Additive (an optional field and a new interface, own commit). Absent means on (except on Windows).
+     `entry` lets a packager (Electron, #19) point at an unpacked copy of the helper; `execPath` at the Node that runs it.
+349. **The helper is `spawn(process.execPath, [git-helper.js, …])` speaking length-prefixed binary frames over its
+     stdin/stdout, not `child_process.fork` IPC and not Electron's `utilityProcess`.** Frames are `u32 length | u8 type |
+     u32 id | payload`; output payloads are the raw bytes git wrote (no UTF-8 decoding, no base64, no JSON around them),
+     so `-z` output and non-UTF-8 names pass byte-exact. Plain pipes work the same under Node, under
+     `ELECTRON_RUN_AS_NODE=1` (set automatically when `process.versions.electron` exists) and for any packager that can
+     start a Node binary; `fork`'s IPC needs an IPC fd and JSON (or V8 "advanced") serialization, and `utilityProcess`
+     exists only in Electron's main process. The helper runs in its own session (`detached`), in `/`, with an empty
+     environment (no `NODE_OPTIONS` from the daemon), so terminal signals reach only the parent.
+350. **The runner keeps every decision; the helper is a dumb executor that is strict about shape.** Allowlist, stdin
+     allowlist, config pins, safety env, `--git-dir`/`--work-tree` checks, the scheduler and lanes, `onSpawn`,
+     `queueKey`, timeouts, `maxOutputBytes`, AbortSignal (SIGTERM, SIGKILL after `ABORT_GRACE_MS`, slot freed on exit),
+     dispose and `GitCoreError` mapping stay in `runner.ts`, which now drives a `ProcHandle` that is either a direct
+     child or a helper request (same callbacks: stdout, stderr, exit, close, error). The helper (`git-helper.ts`,
+     self-contained, Node built-ins only, erasable TypeScript so Node runs the source in dev) is started with the one
+     absolute git binary it may run; a SPAWN must be exactly `{binary, argv, cwd, env, stdin, maxOutputBytes}`:
+     `binary` equal to that path, `argv` an array of NUL-free strings, `cwd` absolute, `env` a map of strings (no `=` in
+     keys), anything else (extra or missing keys, wrong types) is REJECTED and nothing runs. Framing errors (length over
+     8 MiB, unknown type, a malformed KILL) are FATAL: the helper SIGKILLs every group it started and exits 2. It never
+     uses a shell, never spawns anything but its git binary, and caps output too (TOO_LARGE: it kills the group and
+     stops forwarding at `maxOutputBytes`, which the runner maps to the same `output_too_large`), stderr at 64 KiB, and
+     256 running processes. A finished process's group stays killable for 5 s (the runner's post-abort SIGKILL).
+     Back-pressure: when its stdout to the parent is full, the helper pauses git's pipes until it drains.
+351. **Failure model.** A helper that exits with requests in flight reports them lost; the parent SIGKILLs their process
+     groups (it learned each pid from SPAWNED), so nothing outlives a crashed helper. A lost request runs again once
+     (twice when the pool has just given up, the second time directly), unless it streamed output to an `onStdout`
+     callback already: then it fails with `git_failed` and `details.helper: 'lost'`. The retry restarts the timeout. A
+     helper that exits before READY is a start failure; two in a row, or five exits within a minute, turn the pool off
+     for that runner (one warning) and git is spawned directly. When the parent dies (SIGKILL included), its end of the
+     helper's stdin closes: the helper SIGKILLs every group it started and exits (test with a PID file).
+352. **Two helpers by default (one with `concurrency: 1`), started lazily; the second only while the first is busy.** One
+     helper's event loop is the bottleneck at concurrency 4 (640 × `git status`: 735 ms vs 604 ms direct), two are faster
+     than direct (511 ms) while the daemon's main thread does 0.2 ms of work per git process instead of about 1 ms. Idle
+     helpers are unref'd (they never keep the daemon or a test worker alive); busy ones are ref'd as running git children
+     were. `dispose()` ends their stdin and waits (2 s, then SIGKILL).
+353. **Windows keeps the direct path.** No process groups to kill there and no way to test it here; `helperConfig`
+     returns null on `win32` whatever the option says, and doctor reports "not used on Windows".
+354. **Kill switches.** `OCTOPUS_DIFF_GIT_HELPER=0|false|no|off` always wins (git-core reads it, so whole test suites run
+     both ways); `GitCoreOptions.helper: false`; the daemon's `internal.gitHelper: false`; the CLI config file's
+     `git.helper: false`. The direct path is the code that ran before, behind `spawnDirect`.
+355. **`no-shell.test.ts` now lists three modules that import `node:child_process`** (`runner.ts`, `helper-client.ts`,
+     `git-helper.ts`) and pins what each may spawn: the resolved git binary, `execPath` for the helper, and the helper's
+     startup git binary. This is the one existing test that changed: the old assertion ("only runner.ts") is false by
+     design now.
+356. **CLI packaging.** `pack.mjs` builds `dist/git-helper.js` next to the bundle (`new URL('./git-helper.js',
+     import.meta.url)` resolves to it); `pnpm build` emits `dist/runner/git-helper.js` next to the runner. `doctor` has a
+     `git-helper` check (`git --version` through a real helper: ok / info when off / warn when broken). The CI `package`
+     job asserts that check is ok and runs `apps/cli/scripts/smoke-tarball.mjs` (serve, a diff through the API, a helper
+     under the daemon, SIGKILL of the daemon, no helper or git process left). For #19: unpack `git-helper.js` from the
+     asar (or pass `helper.entry`), and `execPath` is Electron's binary with `ELECTRON_RUN_AS_NODE`.
+357. **The RSS-proportional spawn cost of review-perf F1 does not reproduce on this machine any more** (Node 26.13, libuv
+     1.52): `spawn()` costs 0.67 ms synchronously at 56 MiB RSS and 1.21 ms at 1.4 GiB (it was 0.63 → 16 ms in
+     2026-11). The helper is still worth it: the main thread is busy about 1 ms per git process on the direct path (100 %
+     of a spawn burst), 0.2 ms through the helper, at any heap size. Measured with
+     `packages/git-core/test/bench/spawn-helper.bench.ts` (numbers in `docs/reports/spawn-helper.md`).
