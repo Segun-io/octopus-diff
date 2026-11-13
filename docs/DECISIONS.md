@@ -4366,6 +4366,10 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      helper that exits before READY is a start failure; two in a row, or five exits within a minute, turn the pool off
      for that runner (one warning) and git is spawned directly. When the parent dies (SIGKILL included), its end of the
      helper's stdin closes: the helper SIGKILLs every group it started and exits (test with a PID file).
+     *Amended by #375-#376 and #380 (PR #98 reviews):* the pids come from the synchronous pid channel, not from
+     SPAWNED; a lost request is retried only when nothing of its first try can still run; a refused one runs directly;
+     and a helper whose SIGKILLed git never reports its exit is itself SIGKILLed, so an aborted run's slot comes back
+     even from a stopped or wedged helper (before, only dispose settled such a run).
 369. **Two helpers by default (one with `concurrency: 1`), started lazily; the second only while the first is busy.** One
      helper's event loop is the bottleneck at concurrency 4 (640 × `git status`: 735 ms vs 604 ms direct), two are faster
      than direct (511 ms) while the daemon's main thread does 0.2 ms of work per git process instead of about 1 ms. Idle
@@ -4391,3 +4395,80 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      2026-11). The helper is still worth it: the main thread is busy about 1 ms per git process on the direct path (100 %
      of a spawn burst), 0.2 ms through the helper, at any heap size. Measured with
      `packages/git-core/test/bench/spawn-helper.bench.ts` (numbers in `docs/reports/spawn-helper.md`).
+
+### Spawn helper: Greptile review (PR #98, 2026-11-12)
+
+375. **The pid of every git process reaches the parent synchronously, on a channel of its own (P1).** A helper that died
+     after starting git but before its queued `SPAWNED` frame was written left that git running, unknown to the parent,
+     and the retry then ran next to it (reproduced: the retry saw the first process alive). Now, the helper's fd 3 is a
+     pid channel: an 8-byte record `id | 0` right before the call that starts git and `id | pid` right after it,
+     each written with `fs.writeSync` (blocking; EAGAIN retried), so it is in the kernel before the helper runs any
+     other code. A separate fd keeps the records out of the stdout frames: a synchronous write there could land in the
+     middle of a frame still queued in the helper. The parent reads both until the helper's `close`. Chosen over a
+     wrapper that writes a pid file (an extra exec per git process, a file per request) and over scanning processes
+     for a marker (platform-specific, racy); `PR_SET_PDEATHSIG` is Linux-only and out of Node's reach. The helper
+     refuses to start unless fd 3 is a socket (what a stdio `pipe` is on POSIX; Node's own fds take the number
+     otherwise).
+376. **A lost request is retried only when nothing of its first try can still run.** The parent SIGKILLs the groups whose
+     pid it knows and retries once they are gone (polled, at most 1 s; after that it retries anyway, since a SIGKILLed
+     group runs no more code, which leaves only an unreaped zombie). A request announced on the pid channel without a
+     pid (the helper died in the microseconds while starting git) is **not** retried: git may be running there,
+     unknown. It fails with `git_failed`, `details.helper: 'lost'`. A request the helper never announced (it died
+     before) is retried as before. Test hook: `GitRunnerOptions.helperTestCrash` (`before-spawn` / `after-spawn` with a
+     one-shot file) makes a helper SIGKILL itself at that point; it is git-core-internal, not in the contracts, and the
+     helper reads it only from the environment the parent gives it (otherwise empty).
+377. **stdin is credit-based and copy-free (P2).** It used to be copied into 1 MiB frames and queued whole (two 64 MiB
+     `patch-id` inputs: +134 MB in the daemon). Now the helper grants each request a window (`STDIN_CREDIT`, 256 KiB
+     at the start). The parent sends 64 KiB frames, each a header plus a `subarray` view of the caller's buffer
+     (corked, never concatenated), only within that credit and only while its pipe to the helper does not need a
+     drain. The helper gives credit back once git has accepted the bytes (the `write` callback of git's stdin). A
+     stdin frame over the credit is FATAL. So each process holds at most the window per request, and a git that does
+     not read its stdin stops the flow for its own request only: no head-of-line blocking of the shared pipe, which
+     pausing the whole helper input would cause. On detach (cancel, timeout, cap) the parent drops the rest, and the
+     helper destroys git's stdin; on EXIT the parent stops sending.
+378. **The spawn-helper bench fixture sets `init.defaultBranch=main` and `commit.gpgsign=false` (P2).** The other
+     configs this PR writes were checked against the AGENTS.md list: `smoke-tarball.mjs` has all of them; the test
+     fixtures use the shared `createFixture` / `makeRealGitFixture`, which do.
+379. **The merged fresh-`.gitignore` route test warms its core first.** It failed on `fdef217` with the helper on (6 of 6
+     tries): it reads its first state on a cold core, and the helper starting (plus the version probe) can put the
+     stamp past the 100 ms `IGNORE_MARGIN_MS`. The route is right then: a rule file older than the margin was visible
+     to git. The test's retries reuse the repository and cannot recover. `await fast.version()` first keeps the
+     test's premise ("written just before the state was read").
+
+### Spawn helper: security review (PR #98, 2026-11-12)
+
+380. **A helper that does not report a SIGKILLed process's exit is given up on (review 1, P2).** An aborted run settles
+     on EXIT, and a stopped or wedged helper never sends one: every aborted run kept its slot, and after `concurrency`
+     of them the whole runner stood still (reproduced with SIGSTOP). Now, every SIGKILL the runner sends through a
+     helper (a timeout, a cap, dispose, an abort's forced kill) arms a watchdog: no exit within `HELPER_EXIT_WAIT_MS`
+     (`ABORT_GRACE_MS` + 1 s) means `ProcHandle.abandon()`, which SIGKILLs that helper. Its death reports its requests
+     lost (the aborted ones settle `aborted`, the others are retried by the rules of #376), the pool starts a new
+     helper, and the slots come back. A timeout that fires while an abort is waiting gives up at once. The direct path
+     has no `abandon` (the kernel always reports a child's exit; a process stuck in uninterruptible sleep keeps its slot
+     there, as before).
+381. **The helper's count limits are checked before sending, and a refused request runs directly (review 2, P3).** The
+     helper accepts at most 65 536 argv and 4 096 env entries; `helperRequestFits` only checked the frame's bytes, so
+     about 70 000 short pathspecs (within `PATHSPEC_BUDGET`) were refused with a misleading reason and then failed. Now
+     the counts are checked as well (`HELPER_MAX_ARGV`, `HELPER_MAX_ENV`, exported by the client; a test reads the
+     helper's source and asserts both sides agree), and a REJECTED request, which the helper would refuse again, is
+     run once on the direct path with a warning, instead of being retried through the helper. The helper's reason for
+     a too-long argv now says so.
+382. **The pid channel (#375) is also the fix for review 3; the helper never dies silently.** The reviewer's repro (the
+     parent stops reading, a flood fills the buffers, the second request's SPAWNED waits in the helper's own write
+     buffer, the helper is SIGKILLed) leaves the pid known through fd 3: it is a test now. The helper also has
+     `uncaughtException` and `unhandledRejection` handlers that SIGKILL every group it started before exiting (a test
+     hook throws right after a spawn). Holding new SPAWNs while the output is blocked was not needed with the channel.
+383. **Each request's callbacks run in that request's async context, and helpers are created outside any (review 4,
+     P3).** Before, a helper's pipes belonged to the context of the request that started the helper, so later requests'
+     `onStdout` and their lost-retries saw that first call's `currentCall()` (its lane and AbortSignal), and kept it
+     alive. `startGit` now binds every handler with an `AsyncResource` made in the caller's context, and the pool
+     creates helpers through an `AsyncLocalStorage.snapshot()` taken when the module loads. Test: requests A then B,
+     each `onStdout` sees its own call.
+384. **The spawn hygiene test cannot be bypassed inside the three allowed modules (review 5, P3).** `spawnHygieneProblems`
+     (in `no-shell.test.ts`) strips comments, then requires, per allowed file, exactly one mention of `child_process`,
+     which must be `import { type ChildProcess, spawn } from 'node:child_process';` (so no alias, namespace, `require` or
+     dynamic import), exactly the pinned spawn calls, `spawn` referenced nowhere else (no `const run = spawn`), and
+     `shell:` only as `shell: false`; anywhere in git-core it forbids `exec*`, `execFile*`, `spawnSync`, `fork` and the
+     process bindings, and any other mention of `child_process`. Negative tests feed it each bypass the reviewer
+     listed, and a few more. Two names were changed so the rule stays simple: the frame key `HelperFrame.spawn` is
+     now `startGit`, and the error text `'spawn failed'` is now `'git did not start'`.

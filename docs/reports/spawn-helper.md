@@ -29,9 +29,11 @@
   Helpers start lazily: up to 2, the second only while the first is busy, 1 with `concurrency: 1`. Idle helpers are
   unref'd. `dispose()` closes them and waits for them to exit.
 
-  If a helper dies with requests in flight, the runner kills their process groups (it learned each pid from the
-  helper). It runs a lost request again once, unless that request already streamed output to `onStdout`; then the
-  request fails with `git_failed`, `details.helper: 'lost'`. Two start failures in a row, or 5 crashes within a minute,
+  If a helper dies with requests in flight, the runner kills their process groups: each pid reaches it synchronously
+  on the helper's pid channel (fd 3; PR #98 review). It runs a lost request again once, but only when nothing of the
+  first try can still run (its group is gone, or it never started), and not when that request already streamed output
+  to `onStdout`. Otherwise the request fails with `git_failed`, `details.helper: 'lost'`. A request the helper refuses
+  runs directly. A helper whose SIGKILLed git never reports its exit (stopped, wedged) is SIGKILLed itself. Two start failures in a row, or 5 crashes within a minute,
   turn the pool off for that runner: git is then spawned directly, with one warning.
 - **Kill switches.** `OCTOPUS_DIFF_GIT_HELPER=0` always wins. The others are `GitCoreOptions.helper: false` (contracts),
   the daemon's `internal.gitHelper: false` and the CLI config file's `git.helper: false`. Windows always uses the
@@ -208,7 +210,7 @@ helpers therefore add about 40 MB of private memory to a daemon that uses 140-21
 
 ## Decisions
 
-DECISIONS #365-#374 (`docs/DECISIONS.md`, "Spawn helper for git"):
+DECISIONS #365-#374 (`docs/DECISIONS.md`, "Spawn helper for git"), and #375-#384 for the PR #98 reviews (below):
 
 - #365: the contracts field;
 - #366: stdio frames from `spawn(process.execPath)` rather than fork IPC or `utilityProcess`, for Node and Electron;
@@ -233,9 +235,9 @@ None added or removed. The tarball's second esbuild entry uses the existing esbu
 ## Known gaps
 
 - **Windows uses the direct path** (no process groups to kill, untested here). The helper code is POSIX-first.
-- **No watchdog for a hung helper.** A helper that stops answering without exiting would hold an aborted run's slot
-  (the run waits for EXIT); timeouts and dispose still settle at once. Never seen; a wedged helper is a bug, not a
-  git-behaviour case.
+- **Fixed in the PR #98 reviews:** the hung-helper slot leak (watchdog, DECISIONS #380), git outliving a helper
+  that died with its SPAWNED still queued (pid channel, #375/#382), whole-input stdin copies (credit, #377). See
+  "PR #98 review round" below.
 - **A retried request restarts its timeout**, and `onSpawn` is called again for the second process.
 - **`no-shell.test.ts` changed** (the only existing test that did): it had asserted that only `runner.ts` imports
   `node:child_process`, which is false by design now. It pins what each of the three modules may spawn.
@@ -252,3 +254,80 @@ None added or removed. The tarball's second esbuild entry uses the existing esbu
   `ELECTRON_RUN_AS_NODE`, nothing else is needed.
 - `docs/bench/results*.{json,md}` were not regenerated (the results above come from `/tmp`); regenerate them when
   merging if the committed bench numbers should reflect the helper.
+
+## PR #98 review round (Greptile + security review, 2026-11-12)
+
+DECISIONS #375-#384; #368 amended. Every new test was written first and failed on `fdef217` for the reason under test,
+except the flood repro of security review 3, which the pid channel (Greptile 1) already fixed when it was written.
+
+| Item | Change | Test (failed first with) |
+|---|---|---|
+| Greptile 1 (P1) = review 3 | Pid channel on the helper's fd 3: `id\|0` before and `id\|pid` after starting git, written with `writeSync`, so a helper that dies right after has told the parent what to kill. A lost request is retried only once its group is gone, never when it was announced without a pid. `uncaughtException` / `unhandledRejection` handlers kill every group. The helper refuses to start unless fd 3 is a socket. | helper SIGKILLed right after spawn (test hook): the retry ran `alongside` the survivor; helper SIGKILLed after the announce, before spawn: it was retried; the flood repro: the pid is known while SPAWNED is stuck; uncaught exception: the group survived; no fd 3: exits 2 |
+| Greptile 2 (P2) | Credit-based stdin: 256 KiB window per request, given back as git reads; 64 KiB frames that are views of the caller's buffer; over-credit is FATAL; dropped on detach and exit | two 64 MiB inputs at once: +134 MB peak before, now < 16 MiB; 64 MiB random `cksum` equal to direct; a git that reads nothing holds < 4 MiB; abort while sending |
+| Greptile 3 (P2) | Bench fixture sets `init.defaultBranch` and `commit.gpgsign`; other configs checked | review |
+| Review 1 (P2) | Watchdog: no exit `HELPER_EXIT_WAIT_MS` after a SIGKILL means the helper is SIGKILLed (`ProcHandle.abandon`); a timeout while aborting gives up at once | SIGSTOPped helpers + two aborted runs: never settled before (test timed out), now aborted and the third run done in < 5 s; the timeout variant settles before the watchdog would |
+| Review 2 (P3) | `HELPER_MAX_ARGV` / `HELPER_MAX_ENV` checked before sending; a refusal runs directly; a clear reason | 70 000 pathspecs: `git_failed` before, now the same argc as direct with no refusal; an env key with `=`: runs directly |
+| Review 4 (P3) | Handlers bound to the request's context (`AsyncResource`); helpers created in the module's root context | A then B: `A:own, A:other` before, now `A:own, B:own` |
+| Review 5 (P3) | `spawnHygieneProblems`: one exact import per allowed file, pinned calls, no other `spawn` reference, `shell: false` only, no `fork` / `exec*` / bindings / `child_process` elsewhere | negative tests for each bypass (alias, namespace, require, dynamic import, fork, exec, execFile, a second call, `const run = spawn`, `shell: someVar`/`true`/a path, bindings); a test that the client's limits equal the helper's |
+
+Also: the merged #93 test "a `.gitignore` written just before the state was read" failed 6 of 6 times on `fdef217`
+with the helper on (a cold core can take longer than the 100 ms margin; DECISIONS #379); it now warms its core
+first. The SIGSTOP tests release their helpers through `onTestFinished`: a timed-out test must not leave stopped
+processes behind, which the first mutation run did (11 stopped helpers and their zombie children, killed by PID).
+
+**Mutation check** (each mutant alone, `helper.test.ts` or `no-shell.test.ts`): 32 applied, 31 killed.
+- Greptile round: no pid announce after spawn; no start announce; pid channel ignored by the parent; an announced
+  request without a pid still retried; `retryable` ignored by the runner; credit given on receipt instead of after
+  git's write; credit check removed; client copying the whole input up front; fd 3 check accepting anything.
+- Security round: no watchdog; timeout-while-aborting not abandoning; `abandon` a no-op; count checks removed; refusal
+  retried through the helper; no `uncaughtException` handler; handlers not bound; and five checker rules weakened
+  (any `child_process` mention, `spawn` references not counted, the `shell` rule only rejecting `true`, `fork`
+  allowed, `child_process` allowed elsewhere).
+- **Survived: "retry without waiting for the group to disappear".** The wait only matters for a group that still
+  exists after SIGKILL (a process in uninterruptible sleep, or an unreaped zombie). Neither can be produced in a test
+  here: init reaps at once. The wait stays (bounded, 1 s).
+- Not tested: creating helpers in the root context (review 4, second half). It keeps a later request from holding the
+  first request's context alive, which no test can observe without a forced GC.
+
+**Verification** (head after this round; `pgrep -a git` empty of my processes before and after every run):
+- `pnpm lint` exit 0 (4 warnings, 1 info, in files this branch does not touch; credits up to date).
+  `pnpm typecheck` exit 0. `pnpm build` exit 0.
+- `pnpm test` exit 0: contracts 118; forge 101 (5 skipped); fixtures 58; web 482; git-core 477 (1 skipped);
+  daemon 420 (4 skipped); e2e unit 8; cli 141; scripts 34.
+- Helper on / off:
+
+  | Package | Helper on | Helper off |
+  |---|---|---|
+  | git-core | 477 passed, 1 skipped | 453 passed, 25 skipped |
+  | daemon | 420 passed, 4 skipped | 419 passed, 5 skipped |
+
+- Folding mode: git-core 462 passed, 16 skipped; daemon 418 passed, 6 skipped.
+- `pnpm test:e2e --workers=1`: 106 passed (2.9 min). Read-only proof: 12 control repos, 4353 lock polls,
+  0 violations.
+- `perf:smoke`: exit 0, no failed check.
+- Package steps: tarball (9.46 MB, 1070 files); `npm install` exit 0; `--version` printed `0.0.0`; doctor "ok git
+  helper … dist/git-helper.js"; the JSON assertion exit 0; `smoke-tarball.mjs` exit 0 with the helper on and off.
+- Busy time per spawn (`spawn-helper.bench.ts`, 640 × `status`):
+
+  | Path | Retained 0 MiB | 100 MiB | 1000 MiB |
+  |---|---|---|---|
+  | Direct | 0.93 ms | 0.97 ms | 0.96 ms |
+  | 1 helper | 0.215 ms | 0.217 ms | 0.216 ms |
+  | 2 helpers (wall 514-516 ms) | 0.238 ms | 0.248 ms | 0.242 ms |
+
+  At `fdef217`, measured the same way, it was 0.183 ms (1 helper) and 0.203 ms (2 helpers): **+0.02-0.03 ms per spawn
+  (about 12 %)**. It is spread over the review fixes, with no single cause: without the per-request context binding
+  it is 0.005 ms less, without the pid-channel listener 0.005 ms less, without both and the `AsyncResource` 0.01 ms
+  less. It is still about 4 × below direct and flat across heap sizes.
+- 30 × 3 bench, helper on / direct:
+
+  | Metric | Helper on | Direct |
+  |---|---|---|
+  | Startup to all summaries | 666 ms | 1003 ms |
+  | Startup git wall time, summed | 1112 ms | 3164 ms |
+  | 60-edit burst: spawns / git wall time summed | 292 / 688 ms (725 ms before this round) | 291 / 2382 ms |
+  | Diff during the burst, p95 | 18 ms | 30 ms |
+  | Edit → SSE, p50 / p95 | 13 / 23 ms | 15 / 26 ms |
+  | Idle CPU | 0.23 % | 0.40 % |
+
+  Every budget passes in both runs.
