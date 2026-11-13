@@ -1,11 +1,19 @@
-import { appendFile } from 'node:fs/promises';
+import { appendFile, mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { GitCore } from '@octopus-diff/contracts';
 import { createGitCore, GIT_CORE_IMPLEMENTED } from '@octopus-diff/git-core';
 import { describe, expect, it } from 'vitest';
 import { startDaemon } from '../src/daemon.js';
 import { hashId } from '../src/ids.js';
-import { client, eventually, onCleanup, sleep, TEST_TOKEN, tempDir } from './helpers.js';
+import {
+  client,
+  eventually,
+  onCleanup,
+  recordEvents,
+  sleep,
+  TEST_TOKEN,
+  tempDir,
+} from './helpers.js';
 import { makeRealGitFixture, makeRealRepo } from './real-git-fixture.js';
 
 /**
@@ -91,5 +99,47 @@ describe.skipIf(!GIT_CORE_IMPLEMENTED)('review range cache (#49)', () => {
     await s.settle();
     // `moveBookmark` reads one range itself; the review state it triggers reads another.
     expect(s.ranges() - afterCommit).toBeGreaterThanOrEqual(2);
+  });
+
+  it('is not kept while the bookmark is unreachable from HEAD (a reset): asked every time', async () => {
+    const s = await setup();
+    s.fx.git(s.repo, 'add', '-A');
+    s.fx.git(s.repo, 'commit', '-q', '-m', 'second');
+    await eventually(async () => (await s.row())?.headSha !== undefined, 8000);
+    await s.settle();
+    const head = s.fx.git(s.repo, 'rev-parse', 'HEAD').trim();
+    await s.daemon.core.moveBookmark(s.worktreeId, head);
+    // HEAD goes back: the bookmark (the dropped commit) is not an ancestor of HEAD any more.
+    s.fx.git(s.repo, 'reset', '-q', '--hard', 'HEAD~1');
+    await eventually(async () => (await s.row())?.headSha !== head, 8000);
+    await s.api.listProjects();
+    await s.settle();
+    const base = s.ranges();
+    for (let i = 1; i <= 2; i++) {
+      const before = (await s.row())?.stateHash;
+      await appendFile(path.join(s.repo, 'a.txt'), `unreachable ${i}\n`);
+      await eventually(async () => (await s.row())?.stateHash !== before, 8000);
+      await s.api.listProjects();
+      await s.settle();
+    }
+    expect(s.ranges() - base).toBeGreaterThanOrEqual(2);
+  });
+
+  it('worktree.changed still carries the cached list when an attributes file exists (its stamp is in the key)', async () => {
+    const s = await setup();
+    await mkdir(path.join(s.repo, '.git', 'info'), { recursive: true });
+    await writeFile(path.join(s.repo, '.git', 'info', 'attributes'), '*.bin -diff\n');
+    const events = recordEvents(s.daemon);
+    await events.opened;
+    const mark = events.events.length;
+    await appendFile(path.join(s.repo, 'a.txt'), 'with attributes\n');
+    const changed = await eventually(
+      () =>
+        events.events
+          .slice(mark)
+          .find((e) => e.type === 'worktree.changed' && e.worktreeId === s.worktreeId && e.paths),
+      8000,
+    );
+    expect(changed).toBeDefined();
   });
 });

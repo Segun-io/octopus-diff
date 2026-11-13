@@ -288,10 +288,29 @@ describe('file list cache: invalidation points', () => {
     expect(calls(fake)).toBe(before + 1);
   });
 
+  /** A fake whose summary (so its stateHash) does not depend on the default branch. */
+  function sameHash(fake: FakeGitCore) {
+    const original = fake.getSummary.bind(fake);
+    fake.getSummary = (loc, options) => original(loc, { ...options, defaultBranch: undefined });
+  }
+
   it('changing the default branch override drops the project entries', async () => {
     const { fake, daemon, repo, wt } = await setup();
+    sameHash(fake);
+    await client(daemon).refreshWorktree(wt);
     const before = await warm(daemon, wt, fake);
     await client(daemon).updateProject(repo.projectId, { defaultBranchOverride: 'trunk' });
+    await listOf(daemon, wt);
+    expect(calls(fake)).toBe(before + 1);
+  });
+
+  it('a changed detected default branch drops the project entries', async () => {
+    const { fake, daemon, repo, wt } = await setup();
+    sameHash(fake);
+    await client(daemon).refreshWorktree(wt);
+    const before = await warm(daemon, wt, fake);
+    repo.detectedDefaultBranch = 'trunk';
+    await client(daemon).addProject({ path: repo.mainPath });
     await listOf(daemon, wt);
     expect(calls(fake)).toBe(before + 1);
   });
