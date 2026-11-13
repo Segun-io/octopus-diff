@@ -257,6 +257,7 @@ describe('read-only proof', () => {
           }
         }
         await core.countTreeFiles?.(wt, { tree: treeOid });
+        await core.countTreeChildren?.(wt, { tree: treeOid });
       }
       await core.getWatchTargets(wt);
       const commits = await core.listCommits(wt, { limit: 5 });

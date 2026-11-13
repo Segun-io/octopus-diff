@@ -41,7 +41,7 @@ import {
 import { abortedError, callContext, raceAbort, withCall } from './runner/call-context.js';
 import { defaultBigFileThreshold, GitRunner } from './runner/runner.js';
 import { getSummary } from './summary.js';
-import { countTreeFiles, listTree, TreeCache, type TreeDeps } from './tree.js';
+import { countTreeChildren, countTreeFiles, listTree, TreeCache, type TreeDeps } from './tree.js';
 import { createUntrackedCache } from './untracked.js';
 
 const DEFAULTS = {
@@ -275,6 +275,10 @@ export const createGitCore: CreateGitCore = (options: GitCoreOptions = {}): GitC
     ),
     countTreeFiles: guard(
       (worktree, countOptions) => countTreeFiles(treeDeps, worktree, countOptions),
+      (_worktree, countOptions) => countOptions,
+    ),
+    countTreeChildren: guard(
+      (worktree, countOptions) => countTreeChildren(treeDeps, worktree, countOptions),
       (_worktree, countOptions) => countOptions,
     ),
     dispose: async () => {
