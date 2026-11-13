@@ -5400,3 +5400,52 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      integer, `version` a non-empty string; unknown keys are stripped, not rejected (so a later additive field does not
      break an older reader). `daemon.ts` now imports zod (it was types only); the contracts already depend on it. Nothing
      renamed or removed. Tests: `packages/contracts/test/serve-ready.test.ts`.
+477. **`--ready-fd <n>` validation.** `n` must be an integer from 3 to 2^31-1 (parse error, exit 2, otherwise: 0-2 are
+     stdin/stdout/stderr and `ready-fd=1` would mix the line into the banner). A number that parses but is not an
+     open descriptor in this process (`fs.fstatSync` fails) is a runtime error, exit 1, **before** anything is
+     started or the state dir is looked at: `--ready-fd 200: file descriptor 200 is not open (the parent must pass it to
+     this process)`. `fstat` only proves the number is open: low numbers can be Node's own internal descriptors (epoll,
+     eventfds; fd 9 is open in a bare `node`), and the CLI cannot tell a pipe from the parent from one of those. The
+     parent passes the pipe at the index it names; the test for the "not open" case uses fd 200.
+478. **What the line is, and when.** One compact JSON line (`JSON.stringify(ServeReady)` + `\n`, the shape of #476), written
+     with a blocking `fs.writeSync` loop (partial writes, bounded `EAGAIN` retry), then the descriptor is **closed**, so a
+     reader can wait for EOF as well as for a newline, and nothing else can ever be written to it. `started`: after the
+     daemon listens, `daemon.json` is written and the banner is on stdout, before `--open` and before `onReady`;
+     `pid` is this process, `version` the CLI's. `attached`: right away after the verified `findRunningDaemon`
+     (`running.verified && running.token`); `pid` and `version` are the **running daemon's** (`running.pid`, its
+     `/api/health` version), so a supervisor sees version skew (DESKTOP.md §3.1); then exit 0, nothing started, no stdin
+     watched. An unverified recorded daemon is still the existing error (exit 1, no line, no token sent). If the line cannot be
+     written (EPIPE: the parent is already gone), `started` stops the daemon it just started, removes `daemon.json`
+     and exits 1 (a daemon nobody was told about is an orphan); `attached` exits 1.
+479. **The token travels on the fd only.** With `--ready-fd` the stdout banner has no `Open:` / `LAN:` token URLs
+     (`API:`, `State:`, `Web UI:` and "the access URL was sent on file descriptor n" instead) and the "already running"
+     message has no URL. Argv carries nothing secret (it never did), stderr and the daemon's log lines never held the
+     token (tested for both modes: the real token read from `<stateDir>/token` is absent from argv, stdout and stderr).
+     Without the flag every line is unchanged. `--open` with `--ready-fd` still works (a 0600 launcher file, SEC-04).
+480. **`--exit-with-stdin`.** stdin is read and discarded (`resume()`), the handle is `unref`'d so it never keeps the
+     process alive by itself (the daemon's own handles do; the 2 s `process.exit` fallback in `index.ts` is unaffected),
+     and `end`, `close` or `error` resolve one promise that is **raced with the signal promise** in the same place
+     `waitForShutdown` was, so the same graceful path runs (close the daemon with the same timeout, remove
+     `daemon.json`, exit 0; 1 if close fails or times out). It listens before the daemon starts, like signals, so an EOF
+     during startup closes the daemon as soon as it is up. Afterwards stdin is paused again. stderr says
+     `stdin closed, shutting down…` (or `stdin error (…)`), not `received …`. Not read at all without the flag (a plain
+     `serve` in a terminal is unchanged). In `attached` mode there is nothing to shut down, so stdin is not watched.
+     A supervisor must give the child a stdin **pipe**: with `ignore` the child reads `/dev/null`, sees EOF at once and
+     shuts down immediately; that is the contract, not a bug.
+481. **The bundle step is `apps/cli/scripts/bundle.mjs`.** `bundleCli({ outDir })` (also `node bundle.mjs --out <dir>`) holds
+     the two esbuild calls and the `web` copy that were inline in `pack.mjs`: `index.js` (+ `.map`, `.LEGAL.txt`),
+     `git-helper.js` (the spawn-helper entry the bundled git runner finds next to itself, #45) and `web/`, with
+     `@parcel/watcher` external. `externalDependencies()` returns the external packages' version ranges (from the daemon's
+     `package.json`) for whatever manifest ships the bundle. `pack.mjs` now only calls it and writes the manifest/docs and
+     runs `npm pack`. **Verified identical**: the tarball built by the old and the new `pack.mjs` has the same file list and
+     byte-identical contents (`diff -r` of both extracted trees), and the CI `package` job's steps (install, `--version`,
+     `doctor` git-helper check, `smoke-tarball.mjs`) pass on it. Documented in CONTRIBUTING.md. The desktop shell
+     (phase A) decides how to run it; nothing about Electron is in the script.
+482. **Tests.** Unit (`serve.test.ts`, `args.test.ts`): fake channel and stdin, the lines and orders above. Process tests
+     (`serve-ready.test.ts`) run the built bin with `stdio: ['pipe','pipe','pipe','pipe']` (fd 3) against the real
+     daemon in a temp state dir, like the existing binary test (skipped when `dist/index.js` is missing; CI builds before
+     `pnpm test`). They stop daemons by closing stdin, never with a signal (one test sends SIGINT, only where the platform
+     has it), and kill strays by PID in `afterEach`. Not run on Windows or macOS here (Linux/WSL only): the code uses only
+     `fs.writeSync` on an inherited fd and stdin events, which Node supports on both; if a CI OS shows a difference, it
+     is a bug to fix, not a skip. `readme.test.ts` requires every serve flag in the README table, so both flags are listed
+     there.
