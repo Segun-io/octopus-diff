@@ -79,6 +79,12 @@ export function cacheKey(group: string, state: string): string {
 export class StateCache<V> {
   readonly #cache: Cache.Cache<string, Computed<V>, unknown, LookupParams>;
   readonly #capacity: number;
+  /**
+   * The lookup that owns each key's entry while it runs. An invalidation removes the key, so a
+   * lookup that finishes later is no longer the owner: it must not prune the group's newer states
+   * (PR #104).
+   */
+  readonly #owners = new Map<string, Params>();
   #hits = 0;
   #misses = 0;
   #joins = 0;
@@ -88,13 +94,23 @@ export class StateCache<V> {
     this.#cache = Effect.runSync(
       Cache.makeWith(
         (key: string): Effect.Effect<Computed<V>, unknown, LookupParams> =>
-          Effect.flatMap(LookupParams, (params) =>
-            Effect.tap(this.#run(params), (done) =>
-              Effect.sync(() => {
-                if (done.store) this.#dropOtherStates(params.group, key);
-              }),
-            ),
-          ),
+          Effect.flatMap(LookupParams, (params) => {
+            this.#owners.set(key, params);
+            return this.#run(params).pipe(
+              Effect.tap((done) =>
+                Effect.sync(() => {
+                  if (done.store && this.#owners.get(key) === params) {
+                    this.#dropOtherStates(params.group, key);
+                  }
+                }),
+              ),
+              Effect.ensuring(
+                Effect.sync(() => {
+                  if (this.#owners.get(key) === params) this.#owners.delete(key);
+                }),
+              ),
+            );
+          }),
         {
           capacity: options.capacity,
           // Failures and results the caller says not to keep live as long as their waiters.
@@ -189,6 +205,7 @@ export class StateCache<V> {
     for (const key of [...this.#cache.map].map(([k]) => k)) {
       if (match(key)) MutableHashMap.remove(this.#cache.map, key);
     }
+    for (const key of [...this.#owners.keys()]) if (match(key)) this.#owners.delete(key);
   }
 
   stats(): CacheStats {

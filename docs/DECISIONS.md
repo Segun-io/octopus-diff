@@ -5316,3 +5316,15 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      startup), the `project.worktrees.get(id) === entry` store condition (a removed worktree's pending entries are
      already dropped by the removal's invalidation), and the `hit ||` in `#gitFilesAt` (a hit's `summaryState` equals
      the `asked` of any caller with the same `stateHash`; it keeps the old "a hit is always the summary's list").
+
+### Effect caches: Greptile review of PR #104 (2026-11-13)
+
+458. **A lookup that an invalidation overtook no longer prunes the newer states of its group** (Greptile P2).
+     `StateCache` pruned the group's other completed states whenever a lookup finished with `store: true`. A lookup
+     for state A, invalidated while it ran, could finish after state B had been looked up and stored, and then delete
+     B although A itself was not kept (the next request repeated the git work). Now each key records the lookup that
+     owns it while it runs (`#owners`); an invalidation clears the record, and only the owner prunes. The record is
+     also cleared when the lookup ends.
+     - **Tests:** the late-finishing invalidated lookup leaves B stored (failed first: B was gone), and a lookup that
+       still owns its entry still prunes the older states of its group.
+     - **Mutant killed:** the pruning without the ownership check.

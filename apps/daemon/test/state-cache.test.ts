@@ -179,6 +179,32 @@ describe('StateCache invalidation (#49)', () => {
     expect(cache.peek('g', 's')).toBe('new');
   });
 
+  it('an invalidated lookup finishing late does not prune the newer state stored after it (PR #104)', async () => {
+    const cache = new StateCache<string>({ capacity: 10 });
+    const a = work<string>();
+    const first = cache.get('g', 'A', a.compute);
+    await tick();
+    cache.invalidateGroup('g');
+    // The newer state is looked up and stored while A is still running ...
+    expect((await cache.get('g', 'B', immediate('b'))).value).toBe('b');
+    expect(cache.peek('g', 'B')).toBe('b');
+    // ... and A finishing (not stored: it was invalidated) must not delete it.
+    a.done('a');
+    expect((await first).value).toBe('a');
+    await tick();
+    expect(cache.peek('g', 'B')).toBe('b');
+    expect(cache.peek('g', 'A')).toBeUndefined();
+    expect(await cache.get('g', 'B', immediate('again'))).toEqual({ value: 'b', hit: true });
+  });
+
+  it('a lookup that still owns its entry prunes the older states of its group', async () => {
+    const cache = new StateCache<string>({ capacity: 10 });
+    await cache.get('g', 'A', immediate('a'));
+    await cache.get('g', 'B', immediate('b'));
+    expect(cache.peek('g', 'A')).toBeUndefined();
+    expect(cache.peek('g', 'B')).toBe('b');
+  });
+
   it('invalidates a group, or every group under a prefix, and nothing else', async () => {
     const cache = new StateCache<string>({ capacity: 10 });
     await cache.get('w1\u0000working', 's', immediate('a'));
