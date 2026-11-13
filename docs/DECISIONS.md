@@ -4532,3 +4532,30 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      not depend on such limits: the 8 MiB frame test only sends a header, and stdin, env sizes and path lengths stay
      far below every platform's limits (temp paths under `/private/var/folders` are about 60 characters, PATH_MAX
      1024).
+
+### Spawn helper tests on macOS CI (run 43384632348, 2026-11-13)
+
+391. **The fake git logs one line per event, written by one `printf '%s\n'` of a string it built first.** The old
+     `printf '%s\x1f' "$$" "$PPID" "$#" "$@" >> log` applies its format once per argument. A shell may flush that in
+     several writes, so concurrent fakes interleaved their fields, and the parser, which stops at the first broken
+     record, lost the rest. Shown on Linux: bash with 4.6 KB records parsed 11 of 300 concurrent records (dash: 300).
+     macOS's `/bin/sh` is bash 3.2; with the runner's ~2.5 KB records that matches "6 of 9 starts" in "keeps the
+     concurrency limit" (the best hypothesis; I have no macOS machine). A record now holds every argument up to 32,
+     else only the last (the tests use only the last for runner calls), so it stays a short single write. An `end`
+     line on normal exit lets the concurrency test prove the limit from the order of events (never more than 3
+     running, all 9 started and ended) instead of from a count at an instant.
+392. **Every wait in `helper.test.ts` explains its failure, and the tests make no assumption about start-up time.**
+     - On a timeout, `until` throws with the fake's events, `ps -A -o pid=,ppid=,pgid=,stat=,command=` filtered to
+       the pids, parents and groups the test knows, the helpers' state (`helperPids`, `helperChildPids`,
+       `usesHelper`) and the warnings logged.
+     - BSD `ps` flags a process on its way out with `E`: that counts as dead, as `Z` (zombie) and `X` (Linux) do. For
+       "a crashed helper's request is retried even when its killed group lingers", where the first git never looked
+       gone on macOS after the parent's group SIGKILL, this is the best hypothesis, with no evidence yet. The other
+       candidate, a failed `killpg`, is now logged as a warning ("could not kill a git process group") instead of
+       being swallowed, so the next failure will say which it was.
+     - Default waits are 20 s.
+     - Tests that use a short timeout first warm their helper, and assert that git ran. The timeout counts from the
+       request, as a direct spawn's does, so on a cold, slow helper it could fire before git started, and one test
+       would then have passed vacuously.
+     - A test hook, `helperTest.startDelayMs` (`OCTOPUS_DIFF_TEST_HELPER_START_DELAY_MS` for the whole file),
+       rehearses a slow runner: the file passes with 1.5 s and 3 s start delays.

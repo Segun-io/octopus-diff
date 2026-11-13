@@ -394,3 +394,40 @@ to the whole-worktree command.
 - `pnpm test` under 8 busy loops: 3 of 3 green (git-core 483 passed, 1 skipped; daemon 420 passed, 4 skipped).
 - Folding mode: git-core 468 passed, 16 skipped; daemon 418 passed, 6 skipped.
 - No helper process and none of my git processes left.
+
+## macOS CI: concurrency and lingering-group tests (run 43384632348, 2026-11-13)
+
+**"keeps the concurrency limit" (6 of 9 starts).** All nine runs had resolved, so the starts happened; the *log* was
+broken.
+- Cause: the fake logged with a `printf` whose format repeats per argument. A shell can flush that in several writes,
+  and concurrent fakes interleaved their fields. The parser stops at the first broken record.
+- Shown on Linux: bash with 4.6 KB records, 300 concurrent writers, 11 of 300 parsed (dash: 300). With the new
+  format, 300 of 300 for both.
+- macOS's `/bin/sh` is bash 3.2. With the runner's ~2.5 KB records it fits the macOS failure: the best hypothesis.
+- Fix: one line per event, one `printf '%s\n'` of a prebuilt string; start and end events. The limit is now proven
+  from the event order: never more than 3 running, every job started once and ended.
+- Mutant "the scheduler allows limit + 1": killed ("expected length 3, got 4").
+
+**"retried even when its killed group lingers" (the first git not reached).** The retry happened (the request
+returned "second run"); the first git still looked alive to `ps` 20 s after the parent's group SIGKILL.
+- Best hypothesis, no evidence yet: BSD `ps` shows a process on its way out with an `E` flag, which the check read as
+  alive. It now counts as dead, as `Z`/`X` do.
+- The other candidate is a failing `killpg` on macOS. It used to be swallowed silently; it is now logged as a warning.
+- Both, and anything else, will show in the new failure diagnostics: every wait prints the fake's events, `ps` lines
+  for the test's pids and groups, the helpers' state and the warnings.
+
+**Other waits reviewed** (DECISIONS #392): default waits are now 20 s. Three tests whose short timeout could fire
+before a slow helper started (one would then have passed vacuously) warm the helper first and assert that git ran.
+`helperTest.startDelayMs` rehearses a slow runner: the file passes with 1.5 s and 3 s start delays. Nothing in the
+tests relies on `setsid(1)`, `/proc` or path strings from scripts (`fx.root` is a realpath; scripts report pids, not
+paths).
+
+**Verification** (head `d531ba4` plus these docs):
+- `pnpm lint`, `pnpm typecheck`: exit 0.
+- Under 14 busy loops:
+  - `helper.test.ts`, helper on: 10 of 10 green, 40 passed each;
+  - helper off: 10 of 10 green, 12 passed and 28 skipped each;
+  - with a 1.5 s helper start delay: 3 of 3 green.
+- `pnpm test` under 8 busy loops: 3 of 3 green (git-core 483 passed, 1 skipped; daemon 420-421 passed).
+- Folding mode: git-core 468 passed, 16 skipped; daemon 418 passed, 6 skipped.
+- No helper and none of my git processes left.
