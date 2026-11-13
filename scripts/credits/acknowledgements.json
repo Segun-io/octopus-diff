@@ -15,7 +15,8 @@
     "BSD-3-Clause",
     "ISC",
     "0BSD",
-    "MIT OR Apache-2.0"
+    "MIT OR Apache-2.0",
+    "Unlicense"
   ],
   "alsoShipped": {
     "tailwindcss": "A build tool, but the CSS it generates (including its preflight reset) is part of the web UI."

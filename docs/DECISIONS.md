@@ -5328,3 +5328,66 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      - **Tests:** the late-finishing invalidated lookup leaves B stored (failed first: B was gone), and a lookup that
        still owns its entry still prunes the older states of its group.
      - **Mutant killed:** the pruning without the ownership check.
+
+## TanStack Router for URL state (session, 2026-11-13; roadmap #50, step 33)
+
+459. **The selection lives in the address bar, through `@tanstack/react-router`.** One route, `/`, whose query parameters
+     carry the selection: `?worktree=<id>[&tab=request][&file=<path>[&raw=<rawPath>]][&scope=<kind>[&base=][&sha=][&working=1]]`,
+     or `?project=<id>` / `?folder=<id>` for the Overviews. Query, not path (`/w/<id>/…`): the daemon serves the
+     built UI from `/` and a path would need an SPA-fallback and base-path decision in `apps/daemon` (not ours to
+     change); a query on `/` works with the daemon as it is. Not the hash either: the hash carries the token (#460).
+     The router is code-defined (no file routes, no generated tree, no loaders). `App` creates it (`router.tsx`, history
+     overridable for tests) and renders the existing `AppShell` as the route component; the shell still reads every
+     value from the UI store. `state/useUrlSync.ts` mirrors store and URL both ways. The view registry itself
+     (`views/registry.ts`) did not need a change: a view's place in the URL is the same `View` path
+     (folder → project → worktree + tab) the registry already selects on.
+460. **The daemon token never reaches the router.** `api/token.ts` is unchanged and still runs first (`main.tsx`), moving
+     `#token=` into localStorage and stripping it with `replaceState` before the router exists; a `#token=` pasted into an
+     open tab is handled by its `hashchange` listener as before. On top of that: (a) no route reads the hash; (b) every
+     navigation passes `search` only, and a TanStack navigation without an explicit `hash` writes none, so a fragment is
+     dropped, never copied into an entry; (c) `parseSearch` / `stringifySearch` / `validateSearch` are ours and keep
+     only the ten known keys, so a `?token=` (which the daemon redirects to `#token=` anyway) is not carried into
+     a URL the router writes; (d) the router's default JSON search parsing is replaced by plain strings (it would
+     turn an all-digit id into a number). The token is not sent to the daemon, logged or put in history state by the
+     router. Tests: unit (`url-state.test.ts` "validateSearch…", `url-state-app.test.tsx` "never carries the daemon
+     token…") and e2e (`21-url-state.spec.ts`: no request URL, address, `location.hash` or `history.state` holds it).
+461. **Mapping and precedence.** `state/urlState.ts` holds pure functions (`stateOfSearch`, `searchOf`, `historyMode`) and is
+     unit tested without a router. Parsing is lenient and never throws: an id is 1–256 chars of `[A-Za-z0-9._~:@-]`, a scope
+     must pass the contract's `scopeFromQueryFields` rules (a `commit` scope needs a hex sha, a `review` base a commit id, a
+     `branch` base a valid ref name), anything else is dropped (a bad scope keeps the view and falls back to the preference).
+     **Precedence:** the store starts from the URL when it names a view (so the landing has nothing to decide and the
+     `lastWorktree` preference is not consulted); with no view in the URL the landing flow (#272/#273) runs unchanged and writes
+     the result into the URL by replacement. `lastWorktree` is still written by the same effect. A store handed to `App`
+     with a view already chosen (tests) keeps it. A worktree id that is not in the list falls back through the landing
+     flow (the existing `missing` rule, which replaces the dead entry); a stale project/folder id from the first
+     address is dropped once the lists have loaded (otherwise it would show "no longer listed"); later removals behave as before.
+     `commands.openView` is used for URL → store view changes, so Back to a worktree the filters hide still clears the
+     filters (#242 behaviour kept); `openView`, `setView` and the landing were not edited.
+462. **History entries.** A new entry when the user moves somewhere else: another worktree, tab or file. A replacement for the
+     landing, for the first file of a worktree that had none, for a scope change (the list changes under the same
+     place) and whenever the old entry was empty or names a worktree that is gone, so Back never lands on a dead entry. The
+     first pass of the hook never adds an entry. Automatic moves that are not a landing (the selection repair after a file
+     disappears, auto-advance after review) do add an entry: they are indistinguishable from a click at this layer, and
+     marking them would touch `actions` in every caller. Back / Forward re-apply the whole selection (worktree, tab, file,
+     scope).
+463. **Dependency, license, size.** `@tanstack/react-router` 1.170.46 added to `apps/web` only (MIT). Its dependency `isbot`
+     is **Unlicense** (public-domain dedication), outside `allowedRuntimeLicenses`; allowed there because it grants
+     everything MIT does and needs no attribution (it is listed in the credits anyway). `pnpm credits` was run; both
+     outputs are in the same commit. Cost: the main web chunk grew from 413.63 kB (128.78 kB gzip) to 492.30 kB
+     (155.79 kB gzip): +78.7 kB (+27.0 kB gzip), the router and its history/store packages, loaded on first paint. This
+     is the price of the optional feature (no performance value, as the issue says); a later step that drops it only has to
+     remove `router.tsx`, `useUrlSync.ts` and the `RouterProvider` in `App`.
+464. **Known limits.** A `commit` scope whose sha is not in the worktree is applied as given (the contract only checks its
+     shape), so such a link shows the daemon's error for that scope like any other bad commit selection; the other scopes always
+     exist. `?file=` of a file that is not in the scope's list is repaired by the existing selection repair (it selects
+     another file, or none) and the URL follows. The folder/project Overviews carry no file or scope.
+
+### TanStack Router: Greptile review of PR #105 (2026-11-13)
+
+465. **Switching tabs on a worktree with no selected file is a history entry** (Greptile P2). `historyMode` replaced
+     every change on a worktree that had no file, meant for "opening a worktree and choosing its first file is one
+     entry". On a clean worktree with a pull request that also covered Changes ↔ Request, so Back skipped the previous
+     tab. The exception now applies only when the file goes from none to one and the tab is the same.
+     - **Test:** a tab change in both directions with `selected === null` pushes (failed first: it replaced); the
+       first-file case still replaces.
+     - **Mutant killed:** the exception without the tab and `next.selected` conditions.

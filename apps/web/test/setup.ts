@@ -11,3 +11,9 @@ import { installLayoutShim, resetSidebarLayout } from './layout.ts';
 
 installLayoutShim();
 afterEach(resetSidebarLayout);
+
+// The router writes the selection into the address bar (state/urlState.ts); jsdom keeps it for the
+// whole file, so every test starts from `/`.
+afterEach(() => {
+  if (typeof window !== 'undefined') window.history.replaceState(null, '', '/');
+});
