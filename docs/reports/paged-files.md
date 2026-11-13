@@ -161,3 +161,25 @@ None added or removed (`pnpm credits:check`: up to date).
   row); tests shrink both. `FILE_LIST_MORE_TEST_ID` (`file-list-more`) and `file-tree-more` are local test ids, not
   in `TEST_IDS`, to keep the contracts commit to one.
 - `bench:paged` takes about 2 minutes (40k-file fixture); `--profile <dir>` writes a daemon CPU profile.
+
+## PR #97 review follow-up (Greptile: two P1, two P2)
+
+All four were in the web paging code. Every fix has failing-first tests in `apps/web/test/paged-review.test.tsx`
+(10 tests, mock backend, driven through the app's own controls: the palette, keys, Load more, Retry, Tree view; the
+shared harness `test/paged-harness.tsx` can hold and fail requests). DECISIONS #358-#361.
+
+- **P1, a removed selection stayed selected** (#358, `App.tsx` `useSelectionRepair`): the lookup is tracked to its end.
+  Nothing repairs while it runs; afterwards a missing file is handed to its neighbour, and a file that loaded waits for
+  its rows.
+- **P1, `n` jumped backward in the tree layout** (#359, `lib/model.ts`, `state/model.tsx`, `state/commands.ts`): the
+  daemon is asked after the paging boundary (the last loaded file in its order), not after the last displayed row.
+  `j` at the end, Load more and the lookups were checked and use the cursor or the file itself.
+- **P2, failed pages retried forever** (#360, `App.tsx` `useMoreFiles`, `components/FileList.tsx` `MoreStatus`): no
+  automatic load while a page is failing; delayed retries of 1, 3 and 10 s, then a Retry button with an alert. A test
+  with every page failing makes exactly 4 requests.
+- **P2, old navigations overrode new ones** (#361, `state/commands.ts`): a navigation token for the palette jump, for
+  `j` at the end and for `n`. A failed load selects nothing.
+
+Mutation checks: see #358-#361. Killed: 13 mutants. Survived: three single layers whose twin catches the same case
+(each "found" guard of #358; the sequence bump in `k`/`J`, also caught by the snapshot), and one equivalent mutant
+(stepping after a failed page at the list's end selects nothing either way).

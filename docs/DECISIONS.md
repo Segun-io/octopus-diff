@@ -4244,3 +4244,45 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      checked after every full summary), so every edit re-lists the 36k files (about 2 s per scope) and re-signs them
      (`lstat` of every changed file in the summary). Raising that limit or signing lazily is #40's design to revisit,
      not paging's.
+
+### Paged lists: the PR #97 review (Greptile, 2026-11-13)
+
+358. **A selection lookup is tracked until it ends (P1).** The selection repair's lookup of a selection a partly loaded
+     list does not hold (#355) only started the lookup: when the file was gone and its place was already loaded,
+     `ensureFiles` changed nothing, nothing ran the repair again, and the removed file stayed selected; and any other
+     render during the lookup repaired at once, before its pages arrived. The lookup (`useSelectionRepair` in
+     `App.tsx`) now records its key (selection and list state), whether it is pending, and whether the loaded data
+     holds the file. While pending nothing repairs. Once done: the file is not in the data, so a state bump re-runs the
+     effect and it hands the selection to its neighbour; or it is, and the effect waits for the list's next render
+     (a bump there raced the query observer: it rendered the old rows and repaired, caught by the test). Tests (web,
+     mock, real actions): a file removed by a refresh is handed to its neighbour; a selection pushed past the loaded
+     rows keeps through two eye toggles while its lookup is held. Mutations killed: no wait while pending; no re-run
+     after the lookup; both "found" guards removed (3 of 3 runs). Each "found" guard alone survives (two layers).
+359. **`n` asks after the paging boundary, not the last displayed row (P1).** In the tree layout a worktree's rows
+     follow the tree's order, so the last row can sit inside the loaded pages in the daemon's order, and
+     `after=<last row>` returned a loaded file before the selection. `ListInfo` and `NextSegment` now carry `boundary`:
+     the last loaded file in the daemon's paging order (the files query's last file, the inbox row's last file), and
+     `planNextUnreviewed` asks after it. Checked for the same mix-up and found none: `j` at the end and Load more page
+     on with the cursor; the jump and the selection lookup ask after the file itself; `openMore`'s counts do not depend
+     on order. Test: tree layout, 100 of 120 loaded, the tree's last row selected (it is not the last loaded file),
+     `n` goes to the 101st file of the list and asks `after=<the 100th>`; the old boundary (the last displayed row)
+     fails it.
+360. **A failing page is retried a bounded number of times (P2).** Automatic loading near the list's end started again
+     whenever a load ended, so a failure every time looped. `useMoreFiles` keeps the last failure per page (the cursor
+     it continued from) and the tries in a row; while a page is failing, the footer does not load on its own; delayed
+     retries follow (`filesPaging.retryDelaysMs`, 1 s, 3 s, 10 s), then only the footer's (or the tree bar's) Retry
+     button tries again (and the delays start over). A new cursor (a refresh, a page that loaded) clears it. The footer
+     says "Could not load more files" in a `role="alert"` region. Test with every page request failing: exactly 4
+     requests, no more after a wait, a Retry gives 4 more, a working daemon then loads. Mutations killed: the footer
+     ignoring the failure; no delayed retries; unbounded retries.
+361. **Navigations the user overtook, or whose load failed, select nothing (P2).** The palette jump selected its file in
+     `finally` (after a failed load too), and `j` at the end of the loaded rows stepped through whatever view was open
+     when its page arrived. `useCommands` now gives every waiting navigation (the jump, `j` at the end, `n` while it asks
+     or loads) a token: it acts only while it is the latest navigation and the view, scope and selection are what they
+     were when it began. Every other navigation command (`j`/`k`, `J`/`K`, a click, `openView`, a jump) bumps the
+     sequence, and changes from anywhere else show in the snapshot. A failed load selects nothing and says so. `n`
+     presses while one waits still run after it (as before). Tests: a jump still loading, then `j`; a jump whose pages
+     fail (no selection of the target at any moment, the notice shown); `j` at the end, then `k`; `j` at the end, then
+     `J`; `n` while it asks, then `k` (and no page loaded for it); `n` while it loads through its answer, then `k`.
+     Mutations killed: select after a failure; no token in the jump, in `j` at the end, after `n`'s ask, before `n`'s
+     move. The sequence bumps in `k`/`J` alone survive: the snapshot catches those changes too.
