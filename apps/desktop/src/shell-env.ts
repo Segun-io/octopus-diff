@@ -128,9 +128,20 @@ export const defaultRunShell: RunShell = (shell, args, options) =>
       clearTimeout(timer);
       reject(error);
     });
-    child.on('close', (code, signal) => {
+    // `exit` is the shell's own end; `close` also waits for every process still holding stdout,
+    // which an rc file starting a background job keeps open for as long as it runs. After `exit`
+    // the output already written is read for a moment, then the pipe is dropped.
+    let settled = false;
+    const finish = (code: number | null, signal: NodeJS.Signals | null) => {
+      if (settled) return;
+      settled = true;
       clearTimeout(timer);
+      child.stdout.destroy();
       if (code === 0) resolve(out);
       else reject(new Error(signal ? `killed by ${signal}` : `exited with code ${code}`));
+    };
+    child.on('exit', (code, signal) => {
+      setTimeout(() => finish(code, signal), 250).unref();
     });
+    child.on('close', finish);
   });

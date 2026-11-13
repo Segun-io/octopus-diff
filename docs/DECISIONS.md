@@ -5710,3 +5710,33 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
        unchanged (with a non-zero test count), and counts a mutant as killed only when vitest reported failed tests; a
        run that dies before reporting (missing vitest, a load error) is "BROKEN" and fails the check. The obsolete
        braces mutant became a "braced expansion" mutant. 44 mutants, all killed.
+
+### Desktop phase A: independent review of PR #108 (2026-11-13; Greptile's credits had run out)
+
+506. **Review findings fixed here.**
+     - **P1, the token reached `daemon.log`.** When `loadURL` failed, `showReady` logged `error.message`, and Electron's
+       message carries the URL that failed (`ERR_CONNECTION_REFUSED (-102) loading 'http://…/#token=…'`). Only the error
+       code is logged now (`loadFailureNote`; anything without a plain code is "unknown error"). Test with a message
+       holding a token; a mutant that logs the message is killed.
+     - **P2, a failed load left a blank window nothing recovered.** `showing` was set to `ui` before the load and kept
+       on failure, so a later `ready` with the same token returned early and `restarting` showed no screen. A failed
+       load (not a superseded one, `ERR_ABORTED`) now shows the failed screen ("Try again" reloads through the forced
+       `showReady`).
+     - **P3, the shell PATH lookup waited for background jobs.** `close` waits for every holder of stdout, so an rc
+       file starting `foo &` made a lookup that had already printed its markers time out (5 s, inherited PATH). It
+       now resolves shortly after `exit` and drops the pipe (failed first: 3 s).
+     - **P3, a screen button on the page being replaced.** `showScreen` marks the screen as showing before the
+       `data:` page has loaded; a screen action now also requires the current page to be one of our screens
+       (`isScreenPage`).
+     - **P3, a second launch during quit** no longer brings the dying window back (`focusWindow` returns when quitting).
+507. **Review findings recorded for later (not in this PR).**
+     - **P2, dev switches in any build (for #19).** `--renderer-url` takes any http(s) origin (and adds
+       `--allowed-host` for it), `--dev` enables DevTools, `--backend source` runs from sources. #19 must refuse all
+       three when `app.isPackaged` (with #502's `--remote-debugging-port`), and limit `--renderer-url` to loopback
+       hosts. An attacker who can start the app as this user gains little, but §5 says "no remote content".
+     - **P3, clipboard.** Denying `clipboard-sanitized-write` can make `navigator.clipboard.writeText` reject;
+       `apps/web/src/lib/copy.ts` falls back to `execCommand` but `RequestView.tsx` ("copy the head branch") calls the
+       API directly. Request to WS3: use `copyText` there (the bridge in #20 can also provide a copy method).
+     - **P3, the log grows during a long session.** It is rotated at startup only and the daemon writes to it
+       directly. Acceptable for the MVP (5 MiB between launches); a size check on "Show the log" or a periodic
+       rotation is a follow-up.

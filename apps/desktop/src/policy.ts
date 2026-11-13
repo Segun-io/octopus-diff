@@ -92,3 +92,18 @@ export function windowOptions(input: WindowOptionsInput) {
     webPreferences: webPreferences(input.devTools),
   };
 }
+
+/**
+ * What may be logged about a failed `loadURL`: the error code only. Electron's message carries the
+ * URL that failed (`ERR_CONNECTION_REFUSED (-102) loading 'http://…/#token=…'`), which holds the
+ * daemon token, so the message is never logged (PR #108 review).
+ */
+export function loadFailureNote(error: unknown): string {
+  const code = (error as { code?: unknown } | null)?.code;
+  return typeof code === 'string' && /^[A-Z][A-Z0-9_]{1,60}$/.test(code) ? code : 'unknown error';
+}
+
+/** A load that a newer navigation replaced (a screen swap, a reload): not a failure to report. */
+export function isSupersededLoad(error: unknown): boolean {
+  return (error as { code?: unknown } | null)?.code === 'ERR_ABORTED';
+}

@@ -70,6 +70,11 @@ export function screenUrl(screen: Screen): string {
   return `data:text/html;charset=utf-8,${encodeURIComponent(screenHtml(screen))}`;
 }
 
+/** Whether the page showing is one of our screens (a `data:` page), not the web UI or anything else. */
+export function isScreenPage(url: string): boolean {
+  return url.startsWith('data:text/html');
+}
+
 /** The action a screen link navigates to (`octopus-diff-desktop:retry`), or null. */
 export function screenAction(url: string): ScreenAction | null {
   if (!url.startsWith(SCREEN_ACTION_SCHEME)) return null;

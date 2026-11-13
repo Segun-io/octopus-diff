@@ -252,6 +252,21 @@ const MUTATIONS = [
     "return state?.kind === 'ready' && state.ready === r;",
     "return state?.kind === 'ready';",
   ],
+  // --- review of PR #108 (second pair of eyes) ---
+  [
+    'policy.ts',
+    'policy',
+    'a load failure note leaks the message (the URL, so the token)',
+    "return typeof code === 'string' && /^[A-Z][A-Z0-9_]{1,60}$/.test(code) ? code : 'unknown error';",
+    "return error instanceof Error ? error.message : 'unknown error';",
+  ],
+  [
+    'screens.ts',
+    'misc',
+    'a screen button counts on any page',
+    "return url.startsWith('data:text/html');",
+    'return true;',
+  ],
   // --- shell env ---
   [
     'shell-env.ts',

@@ -19,6 +19,7 @@ import {
   escapeHtml,
   failedScreen,
   gitMissingScreen,
+  isScreenPage,
   screenAction,
   screenHtml,
   screenUrl,
@@ -378,5 +379,20 @@ describe('log file', () => {
       'daemon says hi\n[desktop 2026-11-13T00:00:00.000Z] ready\n',
     );
     expect(formatNote('x', new Date(0))).toBe('[desktop 1970-01-01T00:00:00.000Z] x\n');
+  });
+});
+
+describe('isScreenPage (PR #108 review: a screen button only counts on our own screen)', () => {
+  it('is true for a screen data page and false for the UI or anything else', () => {
+    expect(isScreenPage(screenUrl(startingScreen('octopus-diff')))).toBe(true);
+    for (const url of [
+      'http://127.0.0.1:7428/',
+      'about:blank',
+      'file:///etc/passwd',
+      'data:application/json,{}',
+      '',
+    ]) {
+      expect(isScreenPage(url)).toBe(false);
+    }
   });
 });

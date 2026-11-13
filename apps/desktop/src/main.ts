@@ -44,6 +44,8 @@ import { buildMenuTemplate } from './menu.js';
 import { refreshScript, settingsScript, undoScript } from './page-actions.js';
 import {
   httpOrigin,
+  isSupersededLoad,
+  loadFailureNote,
   MIN_HEIGHT,
   MIN_WIDTH,
   navigationPolicy,
@@ -54,6 +56,7 @@ import {
 import {
   failedScreen,
   gitMissingScreen,
+  isScreenPage,
   restartingScreen,
   type Screen,
   type ScreenAction,
@@ -118,6 +121,8 @@ if (primary) {
 }
 
 function focusWindow(): void {
+  // A second launch while the app is quitting must not bring the dying window back.
+  if (quitting) return;
   if (!win) {
     createWindow();
     return;
@@ -146,7 +151,9 @@ app.on('web-contents-created', (_event, contents) => {
       event.isMainFrame !== false &&
       showing.kind === 'screen' &&
       win &&
-      contents.id === win.webContents.id
+      contents.id === win.webContents.id &&
+      // Our screen is on show, not the page it is replacing (the swap has a gap).
+      isScreenPage(contents.getURL())
     ) {
       event.preventDefault();
       void onScreenAction(action);
@@ -296,10 +303,15 @@ async function showReady(r: ReadyInfo, force = false): Promise<void> {
   uiOrigin = httpOrigin(target);
   showing = { kind: 'ui', authUrl: r.authUrl };
   if (notice) win.setTitle(versionNoticeTitle(APP_NAME, notice.daemon, notice.app));
-  await win.loadURL(target).catch((error: unknown) => {
-    log.note(
-      `the window could not load the UI: ${error instanceof Error ? error.message : String(error)}`,
-    );
+  const w = win;
+  await w.loadURL(target).catch((error: unknown) => {
+    if (isSupersededLoad(error) || win !== w) return;
+    // The page never loaded (the daemon died after its ready line, the dev server is not up yet):
+    // nothing would reconnect, so say so and let "Try again" reload. Only the code is logged: the
+    // message holds the URL, and the URL the token.
+    const note = loadFailureNote(error);
+    log.note(`the window could not load the UI: ${note}`);
+    showScreen(failedScreen(`The window could not load the UI (${note})`, 1, log.path));
   });
 }
 

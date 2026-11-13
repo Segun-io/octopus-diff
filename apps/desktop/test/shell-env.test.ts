@@ -170,6 +170,16 @@ describe.skipIf(process.platform === 'win32')('defaultRunShell with a real /bin/
     },
   );
 
+  it('does not wait for a background job an rc file left holding stdout (PR #108 review)', async () => {
+    const started = Date.now();
+    const out = await defaultRunShell('/bin/sh', ['-c', `(sleep 3 &); ${PATH_SCRIPT}`], {
+      env: { PATH: '/usr/local/bin:/usr/bin:/bin' },
+      timeoutMs: 5_000,
+    });
+    expect(extractPath(out)).toBe('/usr/local/bin:/usr/bin:/bin');
+    expect(Date.now() - started).toBeLessThan(2_000);
+  });
+
   it('rejects on a non-zero exit and kills at the timeout', async () => {
     await expect(
       defaultRunShell('/bin/sh', ['-c', 'exit 3'], {

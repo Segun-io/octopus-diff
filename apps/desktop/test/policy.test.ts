@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   httpOrigin,
+  isSupersededLoad,
+  loadFailureNote,
   MIN_HEIGHT,
   MIN_WIDTH,
   navigationPolicy,
@@ -150,5 +152,32 @@ describe('webPreferences / windowOptions (DESKTOP §5)', () => {
     expect(restored).toMatchObject({ x: 10, y: 20, width: 1000, height: 700, title: 't' });
     expect(restored.webPreferences.devTools).toBe(true);
     expect(restored.webPreferences.sandbox).toBe(true);
+  });
+});
+
+describe('loadFailureNote (PR #108 review: loadURL errors carry the URL, so the token)', () => {
+  it('logs the error code, never the message', () => {
+    const error = Object.assign(
+      new Error(
+        "ERR_CONNECTION_REFUSED (-102) loading 'http://127.0.0.1:7428/#token=SECRETSECRETSECRET'",
+      ),
+      { code: 'ERR_CONNECTION_REFUSED', errno: -102 },
+    );
+    const note = loadFailureNote(error);
+    expect(note).toBe('ERR_CONNECTION_REFUSED');
+    expect(note).not.toContain('SECRET');
+  });
+
+  it('says "unknown error" for anything without a plain code, and never echoes it', () => {
+    expect(loadFailureNote(new Error("loading 'http://x/#token=SECRET'"))).toBe('unknown error');
+    expect(loadFailureNote('http://x/#token=SECRET')).toBe('unknown error');
+    expect(loadFailureNote(null)).toBe('unknown error');
+    expect(loadFailureNote({ code: 'http://x/#token=SECRET' })).toBe('unknown error');
+  });
+
+  it('knows a superseded load (a newer navigation) from a failure', () => {
+    expect(isSupersededLoad({ code: 'ERR_ABORTED' })).toBe(true);
+    expect(isSupersededLoad({ code: 'ERR_CONNECTION_REFUSED' })).toBe(false);
+    expect(isSupersededLoad(new Error('x'))).toBe(false);
   });
 });
