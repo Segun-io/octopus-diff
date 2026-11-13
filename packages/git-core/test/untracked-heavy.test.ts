@@ -684,12 +684,16 @@ describe('numstat alongside the status of a full summary (#43)', () => {
       expect(afterRace.headSha, probe.why(afterRace)).toBe(raced);
       expect(race.numstats, probe.why(afterRace)).toBeGreaterThanOrEqual(1);
       expect(race.commits.at(-1), probe.why(afterRace)).toBe(raced);
+      // The racing summary may or may not have seen the file written after the commit (that write
+      // lands while the wrapper holds the status, but on a slow runner it can land after the status
+      // ran), so it is the NEXT summary, taken once everything is written, that must equal a full
+      // core's: the kept state the race left must be right.
+      const settled = await probe.core.getSummary(wt);
       {
-        const { updatedAt: _a, refresh: _b, ...got } = afterRace;
+        const { updatedAt: _a, refresh: _b, ...got } = settled;
         const { updatedAt: _c, refresh: _d, ...want } = await full.getSummary(wt);
-        expect(got, probe.why(afterRace)).toEqual(want);
+        expect(got, probe.why(settled)).toEqual(want);
       }
-      await probe.core.getSummary(wt);
       // Clean now: the speculative run is waited for and discarded.
       fx.git(repo, ['checkout', '-q', '--', '.']);
       await ageFiles();
