@@ -18,19 +18,29 @@ import {
   type DiffResponse,
   type DiffScope,
   type EffectiveReviewPolicy,
+  FILES_PAGE_MAX_BYTES,
+  FILES_UNPAGED_MAX,
   type FileOriginInfo,
+  type FilePageRequest,
   type FilesResponse,
+  fileListCounts,
+  fileListKey,
   type GitChangedFile,
   type GitCore,
   type GitPriority,
   type HealthResponse,
+  INBOX_FILES_MAX,
+  INBOX_FILES_MAX_BYTES,
+  INBOX_FILES_PER_WORKTREE,
   type InboxEntry,
   type InboxResponse,
   isGitCoreError,
   type ListedChangedFiles,
   type Logger,
+  orderFiles,
   type Project,
   type ProjectListItem,
+  pageFileList,
   type ResolvedProject,
   type ReviewRange,
   type ReviewRequest,
@@ -42,6 +52,7 @@ import {
   scopeKey,
   type UntrackedOmission,
   type UpdateProjectRequest,
+  utf8Length,
   type WatchOptions,
   type WatchTargets,
   WORKTREE_CHANGED_PATHS_MAX,
@@ -510,6 +521,14 @@ export class DaemonCore {
   readonly #originsLimit = new Limiter(CORE_DEFAULTS.originsConcurrency);
   /** The live view's activity rings (#38): memory only, never written to the store. */
   readonly #activity: ActivityStore;
+  /**
+   * Each listed array in the paging order, with its list key (#42): a cached list is sorted once
+   * and keyed once, however many pages, inbox rows and searches read it.
+   */
+  readonly #ordered = new WeakMap<
+    readonly LabeledFile[],
+    { ordered: LabeledFile[]; keys: Map<string, string> }
+  >();
   /** Identical inbox requests that overlap share one run (`inbox`), keyed by what it reads. */
   readonly #inboxInflight = new Map<string, Promise<InboxResponse>>();
   /** Worktree ids removed recently (id → time), to spot a path re-added soon after (F1). */
@@ -2055,6 +2074,7 @@ export class DaemonCore {
     worktreeId: string,
     scope: DiffScope,
     signal?: AbortSignal,
+    page: FilePageRequest = {},
   ): Promise<FilesResponse> {
     const { project, entry } = this.#requireWorktree(worktreeId);
     const want: Want = { signal, priority: 'interactive' };
@@ -2063,17 +2083,64 @@ export class DaemonCore {
     // The list, its stateHash and its omission notice all come from the summary the list was
     // built for (Greptile on PR #91).
     const listed = await this.#listedAt(project, entry, scope, want);
-    const { resolved, files } = listed;
+    const { resolved } = listed;
     const stateHash = listed.stateHash ?? this.#summaryOrThrow(entry);
     // The state the list is of says which untracked files no list holds (#43).
     const omitted = listed.untrackedOmitted;
+    // Paged (#42): a slice of the cached list in the paging order, never a new git run. Without
+    // `limit` (an older client) the first `FILES_UNPAGED_MAX` files, `truncated` when cut.
+    const { files, listKey } = this.#pageable(project, resolved, listed.files, stateHash);
+    const result = pageFileList(files, page, {
+      listKey,
+      defaultLimit: FILES_UNPAGED_MAX,
+      maxBytes: FILES_PAGE_MAX_BYTES,
+    });
     return {
       worktreeId,
       scope: resolved.scope,
       stateHash,
-      files: this.#attachReviewedFor(project.row.id, resolved.scope, files, resolved.review),
+      files: result.files,
       ...(omitted && listsUntracked(resolved.scope) ? { untrackedOmitted: omitted } : {}),
+      total: result.total,
+      offset: result.offset,
+      position: result.position,
+      nextCursor: result.nextCursor,
+      truncated: result.truncated,
+      restarted: result.restarted,
+      counts: fileListCounts(files),
     };
+  }
+
+  /**
+   * A listed array ready to page (#42): in the paging order (sorted once per array, `#ordered`),
+   * with `reviewed` attached (always over the whole list: marks it keeps alive are touched as
+   * before), and its list key for cursors: the state, the resolved scope and the order.
+   */
+  #pageable(
+    project: ProjectEntry,
+    resolved: { scope: DiffScope; review: ReviewComputed | null },
+    listed: readonly LabeledFile[],
+    stateHash: string,
+  ): { files: Array<LabeledFile & { reviewed: boolean }>; listKey: string } {
+    let memo = this.#ordered.get(listed);
+    if (!memo) {
+      memo = { ordered: orderFiles(listed), keys: new Map() };
+      this.#ordered.set(listed, memo);
+    }
+    const stateKey = `${stateHash}\u0000${scopeKey(resolved.scope)}`;
+    let listKey = memo.keys.get(stateKey);
+    if (listKey === undefined) {
+      listKey = fileListKey(stateKey, memo.ordered);
+      if (memo.keys.size >= 8) memo.keys.clear();
+      memo.keys.set(stateKey, listKey);
+    }
+    const files = this.#attachReviewedFor(
+      project.row.id,
+      resolved.scope,
+      memo.ordered,
+      resolved.review,
+    );
+    return { files, listKey };
   }
 
   /** One file's diff (`GET /diff`); `signal` as in `listFiles` (interactive lane, #44). */
@@ -2133,6 +2200,7 @@ export class DaemonCore {
     onlyUnreviewed: boolean,
     projectIds?: readonly string[],
     worktreeIds?: readonly string[],
+    filesLimit: number = INBOX_FILES_PER_WORKTREE,
   ): Promise<InboxResponse> {
     const only = projectIds ? new Set(projectIds) : null;
     // Only these worktrees (#51: a client applying `worktree.changed`); unknown ids match nothing.
@@ -2179,7 +2247,7 @@ export class DaemonCore {
     for (const project of projects)
       bases.set(project.row.id, await this.#branchBase(project, scope));
     const hash = createHash('sha1')
-      .update(`${scopeKey(scope)}\u0000${onlyUnreviewed}`)
+      .update(`${scopeKey(scope)}\u0000${onlyUnreviewed}\u0000${filesLimit}`)
       .update(`\u0000${only ? [...only].sort().join(',') : '*'}`)
       .update(`\u0000${onlyWorktrees ? [...onlyWorktrees].sort().join(',') : '*'}`)
       .update(`\u0000${[...bases.values()].join('\u0001')}`);
@@ -2191,7 +2259,7 @@ export class DaemonCore {
     const flightKey = hash.digest('hex');
     const inflight = this.#inboxInflight.get(flightKey);
     if (inflight) return inflight;
-    const run = this.#buildInbox(scope, onlyUnreviewed, candidates).finally(() => {
+    const run = this.#buildInbox(scope, onlyUnreviewed, candidates, filesLimit).finally(() => {
       this.#inboxInflight.delete(flightKey);
     });
     this.#inboxInflight.set(flightKey, run);
@@ -2207,9 +2275,16 @@ export class DaemonCore {
       summary: WorktreeSummary;
       review: EffectiveReviewPolicy | undefined;
     }>,
+    filesLimit: number = INBOX_FILES_PER_WORKTREE,
   ): Promise<InboxResponse> {
+    /** A row with its whole list; its page is cut below, once the rows are in order (#42). */
+    type Built = {
+      entry: Omit<InboxEntry, 'files'>;
+      files: Array<LabeledFile & { reviewed: boolean }>;
+      listKey: string;
+    };
     const results = await Promise.all(
-      candidates.map(async (c): Promise<InboxEntry | null> => {
+      candidates.map(async (c): Promise<Built | null> => {
         try {
           const listed = await this.#listedAt(c.project, c.entry, scope);
           // A list of no held summary cannot be paired with one, but leaving the row out would read
@@ -2222,31 +2297,37 @@ export class DaemonCore {
             });
             inboxOvertaken.count++;
             return {
-              project: this.#toProject(c.project.row),
-              worktree: c.entry.worktree,
-              summary: c.entry.summary ?? c.summary,
+              entry: {
+                project: this.#toProject(c.project.row),
+                worktree: c.entry.worktree,
+                summary: c.entry.summary ?? c.summary,
+                ...(c.review ? { review: c.review } : {}),
+                listing: 'overtaken',
+              },
               files: [],
-              ...(c.review ? { review: c.review } : {}),
-              listing: 'overtaken',
+              listKey: '',
             };
           }
           const resolved = listed.resolved;
-          const gitFiles = listed.files;
-          let files = this.#attachReviewedFor(
-            c.project.row.id,
-            resolved.scope,
-            gitFiles,
-            resolved.review,
+          // The row's summary is the one its files were listed for (Greptile on PR #91).
+          const summary = listed.summary ?? c.summary; // bare: no summary changes under it
+          const { files, listKey } = this.#pageable(
+            c.project,
+            resolved,
+            listed.files,
+            listed.stateHash ?? summary.stateHash,
           );
-          if (onlyUnreviewed) files = files.filter((f) => !f.reviewed);
-          if (files.length === 0) return null;
+          const shown = onlyUnreviewed ? files.filter((f) => !f.reviewed).length : files.length;
+          if (shown === 0) return null;
           return {
-            project: this.#toProject(c.project.row),
-            worktree: c.entry.worktree,
-            // The row's summary is the one its files were listed for (Greptile on PR #91).
-            summary: listed.summary ?? c.summary, // bare: no summary changes under it
+            entry: {
+              project: this.#toProject(c.project.row),
+              worktree: c.entry.worktree,
+              summary,
+              ...(c.review ? { review: c.review } : {}),
+            },
             files,
-            ...(c.review ? { review: c.review } : {}),
+            listKey,
           };
         } catch (error) {
           if (!isShutdownError(error)) {
@@ -2256,15 +2337,42 @@ export class DaemonCore {
         }
       }),
     );
-    const entries = results
-      .filter((e): e is InboxEntry => e !== null)
+    const built = results
+      .filter((e): e is Built => e !== null)
       .sort((a, b) => {
-        const an = a.project.name.toLowerCase();
-        const bn = b.project.name.toLowerCase();
+        const an = a.entry.project.name.toLowerCase();
+        const bn = b.entry.project.name.toLowerCase();
         if (an !== bn) return an < bn ? -1 : 1;
-        if (a.project.id !== b.project.id) return a.project.id < b.project.id ? -1 : 1;
-        return compareWorktrees(a.worktree, b.worktree);
+        if (a.entry.project.id !== b.entry.project.id)
+          return a.entry.project.id < b.entry.project.id ? -1 : 1;
+        return compareWorktrees(a.entry.worktree, b.entry.worktree);
       });
+    // Each row's first page (#42): at most `filesLimit` files, and the response as a whole at most
+    // `INBOX_FILES_MAX` files and `INBOX_FILES_MAX_BYTES` of them, in row order. A row cut short
+    // says how many files it has and where to page on (`GET /files` with `filesNextCursor`).
+    let rowsLeft = INBOX_FILES_MAX;
+    let bytesLeft = INBOX_FILES_MAX_BYTES;
+    const entries: InboxEntry[] = built.map((b) => {
+      if (b.entry.listing === 'overtaken') return { ...b.entry, files: [] };
+      const limit = bytesLeft > 0 ? Math.min(filesLimit, rowsLeft) : 0;
+      const page = pageFileList(b.files, onlyUnreviewed ? { limit, unreviewed: true } : { limit }, {
+        listKey: b.listKey,
+        defaultLimit: limit,
+        maxBytes: Math.max(1, bytesLeft),
+      });
+      // `pageFileList` always returns a file when it may; the response budget is the caller's.
+      const files = limit > 0 ? page.files : [];
+      rowsLeft -= files.length;
+      for (const f of files) bytesLeft -= utf8Length(JSON.stringify(f)) + 1;
+      const next = files.length < page.total ? page.nextCursor : null;
+      return {
+        ...b.entry,
+        files,
+        filesTotal: page.total,
+        ...(next ? { filesNextCursor: next } : {}),
+        fileCounts: fileListCounts(b.files),
+      };
+    });
     return { scope, entries, generatedAt: this.#nowIso() };
   }
 
