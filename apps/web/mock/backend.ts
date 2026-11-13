@@ -24,13 +24,23 @@ import {
   type DiffResponse,
   type DiffScope,
   type EffectiveReviewPolicy,
+  FILES_PAGE_MAX_BYTES,
+  FILES_UNPAGED_MAX,
+  type FilePageRequest,
   type FilesResponse,
   type ForgesResponse,
+  fileListCounts,
+  fileListKey,
   type HealthResponse,
+  INBOX_FILES_MAX,
+  INBOX_FILES_MAX_BYTES,
+  INBOX_FILES_PER_WORKTREE,
   type InboxResponse,
+  orderFiles,
   type Project,
   type ProjectListItem,
   type ProjectsResponse,
+  pageFileList,
   type RefreshResponse,
   type RepositoriesResponse,
   type RepositoryForgeResponse,
@@ -50,6 +60,7 @@ import {
   type UndoReviewResponse,
   type UpdateProjectRequest,
   type UpdateProjectResponse,
+  utf8Length,
   WORKTREE_CHANGED_PATHS_MAX,
   WORKTREE_CHANGED_PATHS_MAX_CHARS,
   type Worktree,
@@ -1462,11 +1473,14 @@ export class MockBackend {
     onlyUnreviewed: boolean,
     projectIds?: readonly string[],
     worktreeIds?: readonly string[],
+    filesLimit: number = INBOX_FILES_PER_WORKTREE,
   ): InboxResponse {
     if (scope.kind === 'commit') {
       throw new MockApiError(400, 'bad_request', 'commit scope is not supported by the inbox');
     }
     const entries: InboxResponse['entries'] = [];
+    let rowsLeft = INBOX_FILES_MAX;
+    let bytesLeft = INBOX_FILES_MAX_BYTES;
     const map = reviewOverrideMap([...this.overrides.values()]);
     const only = projectIds ? new Set(projectIds) : null;
     const onlyWorktrees = worktreeIds ? new Set(worktreeIds) : null;
@@ -1490,29 +1504,62 @@ export class MockBackend {
           });
           continue;
         }
-        let files = this.changedFiles(mp, mw, scope);
-        if (onlyUnreviewed) files = files.filter((f) => !f.reviewed);
-        if (files.length === 0) continue;
+        // Paged rows, as the daemon (#42): the first page of the list, the counts, a cursor.
+        const all = orderFiles(this.changedFiles(mp, mw, scope));
+        const summary = this.summary(mp, mw);
+        const shown = onlyUnreviewed ? all.filter((f) => !f.reviewed).length : all.length;
+        if (shown === 0) continue;
+        const limit = bytesLeft > 0 ? Math.min(filesLimit, rowsLeft) : 0;
+        const page = pageFileList(all, onlyUnreviewed ? { limit, unreviewed: true } : { limit }, {
+          listKey: fileListKey(
+            `${mw.worktree.id}\u0000${summary.stateHash}\u0000${scopeKey(scope)}`,
+            all,
+          ),
+          defaultLimit: limit,
+          maxBytes: Math.max(1, bytesLeft),
+        });
+        const files = limit > 0 ? page.files : [];
+        rowsLeft -= files.length;
+        for (const f of files) bytesLeft -= utf8Length(JSON.stringify(f)) + 1;
+        const next = files.length < page.total ? page.nextCursor : null;
         entries.push({
           project: mp.project,
           worktree: mw.worktree,
-          summary: this.summary(mp, mw),
+          summary,
           files,
           review,
+          filesTotal: page.total,
+          ...(next ? { filesNextCursor: next } : {}),
+          fileCounts: fileListCounts(all),
         });
       }
     }
     return { scope, entries, generatedAt: now() };
   }
 
-  listFiles(worktreeId: string, scope: DiffScope): FilesResponse {
+  /** `GET /files`, paged like the daemon's (#42; `pageFileList` over the list in paging order). */
+  listFiles(worktreeId: string, scope: DiffScope, page: FilePageRequest = {}): FilesResponse {
     const { mp, mw } = this.findWorktree(worktreeId);
     if (mw.error) throw new MockApiError(500, 'internal', mw.error);
+    const stateHash = this.summary(mp, mw).stateHash;
+    const all = orderFiles(this.changedFiles(mp, mw, scope));
+    const result = pageFileList(all, page, {
+      listKey: fileListKey(`${worktreeId}\u0000${stateHash}\u0000${scopeKey(scope)}`, all),
+      defaultLimit: FILES_UNPAGED_MAX,
+      maxBytes: FILES_PAGE_MAX_BYTES,
+    });
     return {
       worktreeId,
       scope,
-      stateHash: this.summary(mp, mw).stateHash,
-      files: this.changedFiles(mp, mw, scope),
+      stateHash,
+      files: result.files,
+      total: result.total,
+      offset: result.offset,
+      position: result.position,
+      nextCursor: result.nextCursor,
+      truncated: result.truncated,
+      restarted: result.restarted,
+      counts: fileListCounts(all),
     };
   }
 

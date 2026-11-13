@@ -20,6 +20,7 @@ import {
 import { createContext, useContext } from 'react';
 import type { FileRef } from '../lib/fileRef.ts';
 import { keepNewerRows } from './deltas.ts';
+import { filesQueryFn, inboxFilesParam } from './files.ts';
 import { readToken } from './token.ts';
 
 /**
@@ -257,7 +258,14 @@ export async function settleOvertaken(
     const answers = await Promise.all(
       chunks.map(async (chunk) => {
         try {
-          return { chunk, response: await api.inbox({ scope: current.scope, worktreeIds: chunk }) };
+          return {
+            chunk,
+            response: await api.inbox({
+              scope: current.scope,
+              worktreeIds: chunk,
+              ...inboxFilesParam(),
+            }),
+          };
         } catch {
           return null; // the marked rows stay; the next fetch or event asks again
         }
@@ -293,7 +301,10 @@ async function* streamInbox(
   batches: string[][] | null,
 ): AsyncGenerator<{ response: InboxResponse; last: boolean }> {
   if (batches === null) {
-    yield { response: await settleOvertaken(api, await api.inbox({ scope })), last: true };
+    yield {
+      response: await settleOvertaken(api, await api.inbox({ scope, ...inboxFilesParam() })),
+      last: true,
+    };
     return;
   }
   const pending = new Map<number, Promise<[number, InboxResponse]>>();
@@ -301,7 +312,7 @@ async function* streamInbox(
   const start = () => {
     const i = next++;
     const request = api
-      .inbox({ scope, projectIds: batches[i] ?? [] })
+      .inbox({ scope, projectIds: batches[i] ?? [], ...inboxFilesParam() })
       .then((r) => settleOvertaken(api, r))
       .then((r): [number, InboxResponse] => [i, r]);
     // Rejections surface through `Promise.race`; a batch still in flight after one failed must
@@ -374,17 +385,24 @@ export function useInboxQuery(scope: DiffScope) {
  * invalidation while one is in flight, e.g. two `worktree.changed` in a row, or the last observer
  * leaving) aborts its request instead of leaving it running, and the daemon stops its git work.
  */
-export function filesQueryOptions(api: ApiClient, worktreeId: string, scope: DiffScope) {
+export function filesQueryOptions(
+  api: ApiClient,
+  worktreeId: string,
+  scope: DiffScope,
+  queryClient?: QueryClient,
+) {
   return {
     queryKey: queryKeys.files(worktreeId, scope),
-    queryFn: ({ signal }: { signal: AbortSignal }) => api.listFiles(worktreeId, { scope, signal }),
+    // Paged (#42, `api/files.ts`): the first page, or as many files as the cache had.
+    queryFn: filesQueryFn(api, queryClient, worktreeId, scope),
   };
 }
 
 export function useFilesQuery(worktreeId: string | null, scope: DiffScope) {
   const api = useApi();
+  const queryClient = useQueryClient();
   return useQuery({
-    ...filesQueryOptions(api, worktreeId ?? '', scope),
+    ...filesQueryOptions(api, worktreeId ?? '', scope, queryClient),
     enabled: worktreeId !== null,
   });
 }

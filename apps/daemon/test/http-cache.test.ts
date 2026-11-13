@@ -71,14 +71,17 @@ describe('gzip and ETag on the JSON API (fake git-core)', () => {
     await client(daemon).addProject({ path: alpha.mainPath });
   });
 
+  const BIG_INBOX = '/api/inbox?filesLimit=2000';
+
   it('sends the inbox gzipped, about 10x smaller, with Vary, and the body round-trips', async () => {
-    const plain = await inproc(daemon, '/api/inbox');
+    const plain = await inproc(daemon, BIG_INBOX);
     expect(plain.headers.get('content-encoding')).toBeNull();
     expect(plain.headers.get('vary')).toMatch(/accept-encoding/i);
     const plainBytes = await rawBytes(plain);
-    expect(plainBytes.length).toBeGreaterThan(900_000);
+    // Since #42 a row carries a page of its files: 2000 of the 4500 here.
+    expect(plainBytes.length).toBeGreaterThan(400_000);
 
-    const packed = await inproc(daemon, '/api/inbox', {
+    const packed = await inproc(daemon, BIG_INBOX, {
       headers: { 'accept-encoding': 'gzip, deflate, br' },
     });
     expect(packed.status).toBe(200);
@@ -98,12 +101,13 @@ describe('gzip and ETag on the JSON API (fake git-core)', () => {
   });
 
   it('works through the real HTTP server (the client decodes it)', async () => {
-    const res = await http(daemon, '/api/inbox', { headers: { 'accept-encoding': 'gzip' } });
+    const res = await http(daemon, BIG_INBOX, { headers: { 'accept-encoding': 'gzip' } });
     expect(res.status).toBe(200);
     const body = InboxResponseSchema.parse(await res.json());
-    expect(body.entries[0]?.files).toHaveLength(4500);
+    expect(body.entries[0]?.files).toHaveLength(2000);
+    expect(body.entries[0]?.filesTotal).toBe(4500);
     // Still fine for a client that asks for nothing.
-    const identity = await http(daemon, '/api/inbox', {
+    const identity = await http(daemon, BIG_INBOX, {
       headers: { 'accept-encoding': 'identity' },
     });
     expect(identity.headers.get('content-encoding')).toBeNull();

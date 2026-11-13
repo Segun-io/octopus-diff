@@ -1,9 +1,10 @@
-import { TEST_IDS } from '@octopus-diff/contracts';
+import { type ChangedFile, scopeKey, TEST_IDS } from '@octopus-diff/contracts';
+import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
-import { describeError } from '../api/queries.ts';
+import { describeError, useApi } from '../api/queries.ts';
 import { useSettingsSupport } from '../api/settings.ts';
 import { isBrowseQuery } from '../lib/folderPath.ts';
-import { rankBy } from '../lib/fuzzy.ts';
+import { type FuzzyMatch, rankBy } from '../lib/fuzzy.ts';
 import { DIRECT_FOLDER_ID, worktreeLabel } from '../lib/model.ts';
 import { SETTINGS_SECTIONS } from '../settings/registry.ts';
 import { COMMANDS, GROUP_LABELS } from '../state/commandRegistry.ts';
@@ -23,7 +24,7 @@ import {
 
 interface PaletteItem {
   id: string;
-  kind: 'go' | 'command' | 'settings' | 'theme' | 'review';
+  kind: 'go' | 'command' | 'settings' | 'theme' | 'review' | 'file';
   label: string;
   /** A two-part name (project, branch) rendered with weight instead of punctuation. */
   parts?: [string, string] | undefined;
@@ -47,7 +48,34 @@ const KIND_LABELS: Record<PaletteItem['kind'], string> = {
   settings: 'Settings',
   theme: 'Theme',
   review: 'Review',
+  file: 'File',
 };
+
+/** Files the palette's file search shows at most (#42). */
+export const PALETTE_FILES_MAX = 20;
+
+/**
+ * The open worktree's files matching the palette text (#42): asked from the daemon (`q`), which
+ * searches the whole list, loaded or not, and ranks with the palette's own matcher.
+ */
+function useFileSearch(worktreeId: string | null, text: string, enabled: boolean) {
+  const api = useApi();
+  const model = useAppModel();
+  const scope = model.scope;
+  // Results are of one state of the list: an edit (a new `stateHash`) asks again (PR #97).
+  const state = model.files.data?.worktreeId === worktreeId ? model.files.data?.stateHash : null;
+  const q = text.trim();
+  return useQuery({
+    queryKey: ['file-search', worktreeId ?? '', scopeKey(scope), state ?? '', q],
+    queryFn: ({ signal }) =>
+      api.listFiles(worktreeId ?? '', { scope, q, limit: PALETTE_FILES_MAX, signal }),
+    enabled: enabled && worktreeId !== null && q.length > 0,
+    placeholderData: keepPreviousData,
+    staleTime: 5_000,
+    gcTime: 30_000,
+    retry: false,
+  });
+}
 
 /**
  * Command palette (Ctrl/Cmd+K): jump to any folder / project / worktree, run any registered
@@ -176,10 +204,25 @@ export function CommandPalette() {
     everyUnreviewed,
   ]);
 
-  const results = useMemo(
-    () => rankBy(query, items, (i) => `${i.label} ${i.hint ?? ''}`, 40),
-    [query, items],
-  );
+  const openWorktree = model.view.kind === 'worktree' ? model.view.worktreeId : null;
+  const fileSearch = useFileSearch(openWorktree, query, !browsing);
+  const found = query.trim().length > 0 ? fileSearch.data?.files : undefined;
+  const results = useMemo(() => {
+    const ranked = rankBy(query, items, (i) => `${i.label} ${i.hint ?? ''}`, 40);
+    if (!found || openWorktree === null) return ranked;
+    // Files of the open worktree, as the daemon ranked them, after the commands and places.
+    const files = found.map((file: ChangedFile): { item: PaletteItem; match: FuzzyMatch } => ({
+      item: {
+        id: `file:${file.rawPath ?? file.path}`,
+        kind: 'file' as const,
+        label: file.path,
+        hint: file.reviewed ? 'reviewed' : undefined,
+        run: () => commands.openFile(openWorktree, file),
+      },
+      match: { score: 0, positions: [] },
+    }));
+    return [...ranked, ...files];
+  }, [query, items, found, openWorktree, commands]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: reset the cursor when results change
   useEffect(() => setIndex(0), [query]);

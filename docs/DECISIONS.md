@@ -4116,3 +4116,218 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      isolates the case (other refusals come first), so it keeps the equality but did not kill the check-removed mutant:
      the deterministic tests are the guard.
 
+
+## Paged file lists and inbox (session, 2026-11-12; roadmap #42, step 26)
+
+348. **Contracts for paged file lists (additive, `contracts:` commit).** New `packages/contracts/src/paging.ts`
+     (pure, browser-safe, shared by the daemon and the web mock so both page alike): the paging order
+     `compareFileOrder` (own and mixed files first, then `origin: 'base'`, each by path in UTF-16 code-unit order,
+     then `rawPath`: exactly the web list's `ownFirst(sortFiles())`), `fileListCounts`, `fileListKey` (a list's
+     identity: its state key plus every file's place and group, non-cryptographic 64-bit hash), `pageFileList`
+     (one page of a view), `fuzzyMatch` (moved from the web palette so the daemon's search ranks like the palette)
+     and the limits: `FILES_PAGE_MAX` 2000 (a page's `limit`), `FILES_PAGE_DEFAULT` 500 (what the web asks for),
+     `FILES_UNPAGED_MAX` 2000 (a request without `limit`), `FILES_PAGE_MAX_BYTES` 900 000 (bytes of a page's file
+     rows: with the envelope a response stays under about 1 MB whatever the path lengths), `INBOX_FILES_PER_WORKTREE`
+     200, `INBOX_FILES_MAX` 4000 and `INBOX_FILES_MAX_BYTES` 900 000 (per inbox response). `GET /files` gains
+     `limit`, `cursor`, `after`/`afterRawPath`, `unreviewed`, `origin` (`own` | `base`) and `q`; `FilesQuery` gains
+     `page` only when one of them is given (an old query parses exactly as before). `FilesResponse` gains `total`,
+     `offset`, `position`, `nextCursor`, `truncated`, `restarted` and `counts` (`FileListCounts`: `total`,
+     `reviewed`, `base`, `baseReviewed` of the whole list). `GET /api/inbox` gains `filesLimit` (0-2000; 0 = counts
+     only); `InboxEntry` gains `filesTotal`, `filesNextCursor` and `fileCounts`. `ApiClient.listFiles` takes the new
+     parameters (`FilesParams`), `ApiClient.inbox` takes `filesLimit`. Nothing renamed or removed; older clients'
+     schemas strip the new fields.
+     **The cursor** is `1.<fingerprint>.<offset>` (opaque to clients, `FILE_CURSOR_PATTERN`): the fingerprint covers
+     the list key (so the worktree's `stateHash`, the resolved scope, every file's place and group), the filters,
+     and for an `unreviewed` view which files are reviewed. Any other view answers with its first page and
+     `restarted: true`, never an error: the client drops its pages and pages again, so paging always yields one
+     state's files exactly once (property tests in `packages/contracts/test/paging.test.ts`). An offset cursor (not
+     "after this key") was chosen because the fingerprint already pins the list: the slice is O(1) and a key cursor
+     would only matter for a list that changed, which restarts anyway. Binding the cursor to the state (as the issue
+     asks) rather than only to the set of paths means every edit restarts a paging in progress; the web refetches
+     its loaded length in one go (#352), so a restart costs what a refetch cost before.
+     **Why `after` and `q` live on `/files`** (and not in a new route): `n` across pages needs "the next unreviewed
+     own file after X" (`after=X&unreviewed=true&origin=own&limit=1`), the palette's file jump needs "files matching
+     Q" (`q=Q&limit=20`); both are views of the same cached list with the same paging, so one route and one helper
+     serve all three. `position` (the page's first file in the whole list) lets the web load the list through a
+     file it jumped to. `after` of a file no longer in the list starts where it would sort (as an own file).
+349. **Measured first; two quadratic loops in git-core fixed.** The new `large-paged` layout (#357) on main: the first
+     `GET /files` of the 36k-changed worktree took **12.2 s cold (13.3 s of CPU)**, answered 9.9 MB raw / 1.0 MB gzip;
+     the inbox 10.4 MB; the browser had not painted a file row of it after 5 minutes. A CPU profile put 21 s in
+     `pickEntry` (`diff.ts` `trackedRows` scanned every raw entry for each path: O(n²)); it now groups the run's raw
+     entries by path once (same order, same pick). That took the cold list to 2.1 s. A later profile (edits) found
+     `PatchSplitter.findChunkStart` re-searching the rest of each stdout chunk for every marker on every patch
+     (1.8 s of 23 s); it now keeps each marker's next index for the pass (a found index stays valid until passed, an
+     absent marker stays absent), 111 ms. Both are git-core changes outside the runner (the session on #45 owns the
+     runner). Tests: the existing parser and list suites; a new splitter test (60 copies of the sample patch with every
+     marker kind, written whole, by 5 and by 4096 characters); the mutation "never refresh a passed index" fails it and
+     three older tests. No test for `pickEntry`'s speed (a timing test would be flaky); the bench is the guard.
+350. **`/files` pages are slices of the cached list.** `CoreService.listFiles` gets its list exactly as before
+     (`#listedAt`: the files cache per state, single-flight, cancellation, retries when overtaken), then `#pageable`:
+     the listed array sorted once into the paging order (memoized per array in a `WeakMap`), its list key (memoized per
+     state and scope), and `reviewed` attached over the whole list (as before, so marks the list keeps alive are still
+     touched). `pageFileList` cuts the page. A page request therefore never runs git unless the state's list was not
+     computed yet, and then once for every page of that state (test with a counting git-core: 19 pages, a
+     `next unreviewed`, a search and an inbox row cost no list). **Old clients** (no `limit`) get the first
+     `FILES_UNPAGED_MAX` = 2000 files with `truncated: true`; 2000 is the untracked cap's number and about 550 KiB of
+     typical rows, and the byte bound (900 KB of rows) holds for long paths (real-git test: 1300 files with
+     800-character paths, every page and the unpaged answer under 1 MB). `counts` (`FileListCounts`) are of the whole
+     list, before the filters. Cost on the 36k list: 4-10 ms per page warm (500 rows, 137 KiB, 14.8 KiB gzip),
+     73 pages in 270-300 ms.
+351. **Inbox rows carry a first page.** `filesLimit` per row (default `INBOX_FILES_PER_WORKTREE` = 200, smaller than
+     the web's file page because the inbox holds every dirty worktree), and per response `INBOX_FILES_MAX` = 4000 files
+     and 900 KB of rows, spent in the rows' order: later rows get fewer or none, and every row says `filesTotal`,
+     `fileCounts` and, when cut, `filesNextCursor` (a `GET /files` cursor of the same scope; with `onlyUnreviewed` of
+     the `unreviewed=true` view). Rows are built first and cut once sorted, so the budget does not depend on which
+     worktree answered first. A fair split between rows was weighed and not done: the web reads inbox rows for `n`
+     and the every-worktree bulk plan, both of which now ask the daemon or use the counts when a row is cut, so the
+     simple rule costs nothing. Streaming per worktree (allowed by the issue) was not needed: the web already fetches
+     rows in project batches and by `worktreeIds`. The 36k layout's inbox: 800 rows of 37 901 files, 215 KiB (was
+     10.4 MB).
+352. **The web keeps one `FilesResponse` per list whose `files` is the loaded prefix** (`apps/web/src/api/files.ts`),
+     not `useInfiniteQuery`: every consumer of the files query (review-mark patches, event deltas and the diff verdict,
+     `listBehind`, the bulk state hashes, ScopeSelect, the PR Files tab) reads `data.files` and `data.stateHash` and
+     keeps working, while a page list would have to be flattened everywhere. The query function loads what was wanted
+     (`wantFiles`: every load past the first page goes through `ensureFiles`, which records it), at least
+     `FILES_PAGE_DEFAULT` = 500, in requests of up to 2000; a page answering `restarted` starts the load over (3 times,
+     then the restarted page's state), so the prefix is always one state's. A refresh after an edit therefore asks for
+     the loaded length in one request: the selection and scroll position stay (PLAN §4.2), and per-edit traffic grows
+     with what the user loaded (500 rows: 15.7 KiB gzip; 2000: about 60 KiB). `ensureFiles` appends pages, single
+     flight per list; a refresh that replaced the data meanwhile wins and the load goes on from it. Event deltas keep
+     their path: the event's `paths` list is truncated above 200 files, so a big list is refetched; `currentFile` says
+     "unknown" (not "gone") for a file a partly loaded list or inbox row does not hold, so a diff is not refetched for
+     that alone. `review.changed` patches also adjust `counts`. Counts on screen (ScopeSelect, the "from main" chip)
+     come from `counts`, the sidebar's from the summary as before. An older daemon (no `total`) answers the whole list
+     and nothing pages.
+353. **Loading more in the list.** A partly loaded list gets a footer row (`file-list-more`: "500 of 36,150 files
+     loaded", a Load more button) and the next page loads when the viewport comes within two screens of it, only once
+     the viewport was measured (the first render's 800 px is a guess and loaded a second page of short lists, caught by
+     the web tests). `j` at the last loaded row loads the next page, then steps. What the list would still show is
+     decided from the counts and the view (`openMore`): with the "from main" group collapsed and the own files all
+     loaded, or the eye off and every unreviewed file loaded, nothing more is loaded (a merge that brought 36k files
+     must not load them all to show a collapsed row). The "from main" row is placed only once the own files are all
+     loaded; its count and the chip's come from the counts. The tree layout sorts the loaded prefix as before and has a
+     Load more bar; a tree of a partly loaded list fills in as pages come (known gap, #355).
+354. **`n` across pages.** `planNextUnreviewed` (`lib/model.ts`, pure) walks as `nextUnreviewed` did (after the
+     selection, the following worktrees, around, back to the selection) over the loaded files; where a worktree's list
+     is not all loaded and its counts say unreviewed files `n` may go to are beyond the loaded ones, it stops and the
+     command asks the daemon for one file: `after=<last loaded>&unreviewed=true&origin=own|base` (`own` while the
+     "from main" group is collapsed, `base` with the chip, none when expanded; review-off worktrees are skipped as
+     before). The answer's `position` loads the list through it (`ensureFiles`, or `wantFiles` before switching to
+     another worktree) so the selection is a row of the list; no answer, and the walk goes on. When the loaded files
+     decide, `n` stays synchronous as before; presses during an ask run after it. Tests (mock): past the first page
+     in the open worktree; into the next worktree past its inbox row's 5 files, with exactly one list request
+     through the file and no ask for the open worktree whose counts say nothing is left; e2e: 520 reviewed of 1200.
+355. **Search and the palette's file jump did not exist; the palette got a file search.** The issue asks that "search"
+     and "the palette's file jump" keep working across pages, but the web had neither (the `/` filter is the sidebar's
+     worktree filter). The simplest reading that serves big lists: the palette, with a worktree open and text typed,
+     asks `GET /files?q=<text>&limit=20` and lists the matches ("File" items) after its commands; the daemon ranks with
+     the palette's own matcher (`fuzzyMatch`, moved to the contracts). Picking one loads the list through it: its index
+     comes from one request (`after=<the file>&limit=1`: the page after it starts at its index + 1;
+     `locateFile`), then `ensureFiles`. The same lookup backs the selection repair: a selection a partly loaded list
+     does not hold (a refresh pushed it past the loaded rows, a jump selected it first) is loaded through once per
+     state before the repair moves it (test: a new file sorting before the last loaded row). `order=tree` for the tree
+     layout was not added (the tree shows the loaded prefix in tree order).
+356. **Bulk review on paged lists.** The daemon already marks from its whole list (`ReviewSource.changedFiles` is the
+     daemon's list, not the client's), so nothing changed there; patchHash and the stale checks are as they were.
+     The web plan (`planBulk`, new input `partial`) sends a worktree whose list is not all loaded **without `paths`**
+     (the daemon marks all its own files; base files are skipped there too) and counts what it changes from
+     `FileListCounts`, except where the view hides files the request would change: with the "From main" chip on
+     nothing (own files are hidden), with the eye off and "mark unreviewed" nothing (the hidden reviewed files would
+     be unmarked). The every-worktree plan does the same for inbox rows that are cut. Complete lists keep the old plan
+     (`paths` of the visible files). Tests: mock (Shift+R on a partly loaded list sends no `paths`; every file
+     reviewed after), real daemon (bulk of a 2100-file list marks 2100), e2e (1200 files, 500 loaded).
+357. **Bench and fixture role.** `tools/fixtures` `large.ts` gains `manyChanged` and the `many-changed` worktree (a
+     format run rewriting the first N tracked files, plus new files), and the `large-paged` layout (40k files, 36k
+     rewritten); `e2e/bench/paged-files.ts` (`bench:paged`) measures it (bench README "Paged file lists").
+     **Known gap left as is:** an edit in that worktree reaches SSE after 3.6-4.1 s: git-core does not keep lists with
+     more than `listLimits.maxLateSignatures` (20k) signatures for incremental updates (#40's trade-off: they would be
+     checked after every full summary), so every edit re-lists the 36k files (about 2 s per scope) and re-signs them
+     (`lstat` of every changed file in the summary). Raising that limit or signing lazily is #40's design to revisit,
+     not paging's.
+
+### Paged lists: the PR #97 review (Greptile, 2026-11-13)
+
+358. **A selection lookup is tracked until it ends (P1).** The selection repair's lookup of a selection a partly loaded
+     list does not hold (#355) only started the lookup: when the file was gone and its place was already loaded,
+     `ensureFiles` changed nothing, nothing ran the repair again, and the removed file stayed selected; and any other
+     render during the lookup repaired at once, before its pages arrived. The lookup (`useSelectionRepair` in
+     `App.tsx`) now records its key (selection and list state), whether it is pending, and whether the loaded data
+     holds the file. While pending nothing repairs. Once done: the file is not in the data, so a state bump re-runs the
+     effect and it hands the selection to its neighbour; or it is, and the effect waits for the list's next render
+     (a bump there raced the query observer: it rendered the old rows and repaired, caught by the test). Tests (web,
+     mock, real actions): a file removed by a refresh is handed to its neighbour; a selection pushed past the loaded
+     rows keeps through two eye toggles while its lookup is held. Mutations killed: no wait while pending; no re-run
+     after the lookup; both "found" guards removed (3 of 3 runs). Each "found" guard alone survives (two layers).
+359. **`n` asks after the paging boundary, not the last displayed row (P1).** In the tree layout a worktree's rows
+     follow the tree's order, so the last row can sit inside the loaded pages in the daemon's order, and
+     `after=<last row>` returned a loaded file before the selection. `ListInfo` and `NextSegment` now carry `boundary`:
+     the last loaded file in the daemon's paging order (the files query's last file, the inbox row's last file), and
+     `planNextUnreviewed` asks after it. Checked for the same mix-up and found none: `j` at the end and Load more page
+     on with the cursor; the jump and the selection lookup ask after the file itself; `openMore`'s counts do not depend
+     on order. Test: tree layout, 100 of 120 loaded, the tree's last row selected (it is not the last loaded file),
+     `n` goes to the 101st file of the list and asks `after=<the 100th>`; the old boundary (the last displayed row)
+     fails it.
+360. **A failing page is retried a bounded number of times (P2).** Automatic loading near the list's end started again
+     whenever a load ended, so a failure every time looped. `useMoreFiles` keeps the last failure per page (the cursor
+     it continued from) and the tries in a row; while a page is failing, the footer does not load on its own; delayed
+     retries follow (`filesPaging.retryDelaysMs`, 1 s, 3 s, 10 s), then only the footer's (or the tree bar's) Retry
+     button tries again (and the delays start over). A new cursor (a refresh, a page that loaded) clears it. The footer
+     says "Could not load more files" in a `role="alert"` region. Test with every page request failing: exactly 4
+     requests, no more after a wait, a Retry gives 4 more, a working daemon then loads. Mutations killed: the footer
+     ignoring the failure; no delayed retries; unbounded retries.
+361. **Navigations the user overtook, or whose load failed, select nothing (P2).** The palette jump selected its file in
+     `finally` (after a failed load too), and `j` at the end of the loaded rows stepped through whatever view was open
+     when its page arrived. `useCommands` now gives every waiting navigation (the jump, `j` at the end, `n` while it asks
+     or loads) a token: it acts only while it is the latest navigation and the view, scope and selection are what they
+     were when it began. Every other navigation command (`j`/`k`, `J`/`K`, a click, `openView`, a jump) bumps the
+     sequence, and changes from anywhere else show in the snapshot. A failed load selects nothing and says so. `n`
+     presses while one waits still run after it (as before). Tests: a jump still loading, then `j`; a jump whose pages
+     fail (no selection of the target at any moment, the notice shown); `j` at the end, then `k`; `j` at the end, then
+     `J`; `n` while it asks, then `k` (and no page loaded for it); `n` while it loads through its answer, then `k`.
+     Mutations killed: select after a failure; no token in the jump, in `j` at the end, after `n`'s ask, before `n`'s
+     move. The sequence bumps in `k`/`J` alone survive: the snapshot catches those changes too.
+
+### Paged lists: the PR #97 review, second round (Greptile, 2026-11-13)
+
+362. **The selection lookup's record belongs to its worktree, scope and state (P1).** Its key was the selection and the
+     list's `stateHash`, but every scope of a worktree has the same `stateHash`: after a lookup that found its file, a
+     switch to a partly loaded scope without that file matched the old `found` record, which skipped both a new lookup
+     and the repair, so the file stayed selected. The key is now worktree, `scopeKey(scope)`, `stateHash` and selection,
+     and a `found` record also checks that the cached list of this worktree and scope still holds the file before
+     it waits. The repair's place in the list (`lastIndex`) also starts over in another scope (another list), so the
+     selection goes to the first file there. Test (web, mock, real controls): a lookup records `found` in working
+     scope, then the scope control switches to a partly loaded unstaged scope without the file; the selection goes to
+     its first file (failed before: stuck). Mutations: the key without the scope, or the record not re-checked,
+     each survive alone (one covers the other); both removed fail (2 of 2); the place not reset per scope fails.
+363. **The other keys of the paging code were checked for the same gap** (omitting the worktree, the scope, the
+     layout or filters, or the state). Fixed:
+     - *Cursors* (daemon `#pageable`, mock): the list key had the state and scope but not the worktree; two worktrees
+       with the same state and files accepted each other's cursors (harmless for identical lists, but not what the
+       contract says). The worktree id is now part of it. Daemon test with a fake git-core whose two repositories
+       share a `stateHash`: the other worktree's cursor restarts (failed before); mutation killed.
+     - *The navigation token* (`useCommands`): its snapshot was view, scope and selection. It now also holds the
+       layout, the eye, the "from main" chip and open groups, and the sidebar's filters (what decides where `j`/`n`
+       land, and which worktrees `n` may open). Test: `j` at the end, then the Tree view button; the pending step is
+       dropped. Mutation (layout left out) killed.
+     - *The palette's file search*: its query key had no state, so results stayed for 5 s after an edit (a removed
+       file was still offered). The key now holds the open list's `stateHash`. Test: the palette open on a file that
+       a refresh removes; its result goes. Mutation killed.
+     - *The load-more failure record*: it was keyed by the cursor only. Since the cursor now covers worktree, scope and
+       state it could not collide any more, but the record now says all four explicitly (no test of its own: no case
+       makes two pages share a cursor).
+     Checked and right as they were: `ensureFiles` single-flight and the wanted counts (keyed by the files query key:
+     worktree and scope; a count, not data, so not by state); the appended page (applied only while the cached data's
+     `nextCursor` is still the one the page continued from, so never onto another state); the paging boundary (from
+     the files query of the open worktree and scope, else the inbox row of the inbox scope; the tree layout's order
+     never enters it, #359); `ensureFiles`'s data (the files query has no placeholder data, so another scope never
+     shows the previous scope's rows); the inbox rows' cursors (built with the same list key as `/files`, so a row's
+     `filesNextCursor` pages on there); the `unreviewed` view's fingerprint (it covers the review marks); the daemon's
+     `#ordered` memo (per listed array, so per state); `currentFile` (looks up the files query of the event's
+     worktree and the diff's scope). The web never queries an `unreviewed`-filtered list (the eye filters loaded rows),
+     so no cached key depends on that filter.
+364. **`j` at the end of the loaded rows steps once the new rows are rendered.** Found while writing the layout test:
+     right after its page loaded, `j` stepped through the model of the render before (the rows without the page), so
+     at the last loaded row it often did not step at all. The step is now kept (`pendingStep`, with its token and the
+     row count it saw) and taken by an effect once the model has more rows, or dropped when the token is no longer
+     current. Test: `j` at the 20th of 20 loaded rows goes to the 21st (failed before). Mutation (step through the
+     stale render) killed.

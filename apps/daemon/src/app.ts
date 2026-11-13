@@ -356,14 +356,20 @@ export function createApp(deps: AppDeps): Hono {
   route('inbox', async (c) => {
     const query = parseWith(InboxQuerySchema, c.req.query(), 'query');
     return c.json(
-      await core.inbox(query.scope, query.onlyUnreviewed, query.projectIds, query.worktreeIds),
+      await core.inbox(
+        query.scope,
+        query.onlyUnreviewed,
+        query.projectIds,
+        query.worktreeIds,
+        query.filesLimit,
+      ),
     );
   });
 
   route('listFiles', async (c) => {
     const worktreeId = idParam(c, 'worktreeId');
     const query = parseWith(FilesQuerySchema, c.req.query(), 'query');
-    return c.json(await core.listFiles(worktreeId, query.scope, c.req.raw.signal));
+    return c.json(await core.listFiles(worktreeId, query.scope, c.req.raw.signal, query.page));
   });
 
   route('getDiff', async (c) => {

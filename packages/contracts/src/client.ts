@@ -125,12 +125,24 @@ export interface ScopeParams extends RequestParams {
   scope?: DiffScope;
 }
 
+/** `GET /files` paging and filters (#42); every field optional (see `FilesQuerySchema`). */
+export interface FilesParams extends ScopeParams {
+  limit?: number;
+  cursor?: string;
+  after?: { path: string; rawPath?: string | undefined };
+  unreviewed?: boolean;
+  origin?: 'own' | 'base';
+  q?: string;
+}
+
 export interface InboxParams extends ScopeParams {
   onlyUnreviewed?: boolean;
   /** Only these projects (at most `INBOX_PROJECTS_MAX`); omitted = every project. */
   projectIds?: readonly string[];
   /** Only these worktrees (at most `INBOX_WORKTREES_MAX`, #51); omitted = every worktree. */
   worktreeIds?: readonly string[];
+  /** Files per row at most (#42; 0: counts only); omitted = the daemon's default. */
+  filesLimit?: number;
 }
 
 export interface DiffParams extends ScopeParams {
@@ -171,7 +183,7 @@ export interface ApiClient {
   removeScanRoot(scanRootId: string): Promise<OkResponse>;
   rescanScanRoot(scanRootId: string): Promise<RescanResponse>;
   inbox(params?: InboxParams): Promise<InboxResponse>;
-  listFiles(worktreeId: string, params?: ScopeParams): Promise<FilesResponse>;
+  listFiles(worktreeId: string, params?: FilesParams): Promise<FilesResponse>;
   getDiff(worktreeId: string, params: DiffParams): Promise<DiffResponse>;
   listCommits(
     worktreeId: string,
@@ -419,16 +431,28 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
       if (params.onlyUnreviewed) query.set('onlyUnreviewed', 'true');
       if (params.projectIds?.length) query.set('projectIds', params.projectIds.join(','));
       if (params.worktreeIds?.length) query.set('worktreeIds', params.worktreeIds.join(','));
+      if (params.filesLimit !== undefined) query.set('filesLimit', String(params.filesLimit));
       return request(InboxResponseSchema, 'GET', ROUTES.inbox.path, {
         query,
         signal: params.signal,
       });
     },
-    listFiles: (worktreeId, params = {}) =>
-      request(FilesResponseSchema, 'GET', p(ROUTES.listFiles, { worktreeId }), {
-        query: scopeQuery(params.scope),
+    listFiles: (worktreeId, params = {}) => {
+      const query = scopeQuery(params.scope);
+      if (params.limit !== undefined) query.set('limit', String(params.limit));
+      if (params.cursor !== undefined) query.set('cursor', params.cursor);
+      if (params.after !== undefined) {
+        query.set('after', params.after.path);
+        if (params.after.rawPath !== undefined) query.set('afterRawPath', params.after.rawPath);
+      }
+      if (params.unreviewed) query.set('unreviewed', 'true');
+      if (params.origin !== undefined) query.set('origin', params.origin);
+      if (params.q !== undefined) query.set('q', params.q);
+      return request(FilesResponseSchema, 'GET', p(ROUTES.listFiles, { worktreeId }), {
+        query,
         signal: params.signal,
-      }),
+      });
+    },
     getDiff: (worktreeId, params) => {
       const query = scopeQuery(params.scope);
       query.set('path', params.path);
