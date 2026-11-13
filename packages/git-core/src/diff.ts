@@ -885,11 +885,16 @@ async function trackedRows(
   const combinedKeys = run.raw.filter((entry) => entry.combined).map((entry) => entry.path);
   const combinedChunks = await collectCombinedChunks(ctx, repo, plan, combinedKeys);
   const rows: ListRow[] = [];
-  const seen = new Set<string>();
-  for (const candidate of run.raw) {
-    if (seen.has(candidate.path)) continue;
-    seen.add(candidate.path);
-    const entry = pickEntry(run.raw, candidate.path) ?? candidate;
+  // Each path's entries, in output order: `pickEntry` over the whole run per path was quadratic
+  // (#42: 21 s of CPU for a 36k-file list).
+  const byPath = new Map<string, RawEntry[]>();
+  for (const entry of run.raw) {
+    const same = byPath.get(entry.path);
+    if (same) same.push(entry);
+    else byPath.set(entry.path, [entry]);
+  }
+  for (const [key, same] of byPath) {
+    const entry = pickEntry(same, key) ?? (same[0] as RawEntry);
     const chunk = entry.combined ? combinedChunks.get(entry.path) : run.chunks.get(entry.path);
     if (isStatOnly(entry, chunk, numstat.get(entry.path))) continue;
     const conflicted = entry.combined || (index?.conflicted.has(entry.path) ?? false);
