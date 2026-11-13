@@ -519,7 +519,7 @@ function markdown(r: any): string {
       '',
       '## Web',
       '',
-      `- App opened on the worktree (navigation → first file row): cold ${fmt(r.ui.coldOpenMs)}, reload ${fmt(r.ui.warmOpenMs)}.`,
+      `- App opened on the worktree (navigation → first file row), a fresh browser profile with the daemon's list of the worktree already computed (the \`/files\` phase above did it; a first open on a fresh daemon also waits for the cold list, ${fmt(r.files[0]?.unpaged.coldMs ?? null)}): ${fmt(r.ui.coldOpenMs)}; reload ${fmt(r.ui.warmOpenMs)}.`,
       `- Opened from another worktree (click on its row → first file row): ${fmt(r.ui.switchOpenMs)}; ${r.ui.mountedRows} rows mounted.`,
       `- One edit in the open worktree: \`worktree.changed\` after ${fmt(r.ui.edit.sseMs)}, then ${kib(r.ui.edit.bytes)} of \`/api/*\` traffic on the wire (${r.ui.edit.requests.length} requests: ${r.ui.edit.requests.join(', ') || 'none'}).`,
     );
