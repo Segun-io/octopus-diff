@@ -19,6 +19,7 @@
  */
 import {
   type ApiClient,
+  ApiClientError,
   type ServerEventOf,
   TREE_PAGE_MAX,
   type TreeResponse,
@@ -33,6 +34,29 @@ export const treePaging = {
   /** Restarts (the state moved mid-paging) before the restarted page is kept as it is. */
   restarts: 3,
 };
+
+/**
+ * The daemon answers 409 with `details.retryable` when the worktree changed while a directory was
+ * listed (DECISIONS #406): retried (unlike other 4xx), at most `TREE_CONFLICT_RETRIES` times; other
+ * errors as the app's default (twice, never a 4xx).
+ */
+export const TREE_CONFLICT_RETRIES = 3;
+
+export function isRetryableTreeConflict(error: unknown): boolean {
+  return (
+    error instanceof ApiClientError &&
+    error.status === 409 &&
+    typeof error.details === 'object' &&
+    error.details !== null &&
+    (error.details as { retryable?: unknown }).retryable === true
+  );
+}
+
+export function treeRetry(failureCount: number, error: unknown): boolean {
+  if (isRetryableTreeConflict(error)) return failureCount < TREE_CONFLICT_RETRIES;
+  if (error instanceof ApiClientError && error.status >= 400 && error.status < 500) return false;
+  return failureCount < 2;
+}
 
 /** How long a tree view of a branch or `HEAD` is fresh. */
 export const TREE_REF_STALE_MS = 30_000;
@@ -138,6 +162,9 @@ export function treeQueryOptions(
         ),
         signal,
       }),
+    retry: treeRetry,
+    // A conflict clears as soon as the daemon's summary caught up: retry soon.
+    retryDelay: (attempt: number) => Math.min(200 * 2 ** attempt, 2000),
     // The working view follows events; a commit's tree never changes; a ref's may move.
     staleTime:
       ref === undefined || FULL_OID.test(ref) ? Number.POSITIVE_INFINITY : TREE_REF_STALE_MS,

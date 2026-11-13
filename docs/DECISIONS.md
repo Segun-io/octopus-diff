@@ -4716,8 +4716,9 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
        tell) and must equal that summary's `headSha`; the list was read in between, so no commit landed under it, and
        that HEAD read is also the listing used;
      - otherwise a summary refresh runs (`refresher.current`, else a new refresh) and it is tried again, up to
-       `LIST_ATTEMPTS` (3) times; then **409 `conflict`** with `details: { retryable: true }`. A client retries (the web
-       data layer's query retries); a listing never mixes two states.
+       `LIST_ATTEMPTS` (3) times; then **409 `conflict`** with `details: { retryable: true }`; a listing never mixes two
+       states. The web's tree queries retry exactly that 409 (`treeRetry`: 3 times, 200 ms doubling; the app's default
+       retries no 4xx), every other 4xx is final.
      - The response's `stateHash` is that summary's; the composed listing is cached under it (and HEAD).
      Tests (`tree-review.real-git.test.ts`, real git, a gate in a wrapped git-core): a commit lands before the list,
      after the list, on every list (409); git-core lists a newer state than the daemon's summary (never labelled with

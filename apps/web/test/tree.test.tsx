@@ -2,6 +2,7 @@
 /** The explorer's data layer (#9): `useTree`, paging into the cached prefix, event deltas. */
 import {
   type ApiClient,
+  ApiClientError,
   pageTreeEntries,
   type ServerEventOf,
   type TreeEntry,
@@ -24,6 +25,7 @@ import {
   type TreeDirEffects,
   treeKeys,
   treePaging,
+  treeRetry,
   useTree,
 } from '../src/api/tree.ts';
 
@@ -298,5 +300,33 @@ describe('tree deltas', () => {
     await waitFor(() => expect(fake.calls).toHaveLength(1));
     expect(fake.calls[0]?.rawPath).toBeUndefined();
     expect(fake.calls[0]?.path).toBe('ZP8=');
+  });
+
+  it('retries the retryable 409 of a worktree that changed while it was listed, not other 4xx', async () => {
+    const fake = fakeApi(dirsOf({ '': [entry('', 'a')] }));
+    const original = fake.getTree.getMockImplementation();
+    if (!original) throw new Error('no implementation');
+    const conflict = () =>
+      new ApiClientError('conflict', 'the worktree changed while it was listed; retry', 409, {
+        retryable: true,
+      });
+    fake.getTree.mockRejectedValueOnce(conflict()).mockRejectedValueOnce(conflict());
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const hook = renderHook(() => useTree(W, { path: '' }), {
+      wrapper: wrapperFor(fake.api, queryClient),
+    });
+    await waitFor(
+      () => expect(hook.result.current.data?.entries.map((e) => e.name)).toEqual(['a']),
+      {
+        timeout: 4000,
+      },
+    );
+    expect(fake.getTree).toHaveBeenCalledTimes(3);
+    expect(original).toBeDefined();
+    expect(treeRetry(0, conflict())).toBe(true);
+    expect(treeRetry(3, conflict())).toBe(false);
+    expect(treeRetry(0, new ApiClientError('not_found', 'no such directory', 404))).toBe(false);
+    expect(treeRetry(0, new ApiClientError('conflict', 'other', 409, {}))).toBe(false);
+    expect(treeRetry(0, new Error('network'))).toBe(true);
   });
 });
