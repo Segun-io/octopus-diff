@@ -29,6 +29,10 @@ export interface ServeFlags extends GlobalFlags, AddressFlags {
   watch?: boolean;
   poll?: boolean;
   webRoot?: string;
+  /** File descriptor (>= 3) that receives the one-line JSON ready message (`ServeReady`). */
+  readyFd?: number;
+  /** Shut down gracefully when stdin ends (a supervisor's lifeline; works on Windows). */
+  exitWithStdin?: boolean;
 }
 
 export interface AddFlags extends GlobalFlags, AddressFlags {
@@ -189,6 +193,8 @@ function parseServe(args: readonly string[]): ParsedCommand {
       watch: { type: 'boolean' },
       poll: { type: 'boolean' },
       'web-root': { type: 'string' },
+      'ready-fd': { type: 'string' },
+      'exit-with-stdin': { type: 'boolean' },
     },
     true,
   );
@@ -207,8 +213,26 @@ function parseServe(args: readonly string[]): ParsedCommand {
       watch: bool(values, 'watch'),
       poll: bool(values, 'poll'),
       webRoot: nonEmpty(values, 'web-root'),
+      readyFd: readyFd(values),
+      exitWithStdin: bool(values, 'exit-with-stdin'),
     }),
   };
+}
+
+/** `--ready-fd <n>`: an integer >= 3 (0-2 are stdin/stdout/stderr, and a fd is a 32-bit int). */
+function readyFd(values: Values): number | undefined {
+  const raw = str(values, 'ready-fd');
+  if (raw === undefined) return undefined;
+  if (!/^\d+$/.test(raw)) {
+    throw new UsageError(`--ready-fd must be an integer file descriptor (3 or more), got "${raw}"`);
+  }
+  const fd = Number(raw);
+  if (fd < 3 || fd > 2_147_483_647) {
+    throw new UsageError(
+      `--ready-fd must be a file descriptor of 3 or more (0-2 are stdin, stdout and stderr), got ${raw}`,
+    );
+  }
+  return fd;
 }
 
 function parseAdd(args: readonly string[]): ParsedCommand {

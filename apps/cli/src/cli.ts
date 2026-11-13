@@ -56,6 +56,15 @@ Options:
       --poll                 Poll instead of using native file watchers (WSL /mnt/*, NFS)
       --web-root <dir>       Serve the web UI from this directory
 
+For supervisors (the desktop app):
+      --ready-fd <n>         Write one JSON line {mode, url, authUrl, pid, version} to file
+                             descriptor n (3 or more) once the daemon is up; mode is "started", or
+                             "attached" when a daemon already runs for this state directory (then
+                             serve exits 0). authUrl holds the token; with this option the
+                             banner on stdout leaves the token out.
+      --exit-with-stdin      Shut down gracefully when stdin ends or closes (also when the parent
+                             process dies). Without it stdin is not read.
+
 ${GLOBAL_HELP}
 `,
   add: `Usage: ${APP_NAME} add <path…> [--scan <dir>…] [options]

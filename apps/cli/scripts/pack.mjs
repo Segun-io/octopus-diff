@@ -2,89 +2,33 @@
 //
 //   pnpm --filter octopus-diff run pack:tarball   →   apps/cli/.pack/octopus-diff-<version>.tgz
 //
-// The workspace packages (@octopus-diff/contracts, git-core, daemon) are private and never
-// published, so they are bundled into one ESM file with esbuild, resolving their TypeScript
-// sources through the `@octopus-diff/source` export condition. Third-party packages are bundled
-// too, except native modules (`@parcel/watcher`), which stay real dependencies of the tarball.
-// The built web UI (apps/web/dist) is copied to dist/web, and git-core's spawn helper is built to
-// dist/git-helper.js. Run `pnpm build` first.
+// The bundle itself (dist/index.js, dist/git-helper.js, dist/web) comes from `bundle.mjs`, the
+// step the desktop app reuses; this script adds the package manifest and the docs and runs
+// `npm pack`. The workspace packages (@octopus-diff/contracts, git-core, daemon) are private and
+// never published, so the bundle inlines them; native modules (`@parcel/watcher`) stay real
+// dependencies of the tarball. Run `pnpm build` first.
 import { execFileSync } from 'node:child_process';
-import { chmod, cp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { build } from 'esbuild';
+import { bundleCli, externalDependencies, packageRoot, repoRoot } from './bundle.mjs';
 
-const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const repoRoot = path.resolve(packageRoot, '..', '..');
 const outDir = path.join(packageRoot, '.pack');
 const stage = path.join(outDir, 'package');
 
-/** Runtime dependencies that cannot be bundled (native addons), with the version range to use. */
-const EXTERNAL_PACKAGES = ['@parcel/watcher'];
-
-async function readJson(file) {
-  return JSON.parse(await readFile(file, 'utf8'));
-}
-
-async function exists(p) {
-  try {
-    await stat(p);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-const cliPkg = await readJson(path.join(packageRoot, 'package.json'));
-const daemonPkg = await readJson(path.join(repoRoot, 'apps', 'daemon', 'package.json'));
-
-const webDist = path.join(repoRoot, 'apps', 'web', 'dist');
-if (!(await exists(path.join(webDist, 'index.html')))) {
-  console.error(`pack: ${webDist}/index.html not found; run \`pnpm build\` first`);
-  process.exit(1);
-}
+const cliPkg = JSON.parse(await readFile(path.join(packageRoot, 'package.json'), 'utf8'));
 
 await rm(outDir, { recursive: true, force: true });
 await mkdir(path.join(stage, 'dist'), { recursive: true });
-
-await build({
-  entryPoints: [path.join(packageRoot, 'src', 'index.ts')],
-  outfile: path.join(stage, 'dist', 'index.js'),
-  bundle: true,
-  platform: 'node',
-  format: 'esm',
-  target: 'node24',
-  conditions: ['@octopus-diff/source'],
-  external: EXTERNAL_PACKAGES,
-  sourcemap: true,
-  legalComments: 'linked',
-  logLevel: 'warning',
-  // Some bundled CommonJS code calls require(); give the ESM bundle one.
-  banner: {
-    js: "import { createRequire as __octopusCreateRequire } from 'node:module';\nconst require = __octopusCreateRequire(import.meta.url);",
-  },
-});
-// git-core's spawn helper (#45) runs as its own process, so it is a separate file; the bundled
-// runner finds it next to itself (`new URL('./git-helper.js', import.meta.url)`).
-await build({
-  entryPoints: [path.join(repoRoot, 'packages', 'git-core', 'src', 'runner', 'git-helper.ts')],
-  outfile: path.join(stage, 'dist', 'git-helper.js'),
-  bundle: true,
-  platform: 'node',
-  format: 'esm',
-  target: 'node24',
-  sourcemap: true,
-  logLevel: 'warning',
-});
-await chmod(path.join(stage, 'dist', 'index.js'), 0o755);
-await cp(webDist, path.join(stage, 'dist', 'web'), { recursive: true });
-
-const dependencies = {};
-for (const name of EXTERNAL_PACKAGES) {
-  const range = daemonPkg.dependencies?.[name];
-  if (!range) throw new Error(`pack: no version range for ${name} in apps/daemon/package.json`);
-  dependencies[name] = range;
+try {
+  await bundleCli({ outDir: path.join(stage, 'dist') });
+} catch (error) {
+  console.error(
+    String(error instanceof Error ? error.message : error).replace(/^bundle:/, 'pack:'),
+  );
+  process.exit(1);
 }
+
+const dependencies = await externalDependencies();
 
 const manifest = {
   name: cliPkg.name,

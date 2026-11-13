@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { closeSync, fstatSync, readFileSync, writeSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { networkInterfaces, tmpdir } from 'node:os';
 import {
@@ -44,6 +44,21 @@ export type ProbeGitHelper = (options: {
   enabled: boolean;
 }) => Promise<GitHelperProbe>;
 
+/** The write end of `--ready-fd`: takes exactly one line, then is closed. */
+export interface ReadyChannel {
+  /** Writes `line` completely (blocking); throws if the reader is gone (EPIPE) or the fd is bad. */
+  write(line: string): void;
+  close(): void;
+}
+
+/** Watches stdin for the end of the supervisor's lifeline (`--exit-with-stdin`). */
+export interface StdinWatch {
+  /** Resolves (never rejects) with a reason when stdin ends, errors or closes. */
+  closed: Promise<string>;
+  /** Stops listening and releases stdin so it cannot keep the process alive. */
+  stop(): void;
+}
+
 /**
  * Everything the commands touch outside of the filesystem paths they are given. Tests replace
  * these; the defaults are the real implementations.
@@ -69,6 +84,10 @@ export interface CliDeps {
    * second signal while shutting down exits immediately.
    */
   waitForShutdown: () => Promise<string>;
+  /** Opens `--ready-fd`; throws an Error if `fd` is not an open descriptor. */
+  openReadyChannel: (fd: number) => ReadyChannel;
+  /** Starts watching stdin for EOF/close/error (`--exit-with-stdin`). */
+  watchStdin: () => StdinWatch;
   isProcessAlive: (pid: number) => boolean;
   runProgram: RunProgram;
   readText: ReadTextSync;
@@ -178,6 +197,75 @@ function processShutdownSignal(onForced: (signal: string) => void): () => Promis
     });
 }
 
+const sleepSignal = new Int32Array(new SharedArrayBuffer(4));
+const READY_WRITE_BUDGET_MS = 5_000;
+
+/**
+ * The real `openReadyChannel`: a blocking `fs.writeSync` on the inherited descriptor (a pipe or
+ * socket the parent holds the other end of; works the same on Windows for fd >= 3 from the spawn
+ * `stdio` array). It retries on `EAGAIN` (a non-blocking pipe that is full) for a bounded time.
+ */
+export function openReadyChannel(fd: number): ReadyChannel {
+  try {
+    fstatSync(fd);
+  } catch {
+    throw new Error(`file descriptor ${fd} is not open (the parent must pass it to this process)`);
+  }
+  let closed = false;
+  return {
+    write(line) {
+      const data = Buffer.from(line, 'utf8');
+      let offset = 0;
+      const deadline = Date.now() + READY_WRITE_BUDGET_MS;
+      while (offset < data.length) {
+        try {
+          offset += writeSync(fd, data, offset, data.length - offset);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'EAGAIN' || Date.now() > deadline)
+            throw error;
+          Atomics.wait(sleepSignal, 0, 0, 5);
+        }
+      }
+    },
+    close() {
+      if (closed) return;
+      closed = true;
+      try {
+        closeSync(fd);
+      } catch {
+        // already gone
+      }
+    },
+  };
+}
+
+/**
+ * The real `watchStdin`. stdin is read and discarded, and unref'd so that it never keeps the
+ * process alive by itself: the daemon's own handles do, and `stop()` pauses it again.
+ */
+export function watchStdin(stdin: NodeJS.ReadStream = process.stdin): StdinWatch {
+  let onEnd = () => {};
+  let onError = (_: Error) => {};
+  const closed = new Promise<string>((resolve) => {
+    onEnd = () => resolve('stdin closed');
+    onError = (error) => resolve(`stdin error (${error.message})`);
+  });
+  stdin.on('end', onEnd);
+  stdin.on('close', onEnd);
+  stdin.on('error', onError);
+  stdin.resume();
+  (stdin as { unref?: () => unknown }).unref?.();
+  return {
+    closed,
+    stop() {
+      stdin.off('end', onEnd);
+      stdin.off('close', onEnd);
+      stdin.off('error', onError);
+      stdin.pause();
+    },
+  };
+}
+
 export function defaultDeps(): CliDeps {
   const onForcedExit = (signal: string) => {
     process.stderr.write(`\nreceived ${signal} again, exiting without a clean shutdown\n`);
@@ -196,6 +284,8 @@ export function defaultDeps(): CliDeps {
     openUrl: (url, isWsl, stateDir) =>
       openBrowser(url, { platform: process.platform, isWsl, stateDir, env: process.env }),
     waitForShutdown: processShutdownSignal(onForcedExit),
+    openReadyChannel,
+    watchStdin: () => watchStdin(),
     isProcessAlive,
     runProgram: createRunProgram(process.env, process.platform),
     readText: readTextSync,
@@ -207,11 +297,18 @@ export function defaultDeps(): CliDeps {
   };
 }
 
+/** Set by `scripts/bundle.mjs` (esbuild `define`): a standalone bundle has no package.json above it. */
+declare const __OCTOPUS_CLI_VERSION__: string | undefined;
+
 let cachedVersion: string | undefined;
 
-/** The CLI package version (from `<pkg>/package.json`, one level above `src/` and `dist/`). */
+/** The CLI package version (embedded in a bundle, else `<pkg>/package.json` above `src/`/`dist/`). */
 export function cliVersion(): string {
   if (cachedVersion === undefined) {
+    if (typeof __OCTOPUS_CLI_VERSION__ === 'string') {
+      cachedVersion = __OCTOPUS_CLI_VERSION__;
+      return cachedVersion;
+    }
     try {
       const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as {
         version?: unknown;

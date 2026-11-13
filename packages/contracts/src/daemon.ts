@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import type { Logger } from './common.js';
 import type { GitCore, GitCoreOptions } from './git-core.js';
 
@@ -68,3 +69,26 @@ export interface DaemonHandle {
   /** Stops watchers, timers and git processes, closes SQLite and the HTTP server. */
   close(): Promise<void>;
 }
+
+/**
+ * The one JSON line `octopus-diff serve --ready-fd <n>` writes to file descriptor `n` once a daemon
+ * is serving for the state directory (the desktop app and other supervisors read it).
+ *
+ * - `started`: this process started the daemon and keeps serving (it owns it).
+ * - `attached`: a verified daemon was already running for the state directory; this process wrote
+ *   the line and exits 0 (it does not own that daemon). `pid` and `version` are the running
+ *   daemon's, so a supervisor can notice a version difference.
+ *
+ * `authUrl` is `<url>/#token=<token>`: it holds the access token, so the reader must never log it
+ * or put it on a command line. The line is the only place `serve --ready-fd` writes the token.
+ */
+export const ServeReadySchema = z.object({
+  mode: z.enum(['started', 'attached']),
+  /** Base URL without credentials, e.g. `http://127.0.0.1:7428`. */
+  url: z.url(),
+  /** `<url>/#token=<token>` (see `DaemonHandle.authUrl`). Secret. */
+  authUrl: z.url(),
+  pid: z.number().int().positive(),
+  version: z.string().min(1),
+});
+export type ServeReady = z.infer<typeof ServeReadySchema>;
