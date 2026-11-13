@@ -8,9 +8,17 @@
  * refuses the TCP debugging switches that Playwright's `_electron.launch` needs). Every launch has
  * temp state/config/app-data dirs and the fixtures' isolated git config.
  */
-import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { ApiClientError, createApiClient, TEST_IDS } from '@octopus-diff/contracts';
 import {
   assertReadOnly,
@@ -19,6 +27,7 @@ import {
   generateFixtures,
   proofTargetsFromManifest,
   registeredProjects,
+  runGit,
   startAgentSimulator,
   startReadOnlyProof,
 } from '@octopus-diff/fixtures';
@@ -45,13 +54,32 @@ let app: PackagedApp;
 let fixtures: FixtureSet;
 let root: string;
 let env: NodeJS.ProcessEnv;
+/** Windows only: the two plain repos that stand in for the acceptance fixtures (see below). */
+const winRepos: string[] = [];
 const launched = new Set<number>();
 
 test.describe.configure({ mode: 'serial' });
 
 test.beforeAll(async () => {
   app = packagedApp();
-  fixtures = await generateFixtures({ seed: 1901 });
+  // The acceptance fixtures use names and links Windows cannot hold (raw bytes, `:`, symlinks):
+  // there the app is exercised with two plain repos, one with an uncommitted change, and the
+  // read-only proof and the agent simulator (which need the full layout) are not run (DECISIONS #523).
+  fixtures = await generateFixtures({ seed: 1901, ...(IS_WIN ? { acceptance: false } : {}) });
+  if (IS_WIN) {
+    for (const name of ['win-a', 'win-b']) {
+      const dir = join(fixtures.root, 'win-repos', name);
+      mkdirSync(dir, { recursive: true });
+      const git = (...args: string[]) => runGit(args, { cwd: dir, env: fixtures.env });
+      await git('init', '-q', '--initial-branch=main', '.');
+      writeFileSync(join(dir, 'a.txt'), `${name}\n`);
+      await git('add', '--', 'a.txt');
+      await git('commit', '-q', '-m', 'first');
+      writeFileSync(join(dir, 'a.txt'), `${name}\nchanged\n`);
+      writeFileSync(join(dir, 'b.txt'), 'new\n');
+      winRepos.push(dir);
+    }
+  }
   root = mkdtempSync(join(tmpdir(), 'octopus-diff-desktop-e2e-'));
   // The fixtures' isolated git config reaches the daemon's git (git-core inherits GIT_CONFIG_*).
   env = { ...process.env, ...fixtures.env.vars };
@@ -113,22 +141,27 @@ test('an installed build refuses dev options and debugger switches', async () =>
 test('the window shows projects added with `octopus-diff add`; read-only proof; quit stops the daemon', async () => {
   test.setTimeout(300_000);
   const { manifest } = fixtures;
-  const proof = await startReadOnlyProof({
-    env: fixtures.env,
-    targets: proofTargetsFromManifest(manifest),
-  });
+  const proof = IS_WIN
+    ? null
+    : await startReadOnlyProof({
+        env: fixtures.env,
+        targets: proofTargetsFromManifest(manifest),
+      });
   const dirs = appDirs(root, 'started');
   const run = launchApp(app, dirs, env);
   track(run.child.pid);
-  const live = findWorktree(manifest, 'live-agent').worktree;
-  const sim = startAgentSimulator({
-    targets: [{ path: live.path, name: 'live-agent' }],
-    env: fixtures.env,
-    seed: 19,
-    durationMs: 30_000,
-    minIntervalMs: 150,
-    maxIntervalMs: 500,
-  });
+  const live = IS_WIN ? null : findWorktree(manifest, 'live-agent').worktree;
+  const sim =
+    live === null
+      ? null
+      : startAgentSimulator({
+          targets: [{ path: live.path, name: 'live-agent' }],
+          env: fixtures.env,
+          seed: 19,
+          durationMs: 30_000,
+          minIntervalMs: 150,
+          maxIntervalMs: 500,
+        });
   try {
     const daemon = await waitReady(dirs);
     const origin = new URL(daemon.url).origin;
@@ -136,12 +169,18 @@ test('the window shows projects added with `octopus-diff add`; read-only proof; 
     // The CLI bundled in the app talks to the app's daemon (D6's mechanism).
     const status = JSON.parse(cli(app, dirs, env, 'status', '--json')) as { url?: string };
     expect(status.url, 'octopus-diff status sees the app daemon').toBe(daemon.url);
-    const registered = registeredProjects(manifest);
+    const registered = IS_WIN
+      ? winRepos.map((p) => ({ name: basename(p), path: p as string | null }))
+      : registeredProjects(manifest).map((project) => ({
+          name: project.name,
+          // Projects found through a scan root are not added one by one.
+          path: project.registration?.kind === 'path' ? project.registration.path : null,
+        }));
     for (const project of registered) {
-      if (project.registration?.kind !== 'path') continue;
-      expect(cli(app, dirs, env, 'add', project.registration.path)).toContain('added');
+      if (project.path === null) continue;
+      expect(cli(app, dirs, env, 'add', project.path)).toContain('added');
     }
-    for (const scanRoot of manifest.scanRoots) {
+    for (const scanRoot of IS_WIN ? [] : manifest.scanRoots) {
       cli(app, dirs, env, 'add', '--scan', scanRoot.path, '--depth', String(scanRoot.depth));
     }
 
@@ -248,7 +287,7 @@ test('the window shows projects added with `octopus-diff add`; read-only proof; 
             } catch (error) {
               // The simulator edits live-agent: a listed file may be gone by the time it is read.
               const raced =
-                worktree.path === live.path &&
+                worktree.path === live?.path &&
                 error instanceof ApiClientError &&
                 error.code === 'not_found';
               if (!raced) throw error;
@@ -282,8 +321,15 @@ test('the window shows projects added with `octopus-diff add`; read-only proof; 
     expect(log).not.toContain('#token=');
     expect(log).not.toContain(daemon.token);
   } finally {
-    await sim.stop();
+    await sim?.stop();
     if (alive(run.child.pid ?? 0)) run.child.kill('SIGKILL');
+  }
+  if (proof === null) {
+    test.info().annotations.push({
+      type: 'readonly-proof',
+      description: 'not run on Windows (needs the acceptance fixtures; DECISIONS #523)',
+    });
+    return;
   }
   const report = await proof.finish();
   test.info().annotations.push({

@@ -5855,3 +5855,11 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      backslashes as escape sequences (`bad config line 15`), so `git init` failed. The fixtures had never run on
      Windows. `configPathValue` writes such paths with forward slashes (`tools/fixtures/src/git.ts`, a one-line
      change outside the desktop paths, needed by this PR's Windows job).
+523. **The Windows packaged smoke uses two plain repos.** The next Windows run failed in the acceptance fixtures
+     (`supportsRawFileNames` writes a name with an invalid UTF-8 byte: `ENOENT` on Windows rather than `EILSEQ`; the
+     layout also has `:` names and symlinks). Making the whole acceptance layout Windows-safe is out of this PR's scope
+     and has no other consumer (the e2e suites run on Linux only). On Windows the spec generates no acceptance layout,
+     creates two repos with a commit and an uncommitted change under the fixtures' isolated git config, adds them with
+     the app's CLI, and does not run the read-only proof or the agent simulator (annotated in the report). Linux and
+     macOS keep the full layout, proof and simulator. Known gap: no read-only proof against the packaged app on
+     Windows (the unit-level guarantee is unchanged: the app never spawns git).
