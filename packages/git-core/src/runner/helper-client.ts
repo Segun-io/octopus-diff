@@ -34,8 +34,14 @@ export const HELPER_MAX_ENV = 4_096;
 const inRootContext = AsyncLocalStorage.snapshot();
 /** stdin is sent in frames of at most this size, within the credit the helper grants. */
 const STDIN_CHUNK = 64 * 1024;
-/** How long a retry waits for the SIGKILLed groups of a crashed helper to disappear. */
-const GROUP_GONE_WAIT_MS = 1_000;
+/**
+ * How long a retry waits for the SIGKILLed groups of a crashed helper to disappear (init reaps
+ * them; seconds on a loaded machine). The retry goes ahead after it anyway: a SIGKILLed process
+ * runs no more code, so what can linger is only a process on its way out or a zombie.
+ */
+const GROUP_GONE_WAIT_MS = 10_000;
+/** A helper asked whether it is alive (PING) that has not answered (PONG) by then is SIGKILLed. */
+const PROBE_WAIT_MS = 3_000;
 /** The helper never sends larger frames (it splits output at 256 KiB). */
 const MAX_EVENT_FRAME = 1024 * 1024;
 const MAX_START_FAILURES = 2;
@@ -61,6 +67,8 @@ export const HelperFrame = {
   rejected: 24,
   fatal: 25,
   stdinCredit: 26,
+  ping: 6,
+  pong: 27,
 } as const;
 
 /** The callbacks a running git process reports through (same for direct and helper spawns). */
@@ -89,9 +97,9 @@ export interface ProcHandle {
   /** Stops reading the process's output and closes its pipes. */
   detach(): void;
   /**
-   * Gives up on whatever runs the process when a SIGKILL brought no exit (review #1): for a
-   * helper, SIGKILLs the helper, whose death reports its requests lost and frees their slots.
-   * Absent for a direct child (the kernel always delivers its exit).
+   * A SIGKILL brought no exit report (review #1): for a helper, probe it and SIGKILL it if it does
+   * not answer, so its death reports its requests lost and frees their slots. Absent for a direct
+   * child (the kernel always delivers its exit).
    */
   abandon?(): void;
 }
@@ -107,8 +115,13 @@ export interface HelperSpawnRequest {
 }
 
 export interface HelperPoolOptions {
-  /** Test hook: `OCTOPUS_DIFF_GIT_HELPER_TEST_CRASH` for the helpers (see `git-helper.ts`). */
-  testCrash?: string;
+  /** Test hooks and timings (`GitRunnerOptions.helperTest`). */
+  test?: {
+    crash?: string;
+    delayExitMs?: number;
+    groupGoneWaitMs?: number;
+    probeWaitMs?: number;
+  };
   gitBinary: string;
   entry: string;
   processes: number;
@@ -176,6 +189,8 @@ function groupExists(pid: number): boolean {
 
 /** Resolves once none of the groups exists any more, or after `ms`. */
 async function groupsGone(pids: number[], ms: number): Promise<boolean> {
+  // No wait (tests): one look, right after the SIGKILL, when the groups still exist.
+  if (ms <= 0) return !pids.some(groupExists);
   const deadline = Date.now() + ms;
   while (pids.some(groupExists)) {
     if (Date.now() > deadline) return false;
@@ -198,15 +213,20 @@ class HelperProcess {
   dead = false;
   /** Why the parent stopped trusting this helper (a protocol violation). */
   lastError: string | null = null;
+  private probe: { id: number; timer: NodeJS.Timeout } | null = null;
+  private nextProbe = 1;
   readonly exited: Promise<void>;
 
   constructor(
-    options: HelperPoolOptions,
+    private readonly options: HelperPoolOptions,
     private readonly onDead: (helper: HelperProcess, beforeReady: boolean) => void,
   ) {
     const env: Record<string, string> = {};
     if (process.versions.electron) env.ELECTRON_RUN_AS_NODE = '1';
-    if (options.testCrash) env.OCTOPUS_DIFF_GIT_HELPER_TEST_CRASH = options.testCrash;
+    if (options.test?.crash) env.OCTOPUS_DIFF_GIT_HELPER_TEST_CRASH = options.test.crash;
+    if (options.test?.delayExitMs) {
+      env.OCTOPUS_DIFF_GIT_HELPER_TEST_DELAY_EXIT_MS = String(options.test.delayExitMs);
+    }
     const execArgv = options.entry.endsWith('.ts') ? ['--disable-warning=ExperimentalWarning'] : [];
     this.child = spawn(
       options.execPath ?? process.execPath,
@@ -269,6 +289,11 @@ class HelperProcess {
     return this.requests.size;
   }
 
+  /** PIDs of the in-flight git processes this helper announced. */
+  childPids(): number[] {
+    return [...this.requests.values()].flatMap((r) => (r.pid === undefined ? [] : [r.pid]));
+  }
+
   startGit(request: HelperSpawnRequest, handlers: ProcHandlers): ProcHandle {
     const id = this.nextId++;
     // The request's own async context for every callback (not the helper's pipes' context).
@@ -324,13 +349,7 @@ class HelperProcess {
         state.input = undefined;
         if (!this.dead && this.requests.has(id)) this.write(frame(HelperFrame.detach, id));
       },
-      abandon: () => {
-        if (!this.dead) {
-          this.lastError =
-            'a SIGKILLed git process never reported its exit (helper stopped or wedged)';
-          this.kill();
-        }
-      },
+      abandon: () => this.probeAlive(),
     };
   }
 
@@ -344,6 +363,25 @@ class HelperProcess {
     timer.unref();
     await this.exited;
     clearTimeout(timer);
+  }
+
+  /**
+   * A SIGKILLed git process has not been reported gone (review #1): the helper may be stopped or
+   * wedged, or only slow (a loaded machine reaps late). PING it, and SIGKILL it only if it does not
+   * answer within `PROBE_WAIT_MS`: a helper that answers is alive and will report the exit.
+   */
+  probeAlive(): void {
+    if (this.dead || this.probe) return;
+    const id = this.nextProbe++;
+    const timer = setTimeout(() => {
+      if (this.probe?.id !== id) return;
+      this.probe = null;
+      this.lastError = 'the helper did not answer a probe (stopped or wedged)';
+      this.kill();
+    }, this.options.test?.probeWaitMs ?? PROBE_WAIT_MS);
+    timer.unref();
+    this.probe = { id, timer };
+    this.write(frame(HelperFrame.ping, id));
   }
 
   /** SIGKILLs the helper itself (a protocol violation or an unresponsive helper). */
@@ -438,8 +476,8 @@ class HelperProcess {
         // A crashed helper cannot clean up: kill what it started, and retry only once it is gone.
         const pid = request.pid;
         killGroupDirect(pid);
-        void groupsGone([pid], GROUP_GONE_WAIT_MS).then((gone) =>
-          request.handlers.lost(reason, gone),
+        void groupsGone([pid], this.options.test?.groupGoneWaitMs ?? GROUP_GONE_WAIT_MS).then(() =>
+          request.handlers.lost(reason, true),
         );
       } else {
         // Announced but no pid: the helper died while starting git, which may be running unseen.
@@ -494,6 +532,13 @@ class HelperProcess {
   private onFrame(type: number, id: number, payload: Buffer): void {
     if (type === HelperFrame.ready) {
       this.ready = true;
+      return;
+    }
+    if (type === HelperFrame.pong) {
+      if (this.probe?.id === id) {
+        clearTimeout(this.probe.timer);
+        this.probe = null;
+      }
       return;
     }
     if (type === HelperFrame.fatal) {
@@ -576,6 +621,11 @@ export class HelperPool {
 
   get available(): boolean {
     return !this.disabled && !this.closed;
+  }
+
+  /** PIDs of the in-flight git processes the helpers announced (tests, diagnostics). */
+  childPids(): number[] {
+    return this.helpers.flatMap((h) => (h && !h.dead ? h.childPids() : []));
   }
 
   /** PIDs of the running helpers (tests, diagnostics). */

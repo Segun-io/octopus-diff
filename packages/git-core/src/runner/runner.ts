@@ -39,8 +39,21 @@ export interface GitRunnerOptions {
    * whatever this says.
    */
   helper?: boolean | GitHelperOptions;
-  /** Tests only: makes a helper SIGKILL itself around a spawn (see `git-helper.ts`). */
-  helperTestCrash?: string;
+  /** Tests only (not in the contracts): helper hooks and timings. */
+  helperTest?: HelperTestOptions;
+}
+
+export interface HelperTestOptions {
+  /** `OCTOPUS_DIFF_GIT_HELPER_TEST_CRASH` for the helpers (see `git-helper.ts`). */
+  crash?: string;
+  /** The helpers report each git process's exit this much later (slow reaping under load). */
+  delayExitMs?: number;
+  /** Replaces `HELPER_EXIT_WAIT_MS`. */
+  exitWaitMs?: number;
+  /** How long a retry waits for a crashed helper's SIGKILLed groups to disappear. */
+  groupGoneWaitMs?: number;
+  /** How long a probed helper may take to answer before it is SIGKILLed. */
+  probeWaitMs?: number;
 }
 
 /** Off when `OCTOPUS_DIFF_GIT_HELPER` is `0`, `false`, `no` or `off`. */
@@ -385,7 +398,7 @@ export class GitRunner {
   private resolvedBinary: string | null = null;
   private readonly helper: HelperConfig | null;
   private pool: HelperPool | null = null;
-  private readonly helperTestCrash: string | undefined;
+  private readonly helperTest: HelperTestOptions;
 
   constructor(options: GitRunnerOptions = {}) {
     this.gitBinary = options.gitBinary ?? 'git';
@@ -400,7 +413,7 @@ export class GitRunner {
     const threshold = options.bigFileThreshold ?? defaultBigFileThreshold(this.maxOutputBytes);
     this.extraPins = ['-c', `core.bigFileThreshold=${Math.floor(threshold)}`];
     this.helper = helperConfig(options.helper, concurrency, this.logger);
-    this.helperTestCrash = options.helperTestCrash;
+    this.helperTest = options.helperTest ?? {};
   }
 
   private readonly extraPins: readonly string[];
@@ -629,7 +642,7 @@ export class GitRunner {
         if (watchdog || !proc.abandon) return;
         watchdog = setTimeout(() => {
           if (!exited) proc.abandon?.();
-        }, HELPER_EXIT_WAIT_MS);
+        }, this.helperTest.exitWaitMs ?? HELPER_EXIT_WAIT_MS);
         watchdog.unref();
       };
       const fail = (error: GitCoreError): void => {
@@ -734,7 +747,7 @@ export class GitRunner {
         processes: this.helper.processes,
         logger: this.logger,
         ...(this.helper.execPath ? { execPath: this.helper.execPath } : {}),
-        ...(this.helperTestCrash ? { testCrash: this.helperTestCrash } : {}),
+        test: this.helperTest,
       });
     }
     return this.pool.available ? this.pool : null;
@@ -743,6 +756,11 @@ export class GitRunner {
   /** Whether git processes go through the spawn helper (#45) right now. */
   get usesHelper(): boolean {
     return this.helper !== null && (this.pool?.available ?? true);
+  }
+
+  /** PIDs of the git processes the helpers told this process about (tests and diagnostics). */
+  helperChildPids(): number[] {
+    return this.pool?.childPids() ?? [];
   }
 
   /** PIDs of the running helper processes (tests and diagnostics). */

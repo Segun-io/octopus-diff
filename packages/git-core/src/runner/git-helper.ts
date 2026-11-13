@@ -18,8 +18,8 @@
  *
  * Requests: SPAWN (JSON), STDIN (bytes, within the credit granted), STDIN_END, KILL (1 byte:
  * 1 SIGTERM, 2 SIGKILL; the request's process group), DETACH (stop forwarding output, close the
- * pipes). Events: READY, SPAWNED (u32 pid), STDOUT / STDERR (bytes, never decoded), EXIT / CLOSE /
- * ERROR (JSON), TOO_LARGE, REJECTED (JSON reason), FATAL (JSON reason), STDIN_CREDIT (u32). The
+ * pipes), PING. Events: READY, SPAWNED (u32 pid), STDOUT / STDERR (bytes, never decoded), EXIT / CLOSE /
+ * ERROR (JSON), TOO_LARGE, REJECTED (JSON reason), FATAL (JSON reason), STDIN_CREDIT (u32), PONG. The
  * pid of every git process also goes, synchronously, to the pid channel on fd 3 (`PID_FD`). A frame that is not exactly this shape
  * is fatal: the helper kills every process it started and exits. A SPAWN whose JSON is not exactly
  * the request shape is refused (REJECTED) and nothing runs.
@@ -53,6 +53,8 @@ const REQ_STDIN = 2;
 const REQ_STDIN_END = 3;
 const REQ_KILL = 4;
 const REQ_DETACH = 5;
+/** Liveness probe: answered with PONG (same id) as soon as this process's event loop runs. */
+const REQ_PING = 6;
 
 const EV_READY = 16;
 const EV_SPAWNED = 17;
@@ -66,6 +68,7 @@ const EV_REJECTED = 24;
 const EV_FATAL = 25;
 /** u32: more stdin bytes the parent may send for this request (flow control). */
 const EV_STDIN_CREDIT = 26;
+const EV_PONG = 27;
 
 /** stdin bytes a request may have in flight between the parent and git. */
 const STDIN_WINDOW = 256 * 1024;
@@ -168,6 +171,14 @@ let shuttingDown = false;
 const TEST_CRASH = /^(before-spawn|after-spawn|throw-after-spawn):(.+)$/.exec(
   process.env.OCTOPUS_DIFF_GIT_HELPER_TEST_CRASH ?? '',
 );
+
+/** Test hook: report each git process's exit (EXIT and CLOSE) this many ms late (slow reaping). */
+const TEST_DELAY_EXIT_MS = Number(process.env.OCTOPUS_DIFF_GIT_HELPER_TEST_DELAY_EXIT_MS ?? 0) || 0;
+
+function later(fn: () => void): void {
+  if (TEST_DELAY_EXIT_MS > 0) setTimeout(fn, TEST_DELAY_EXIT_MS);
+  else fn();
+}
 
 function testCrash(at: 'before-spawn' | 'after-spawn'): void {
   if (TEST_CRASH?.[1] === 'throw-after-spawn' && at === 'after-spawn') {
@@ -415,19 +426,21 @@ function startGit(id: number, payload: Buffer): void {
     entry.stderrBytes += chunk.length;
     sendBytes(EV_STDERR, id, chunk);
   });
-  child.once('exit', (code, signal) => sendJson(EV_EXIT, id, { code, signal }));
+  child.once('exit', (code, signal) => later(() => sendJson(EV_EXIT, id, { code, signal })));
   child.on('error', (error: NodeJS.ErrnoException) => {
     sendJson(EV_ERROR, id, { code: error.code ?? null, message: error.message });
   });
-  child.once('close', (code, signal) => {
-    entry.closed = true;
-    running -= 1;
-    sendJson(EV_CLOSE, id, { code, signal });
-    // The group stays killable a little longer (a trusted filter that ignored SIGTERM).
-    setTimeout(() => {
-      if (entries.get(id) === entry) entries.delete(id);
-    }, CLOSED_TTL_MS).unref();
-  });
+  child.once('close', (code, signal) =>
+    later(() => {
+      entry.closed = true;
+      running -= 1;
+      sendJson(EV_CLOSE, id, { code, signal });
+      // The group stays killable a little longer (a trusted filter that ignored SIGTERM).
+      setTimeout(() => {
+        if (entries.get(id) === entry) entries.delete(id);
+      }, CLOSED_TTL_MS).unref();
+    }),
+  );
 }
 
 function onFrame(type: number, id: number, payload: Buffer): void {
@@ -465,6 +478,10 @@ function onFrame(type: number, id: number, payload: Buffer): void {
       if (entry) killGroup(entry, payload[0] === 1 ? 'SIGTERM' : 'SIGKILL');
       return;
     }
+    case REQ_PING:
+      if (payload.length !== 0) fatal('PING has a payload');
+      send(EV_PONG, id);
+      return;
     case REQ_DETACH: {
       if (payload.length !== 0) fatal('DETACH has a payload');
       const entry = entries.get(id);

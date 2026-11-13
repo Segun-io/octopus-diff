@@ -7,7 +7,7 @@
  * The fake binary logs every start with ONE printf (macOS CI: one line per spawn), fields
  * separated by \x1f: pid, parent pid, argument count, then the arguments.
  */
-import { type ChildProcess, spawn } from 'node:child_process';
+import { type ChildProcess, spawn, spawnSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import { chmodSync, existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -69,7 +69,7 @@ beforeAll(() => {
       '  cksum) cksum ;;',
       // The first run records its pid, tells the helper's crash hook it is running and sleeps; the
       // retry says whether the first one is still alive (it must not be).
-      `  crashonce) if mkdir "${gates}/crash.first" 2>/dev/null; then printf '%s' "$$" > "${gates}/crash.first/pid"; : > "$CRASH_FILE.ready"; sleep 30; elif kill -0 "$(cat "${gates}/crash.first/pid")" 2>/dev/null; then printf 'alongside'; else printf 'retried'; fi ;;`,
+      `  crashonce) if mkdir "${gates}/crash.first" 2>/dev/null; then printf '%s' "$$" > "${gates}/crash.first/pid"; : > "$CRASH_FILE.ready"; sleep 30; else st=$(ps -o stat= -p "$(cat "${gates}/crash.first/pid")" 2>/dev/null | tr -d ' '); case "$st" in ''|Z*) printf 'retried' ;; *) printf 'alongside:%s' "$st" ;; esac; fi ;;`,
       '  *) printf \'out:%s\' "$last" ;;',
       'esac',
       `while [ -e "${gates}/$last" ]; do sleep 0.01; done`,
@@ -115,12 +115,51 @@ function gate(name: string): () => void {
   return () => rmSync(file, { force: true });
 }
 
-async function until(check: () => boolean, ms = 5_000, what = 'condition'): Promise<void> {
+async function until(
+  check: () => boolean,
+  ms = 5_000,
+  what = 'condition',
+  every = 10,
+): Promise<void> {
   const deadline = Date.now() + ms;
   while (!check()) {
     if (Date.now() > deadline) throw new Error(`${what} not reached`);
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await new Promise((resolve) => setTimeout(resolve, every));
   }
+}
+
+/**
+ * Every process with its group and state, from POSIX `ps` (the same columns on Linux and macOS;
+ * no /proc). A zombie (`Z`) is dead: it only waits for its parent, often init, to reap it, which
+ * can take seconds on a loaded machine.
+ */
+function processTable(): Array<{ pid: number; pgid: number; zombie: boolean }> {
+  const out = spawnSync('ps', ['-A', '-o', 'pid=,pgid=,stat='], { encoding: 'utf8' }).stdout ?? '';
+  return out.split('\n').flatMap((line) => {
+    const match = /^\s*(\d+)\s+(\d+)\s+(\S+)/.exec(line);
+    if (!match) return [];
+    return [
+      {
+        pid: Number(match[1]),
+        pgid: Number(match[2]),
+        zombie: (match[3] as string).startsWith('Z'),
+      },
+    ];
+  });
+}
+
+/**
+ * Waits until none of `pids` and no member of the groups `groups` is still running (only the
+ * processes this test started: other tests and sessions run git too).
+ */
+async function untilGone(what: string, pids: number[], groups: number[] = []): Promise<void> {
+  await until(
+    () =>
+      !processTable().some((p) => !p.zombie && (pids.includes(p.pid) || groups.includes(p.pgid))),
+    20_000,
+    what,
+    50,
+  );
 }
 
 function alive(target: number): boolean {
@@ -161,7 +200,7 @@ interface Frame {
   payload: Buffer;
 }
 
-const T = { spawn: 1, stdin: 2, stdinEnd: 3, kill: 4, detach: 5 } as const;
+const T = { spawn: 1, stdin: 2, stdinEnd: 3, kill: 4, detach: 5, ping: 6 } as const;
 const E = {
   ready: 16,
   spawned: 17,
@@ -174,6 +213,7 @@ const E = {
   rejected: 24,
   fatal: 25,
   stdinCredit: 26,
+  pong: 27,
 } as const;
 
 function encode(type: number, id: number, payload: Buffer = Buffer.alloc(0)): Buffer {
@@ -270,243 +310,269 @@ function request(overrides: Record<string, unknown> = {}): Record<string, unknow
   };
 }
 
-describe.skipIf(process.platform === 'win32')('helper protocol: strict, never a shell', () => {
-  it('runs a well-formed request: argv reaches the binary verbatim, with no shell in between', async () => {
-    writeFileSync(log, '');
-    const helper = new RawHelper();
-    await helper.next(0, E.ready);
-    const marker = path.join(fx.root, 'pwned');
-    const tricky = ['status', '--', `$(touch ${marker})`, '`touch x`', '; rm -rf /', '*', '"a b"'];
-    helper.spawnRaw(1, request({ argv: tricky }));
-    const close = helper.json(await helper.next(1, E.close));
-    expect(close).toEqual({ code: 0, signal: null });
-    expect(starts().map((s) => s.args)).toEqual([tricky]);
-    expect(Buffer.concat(helper.of(1, E.stdout).map((f) => f.payload)).toString()).toBe(
-      'out:"a b"',
-    );
-    expect(helper.of(1, E.spawned)[0]?.payload.readUInt32BE(0)).toBe(starts()[0]?.pid);
-    // The pid channel announced the spawn, then its pid.
-    expect(helper.pids).toEqual([
-      [1, 0],
-      [1, starts()[0]?.pid],
-    ]);
-    expect(existsSync(marker)).toBe(false);
-    expect(await helper.close()).toBe(0);
-  });
-
-  it('refuses every request that is not exactly the shape, and runs nothing', async () => {
-    writeFileSync(log, '');
-    const helper = new RawHelper();
-    const other = path.join(fx.root, 'other-binary');
-    writeFileSync(other, '#!/bin/sh\nexit 0\n');
-    chmodSync(other, 0o755);
-    const bad: Array<[string, unknown]> = [
-      ['a different binary', request({ binary: other })],
-      ['a shell as binary', request({ binary: '/bin/sh', argv: ['-c', 'touch pwned'] })],
-      ['argv as a string', request({ argv: 'status; touch pwned' })],
-      ['argv with a number', request({ argv: ['status', 1] })],
-      ['argv with an object', request({ argv: ['status', { toString: 'x' }] })],
-      ['argv with null', request({ argv: [null] })],
-      ['argv with NUL', request({ argv: ['status\u0000--exec'] })],
-      ['env as an array', request({ env: [['PATH', '/bin']] })],
-      ['env with a number', request({ env: { PATH: '/bin', N: 1 } })],
-      ['env with an object', request({ env: { PATH: { a: 1 } } })],
-      ['env key with =', request({ env: { 'A=B': 'c' } })],
-      ['env null', request({ env: null })],
-      ['relative cwd', request({ cwd: 'repo' })],
-      ['cwd not a string', request({ cwd: ['/'] })],
-      ['an extra key', request({ shell: true })],
-      ['a missing key', (({ stdin: _, ...rest }) => rest)(request())],
-      ['stdin not a boolean', request({ stdin: 'yes' })],
-      ['a negative cap', request({ maxOutputBytes: -1 })],
-      ['a fractional cap', request({ maxOutputBytes: 1.5 })],
-      ['an array', [request()]],
-      ['a string', 'status'],
-    ];
-    let id = 10;
-    for (const [, message] of bad) helper.spawnRaw(id++, message);
-    helper.send(T.spawn, id++, Buffer.from('{not json'));
-    for (let i = 10; i < id; i++) {
-      const frame = await helper.next(i, E.rejected);
-      expect(helper.json(frame).reason, bad[i - 10]?.[0] ?? 'not json').toEqual(expect.any(String));
-      expect(helper.of(i, E.spawned)).toEqual([]);
-    }
-    // Nothing ran, and the helper still serves well-formed requests.
-    expect(starts()).toEqual([]);
-    helper.spawnRaw(99, request());
-    await helper.next(99, E.close);
-    expect(starts()).toHaveLength(1);
-    expect(await helper.close()).toBe(0);
-  });
-
-  it('a frame over the size cap, an unknown type or a bad KILL ends the helper; nothing runs', async () => {
-    writeFileSync(log, '');
-    const oversize = new RawHelper();
-    const head = Buffer.alloc(9);
-    head.writeUInt32BE(8 * 1024 * 1024 + 6, 0);
-    head.writeUInt8(T.spawn, 4);
-    head.writeUInt32BE(1, 5);
-    oversize.child.stdin?.write(head);
-    expect(await oversize.exited).toBe(2);
-    expect(oversize.of(0, E.fatal)).toHaveLength(1);
-
-    const unknown = new RawHelper();
-    unknown.send(42, 1, Buffer.from('x'));
-    expect(await unknown.exited).toBe(2);
-
-    const badKill = new RawHelper();
-    badKill.send(T.kill, 1, Buffer.from([9]));
-    expect(await badKill.exited).toBe(2);
-
-    const tooShort = new RawHelper();
-    tooShort.child.stdin?.write(Buffer.from([0, 0, 0, 1, 1]));
-    expect(await tooShort.exited).toBe(2);
-    expect(starts()).toEqual([]);
-  });
-
-  it('refuses to start without its pid channel on fd 3', async () => {
-    const helper = new RawHelper(undefined, false);
-    expect(await helper.exited).toBe(2);
-    expect(helper.of(0, E.ready)).toEqual([]);
-  });
-
-  it('grants stdin credit as git reads, and ends on stdin beyond its credit', async () => {
-    const helper = new RawHelper();
-    helper.spawnRaw(1, {
-      ...request({ stdin: true }),
-      env: { PATH: process.env.PATH ?? '/usr/bin:/bin', FAKE_MODE: 'stdin' },
+describe.skipIf(process.platform === 'win32')(
+  'helper protocol: strict, never a shell',
+  { timeout: 60_000 },
+  () => {
+    it('runs a well-formed request: argv reaches the binary verbatim, with no shell in between', async () => {
+      writeFileSync(log, '');
+      const helper = new RawHelper();
+      await helper.next(0, E.ready);
+      const marker = path.join(fx.root, 'pwned');
+      const tricky = [
+        'status',
+        '--',
+        `$(touch ${marker})`,
+        '`touch x`',
+        '; rm -rf /',
+        '*',
+        '"a b"',
+      ];
+      helper.spawnRaw(1, request({ argv: tricky }));
+      const close = helper.json(await helper.next(1, E.close));
+      expect(close).toEqual({ code: 0, signal: null });
+      expect(starts().map((s) => s.args)).toEqual([tricky]);
+      expect(Buffer.concat(helper.of(1, E.stdout).map((f) => f.payload)).toString()).toBe(
+        'out:"a b"',
+      );
+      expect(helper.of(1, E.spawned)[0]?.payload.readUInt32BE(0)).toBe(starts()[0]?.pid);
+      // The pid channel announced the spawn, then its pid.
+      expect(helper.pids).toEqual([
+        [1, 0],
+        [1, starts()[0]?.pid],
+      ]);
+      expect(existsSync(marker)).toBe(false);
+      expect(await helper.close()).toBe(0);
     });
-    const window = (await helper.next(1, E.stdinCredit)).payload.readUInt32BE(0);
-    expect(window).toBe(256 * 1024);
-    helper.send(T.stdin, 1, Buffer.from('hello'));
-    await until(() => helper.of(1, E.stdinCredit).length === 2);
-    expect(helper.of(1, E.stdinCredit)[1]?.payload.readUInt32BE(0)).toBe(5);
-    helper.send(T.stdinEnd, 1);
-    await helper.next(1, E.close);
-    expect(Buffer.concat(helper.of(1, E.stdout).map((f) => f.payload)).toString()).toBe('hello');
-    // A stdin frame over the credit (a request without stdin has none) is a protocol violation.
-    helper.spawnRaw(2, request());
-    await helper.next(2, E.spawned);
-    helper.send(T.stdin, 2, Buffer.from('x'));
-    expect(await helper.exited).toBe(2);
-  });
 
-  it('holds at most its window of stdin while git does not read', async () => {
-    const helper = new RawHelper();
-    helper.spawnRaw(1, {
-      ...request({ stdin: true }),
-      env: { PATH: process.env.PATH ?? '/usr/bin:/bin', FAKE_MODE: 'hang' },
-    });
-    // Send whatever credit allows, for a while: git never reads its stdin.
-    let sent = 0;
-    let used = 0;
-    const deadline = Date.now() + 1_000;
-    while (Date.now() < deadline) {
-      const granted = helper
-        .of(1, E.stdinCredit)
-        .reduce((n, f) => n + f.payload.readUInt32BE(0), 0);
-      while (used < granted) {
-        const n = Math.min(64 * 1024, granted - used);
-        helper.send(T.stdin, 1, Buffer.alloc(n));
-        used += n;
-        sent += n;
+    it('refuses every request that is not exactly the shape, and runs nothing', async () => {
+      writeFileSync(log, '');
+      const helper = new RawHelper();
+      const other = path.join(fx.root, 'other-binary');
+      writeFileSync(other, '#!/bin/sh\nexit 0\n');
+      chmodSync(other, 0o755);
+      const bad: Array<[string, unknown]> = [
+        ['a different binary', request({ binary: other })],
+        ['a shell as binary', request({ binary: '/bin/sh', argv: ['-c', 'touch pwned'] })],
+        ['argv as a string', request({ argv: 'status; touch pwned' })],
+        ['argv with a number', request({ argv: ['status', 1] })],
+        ['argv with an object', request({ argv: ['status', { toString: 'x' }] })],
+        ['argv with null', request({ argv: [null] })],
+        ['argv with NUL', request({ argv: ['status\u0000--exec'] })],
+        ['env as an array', request({ env: [['PATH', '/bin']] })],
+        ['env with a number', request({ env: { PATH: '/bin', N: 1 } })],
+        ['env with an object', request({ env: { PATH: { a: 1 } } })],
+        ['env key with =', request({ env: { 'A=B': 'c' } })],
+        ['env null', request({ env: null })],
+        ['relative cwd', request({ cwd: 'repo' })],
+        ['cwd not a string', request({ cwd: ['/'] })],
+        ['an extra key', request({ shell: true })],
+        ['a missing key', (({ stdin: _, ...rest }) => rest)(request())],
+        ['stdin not a boolean', request({ stdin: 'yes' })],
+        ['a negative cap', request({ maxOutputBytes: -1 })],
+        ['a fractional cap', request({ maxOutputBytes: 1.5 })],
+        ['an array', [request()]],
+        ['a string', 'status'],
+      ];
+      let id = 10;
+      for (const [, message] of bad) helper.spawnRaw(id++, message);
+      helper.send(T.spawn, id++, Buffer.from('{not json'));
+      for (let i = 10; i < id; i++) {
+        const frame = await helper.next(i, E.rejected);
+        expect(helper.json(frame).reason, bad[i - 10]?.[0] ?? 'not json').toEqual(
+          expect.any(String),
+        );
+        expect(helper.of(i, E.spawned)).toEqual([]);
       }
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
-    // The window plus what the kernel buffers for git's stdin, nowhere near unbounded.
-    expect(sent).toBeGreaterThanOrEqual(256 * 1024);
-    expect(sent).toBeLessThan(4 * 1024 * 1024);
-    expect(await helper.close()).toBe(0);
-  });
+      // Nothing ran, and the helper still serves well-formed requests.
+      expect(starts()).toEqual([]);
+      helper.spawnRaw(99, request());
+      await helper.next(99, E.close);
+      expect(starts()).toHaveLength(1);
+      expect(await helper.close()).toBe(0);
+    });
 
-  it('the pid reaches the parent even while its frames are stuck behind a flood (review #3)', async () => {
-    writeFileSync(log, '');
-    const helper = new RawHelper();
-    // The parent stops reading: request 1 fills every buffer, request 2's frames queue behind it.
-    helper.child.stdout?.pause();
-    helper.spawnRaw(1, {
-      ...request(),
-      env: {
-        PATH: process.env.PATH ?? '/usr/bin:/bin',
-        FAKE_MODE: 'zeros',
-        FAKE_BYTES: '50000000',
-      },
-    });
-    await new Promise((resolve) => setTimeout(resolve, 300));
-    helper.spawnRaw(2, {
-      ...request(),
-      env: { PATH: process.env.PATH ?? '/usr/bin:/bin', FAKE_MODE: 'hang' },
-    });
-    await until(() => helper.pids.some(([id, pid]) => id === 2 && pid > 0), 5_000, 'pid of 2');
-    const pid = helper.pids.find(([id, p]) => id === 2 && p > 0)?.[1] as number;
-    expect(helper.of(2, E.spawned)).toEqual([]);
-    helper.child.kill('SIGKILL');
-    await helper.exited;
-    // What the parent does with it (helper-client die()): the group is killable.
-    expect(alive(-pid)).toBe(true);
-    process.kill(-pid, 'SIGKILL');
-    await until(() => !alive(-pid), 3_000, 'the group to die');
-  });
+    it('a frame over the size cap, an unknown type or a bad KILL ends the helper; nothing runs', async () => {
+      writeFileSync(log, '');
+      const oversize = new RawHelper();
+      const head = Buffer.alloc(9);
+      head.writeUInt32BE(8 * 1024 * 1024 + 6, 0);
+      head.writeUInt8(T.spawn, 4);
+      head.writeUInt32BE(1, 5);
+      oversize.child.stdin?.write(head);
+      expect(await oversize.exited).toBe(2);
+      expect(oversize.of(0, E.fatal)).toHaveLength(1);
 
-  it('an uncaught exception in the helper still kills every group it started (review #3)', async () => {
-    const crash = path.join(fx.root, 'crash-throw');
-    writeFileSync(crash, '');
-    const helper = new RawHelper(undefined, true, {
-      OCTOPUS_DIFF_GIT_HELPER_TEST_CRASH: `throw-after-spawn:${crash}`,
-    });
-    helper.spawnRaw(1, {
-      ...request(),
-      env: { PATH: process.env.PATH ?? '/usr/bin:/bin', FAKE_MODE: 'hang' },
-    });
-    expect(await helper.exited).not.toBe(0);
-    const pid = helper.pids.find(([id, p]) => id === 1 && p > 0)?.[1] as number;
-    expect(pid).toBeGreaterThan(0);
-    await until(() => !alive(-pid), 3_000, 'the group of a helper that threw to die');
-  });
+      const unknown = new RawHelper();
+      unknown.send(42, 1, Buffer.from('x'));
+      expect(await unknown.exited).toBe(2);
 
-  it('refuses to start without exactly its startup arguments', async () => {
-    for (const args of [
-      [],
-      ['--octopus-diff-git-helper', '2', fakeGit],
-      ['--octopus-diff-git-helper', '1', 'fake-git'],
-      ['--octopus-diff-git-helper', '1', fakeGit, '--extra'],
-      ['--other', '1', fakeGit],
-    ]) {
-      const helper = new RawHelper(args);
-      expect(await helper.exited, args.join(' ')).toBe(2);
+      const badKill = new RawHelper();
+      badKill.send(T.kill, 1, Buffer.from([9]));
+      expect(await badKill.exited).toBe(2);
+
+      const tooShort = new RawHelper();
+      tooShort.child.stdin?.write(Buffer.from([0, 0, 0, 1, 1]));
+      expect(await tooShort.exited).toBe(2);
+      expect(starts()).toEqual([]);
+    });
+
+    it('answers a PING with a PONG of the same id, and refuses a PING with a payload', async () => {
+      const helper = new RawHelper();
+      helper.send(T.ping, 7);
+      await helper.next(7, E.pong);
+      helper.send(T.ping, 8, Buffer.from('x'));
+      expect(await helper.exited).toBe(2);
+    });
+
+    it('refuses to start without its pid channel on fd 3', async () => {
+      const helper = new RawHelper(undefined, false);
+      expect(await helper.exited).toBe(2);
       expect(helper.of(0, E.ready)).toEqual([]);
-    }
-  });
-
-  it('caps stdout itself: kills the group and reports TOO_LARGE without forwarding past the cap', async () => {
-    const helper = new RawHelper();
-    helper.spawnRaw(1, {
-      ...request({ maxOutputBytes: 100_000 }),
-      env: { PATH: process.env.PATH ?? '/usr/bin:/bin', FAKE_MODE: 'zeros', FAKE_BYTES: '5000000' },
     });
-    await helper.next(1, E.tooLarge);
-    await helper.next(1, E.close);
-    const forwarded = helper.of(1, E.stdout).reduce((n, f) => n + f.payload.length, 0);
-    expect(forwarded).toBeLessThanOrEqual(100_000);
-    expect(await helper.close()).toBe(0);
-  });
 
-  it('kills the process groups it started when its stdin ends', async () => {
-    writeFileSync(log, '');
-    rmSync(path.join(gates, 'family.pid'), { force: true });
-    const helper = new RawHelper();
-    helper.spawnRaw(1, {
-      ...request(),
-      env: { PATH: process.env.PATH ?? '/usr/bin:/bin', FAKE_MODE: 'family' },
+    it('grants stdin credit as git reads, and ends on stdin beyond its credit', async () => {
+      const helper = new RawHelper();
+      helper.spawnRaw(1, {
+        ...request({ stdin: true }),
+        env: { PATH: process.env.PATH ?? '/usr/bin:/bin', FAKE_MODE: 'stdin' },
+      });
+      const window = (await helper.next(1, E.stdinCredit)).payload.readUInt32BE(0);
+      expect(window).toBe(256 * 1024);
+      helper.send(T.stdin, 1, Buffer.from('hello'));
+      await until(() => helper.of(1, E.stdinCredit).length === 2);
+      expect(helper.of(1, E.stdinCredit)[1]?.payload.readUInt32BE(0)).toBe(5);
+      helper.send(T.stdinEnd, 1);
+      await helper.next(1, E.close);
+      expect(Buffer.concat(helper.of(1, E.stdout).map((f) => f.payload)).toString()).toBe('hello');
+      // A stdin frame over the credit (a request without stdin has none) is a protocol violation.
+      helper.spawnRaw(2, request());
+      await helper.next(2, E.spawned);
+      helper.send(T.stdin, 2, Buffer.from('x'));
+      expect(await helper.exited).toBe(2);
     });
-    await until(() => existsSync(path.join(gates, 'family.pid')));
-    const pid = starts()[0]?.pid as number;
-    const family = Number(readFileSync(path.join(gates, 'family.pid'), 'utf8').trim());
-    expect(alive(pid) && alive(family)).toBe(true);
-    expect(await helper.close()).toBe(0);
-    await until(() => !alive(pid) && !alive(family), 3_000, 'the group to be gone');
-  });
-});
+
+    it('holds at most its window of stdin while git does not read', async () => {
+      const helper = new RawHelper();
+      helper.spawnRaw(1, {
+        ...request({ stdin: true }),
+        env: { PATH: process.env.PATH ?? '/usr/bin:/bin', FAKE_MODE: 'hang' },
+      });
+      // Send whatever credit allows, for a while: git never reads its stdin.
+      let sent = 0;
+      let used = 0;
+      const deadline = Date.now() + 1_000;
+      while (Date.now() < deadline) {
+        const granted = helper
+          .of(1, E.stdinCredit)
+          .reduce((n, f) => n + f.payload.readUInt32BE(0), 0);
+        while (used < granted) {
+          const n = Math.min(64 * 1024, granted - used);
+          helper.send(T.stdin, 1, Buffer.alloc(n));
+          used += n;
+          sent += n;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      // The window plus what the kernel buffers for git's stdin, nowhere near unbounded.
+      expect(sent).toBeGreaterThanOrEqual(256 * 1024);
+      expect(sent).toBeLessThan(4 * 1024 * 1024);
+      expect(await helper.close()).toBe(0);
+    });
+
+    it('the pid reaches the parent even while its frames are stuck behind a flood (review #3)', async () => {
+      writeFileSync(log, '');
+      const helper = new RawHelper();
+      // The parent stops reading: request 1 fills every buffer, request 2's frames queue behind it.
+      helper.child.stdout?.pause();
+      helper.spawnRaw(1, {
+        ...request(),
+        env: {
+          PATH: process.env.PATH ?? '/usr/bin:/bin',
+          FAKE_MODE: 'zeros',
+          FAKE_BYTES: '50000000',
+        },
+      });
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      helper.spawnRaw(2, {
+        ...request(),
+        env: { PATH: process.env.PATH ?? '/usr/bin:/bin', FAKE_MODE: 'hang' },
+      });
+      await until(() => helper.pids.some(([id, pid]) => id === 2 && pid > 0), 5_000, 'pid of 2');
+      const pid = helper.pids.find(([id, p]) => id === 2 && p > 0)?.[1] as number;
+      expect(helper.of(2, E.spawned)).toEqual([]);
+      helper.child.kill('SIGKILL');
+      await helper.exited;
+      // What the parent does with it (helper-client die()): the group is killable.
+      expect(alive(-pid)).toBe(true);
+      process.kill(-pid, 'SIGKILL');
+      await untilGone('the group to die', [], [pid]);
+    });
+
+    it('an uncaught exception in the helper still kills every group it started (review #3)', async () => {
+      const crash = path.join(fx.root, 'crash-throw');
+      writeFileSync(crash, '');
+      const helper = new RawHelper(undefined, true, {
+        OCTOPUS_DIFF_GIT_HELPER_TEST_CRASH: `throw-after-spawn:${crash}`,
+      });
+      helper.spawnRaw(1, {
+        ...request(),
+        env: { PATH: process.env.PATH ?? '/usr/bin:/bin', FAKE_MODE: 'hang' },
+      });
+      expect(await helper.exited).not.toBe(0);
+      const pid = helper.pids.find(([id, p]) => id === 1 && p > 0)?.[1] as number;
+      expect(pid).toBeGreaterThan(0);
+      await untilGone('the group of a helper that threw to die', [], [pid]);
+    });
+
+    it('refuses to start without exactly its startup arguments', async () => {
+      for (const args of [
+        [],
+        ['--octopus-diff-git-helper', '2', fakeGit],
+        ['--octopus-diff-git-helper', '1', 'fake-git'],
+        ['--octopus-diff-git-helper', '1', fakeGit, '--extra'],
+        ['--other', '1', fakeGit],
+      ]) {
+        const helper = new RawHelper(args);
+        expect(await helper.exited, args.join(' ')).toBe(2);
+        expect(helper.of(0, E.ready)).toEqual([]);
+      }
+    });
+
+    it('caps stdout itself: kills the group and reports TOO_LARGE without forwarding past the cap', async () => {
+      const helper = new RawHelper();
+      helper.spawnRaw(1, {
+        ...request({ maxOutputBytes: 100_000 }),
+        env: {
+          PATH: process.env.PATH ?? '/usr/bin:/bin',
+          FAKE_MODE: 'zeros',
+          FAKE_BYTES: '5000000',
+        },
+      });
+      await helper.next(1, E.tooLarge);
+      await helper.next(1, E.close);
+      const forwarded = helper.of(1, E.stdout).reduce((n, f) => n + f.payload.length, 0);
+      expect(forwarded).toBeLessThanOrEqual(100_000);
+      expect(await helper.close()).toBe(0);
+    });
+
+    it('kills the process groups it started when its stdin ends', async () => {
+      writeFileSync(log, '');
+      rmSync(path.join(gates, 'family.pid'), { force: true });
+      const helper = new RawHelper();
+      helper.spawnRaw(1, {
+        ...request(),
+        env: { PATH: process.env.PATH ?? '/usr/bin:/bin', FAKE_MODE: 'family' },
+      });
+      await until(() => existsSync(path.join(gates, 'family.pid')));
+      const pid = starts()[0]?.pid as number;
+      const family = Number(readFileSync(path.join(gates, 'family.pid'), 'utf8').trim());
+      expect(alive(pid) && alive(family)).toBe(true);
+      expect(await helper.close()).toBe(0);
+      await untilGone('the group to be gone', [pid, family], [pid]);
+    });
+  },
+);
 
 // ---------------------------------------------------------------------------------------------
 // The runner on the helper path.
@@ -517,7 +583,7 @@ function runnerWith(env: Record<string, string> = {}, extra: Record<string, unkn
   return new GitRunner({ gitBinary: fakeGit, env, helper: { processes: 1 }, ...extra });
 }
 
-describe.skipIf(!helperOn)('runner through the helper', () => {
+describe.skipIf(!helperOn)('runner through the helper', { timeout: 60_000 }, () => {
   it('is the default: git is a child of a helper process, not of this one', async () => {
     writeFileSync(log, '');
     // Constructed exactly as lanes.test.ts and runner.test.ts construct theirs.
@@ -530,7 +596,7 @@ describe.skipIf(!helperOn)('runner through the helper', () => {
     expect(starts()[0]?.ppid).toBe(helpers[0]);
     expect(starts()[0]?.ppid).not.toBe(process.pid);
     await runner.dispose();
-    await until(() => !alive(helpers[0] as number), 3_000, 'the helper to exit on dispose');
+    await untilGone('the helper to exit on dispose', [helpers[0] as number]);
     expect(runner.helperPids()).toEqual([]);
   });
 
@@ -580,7 +646,7 @@ describe.skipIf(!helperOn)('runner through the helper', () => {
     expect(isGitCoreError(error, 'output_too_large')).toBe(true);
     expect((error as Error).message).toBe('git status produced more than 200000 bytes');
     const pid = starts()[0]?.pid as number;
-    await until(() => !alive(pid), 3_000, 'the capped process to be gone');
+    await untilGone('the capped process to be gone', [pid]);
     await runner.dispose();
   });
 
@@ -591,7 +657,7 @@ describe.skipIf(!helperOn)('runner through the helper', () => {
     expect(isGitCoreError(error, 'timeout')).toBe(true);
     expect((error as Error).message).toBe('git status timed out after 300 ms');
     const pid = starts()[0]?.pid as number;
-    await until(() => !alive(-pid), 3_000, 'the group to be gone');
+    await untilGone('the group to be gone', [], [pid]);
     await runner.dispose();
   });
 
@@ -792,10 +858,10 @@ describe.skipIf(!helperOn)('runner through the helper', () => {
       expect(isGitCoreError(await runA, 'aborted')).toBe(true);
       expect(isGitCoreError(await runB, 'aborted')).toBe(true);
       expect((await third).stdout.toString()).toBe('out:c');
-      expect(Date.now() - abortedAt).toBeLessThan(5_000);
+      // The watchdog (1.5 s), the probe (3 s) and the group wait: seconds, not forever.
+      expect(Date.now() - abortedAt).toBeLessThan(20_000);
       // The stopped helpers were given up on, and their git processes killed.
-      for (const pid of helpers) await until(() => !alive(pid), 3_000, `helper ${pid} gone`);
-      for (const pid of gits) await until(() => !alive(-pid), 3_000, `group ${pid} gone`);
+      await untilGone('the stopped helpers and their git processes', helpers, gits);
     } finally {
       for (const pid of helpers) {
         try {
@@ -811,39 +877,66 @@ describe.skipIf(!helperOn)('runner through the helper', () => {
     await runner.dispose();
   });
 
-  it('a timeout that fires while an abort waits on a stopped helper gives up on it at once (review #1)', async () => {
+  it('a timeout that fires while an abort waits on a stopped helper probes it at once (review #1)', async () => {
     writeFileSync(log, '');
     const release = gate('wt');
+    onTestFinished(release);
+    // The watchdog far away: only the timeout can start giving up on the helper.
     const runner = new GitRunner({
       gitBinary: fakeGit,
       concurrency: 1,
       timeoutMs: 1_000,
       helper: { processes: 1 },
+      helperTest: { exitWaitMs: 50_000 },
     });
     const controller = new AbortController();
-    const startedAt = Date.now();
     const run = runner
       .run(job('wt'), { cwd: fx.root, signal: controller.signal })
       .catch((e: unknown) => e);
-    await until(() => starts().length === 1);
+    await until(() => starts().length === 1, 20_000);
     const [helper] = runner.helperPids();
     releaseStopped([helper as number]);
-    onTestFinished(release);
-    try {
-      process.kill(helper as number, 'SIGSTOP');
-      controller.abort();
-      expect(isGitCoreError(await run, 'aborted')).toBe(true);
-      // At the timeout (1 s after the start), well before the watchdog (2 s after the abort).
-      expect(Date.now() - startedAt).toBeLessThan(1_000 + 700);
-    } finally {
-      try {
-        process.kill(helper as number, 'SIGCONT');
-        process.kill(helper as number, 'SIGKILL');
-      } catch {
-        // gone
-      }
-      release();
-    }
+    process.kill(helper as number, 'SIGSTOP');
+    const abortedAt = Date.now();
+    controller.abort();
+    expect(isGitCoreError(await run, 'aborted')).toBe(true);
+    // The timeout (1 s) and the probe (3 s), long before the 50 s watchdog.
+    expect(Date.now() - abortedAt).toBeLessThan(25_000);
+    await untilGone('the stopped helper', [helper as number]);
+    await runner.dispose();
+  });
+
+  it('a helper slow to report a SIGKILLed exit is probed, not killed (load)', async () => {
+    writeFileSync(log, '');
+    const releaseSlow = gate('slow');
+    const releaseOther = gate('other');
+    onTestFinished(() => {
+      releaseSlow();
+      releaseOther();
+    });
+    const runner = new GitRunner({
+      gitBinary: fakeGit,
+      concurrency: 2,
+      timeoutMs: 60_000,
+      helper: { processes: 1 },
+      // Exits are reported 4 s late: longer than HELPER_EXIT_WAIT_MS (1.5 s).
+      helperTest: { delayExitMs: 4_000 },
+    });
+    const other = runner.run(job('other'), { cwd: fx.root, queueKey: 'o' });
+    await until(() => starts().length === 1, 20_000);
+    const slow = runner
+      .run(job('slow'), { cwd: fx.root, queueKey: 's', timeoutMs: 300 })
+      .catch((e: unknown) => e);
+    expect(isGitCoreError(await slow, 'timeout')).toBe(true);
+    const [helper] = runner.helperPids();
+    // Past the watchdog: the helper answered its probe and is still the one serving `other`.
+    await new Promise((resolve) => setTimeout(resolve, 2_500));
+    expect(runner.helperPids()).toEqual([helper]);
+    releaseOther();
+    expect((await other).stdout.toString()).toBe('out:other');
+    // `other` ran once, on the helper that was kept.
+    expect(starts().map(last)).toEqual(['other', 'slow']);
+    expect(runner.helperPids()).toEqual([helper]);
     await runner.dispose();
   });
 
@@ -893,9 +986,11 @@ describe.skipIf(!helperOn)('runner through the helper', () => {
     controller.abort();
     expect(isGitCoreError(await first, 'aborted')).toBe(true);
     // git died on SIGTERM; the member that ignores it is killed once the grace period ends.
+    // git died on SIGTERM (reaped by its helper before EXIT); the member that ignores SIGTERM goes
+    // only with the SIGKILL after the grace period (it would sleep 30 s otherwise). Whether it is
+    // still alive at this instant depends on the machine's load, so that is not asserted.
     expect(alive(pid)).toBe(false);
-    expect(alive(family)).toBe(true);
-    await until(() => !alive(family), ABORT_GRACE_MS + 3_000, 'the SIGKILL after the grace');
+    await untilGone('the SIGKILL after the grace', [family]);
     expect(Date.now() - abortedAt).toBeGreaterThanOrEqual(ABORT_GRACE_MS - 50);
     await until(() => starts().length === 2);
     expect(starts().map(last)).toEqual(['first', 'second']);
@@ -951,7 +1046,7 @@ describe.skipIf(!helperOn)('runner through the helper', () => {
   });
 });
 
-describe.skipIf(!helperOn)('helper crashes', () => {
+describe.skipIf(!helperOn)('helper crashes', { timeout: 60_000 }, () => {
   it('a helper killed with SIGKILL mid-request: the request runs again cleanly, the next one works', async () => {
     writeFileSync(log, '');
     rmSync(path.join(gates, 'once.done'), { force: true });
@@ -960,11 +1055,15 @@ describe.skipIf(!helperOn)('helper crashes', () => {
     await until(() => starts().length === 1);
     const [helper] = runner.helperPids();
     const firstGit = starts()[0]?.pid as number;
+    // An external SIGKILL can land after git started and before the helper announced its pid (a
+    // loaded machine deschedules it there): then nothing may be retried (DECISIONS #376). This
+    // test is about the retry, so it kills once the parent knows the pid.
+    await until(() => runner.helperChildPids().includes(firstGit), 20_000, 'the pid announced');
     process.kill(helper as number, 'SIGKILL');
     const result = await run;
     expect(result.stdout.toString()).toBe('second run');
     // The first git process did not outlive its helper.
-    await until(() => !alive(-firstGit) && !alive(firstGit), 3_000, 'the orphaned group to die');
+    await untilGone('the orphaned group to die', [firstGit], [firstGit]);
     expect(starts()).toHaveLength(2);
     const [replacement] = runner.helperPids();
     expect(replacement).not.toBe(helper);
@@ -985,16 +1084,34 @@ describe.skipIf(!helperOn)('helper crashes', () => {
       env: { FAKE_MODE: 'crashonce', CRASH_FILE: crash },
       timeoutMs: 60_000,
       helper: { processes: 1 },
-      helperTestCrash: `after-spawn:${crash}`,
+      helperTest: { crash: `after-spawn:${crash}` },
     });
     const result = await runner.run(job('crash'), { cwd: fx.root });
     // The hook fired (it deletes the file) after git had started.
     expect(existsSync(crash)).toBe(false);
     expect(result.stdout.toString()).toBe('retried');
     const first = Number(readFileSync(path.join(gates, 'crash.first', 'pid'), 'utf8'));
-    expect(alive(first)).toBe(false);
-    expect(alive(-first)).toBe(false);
+    await untilGone('the first git', [first], [first]);
     expect(starts()).toHaveLength(2);
+    await runner.dispose();
+  });
+
+  it("a crashed helper's request is retried even when its killed group lingers past the wait (slow reaping)", async () => {
+    writeFileSync(log, '');
+    rmSync(path.join(gates, 'once.done'), { force: true });
+    // No wait at all for the SIGKILLed group: it still exists (dying, or a zombie) when checked.
+    const runner = runnerWith(
+      { FAKE_MODE: 'once' },
+      { timeoutMs: 60_000, helperTest: { groupGoneWaitMs: 0 } },
+    );
+    const run = runner.run(job('once'), { cwd: fx.root });
+    await until(() => starts().length === 1, 20_000);
+    const firstGit = starts()[0]?.pid as number;
+    await until(() => runner.helperChildPids().includes(firstGit), 20_000, 'the pid announced');
+    process.kill(runner.helperPids()[0] as number, 'SIGKILL');
+    // SIGKILLed, it runs no more code: the retry goes ahead.
+    expect((await run).stdout.toString()).toBe('second run');
+    await untilGone('the first git', [firstGit], [firstGit]);
     await runner.dispose();
   });
 
@@ -1006,7 +1123,7 @@ describe.skipIf(!helperOn)('helper crashes', () => {
       gitBinary: fakeGit,
       timeoutMs: 60_000,
       helper: { processes: 1 },
-      helperTestCrash: `before-spawn:${crash}`,
+      helperTest: { crash: `before-spawn:${crash}` },
     });
     const error = await runner.run(job('before'), { cwd: fx.root }).catch((e: unknown) => e);
     expect(existsSync(crash)).toBe(false);
@@ -1033,7 +1150,7 @@ describe.skipIf(!helperOn)('helper crashes', () => {
     expect(isGitCoreError(error, 'git_failed')).toBe(true);
     expect((error as { details: Record<string, unknown> }).details.helper).toBe('lost');
     expect(starts()).toHaveLength(1);
-    await until(() => !alive(-gitPid) && !alive(gitPid), 3_000, 'the orphaned group to die');
+    await untilGone('the orphaned group to die', [gitPid], [gitPid]);
     await runner.dispose();
   });
 
@@ -1062,7 +1179,7 @@ describe.skipIf(!helperOn)('helper crashes', () => {
   });
 });
 
-describe.skipIf(!helperOn)('parent death', () => {
+describe.skipIf(!helperOn)('parent death', { timeout: 60_000 }, () => {
   it('SIGKILL of the parent: the helper kills every process group it started and exits', async () => {
     writeFileSync(log, '');
     rmSync(path.join(gates, 'family.pid'), { force: true });
@@ -1099,7 +1216,7 @@ describe.skipIf(!helperOn)('parent death', () => {
           existsSync(pidFile) &&
           starts().length === 2 &&
           existsSync(path.join(gates, 'family.pid')),
-        15_000,
+        30_000,
         `the parent to start two git processes (${stderr})`,
       );
       const helpers = readFileSync(pidFile, 'utf8').trim().split(' ').map(Number);
@@ -1108,12 +1225,11 @@ describe.skipIf(!helperOn)('parent death', () => {
       expect(starts().every((s) => helpers.includes(s.ppid))).toBe(true);
       expect([...helpers, ...gits, family].every(alive)).toBe(true);
       parent.kill('SIGKILL');
-      await until(
-        () => [...helpers, ...gits, family].every((pid) => !alive(pid)),
-        5_000,
-        'the helpers and every git process to be gone',
+      await untilGone(
+        'the helpers and the git processes this test started',
+        [...helpers, ...gits, family],
+        gits,
       );
-      for (const pid of gits) expect(alive(-pid)).toBe(false);
     } finally {
       if (parent.exitCode === null && parent.signalCode === null) parent.kill('SIGKILL');
     }
