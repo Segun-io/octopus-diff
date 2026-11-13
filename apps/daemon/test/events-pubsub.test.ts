@@ -4,6 +4,7 @@
  * the slow-client policy, and no leak over 1000 connect/disconnect cycles. `events.test.ts` keeps
  * the original protocol tests, unchanged.
  */
+import { getEventListeners } from 'node:events';
 import { setFlagsFromString } from 'node:v8';
 import { runInNewContext } from 'node:vm';
 import { assert, describe, it } from '@effect/vitest';
@@ -153,6 +154,13 @@ describe('EventHub on PubSub (TestClock)', () => {
         fibers: 0,
         heartbeat: false,
       });
+      // Dropped another way (the stream is cancelled): its listener leaves the signal too.
+      const kept = new AbortController();
+      const other = drain(hub.createStream(hello, null, kept.signal));
+      yield* settle;
+      assert.strictEqual(getEventListeners(kept.signal, 'abort').length, 1);
+      yield* Effect.promise(() => other.stop());
+      assert.strictEqual(getEventListeners(kept.signal, 'abort').length, 0);
       // An already aborted signal never subscribes.
       const late = drain(hub.createStream(hello, null, controller.signal));
       yield* Effect.promise(() => late.ended());

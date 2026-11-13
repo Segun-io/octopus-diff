@@ -42,6 +42,8 @@ interface SseClient {
   subscription: PubSub.Subscription<Uint8Array<ArrayBuffer>>;
   /** The fiber waiting for the next frames (a pull in progress). */
   waiting: Fiber.Fiber<unknown, unknown> | null;
+  /** Removes the listener on the request's signal. */
+  offAbort: (() => void) | null;
   closed: boolean;
 }
 
@@ -209,14 +211,25 @@ export class EventHub {
               ),
             ),
           );
-          const c: SseClient = { controller, scope, subscription, waiting: null, closed: false };
+          const c: SseClient = {
+            controller,
+            scope,
+            subscription,
+            waiting: null,
+            offAbort: null,
+            closed: false,
+          };
           client = c;
           controller.enqueue(encoder.encode(formatSseEvent(hello)));
           for (const missed of this.#replayAfter(lastEventId)) {
             controller.enqueue(encoder.encode(missed.frame));
           }
           this.#clients.add(c);
-          signal?.addEventListener('abort', () => this.#drop(c, true), { once: true });
+          if (signal) {
+            const onAbort = () => this.#drop(c, true);
+            signal.addEventListener('abort', onAbort, { once: true });
+            c.offAbort = () => signal.removeEventListener('abort', onAbort);
+          }
           this.#ensureHeartbeat();
         },
         pull: () => (client ? this.#pull(client) : undefined),
@@ -274,6 +287,8 @@ export class EventHub {
     this.#clients.delete(client);
     client.waiting?.interruptUnsafe();
     client.waiting = null;
+    client.offAbort?.();
+    client.offAbort = null;
     this.#run(Scope.close(client.scope, Exit.void));
     if (closeController) {
       try {
