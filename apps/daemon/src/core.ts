@@ -2363,10 +2363,17 @@ export class DaemonCore {
             countOne
               ? countOne.call(this.#git, locator, { tree: oid, ...callOptions(want) }).catch(quiet)
               : Promise.resolve(null),
-          children: async () => {
+          children: async (names) => {
             if (!countChildren || !listing?.tree) return null;
+            // Only the directories checked: git-core keeps the counts compactly, the answer is small.
+            const asked = names.map((key) => {
+              const d = decodeBstr(key);
+              return d.rawPath !== undefined
+                ? { name: d.path, rawName: d.rawPath }
+                : { name: d.path };
+            });
             const counts = await countChildren
-              .call(this.#git, locator, { tree: listing.tree, ...callOptions(want) })
+              .call(this.#git, locator, { tree: listing.tree, names: asked, ...callOptions(want) })
               .catch(quiet);
             if (!counts) return null;
             return new Map(

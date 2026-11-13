@@ -295,7 +295,8 @@ function applyDir(entry: TreeEntry, agg: DirAggregate): void {
  */
 export interface FileCounts {
   file(tree: string): Promise<number | null>;
-  children(): Promise<Map<string, number> | null>;
+  /** Only the children named (bstr); the answer may lack names with no file below. */
+  children(names: readonly string[]): Promise<Map<string, number> | null>;
 }
 
 /** Up to this many directories to check are counted one by one; more, with one run (P3-3). */
@@ -366,7 +367,7 @@ export async function workingEntries(
     out.push({ key, dir: true, entry });
   }
   if (checks.length > COUNT_ONE_BY_ONE_MAX) {
-    const byChild = await fileCounts.children();
+    const byChild = await fileCounts.children(checks.map((c) => c.key));
     for (const c of checks) {
       const count = byChild?.get(c.key);
       if (count !== undefined && count === c.deleted) c.entry.status = 'deleted';

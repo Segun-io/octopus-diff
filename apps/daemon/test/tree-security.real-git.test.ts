@@ -306,6 +306,48 @@ describe('P3-3: many directories whose files are all deleted', { timeout: 60_000
   });
 });
 
+describe('P3-3 / Greptile round 3: child counts are asked for the checked directories only', () => {
+  it('passes the names of the deleted-only directories', async () => {
+    const fx = await makeRealGitFixture();
+    const repo = await makeRealRepo(fx, 'asked', { 'top.txt': 't\n' });
+    for (let i = 0; i < 6; i++) {
+      mkdirSync(path.join(repo, `d${i}`));
+      writeFileSync(path.join(repo, `d${i}/only.txt`), `${i}\n`);
+    }
+    mkdirSync(path.join(repo, 'kept'));
+    writeFileSync(path.join(repo, 'kept/a.txt'), 'a\n');
+    fx.git(repo, 'add', '-A');
+    fx.git(repo, 'commit', '-q', '-m', 'six');
+    for (let i = 0; i < 6; i++) rmSync(path.join(repo, `d${i}`), { recursive: true });
+    const asked: Array<ReadonlyArray<{ name: string }> | undefined> = [];
+    const { api } = await start(fx, {
+      wrap: (real) => ({
+        ...real,
+        countTreeChildren: (worktree, options) => {
+          asked.push(options.names);
+          const count = real.countTreeChildren;
+          if (!count) throw new Error('no countTreeChildren');
+          return count.call(real, worktree, options);
+        },
+      }),
+    });
+    await api.addProject({ path: repo });
+    const id = hashId(repo);
+    await api.refreshWorktree(id);
+    const root = await api.getTree(id, {});
+    expect(root.entries.filter((e) => e.status === 'deleted').map((e) => e.name)).toEqual([
+      'd0',
+      'd1',
+      'd2',
+      'd3',
+      'd4',
+      'd5',
+    ]);
+    expect(asked).toHaveLength(1);
+    expect(asked[0]?.map((n) => n.name).sort()).toEqual(['d0', 'd1', 'd2', 'd3', 'd4', 'd5']);
+  });
+});
+
 describe('P3-4: paging a cached listing decodes nothing again', { timeout: 60_000 }, () => {
   it('after the first page, pages only resolve the commit (no entries)', async () => {
     const fx = await makeRealGitFixture();
