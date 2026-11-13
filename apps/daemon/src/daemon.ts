@@ -55,6 +55,11 @@ export interface DaemonInternals {
    * computes every summary and file list in full.
    */
   incremental?: boolean | { reconcileMs?: number };
+  /**
+   * git-core's spawn helper (#45, default on; `GitCoreOptions.helper`). `false` (or
+   * `OCTOPUS_DIFF_GIT_HELPER=0`, or `git.helper: false`) spawns git from the daemon process.
+   */
+  gitHelper?: boolean;
   /** Poll interval of the focused worktree when native watching is unavailable (default 5 s). */
   pollDegradedFocusedMs?: number;
   /** Replaces `@parcel/watcher`'s subscribe (simulate inotify failures). */
@@ -186,6 +191,7 @@ export const startDaemon = (async (options: DaemonOptions = {}): Promise<Daemon>
     createGitCore({
       ...options.git,
       incremental: incremental !== false,
+      ...(internal.gitHelper === false ? { helper: false } : {}),
       logger: options.git?.logger ?? logger,
     });
   const version = options.version ?? DEFAULT_VERSION;

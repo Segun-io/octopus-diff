@@ -99,6 +99,26 @@ async function checkGit(config: ResolvedConfig, deps: CliDeps): Promise<DoctorCh
   return { id: 'git', title, status: 'ok', detail: `${formatVersion(version)} (need >= ${need})` };
 }
 
+async function checkGitHelper(config: ResolvedConfig, deps: CliDeps): Promise<DoctorCheck> {
+  const probe = await deps.probeGitHelper({
+    gitBinary: config.git?.gitBinary ?? 'git',
+    enabled: config.git?.helper !== false,
+  });
+  const title = 'git helper';
+  if (probe.state === 'on') return { id: 'git-helper', title, status: 'ok', detail: probe.detail };
+  if (probe.state === 'off')
+    return { id: 'git-helper', title, status: 'info', detail: probe.detail };
+  return {
+    id: 'git-helper',
+    title,
+    status: 'warn',
+    detail: probe.detail,
+    fix: [
+      'reinstall octopus-diff; git still works, but every git process blocks the daemon briefly',
+    ],
+  };
+}
+
 function checkNode(deps: CliDeps): DoctorCheck {
   const major = Number(deps.nodeVersion.split('.')[0]);
   return major >= MIN_NODE_MAJOR
@@ -418,7 +438,9 @@ export async function collectChecks(
     });
   }
   const stateDir = resolveStateDir(flags, ctx, config.stateDir);
-  checks.push(await checkGit(config, deps));
+  const git = await checkGit(config, deps);
+  checks.push(git);
+  if (git.status !== 'fail') checks.push(await checkGitHelper(config, deps));
   const wsl = detectWsl(deps.platform, deps.env, deps.readText).wsl;
   checks.push(...checkPlatform(deps, config));
   checks.push(...checkInotify(deps, wsl));

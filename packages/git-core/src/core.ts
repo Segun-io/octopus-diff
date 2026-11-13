@@ -157,6 +157,7 @@ export const createGitCore: CreateGitCore = (options: GitCoreOptions = {}): GitC
     maxOutputBytes: settings.maxOutputBytes,
     env: options.env,
     logger: settings.logger,
+    ...(options.helper !== undefined ? { helper: options.helper } : {}),
   });
   const ctx = new GitContext(runner, settings);
   const deps: DiffDeps = {

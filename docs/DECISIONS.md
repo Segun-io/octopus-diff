@@ -4331,3 +4331,268 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      row count it saw) and taken by an effect once the model has more rows, or dropped when the token is no longer
      current. Test: `j` at the 20th of 20 loaded rows goes to the 21st (failed before). Mutation (step through the
      stale render) killed.
+
+## Spawn helper for git (session, 2026-11-12; roadmap #45, step 28)
+
+365. **`contracts:` `GitCoreOptions.helper?: boolean | GitHelperOptions` and `GitHelperOptions { entry?, processes?,
+     execPath? }`.** Additive (an optional field and a new interface, own commit). Absent means on (except on Windows).
+     `entry` lets a packager (Electron, #19) point at an unpacked copy of the helper; `execPath` at the Node that runs it.
+366. **The helper is `spawn(process.execPath, [git-helper.js, …])` speaking length-prefixed binary frames over its
+     stdin/stdout, not `child_process.fork` IPC and not Electron's `utilityProcess`.** Frames are `u32 length | u8 type |
+     u32 id | payload`; output payloads are the raw bytes git wrote (no UTF-8 decoding, no base64, no JSON around them),
+     so `-z` output and non-UTF-8 names pass byte-exact. Plain pipes work the same under Node, under
+     `ELECTRON_RUN_AS_NODE=1` (set automatically when `process.versions.electron` exists) and for any packager that can
+     start a Node binary; `fork`'s IPC needs an IPC fd and JSON (or V8 "advanced") serialization, and `utilityProcess`
+     exists only in Electron's main process. The helper runs in its own session (`detached`), in `/`, with an empty
+     environment (no `NODE_OPTIONS` from the daemon), so terminal signals reach only the parent.
+367. **The runner keeps every decision; the helper is a dumb executor that is strict about shape.** Allowlist, stdin
+     allowlist, config pins, safety env, `--git-dir`/`--work-tree` checks, the scheduler and lanes, `onSpawn`,
+     `queueKey`, timeouts, `maxOutputBytes`, AbortSignal (SIGTERM, SIGKILL after `ABORT_GRACE_MS`, slot freed on exit),
+     dispose and `GitCoreError` mapping stay in `runner.ts`, which now drives a `ProcHandle` that is either a direct
+     child or a helper request (same callbacks: stdout, stderr, exit, close, error). The helper (`git-helper.ts`,
+     self-contained, Node built-ins only, erasable TypeScript so Node runs the source in dev) is started with the one
+     absolute git binary it may run; a SPAWN must be exactly `{binary, argv, cwd, env, stdin, maxOutputBytes}`:
+     `binary` equal to that path, `argv` an array of NUL-free strings, `cwd` absolute, `env` a map of strings (no `=` in
+     keys), anything else (extra or missing keys, wrong types) is REJECTED and nothing runs. Framing errors (length over
+     8 MiB, unknown type, a malformed KILL) are FATAL: the helper SIGKILLs every group it started and exits 2. It never
+     uses a shell, never spawns anything but its git binary, and caps output too (TOO_LARGE: it kills the group and
+     stops forwarding at `maxOutputBytes`, which the runner maps to the same `output_too_large`), stderr at 64 KiB, and
+     256 running processes. A finished process's group stays killable for 5 s (the runner's post-abort SIGKILL).
+     Back-pressure: when its stdout to the parent is full, the helper pauses git's pipes until it drains.
+368. **Failure model.** A helper that exits with requests in flight reports them lost; the parent SIGKILLs their process
+     groups (it learned each pid from SPAWNED), so nothing outlives a crashed helper. A lost request runs again once
+     (twice when the pool has just given up, the second time directly), unless it streamed output to an `onStdout`
+     callback already: then it fails with `git_failed` and `details.helper: 'lost'`. The retry restarts the timeout. A
+     helper that exits before READY is a start failure; two in a row, or five exits within a minute, turn the pool off
+     for that runner (one warning) and git is spawned directly. When the parent dies (SIGKILL included), its end of the
+     helper's stdin closes: the helper SIGKILLs every group it started and exits (test with a PID file).
+     *Amended by #375-#376 and #380 (PR #98 reviews):* the pids come from the synchronous pid channel, not from
+     SPAWNED; a lost request is retried only when nothing of its first try can still run; a refused one runs directly;
+     and a helper whose SIGKILLed git never reports its exit is itself SIGKILLed, so an aborted run's slot comes back
+     even from a stopped or wedged helper (before, only dispose settled such a run).
+369. **Two helpers by default (one with `concurrency: 1`), started lazily; the second only while the first is busy.** One
+     helper's event loop is the bottleneck at concurrency 4 (640 × `git status`: 735 ms vs 604 ms direct), two are faster
+     than direct (511 ms) while the daemon's main thread does 0.2 ms of work per git process instead of about 1 ms. Idle
+     helpers are unref'd (they never keep the daemon or a test worker alive); busy ones are ref'd as running git children
+     were. `dispose()` ends their stdin and waits (2 s, then SIGKILL).
+370. **Windows keeps the direct path.** No process groups to kill there and no way to test it here; `helperConfig`
+     returns null on `win32` whatever the option says, and doctor reports "not used on Windows".
+371. **Kill switches.** `OCTOPUS_DIFF_GIT_HELPER=0|false|no|off` always wins (git-core reads it, so whole test suites run
+     both ways); `GitCoreOptions.helper: false`; the daemon's `internal.gitHelper: false`; the CLI config file's
+     `git.helper: false`. The direct path is the code that ran before, behind `spawnDirect`.
+372. **`no-shell.test.ts` now lists three modules that import `node:child_process`** (`runner.ts`, `helper-client.ts`,
+     `git-helper.ts`) and pins what each may spawn: the resolved git binary, `execPath` for the helper, and the helper's
+     startup git binary. This is the one existing test that changed: the old assertion ("only runner.ts") is false by
+     design now.
+373. **CLI packaging.** `pack.mjs` builds `dist/git-helper.js` next to the bundle (`new URL('./git-helper.js',
+     import.meta.url)` resolves to it); `pnpm build` emits `dist/runner/git-helper.js` next to the runner. `doctor` has a
+     `git-helper` check (`git --version` through a real helper: ok / info when off / warn when broken). The CI `package`
+     job asserts that check is ok and runs `apps/cli/scripts/smoke-tarball.mjs` (serve, a diff through the API, a helper
+     under the daemon, SIGKILL of the daemon, no helper or git process left). For #19: unpack `git-helper.js` from the
+     asar (or pass `helper.entry`), and `execPath` is Electron's binary with `ELECTRON_RUN_AS_NODE`.
+374. **The RSS-proportional spawn cost of review-perf F1 does not reproduce on this machine any more** (Node 26.13, libuv
+     1.52): `spawn()` costs 0.67 ms synchronously at 56 MiB RSS and 1.21 ms at 1.4 GiB (it was 0.63 → 16 ms in
+     2026-11). The helper is still worth it: the main thread is busy about 1 ms per git process on the direct path (100 %
+     of a spawn burst), 0.2 ms through the helper, at any heap size. Measured with
+     `packages/git-core/test/bench/spawn-helper.bench.ts` (numbers in `docs/reports/spawn-helper.md`).
+
+### Spawn helper: Greptile review (PR #98, 2026-11-12)
+
+375. **The pid of every git process reaches the parent synchronously, on a channel of its own (P1).** A helper that died
+     after starting git but before its queued `SPAWNED` frame was written left that git running, unknown to the parent,
+     and the retry then ran next to it (reproduced: the retry saw the first process alive). Now, the helper's fd 3 is a
+     pid channel: an 8-byte record `id | 0` right before the call that starts git and `id | pid` right after it,
+     each written with `fs.writeSync` (blocking; EAGAIN retried), so it is in the kernel before the helper runs any
+     other code. A separate fd keeps the records out of the stdout frames: a synchronous write there could land in the
+     middle of a frame still queued in the helper. The parent reads both until the helper's `close`. Chosen over a
+     wrapper that writes a pid file (an extra exec per git process, a file per request) and over scanning processes
+     for a marker (platform-specific, racy); `PR_SET_PDEATHSIG` is Linux-only and out of Node's reach. The helper
+     refuses to start unless fd 3 is a socket (what a stdio `pipe` is on POSIX; Node's own fds take the number
+     otherwise).
+376. **A lost request is retried only when nothing of its first try can still run.** The parent SIGKILLs the groups whose
+     pid it knows and retries once they are gone (polled, at most 1 s; after that it retries anyway, since a SIGKILLed
+     group runs no more code, which leaves only an unreaped zombie). A request announced on the pid channel without a
+     pid (the helper died in the microseconds while starting git) is **not** retried: git may be running there,
+     unknown. It fails with `git_failed`, `details.helper: 'lost'`. A request the helper never announced (it died
+     before) is retried as before. Test hook: `GitRunnerOptions.helperTestCrash` (`before-spawn` / `after-spawn` with a
+     one-shot file) makes a helper SIGKILL itself at that point; it is git-core-internal, not in the contracts, and the
+     helper reads it only from the environment the parent gives it (otherwise empty).
+377. **stdin is credit-based and copy-free (P2).** It used to be copied into 1 MiB frames and queued whole (two 64 MiB
+     `patch-id` inputs: +134 MB in the daemon). Now the helper grants each request a window (`STDIN_CREDIT`, 256 KiB
+     at the start). The parent sends 64 KiB frames, each a header plus a `subarray` view of the caller's buffer
+     (corked, never concatenated), only within that credit and only while its pipe to the helper does not need a
+     drain. The helper gives credit back once git has accepted the bytes (the `write` callback of git's stdin). A
+     stdin frame over the credit is FATAL. So each process holds at most the window per request, and a git that does
+     not read its stdin stops the flow for its own request only: no head-of-line blocking of the shared pipe, which
+     pausing the whole helper input would cause. On detach (cancel, timeout, cap) the parent drops the rest, and the
+     helper destroys git's stdin; on EXIT the parent stops sending.
+378. **The spawn-helper bench fixture sets `init.defaultBranch=main` and `commit.gpgsign=false` (P2).** The other
+     configs this PR writes were checked against the AGENTS.md list: `smoke-tarball.mjs` has all of them; the test
+     fixtures use the shared `createFixture` / `makeRealGitFixture`, which do.
+379. **The merged fresh-`.gitignore` route test warms its core first.** It failed on `fdef217` with the helper on (6 of 6
+     tries): it reads its first state on a cold core, and the helper starting (plus the version probe) can put the
+     stamp past the 100 ms `IGNORE_MARGIN_MS`. The route is right then: a rule file older than the margin was visible
+     to git. The test's retries reuse the repository and cannot recover. `await fast.version()` first keeps the
+     test's premise ("written just before the state was read").
+
+### Spawn helper: security review (PR #98, 2026-11-12)
+
+380. **A helper that does not report a SIGKILLed process's exit is given up on (review 1, P2).** An aborted run settles
+     on EXIT, and a stopped or wedged helper never sends one: every aborted run kept its slot, and after `concurrency`
+     of them the whole runner stood still (reproduced with SIGSTOP). Now, every SIGKILL the runner sends through a
+     helper (a timeout, a cap, dispose, an abort's forced kill) arms a watchdog: no exit within `HELPER_EXIT_WAIT_MS`
+     (`ABORT_GRACE_MS` + 1 s) means `ProcHandle.abandon()`, which SIGKILLs that helper. Its death reports its requests
+     lost (the aborted ones settle `aborted`, the others are retried by the rules of #376), the pool starts a new
+     helper, and the slots come back. A timeout that fires while an abort is waiting gives up at once. The direct path
+     has no `abandon` (the kernel always reports a child's exit; a process stuck in uninterruptible sleep keeps its slot
+     there, as before).
+381. **The helper's count limits are checked before sending, and a refused request runs directly (review 2, P3).** The
+     helper accepts at most 65 536 argv and 4 096 env entries; `helperRequestFits` only checked the frame's bytes, so
+     about 70 000 short pathspecs (within `PATHSPEC_BUDGET`) were refused with a misleading reason and then failed. Now
+     the counts are checked as well (`HELPER_MAX_ARGV`, `HELPER_MAX_ENV`, exported by the client; a test reads the
+     helper's source and asserts both sides agree), and a REJECTED request, which the helper would refuse again, is
+     run once on the direct path with a warning, instead of being retried through the helper. The helper's reason for
+     a too-long argv now says so.
+382. **The pid channel (#375) is also the fix for review 3; the helper never dies silently.** The reviewer's repro (the
+     parent stops reading, a flood fills the buffers, the second request's SPAWNED waits in the helper's own write
+     buffer, the helper is SIGKILLed) leaves the pid known through fd 3: it is a test now. The helper also has
+     `uncaughtException` and `unhandledRejection` handlers that SIGKILL every group it started before exiting (a test
+     hook throws right after a spawn). Holding new SPAWNs while the output is blocked was not needed with the channel.
+383. **Each request's callbacks run in that request's async context, and helpers are created outside any (review 4,
+     P3).** Before, a helper's pipes belonged to the context of the request that started the helper, so later requests'
+     `onStdout` and their lost-retries saw that first call's `currentCall()` (its lane and AbortSignal), and kept it
+     alive. `startGit` now binds every handler with an `AsyncResource` made in the caller's context, and the pool
+     creates helpers through an `AsyncLocalStorage.snapshot()` taken when the module loads. Test: requests A then B,
+     each `onStdout` sees its own call.
+384. **The spawn hygiene test cannot be bypassed inside the three allowed modules (review 5, P3).** `spawnHygieneProblems`
+     (in `no-shell.test.ts`) strips comments, then requires, per allowed file, exactly one mention of `child_process`,
+     which must be `import { type ChildProcess, spawn } from 'node:child_process';` (so no alias, namespace, `require` or
+     dynamic import), exactly the pinned spawn calls, `spawn` referenced nowhere else (no `const run = spawn`), and
+     `shell:` only as `shell: false`; anywhere in git-core it forbids `exec*`, `execFile*`, `spawnSync`, `fork` and the
+     process bindings, and any other mention of `child_process`. Negative tests feed it each bypass the reviewer
+     listed, and a few more. Two names were changed so the rule stays simple: the frame key `HelperFrame.spawn` is
+     now `startGit`, and the error text `'spawn failed'` is now `'git did not start'`.
+
+### Spawn helper under load (lead repro, PR #98, 2026-11-13)
+
+385. **A crashed helper's request is retried after the bounded group wait, whether or not the group has been reaped
+     yet.** #376 said so, and the code did not: when the SIGKILLed group was still visible after the wait, it reported
+     the request not retryable, and it failed with "the git helper process exited". Under load, init reaps the killed
+     group late (zombies, or processes still on their way out), so CI hit it. A SIGKILLed process runs no more code,
+     so the retry cannot run next to a live first try. The wait (`GROUP_GONE_WAIT_MS`) is now 10 s, a courtesy for
+     the reaper. The case that is not retried stays: a request announced on the pid channel without its pid.
+     Measured under load, that window is not microseconds as #375 implied, but as long as the scheduler keeps the
+     helper off the CPU between starting git and writing the pid. The outcome there is a clear error, by design.
+386. **The watchdog probes before it kills (#380 amended).** On a loaded machine a helper can report a SIGKILLed git's
+     exit later than `HELPER_EXIT_WAIT_MS`, and killing it then would throw away its other requests. Now, past the
+     wait, the client sends PING (a new request frame, 6; strict: no payload) and SIGKILLs the helper only if no PONG
+     (event 27, same id) arrives within `PROBE_WAIT_MS` (3 s). A stopped or wedged helper does not answer; a slow one
+     does. A timeout during an abort's wait probes at once too.
+387. **The helper tests wait on real, scoped conditions.** "Gone" means no process of the pids and groups the test
+     started is running: zombies, which only wait for init, count as gone. It is read with POSIX
+     `ps -A -o pid=,pgid=,stat=`, the same on macOS (no /proc), with 20 s eventually-style waits instead of 3-5 s. No
+     check looks at "every git process" (other tests and sessions run git). The mid-request crash test kills the
+     helper once the parent knows the git pid (`GitRunner.helperChildPids()`), because an earlier kill is the
+     no-retry case of #385. A test no longer asserts that a TERM-ignoring member is still alive at an instant that
+     depends on load; it asserts that the member goes with the post-grace SIGKILL. The internal test knobs
+     (`GitRunnerOptions.helperTest`: the crash hook, delayed exit reports, the wait times) are git-core-only, not in
+     the contracts. The helper reads its hooks only from the environment the parent gives it.
+388. **Residual gap, stated plainly: a git started in the window between `spawn()` returning and the pid record
+     cannot be killed by the parent** if the helper is SIGKILLed or SIGSTOPped exactly there (under load, that is the
+     time the helper stays descheduled). The request is safe (no retry, a clear error; a stopped helper is still
+     probed and SIGKILLed, so the slot comes back), but that git runs until it ends by itself. A real read-only git
+     there dies with SIGPIPE/EPIPE on its first write to the dead helper's pipes, and its stdin, if any, gets EOF;
+     only a process that never writes and never ends survives (none of git's read paths, with the runner's pins).
+     Closing it would take putting git in the helper's own process group (losing the per-request group kill that
+     the abort's grace period needs), or scanning the process table from the daemon. Neither was worth it. Tests that
+     stop or kill a helper do so once the parent knows the pids (`helperChildPids()`).
+
+### Spawn helper: argv sizes per platform (macOS CI, PR #98, 2026-11-13)
+
+389. **The pathspec budget counts what exec counts: each argument's text, its NUL and its 8-byte pointer.** macOS gives
+     argv and the environment 1 MiB together (`getconf ARG_MAX`), pointers included, so `PATHSPEC_BUDGET`'s 512 000
+     bytes of short paths alone (some 70 000 of them, plus 560 KB of pointers) are E2BIG there. That is on the direct
+     path too: a pre-existing issue, not the helper's. The budget value stays; `pathspecsExcluding` now adds
+     `1 + 8` per path (`ARGV_ENTRY_OVERHEAD`), so at most about 512 KB of argv, and so about 50 000 short paths before
+     it falls back to the whole-worktree command, which is what it already does above the budget. Test:
+     `pathspec-budget.test.ts` (50 000 short paths: null; 20 000: listed). Where it mattered: the unreadable-files
+     fallback of the summary (an E2BIG there degraded it to status-only) and of the file list (an E2BIG there failed
+     the list). Not changed: `MAX_PATHSPECS` (1000, incremental) caps the count, not the bytes. 1000 paths of about
+     1 KB each would be E2BIG on macOS: unrealistic, noted.
+390. **The helper's argv tests size themselves from the platform.** With `ARG_MAX` from `getconf`:
+     - parity at the largest argv that fits (60 % of ARG_MAX at 15 bytes per pathspec, at most the helper's own count
+       limit), through the helper;
+     - the > 65 536-entry parity (the client sends it directly up front) only where that many arguments can be exec'd
+       at all (Linux, not macOS);
+     - beyond the OS limit (1.5 × ARG_MAX in 100 KB arguments, still a frame the helper accepts), the same
+       `GitCoreError` on both paths: the helper reports the spawn error as an ERROR frame, which the runner maps
+       exactly as a direct spawn's, with no retry and the same helper alive.
+
+     Checked on Linux with `ulimit -s 4096` (ARG_MAX 1 MiB, as on macOS) and `2048` (512 KiB). The other new tests do
+     not depend on such limits: the 8 MiB frame test only sends a header, and stdin, env sizes and path lengths stay
+     far below every platform's limits (temp paths under `/private/var/folders` are about 60 characters, PATH_MAX
+     1024).
+
+### Spawn helper tests on macOS CI (run 43384632348, 2026-11-13)
+
+391. **The fake git logs one line per event, written by one `printf '%s\n'` of a string it built first.** The old
+     `printf '%s\x1f' "$$" "$PPID" "$#" "$@" >> log` applies its format once per argument. A shell may flush that in
+     several writes, so concurrent fakes interleaved their fields, and the parser, which stops at the first broken
+     record, lost the rest. Shown on Linux: bash with 4.6 KB records parsed 11 of 300 concurrent records (dash: 300).
+     macOS's `/bin/sh` is bash 3.2; with the runner's ~2.5 KB records that matches "6 of 9 starts" in "keeps the
+     concurrency limit" (the best hypothesis; I have no macOS machine). A record now holds every argument up to 32,
+     else only the last (the tests use only the last for runner calls), so it stays a short single write. An `end`
+     line on normal exit lets the concurrency test prove the limit from the order of events (never more than 3
+     running, all 9 started and ended) instead of from a count at an instant.
+392. **Every wait in `helper.test.ts` explains its failure, and the tests make no assumption about start-up time.**
+     - On a timeout, `until` throws with the fake's events, `ps -A -o pid=,ppid=,pgid=,stat=,command=` filtered to
+       the pids, parents and groups the test knows, the helpers' state (`helperPids`, `helperChildPids`,
+       `usesHelper`) and the warnings logged.
+     - BSD `ps` flags a process on its way out with `E`: that counts as dead, as `Z` (zombie) and `X` (Linux) do. For
+       "a crashed helper's request is retried even when its killed group lingers", where the first git never looked
+       gone on macOS after the parent's group SIGKILL, this is the best hypothesis, with no evidence yet. The other
+       candidate, a failed `killpg`, is now logged as a warning ("could not kill a git process group") instead of
+       being swallowed, so the next failure will say which it was.
+     - Default waits are 20 s.
+     - Tests that use a short timeout first warm their helper, and assert that git ran. The timeout counts from the
+       request, as a direct spawn's does, so on a cold, slow helper it could fire before git started, and one test
+       would then have passed vacuously.
+     - A test hook, `helperTest.startDelayMs` (`OCTOPUS_DIFF_TEST_HELPER_START_DELAY_MS` for the whole file),
+       rehearses a slow runner: the file passes with 1.5 s and 3 s start delays.
+
+### Spawn helper: a group SIGKILL that missed a member (macOS CI run 43400303908, 2026-11-13)
+
+393. **A process group is SIGKILLed until it is gone, not once.**
+     - **Evidence** (the #392 diagnostics, macOS): after the test SIGKILLed the helper, the fake git's leader `sh`
+       (52029) was gone, but its child `sleep 30` (52043, pgid 52029, ppid 1) was alive 20 s later. No "could not kill"
+       warning was logged, so the parent's one `process.kill(-52029, 'SIGKILL')` returned success and did not reach the
+       child.
+     - **Why the timing fits:** the test kills the helper as soon as the fake has logged its start and the parent
+       knows its pid. That is when the fake forks `sleep`, so the one `killpg` raced a `fork()`.
+     - **Root cause:** Linux makes a group signal reach a child being forked; the evidence says macOS did not here.
+       Without a second SIGKILL nothing ever ends the child. Job control is off in the non-interactive fake, so
+       `sleep` stays in the group, and `detached: true` makes git a session and group leader. The new helper's
+       `S<s` stat is a session leader, as expected.
+     - **Fix:** `reapGroup(pgid)` (`helper-client.ts`) SIGKILLs, checks with `kill(-pgid, 0)`, and SIGKILLs again
+       every 25 ms while the group is there, for at most 10 s, then warns "a git process group survived SIGKILL" with
+       the pgid and the last errno. An ESRCH from a SIGKILL counts as gone only when the check agrees. It is used by
+       the crash cleanup (the retry goes when the group is gone or after the bounded wait, #385, and the reaping
+       continues regardless, so the test knob that skips the wait never skips the kill), by a SIGKILL sent after the
+       helper died, and by the direct path's group SIGKILL (`killTree`; the same race exists there). The helper
+       repeats its own group SIGKILLs while the group is there (5 s), and `shutdown()` makes up to five rounds, 20 ms
+       apart, before exiting.
+     - **Tests:**
+       - a test knob drops the first group SIGKILL after a crash (the macOS miss); the group must still end. Failing
+         first: the child lived;
+       - the CI pattern itself (the leader killed alone, its child alive in the group, then the helper crash): the
+         parent kills the group;
+       - the survival warning, with a zombie whose parent never reaps it (Linux).
+
+       The fake's long sleeps in these tests are 120 s. With 30 s, a survivor could end by itself within the test's
+       deadline, and the old version of the knob test passed for that reason.
+     - **Mutants:** killed: one SIGKILL only, no warning, no reaping after a crash, any check error taken as gone.
+       Survived: "an ESRCH from the SIGKILL is enough". Linux cannot make a group answer ESRCH while it still has
+       members.
+394. **Warm-ups are quick (Greptile P2 on PR #98).** A warm-up in a `FAKE_MODE: 'hang'` runner ran `sleep 30`. The fake
+     now runs every `warm` job in its fast default mode, whatever `FAKE_MODE` says. `helper.test.ts` went from 58 s to
+     29 s.

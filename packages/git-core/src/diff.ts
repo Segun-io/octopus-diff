@@ -116,6 +116,12 @@ const REGULAR_MODES = new Set(['100644', '100755']);
 const DENIED = new Set(['EACCES', 'EPERM']);
 /** Total bytes of explicit pathspecs git-core passes as argv (Windows caps a command line). */
 const PATHSPEC_BUDGET = process.platform === 'win32' ? 24_000 : 512_000;
+/**
+ * What exec counts for one argument besides its text: the NUL and the 8-byte pointer to it. macOS
+ * gives argv and the environment 1 MiB together, pointers included: 512 000 bytes of short paths
+ * alone (some 70 000 of them) would not exec there (E2BIG, #45 CI).
+ */
+const ARGV_ENTRY_OVERHEAD = 1 + 8;
 
 /**
  * Tracked paths with worktree changes whose file exists but cannot be read. `git status`
@@ -165,7 +171,7 @@ export function pathspecsExcluding(
   let bytes = 0;
   for (const key of paths) {
     if (!isValidUtf8(key)) return null;
-    bytes += key.length + 1;
+    bytes += key.length + ARGV_ENTRY_OVERHEAD;
     if (bytes > PATHSPEC_BUDGET) return null;
     out.push(bstrToUtf8(key));
   }

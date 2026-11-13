@@ -41,10 +41,12 @@ export {
 } from './runner/allowlist.js';
 export { CONFIG_PINS } from './runner/config-pins.js';
 export { buildGitEnv, SAFETY_ENV } from './runner/env.js';
+export { defaultHelperEntry } from './runner/helper-client.js';
 export {
   ABORT_GRACE_MS,
   buildGitArgv,
   GitRunner,
+  gitHelperDisabledByEnv,
   INTERACTIVE_BURST,
   resolveExecutable,
 } from './runner/runner.js';

@@ -384,6 +384,23 @@ export interface GitCoreOptions {
    * since the last list. False: every summary and list is computed in full (kill switch, bench A/B).
    */
   incremental?: boolean;
+  /**
+   * Start git processes through a long-lived helper process (#45, default true except on Windows),
+   * so spawning never blocks the caller's event loop. git-core validates every command as before
+   * and the helper only executes it. False (or `OCTOPUS_DIFF_GIT_HELPER=0` in the environment,
+   * which always wins) spawns git directly. An object turns it on with these settings.
+   */
+  helper?: boolean | GitHelperOptions;
+}
+
+/** Settings of git-core's spawn helper (`GitCoreOptions.helper`, #45). */
+export interface GitHelperOptions {
+  /** Absolute path of the helper entry file (default: the one shipped next to git-core). */
+  entry?: string;
+  /** Number of helper processes (default 2, or 1 with `concurrency: 1`; at most 4). */
+  processes?: number;
+  /** Node executable that runs the helper (default `process.execPath`). */
+  execPath?: string;
 }
 
 /** `createGitCore` in `@octopus-diff/git-core` has this signature. */

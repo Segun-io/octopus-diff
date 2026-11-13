@@ -6,7 +6,8 @@
 // published, so they are bundled into one ESM file with esbuild, resolving their TypeScript
 // sources through the `@octopus-diff/source` export condition. Third-party packages are bundled
 // too, except native modules (`@parcel/watcher`), which stay real dependencies of the tarball.
-// The built web UI (apps/web/dist) is copied to dist/web. Run `pnpm build` first.
+// The built web UI (apps/web/dist) is copied to dist/web, and git-core's spawn helper is built to
+// dist/git-helper.js. Run `pnpm build` first.
 import { execFileSync } from 'node:child_process';
 import { chmod, cp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -62,6 +63,18 @@ await build({
   banner: {
     js: "import { createRequire as __octopusCreateRequire } from 'node:module';\nconst require = __octopusCreateRequire(import.meta.url);",
   },
+});
+// git-core's spawn helper (#45) runs as its own process, so it is a separate file; the bundled
+// runner finds it next to itself (`new URL('./git-helper.js', import.meta.url)`).
+await build({
+  entryPoints: [path.join(repoRoot, 'packages', 'git-core', 'src', 'runner', 'git-helper.ts')],
+  outfile: path.join(stage, 'dist', 'git-helper.js'),
+  bundle: true,
+  platform: 'node',
+  format: 'esm',
+  target: 'node24',
+  sourcemap: true,
+  logLevel: 'warning',
 });
 await chmod(path.join(stage, 'dist', 'index.js'), 0o755);
 await cp(webDist, path.join(stage, 'dist', 'web'), { recursive: true });

@@ -120,3 +120,6 @@ jobs:
           npm install --no-audit --no-fund ./octopus-diff-*.tgz
           ./node_modules/.bin/octopus-diff --version
           ./node_modules/.bin/octopus-diff doctor --state-dir "$dir/state" --config-dir "$dir/config"
+          ./node_modules/.bin/octopus-diff doctor --json --state-dir "$dir/state" --config-dir "$dir/config" | node -e 'const c = JSON.parse(require("node:fs").readFileSync(0, "utf8")).checks.find((c) => c.id === "git-helper"); if (c?.status !== "ok") { console.error("doctor: the git helper is not on", c); process.exit(1); }'
+          # A diff through the installed daemon and its spawn helper; then SIGKILL: no orphans (#45).
+          node "$GITHUB_WORKSPACE/apps/cli/scripts/smoke-tarball.mjs" "$dir"

@@ -265,6 +265,10 @@ export function makeDeps(dirs: TempDirs, overrides: Partial<CliDeps> = {}): Test
     networkInterfaces: () => ({}),
     now: () => new Date('2026-11-08T12:00:00.000Z'),
     shutdownTimeoutMs: 1_000,
+    probeGitHelper: async () => ({
+      state: 'on',
+      detail: 'git version 2.53.0 through git-helper.js',
+    }),
     ...overrides,
     out,
     err,

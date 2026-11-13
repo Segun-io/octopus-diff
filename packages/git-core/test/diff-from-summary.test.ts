@@ -461,10 +461,16 @@ describe('untracked files: no git process at all', () => {
   // Timing by nature: the file must be younger than the clock margin (30 ms) when the state is
   // read; a loaded runner can take longer between the write and the summary and then (correctly)
   // trust the file. A few retries make the freshness window likely without weakening the claim.
+  let freshIgnoreTry = 0;
   it('a .gitignore written just before the state was read is checked by the whole route', {
     retry: 5,
   }, async () => {
-    const repo = fx.repo('ignore-fresh', { files: { 'a.txt': 'a\n' } });
+    // "Just before" means within the 100 ms margin: a cold core (the version probe, the spawn
+    // helper starting, #45) can take longer than that to read its first state.
+    await fast.version();
+    // A fresh repository per try: a retry on the one the failed try summarized starts from a state.
+    freshIgnoreTry += 1;
+    const repo = fx.repo(`ignore-fresh-${freshIgnoreTry}`, { files: { 'a.txt': 'a\n' } });
     text(repo, 'new.txt', 'new\n');
     text(repo, '.gitignore', 'ignored.txt\n');
     await fast.getSummary(locator(repo));
