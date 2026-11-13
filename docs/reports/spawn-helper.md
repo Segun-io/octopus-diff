@@ -363,3 +363,34 @@ not answering PING). The tests use only POSIX process semantics: `kill(-pgid, 0)
 - Folding mode: git-core 465 passed, 16 skipped; daemon 418 passed, 6 skipped. Helper off: git-core 454 passed,
   27 skipped; daemon 419 passed, 5 skipped.
 - `pnpm lint` exit 0, `pnpm typecheck` exit 0. No helper process and none of my git processes left after the runs.
+
+## macOS argv limit (CI run 43381831331, 2026-11-13)
+
+**The failure.** On macOS CI, "70,000 pathspecs: the helper path answers as the direct path does" failed with
+`spawn E2BIG`. macOS gives argv and env 1 MiB together, counting the 8-byte pointers, so 70 000 arguments cannot be
+exec'd there at all, on any path. That is the OS limit, not a helper bug.
+
+**The tests now size themselves from `getconf ARG_MAX`:**
+- parity at the largest argv that fits;
+- the > 65 536 parity only where it can exist (Linux);
+- beyond the OS limit, the same `GitCoreError` (`git_failed`, `failed to start git: Error: spawn E2BIG`) through the
+  helper and directly, with no retry, no refusal and the same helper. Mutants killed: a spawn error reported as a
+  refusal, an altered spawn-error message, and the helper exiting on a spawn error.
+
+My first sizing (2 × ARG_MAX) let both mutants survive, because a request that large goes direct before reaching the
+helper. Found by the mutation check; it is now 1.5 × ARG_MAX, which the client still sends to the helper.
+
+**Production, pre-existing.** The direct path can hit E2BIG on macOS through `PATHSPEC_BUDGET`: 512 000 bytes of short
+pathspecs plus their pointers is more than 1 MiB. The fix is the one-line change in `pathspecsExcluding` that counts
+`1 + 8` bytes per argument (DECISIONS #389), with a failing-first test. Above the budget, git-core already falls back
+to the whole-worktree command.
+
+**Verification** (head `84ad415` plus these docs):
+- `pnpm lint`, `pnpm typecheck` and `pnpm build`: exit 0.
+- `helper.test.ts` + `pathspec-budget.test.ts` with Linux `ulimit -s 4096` (ARG_MAX 1 MiB, as on macOS): 40 passed,
+  1 skipped (the > 65 536 test). With `ulimit -s 2048` (512 KiB): the same. With the default limits: 41 passed.
+- `helper.test.ts` under 14 busy loops: 5 of 5 green with the helper on (40 passed each) and 5 of 5 with it off
+  (12 passed, 28 skipped each).
+- `pnpm test` under 8 busy loops: 3 of 3 green (git-core 483 passed, 1 skipped; daemon 420 passed, 4 skipped).
+- Folding mode: git-core 468 passed, 16 skipped; daemon 418 passed, 6 skipped.
+- No helper process and none of my git processes left.

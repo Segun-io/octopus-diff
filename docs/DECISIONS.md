@@ -4506,3 +4506,29 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      Closing it would take putting git in the helper's own process group (losing the per-request group kill that
      the abort's grace period needs), or scanning the process table from the daemon. Neither was worth it. Tests that
      stop or kill a helper do so once the parent knows the pids (`helperChildPids()`).
+
+### Spawn helper: argv sizes per platform (macOS CI, PR #98, 2026-11-13)
+
+389. **The pathspec budget counts what exec counts: each argument's text, its NUL and its 8-byte pointer.** macOS gives
+     argv and the environment 1 MiB together (`getconf ARG_MAX`), pointers included, so `PATHSPEC_BUDGET`'s 512 000
+     bytes of short paths alone (some 70 000 of them, plus 560 KB of pointers) are E2BIG there. That is on the direct
+     path too: a pre-existing issue, not the helper's. The budget value stays; `pathspecsExcluding` now adds
+     `1 + 8` per path (`ARGV_ENTRY_OVERHEAD`), so at most about 512 KB of argv, and so about 50 000 short paths before
+     it falls back to the whole-worktree command, which is what it already does above the budget. Test:
+     `pathspec-budget.test.ts` (50 000 short paths: null; 20 000: listed). Where it mattered: the unreadable-files
+     fallback of the summary (an E2BIG there degraded it to status-only) and of the file list (an E2BIG there failed
+     the list). Not changed: `MAX_PATHSPECS` (1000, incremental) caps the count, not the bytes. 1000 paths of about
+     1 KB each would be E2BIG on macOS: unrealistic, noted.
+390. **The helper's argv tests size themselves from the platform.** With `ARG_MAX` from `getconf`:
+     - parity at the largest argv that fits (60 % of ARG_MAX at 15 bytes per pathspec, at most the helper's own count
+       limit), through the helper;
+     - the > 65 536-entry parity (the client sends it directly up front) only where that many arguments can be exec'd
+       at all (Linux, not macOS);
+     - beyond the OS limit (1.5 × ARG_MAX in 100 KB arguments, still a frame the helper accepts), the same
+       `GitCoreError` on both paths: the helper reports the spawn error as an ERROR frame, which the runner maps
+       exactly as a direct spawn's, with no retry and the same helper alive.
+
+     Checked on Linux with `ulimit -s 4096` (ARG_MAX 1 MiB, as on macOS) and `2048` (512 KiB). The other new tests do
+     not depend on such limits: the 8 MiB frame test only sends a header, and stdin, env sizes and path lengths stay
+     far below every platform's limits (temp paths under `/private/var/folders` are about 60 characters, PATH_MAX
+     1024).
