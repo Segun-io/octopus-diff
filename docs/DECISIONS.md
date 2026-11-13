@@ -4696,3 +4696,67 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      and +3-8 MiB RSS, and starts within noise. So the cost is loading Effect's code, not running it; bundling removes
      most of it. Recorded as a known gap for dev and bench runs, not fixed here. Details in
      `docs/reports/effect-foundation.md`.
+
+### Effect foundation: Greptile review (PR #100, 2026-11-13)
+
+403. **`close()` of the watch host cancels every waiting subscribe at once (P1).** After repeated crashes a subscribe
+     can be sleeping out the restart backoff (up to 30 s) in `supervisor.get` when `WatcherService.close()` calls
+     `host.close()`. There was no running host to stop, so the subscribe woke later and started a new host. The watcher
+     awaits its subscribes, and the daemon disposes its runtime only afterwards, so shutdown waited for the backoff,
+     plus the new host's subscribe timeout if that one hung. Now the supervisor has **generations**. Every wait in `get`
+     (a backoff sleep, joining a start in flight) races the current generation's gate, a `Deferred`.
+     `Supervisor.stopAll` (the watch host's `close()` calls `stopAllNow()`) works in four steps:
+     - it ends the generation: every pending `get` fails at once with `SupervisorUnavailable` (`closed`, reason
+       `stopped`), which the watch host reports as "watch host closed: stopped";
+     - it stops every running instance (not a death);
+     - it clears the backoff: a deliberate stop is not a crash, while the crash window stays, so a later crash
+       continues where the window left off;
+     - it leaves the supervisor open: the next subscribe starts a host at once.
+
+     Closing the scope ends the generation too. Nothing is started after a stop, because a start that was in flight is
+     released when its acquisition ends, not installed. Test (TestClock, failing first: the subscribe stayed asleep):
+     seven crashes take the backoff to its 30 s cap, a subscribe sleeps 29 s into it, then `close()`. The subscribe
+     rejects without the clock moving, `started` is unchanged, and a later subscribe starts a host at once.
+404. **A start reserves its slot and its scope before `acquire` runs (P2).** `startIn` used to leave its slot empty and
+     its scope untracked while it awaited `acquire`. With an asynchronous acquisition (allowed for `get`), two
+     concurrent starts could pick the same slot and overwrite an instance, and a close during the acquisition missed
+     the new scope. Now:
+     - `reserve(at)` puts a `Starting` entry in the slot synchronously, holding the instance's scope, its generation
+       and a `done` Deferred;
+     - `acquireInto` runs `acquire` in that scope, under `uninterruptibleMask`, and **installs** the instance only if
+       the reservation is still current (same generation, not closed). Otherwise (a failure, an interruption, a close
+       or `stopAll` meanwhile) it closes the scope, which releases what was acquired, and fails `done`;
+     - `get` shares a start in flight of the current generation. When it starts one itself, it runs the acquisition in
+       a fiber of its own and waits on `done` through the gate, like every other caller. So `stopAll` or a close ends
+       even the starter's wait while an uninterruptible `acquireRelease` acquisition runs, and a caller that is
+       interrupted does not lose the shared start;
+     - concurrent starts take distinct slots (`startNow` during an asynchronous `get` takes the next one);
+     - the close finalizer releases the running instances and then waits for starts in flight, which release
+       themselves: when the owner's scope has closed, nothing it acquired is left;
+     - `startNow` keeps its synchronous inline path.
+
+     Tests (TestClock gates on the acquisition, failing first: 6 of 6 failed before):
+     - two concurrent `get`s share one acquisition;
+     - `startNow` during an asynchronous start takes the other slot and both are released on close;
+     - a close during an acquisition fails the waiter at once with `closed`, returns once what was acquired is released
+       (acquires 1, releases 1), and leaves nothing running;
+     - an interrupted waiter leaves the start reserved, and it is installed and then released on close;
+     - `stopAll` fails a backoff sleeper and a waiter on a start in flight.
+405. **Same class in the git helper pool: not affected, now covered by the same code.** `HelperPool` acquires
+     synchronously (`startNow` inside `startGit`, never `get`), and nothing waits in a backoff: during one `startGit`
+     returns null and the runner spawns directly. So there are no overlapping starts and no sleeping callers. Its close
+     (`runner.dispose()` → runtime dispose → the supervisor's finalizer) releases every helper and waits for each. The
+     reservation and generation code is shared, and the pool's tests (`supervisor.test.ts` "the git helper pool under
+     supervision", `helper.test.ts`) pass unchanged.
+
+     Mutation check: 9 new mutants. Eight were killed:
+     - `stopAll` not ending the generation, or keeping the backoff;
+     - ungated waits;
+     - the watch host's `close()` stopping only running hosts;
+     - no reservation;
+     - `get` not sharing the start in flight;
+     - the close not waiting for starts in flight;
+     - a cancelled start not released.
+
+     One is equivalent: dropping `!closed` from the install check, since a close also ends the generation and the
+     generation check refuses the install. The 14 mutants of #46 are still killed.

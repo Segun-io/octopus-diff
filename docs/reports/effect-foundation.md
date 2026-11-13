@@ -191,6 +191,18 @@ and `WatcherServiceOptions.host`. All are additive.
 - **macOS is untested here.** The new tests use POSIX signals and `kill(pid, 0)` checks (no `ps`); the real-helper
   and watch-host tests wait on real conditions with 20 s deadlines.
 
+## Review follow-up (PR #100, Greptile)
+
+- **P1** (`watch-host.ts`): `close()` now calls `Supervisor.stopAll`, which fails every waiting subscribe at once
+  (a restart backoff included) and stops the host. A later subscribe starts a host at once. DECISIONS #403.
+- **P2** (`supervisor.ts`): a start reserves its slot and scope before `acquire`. Concurrent `get`s share it, a
+  concurrent start takes another slot, and a close or stop during an acquisition releases what was acquired.
+  DECISIONS #404.
+- **Same class in the helper pool:** not affected (synchronous acquisition, no waiters). DECISIONS #405.
+- Failing-first TestClock tests: 1 in the daemon, 6 in git-core. Mutation check: 8 of 9 new mutants killed, 1
+  equivalent; the 14 earlier ones still killed.
+- `WatchHost` gained a diagnostic `started` count, used by the test.
+
 ## Notes for integration
 
 - DECISIONS numbers #395-#402 may collide with the file-explorer session; renumber as needed. The references to
