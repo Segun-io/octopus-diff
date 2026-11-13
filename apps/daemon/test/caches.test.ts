@@ -184,6 +184,24 @@ describe('file list cache: lookups (#49)', () => {
   });
 });
 
+describe('file list cache: what is stored', () => {
+  it('a list git-core made of another state than the one asked for is returned, not cached', async () => {
+    const { fake, daemon, wt } = await setup();
+    const git: GitCore = fake;
+    // git-core says the list is of a state the summary did not describe (a refresh overtook it).
+    git.listChangedFilesWithState = async (loc, scope, options) => ({
+      files: await fake.listChangedFiles(loc, scope, options),
+      summaryState: 'some-other-state',
+    });
+    const first = (await (await http(daemon, filesUrl(wt))).json()) as { stateHash: string };
+    expect(first.stateHash).toMatch(/^listed-/);
+    const before = calls(fake);
+    await listOf(daemon, wt);
+    // Asked again (an overtaken list is retried, so more than once), not served from the cache.
+    expect(calls(fake)).toBeGreaterThan(before);
+  });
+});
+
 describe('file list cache: keys (#27, #30)', () => {
   it('serves a repeat from the cache and misses on a new stateHash', async () => {
     const { fake, daemon, wt } = await setup();

@@ -59,7 +59,8 @@ export interface CacheStats {
 
 interface Params {
   readonly group: string;
-  readonly compute: (signal: AbortSignal) => Promise<Computed<unknown>>;
+  /** Taken (and cleared) by the lookup: a finished fiber keeps its context, not the closure. */
+  compute: ((signal: AbortSignal) => Promise<Computed<unknown>>) | null;
 }
 
 /** The per-call part of a lookup: the first waiter's computation, handed over as a service. */
@@ -111,7 +112,11 @@ export class StateCache<V> {
    */
   #run(params: Params): Effect.Effect<Computed<V>, unknown> {
     return Effect.callback<Computed<V>, unknown>((resume, signal) => {
-      const run = params.compute(signal) as Promise<Computed<V>>;
+      const compute = params.compute;
+      params.compute = null;
+      const run = (
+        compute ? compute(signal) : Promise.reject(new Error('no computation'))
+      ) as Promise<Computed<V>>;
       run.then(
         (value) => resume(Effect.succeed(value)),
         (error: unknown) => resume(Effect.fail(error)),
