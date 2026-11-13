@@ -27,6 +27,10 @@
     "@octopus-diff/forge": "workspace:*",
     "@octopus-diff/git-core": "workspace:*",
     "@parcel/watcher": "^2.6.0",
+    "effect": "^4.1.4",
     "hono": "^4.13.17"
+  },
+  "devDependencies": {
+    "@effect/vitest": "^4.1.4"
   }
 }
