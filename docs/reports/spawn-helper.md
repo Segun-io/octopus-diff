@@ -275,7 +275,7 @@ with the helper on (a cold core can take longer than the 100 ms margin; DECISION
 first. The SIGSTOP tests release their helpers through `onTestFinished`: a timed-out test must not leave stopped
 processes behind, which the first mutation run did (11 stopped helpers and their zombie children, killed by PID).
 
-**Mutation check** (each mutant alone, `helper.test.ts` or `no-shell.test.ts`): 32 applied, 31 killed.
+**Mutation check** (each mutant alone, `helper.test.ts` or `no-shell.test.ts`): 22 applied (10 in the Greptile round, 12 in the security round), 21 killed.
 - Greptile round: no pid announce after spawn; no start announce; pid channel ignored by the parent; an announced
   request without a pid still retried; `retryable` ignored by the runner; credit given on receipt instead of after
   git's write; credit check removed; client copying the whole input up front; fd 3 check accepting anything.
