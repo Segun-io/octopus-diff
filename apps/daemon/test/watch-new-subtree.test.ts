@@ -1,7 +1,7 @@
 import { mkdirSync, rmSync } from 'node:fs';
 import { mkdir, symlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { it as effectIt } from '@effect/vitest';
+import { assert, it as effectIt } from '@effect/vitest';
 import type { WatchTargets } from '@octopus-diff/contracts';
 import { noopLogger } from '@octopus-diff/contracts';
 import parcelWatcher from '@parcel/watcher';
@@ -438,6 +438,31 @@ describe('NewSubtreeWatch: a replaced directory is not trusted from before (PR #
         expect(unwatched).toHaveLength(1);
         expect(unwatched[0]?.reason).toBe('unwatched-subdir');
       }),
+  );
+
+  effectIt.effect('a continuous burst is inspected maxWaitMs after it began, not later', () =>
+    Effect.gen(function* () {
+      const timers = new Timers(yield* Effect.context<never>());
+      const base = yield* Effect.promise(() => tempDir());
+      const checkedAt: number[] = [];
+      const watch = new NewSubtreeWatch({
+        timers,
+        debounceMs: 20,
+        maxWaitMs: 100,
+        burstThreshold: 100_000,
+        isIgnored: () => false,
+        onCheck: () => checkedAt.push(timers.now()),
+        onUnwatched: () => {},
+      });
+      onCleanup(() => watch.dispose());
+      for (let t = 0; t < 150; t += 15) {
+        watch.note([path.join(base, `d${t}`)]);
+        yield* advance(watch, 15, 5);
+      }
+      yield* advanceUntil(watch, 'two passes', () => checkedAt.length === 2, 1000, 5);
+      // The first pass at 100 (maxWait), the rest of the burst 20 ms after its last note (135).
+      assert.deepStrictEqual(checkedAt, [100, 155]);
+    }),
   );
 
   effectIt.effect('keeps trusting what was not deleted', () =>

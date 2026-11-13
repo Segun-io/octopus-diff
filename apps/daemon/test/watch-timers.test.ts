@@ -192,11 +192,27 @@ describe('coalescing window (TestClock)', () => {
           paths: ['src/f0.ts', 'src/f1.ts', 'src/f2.ts', 'src/f3.ts', 'src/f4.ts'],
           at: 170,
         });
+        // Events less than a debounce apart keep re-arming the trailing timer: none of them leads,
+        // even once the last fire is more than a debounce ago.
+        yield* advance(watcher, 10); // t=180
+        fake.emit(l.main, ['src/r1.ts']); // armed
+        yield* advance(watcher, 140);
+        fake.emit(l.main, ['src/r2.ts']); // t=320: 140 ms after the last fire, still armed
+        yield* advance(watcher, 100);
+        fake.emit(l.main, ['src/r3.ts']); // t=420: 250 ms after the last fire, still armed
+        assert.strictEqual(fires.length, 2);
+        yield* advance(watcher, 150);
+        assert.deepStrictEqual(fires[2], {
+          id: 'main',
+          reason: 'fs',
+          paths: ['src/r1.ts', 'src/r2.ts', 'src/r3.ts'],
+          at: 570,
+        });
         // Quiet again for a debounce: the next event leads again.
         yield* advance(watcher, 150);
         fake.emit(l.main, ['src/z.ts']);
-        assert.strictEqual(fires.length, 3);
-        assert.strictEqual(fires[2]?.at, 320);
+        assert.strictEqual(fires.length, 4);
+        assert.strictEqual(fires[3]?.at, 720);
       }),
   );
 
@@ -351,21 +367,28 @@ describe('polls and relists (TestClock)', () => {
   it.effect('relists every relistMs ± jitter on a Schedule, and stops when the project goes', () =>
     Effect.gen(function* () {
       const random = vi.spyOn(Math, 'random').mockReturnValue(0);
-      const { watcher, lists, l } = yield* started();
-      random.mockReturnValue(0.5);
+      const { watcher, lists } = yield* started();
+      random.mockReturnValue(1);
       yield* advance(watcher, 44_990); // first relist drawn at -25 %: 45 000
       assert.deepStrictEqual(lists, []);
       yield* advance(watcher, 10);
       assert.deepStrictEqual(lists, [{ projectId: 'p1', reason: 'timer', at: 45_000 }]);
+      // The next recurrence draws its own jitter: +25 %, 75 000 later.
+      random.mockReturnValue(0.5);
+      yield* advance(watcher, 74_990);
+      assert.strictEqual(lists.length, 1);
+      yield* advance(watcher, 10);
+      // And then exactly relistMs.
       yield* advance(watcher, 60_000);
       assert.deepStrictEqual(
         lists.map((x) => x.at),
-        [45_000, 105_000],
+        [45_000, 120_000, 180_000],
       );
       yield* Effect.promise(() => watcher.removeProject('p1'));
+      // Its relist fiber is gone with it (and its worktree's poll), not just muted.
+      assert.strictEqual(watcher.pendingTimers, 0);
       yield* advance(watcher, 200_000);
-      assert.strictEqual(lists.length, 2);
-      void l;
+      assert.strictEqual(lists.length, 3);
     }),
   );
 
@@ -380,6 +403,46 @@ describe('polls and relists (TestClock)', () => {
       yield* advance(watcher, 1);
       assert.deepStrictEqual(lists, [{ projectId: 'p1', reason: 'git', at: 290 }]);
     }),
+  );
+
+  it.effect(
+    'the re-subscribe backoff doubles per error and starts over after 10 quiet minutes',
+    () =>
+      Effect.gen(function* () {
+        const context = yield* Effect.context<never>();
+        const l = yield* Effect.promise(() => layout());
+        const fake = fakeSubscribe();
+        const subscribedAt: number[] = [];
+        const clock = () => Effect.runSyncWith(context)(Clock.currentTimeMillis);
+        const subscribe: SubscribeFn = (dir, fn, opts) => {
+          if (dir === l.main) subscribedAt.push(clock());
+          return fake.subscribe(dir, fn, opts);
+        };
+        const { watcher } = makeWatcher(context, subscribe, { resubscribeDelayMs: 1000 });
+        yield* Effect.promise(() => watcher.setProject('p1', l.common, l.worktrees));
+        yield* quiesce(watcher);
+        const fail = () =>
+          fake.subs
+            .filter((s) => s.dir === l.main && s.active)
+            .at(-1)
+            ?.fn(new Error('Unable to poll: Interrupted system call'), []);
+        const resubscribed = (n: number) =>
+          advanceUntil(watcher, `subscription ${n}`, () => subscribedAt.length === n, 600_000, 100);
+        fail(); // t=0
+        yield* resubscribed(2);
+        fail();
+        yield* resubscribed(3);
+        fail();
+        yield* resubscribed(4);
+        // 1 s, then 2 s, then 4 s after each error.
+        assert.deepStrictEqual(subscribedAt.slice(1), [1000, 3000, 7000]);
+        yield* advance(watcher, 600_000, 10_000);
+        yield* advance(watcher, 1000, 100);
+        const quietUntil = clock();
+        fail(); // more than 10 minutes after the last error: the streak starts over
+        yield* resubscribed(5);
+        assert.strictEqual((subscribedAt[4] ?? 0) - quietUntil, 1000);
+      }),
   );
 
   it.effect('close interrupts every timer; nothing fires afterwards', () =>
