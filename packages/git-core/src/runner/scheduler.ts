@@ -19,7 +19,7 @@
  * Effect's `PartitionedSemaphore` has the partitions and the interruption-safe take/release shape
  * this follows, but no lanes (one pool cannot give one class of waiters priority with a starvation
  * bound) and it rotates partitions in hash order; this keeps the exact order of #44 (DECISIONS
- * #406). Grants are synchronous: no fiber is forked to hand out a permit, and a waiter granted while
+ * #440). Grants are synchronous: no fiber is forked to hand out a permit, and a waiter granted while
  * it is suspended resumes at once.
  */
 import type { GitPriority } from '@octopus-diff/contracts';

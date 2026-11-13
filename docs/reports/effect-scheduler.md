@@ -1,7 +1,7 @@
 # effect-scheduler report
 
 Roadmap step 30, issue #47 (tracker #24, milestone M6). Branch `t3/910390fc`, on `main` at `3c90827` (the Effect
-foundation, #46 / PR #100). DECISIONS #406-#410.
+foundation, #46 / PR #100). DECISIONS #440-#444.
 
 ## Shipped
 
@@ -16,7 +16,7 @@ public `GitRunner` API.
   is an interruptible `Effect.callback` (interrupted, the waiter leaves its queue); `withPermit` releases in
   `ensuring`, so a permit is freed only when the work ends, however it ends; `close(error)` fails every waiter.
   Grants are synchronous (a run that finds a free slot spawns inside `run()`, as before) and never recurse; a grant
-  that races an interruption gives its permit back. Why not Effect's own `PartitionedSemaphore`: DECISIONS #406.
+  that races an interruption gives its permit back. Why not Effect's own `PartitionedSemaphore`: DECISIONS #440.
 - **`GitRunner.schedule`** (`runner.ts`): `run()` and `version()` fork `scheduler.withPermit(queueKey, lane, work)`
   with `{ signal }`. Queued, an abort removes the run (it rejects with `aborted`, `{ queued: true }`, and never
   spawns). Running, `work` hands `execute` the callback's AbortSignal, so the interruption runs the existing abort
@@ -139,15 +139,15 @@ several milliseconds.
 
 ## Decisions
 
-DECISIONS #406-#410:
+DECISIONS #440-#444:
 
-- **#406** `LaneSemaphore` rather than Effect's `PartitionedSemaphore` (one pool, no lanes, hash-order rotation), with
+- **#440** `LaneSemaphore` rather than Effect's `PartitionedSemaphore` (one pool, no lanes, hash-order rotation), with
   the exact rules of #44; synchronous grants; the grant/interruption race.
-- **#407** Every run is a fiber; AbortSignal → interruption; queued vs running outcomes, slot held until exit, dispose.
-- **#408** The runner's timers on Effect's `Clock`; unref on the live clock; the test-only `runnerTest.context`; the
+- **#441** Every run is a fiber; AbortSignal → interruption; queued vs running outcomes, slot held until exit, dispose.
+- **#442** The runner's timers on Effect's `Clock`; unref on the live clock; the test-only `runnerTest.context`; the
   helper client's own timers stay real.
-- **#409** No layer or `ManagedRuntime` for the scheduler; per-run cost.
-- **#410** Tests: acceptance tests unchanged on the live clock; the property test with the old scheduler as its model;
+- **#443** No layer or `ManagedRuntime` for the scheduler; per-run cost.
+- **#444** Tests: acceptance tests unchanged on the live clock; the property test with the old scheduler as its model;
   the TestClock tests; the stand-in's stderr detail.
 
 ## Contract changes
@@ -165,7 +165,7 @@ None added or removed (`effect` came with #46). `pnpm credits:check` is up to da
   probe, then a SIGKILL of an unresponsive helper) has no step a test clock could gate, so it keeps its live-clock
   tests in `helper.test.ts`, which pass unchanged.
 - **The helper client's own timers stay real** (probe wait, group-gone wait, close wait, `reapGroup`). That is
-  process supervision, out of #47's scope (DECISIONS #408).
+  process supervision, out of #47's scope (DECISIONS #442).
 - **`runnerTest.context` is test-only.** The daemon does not hand the runner its runtime's context, so the runner's
   fibers use Effect's defaults (live clock, default scheduler) in production. That is the same behaviour as before.
   Sharing one context is a candidate for #48 (Notes for integration).
@@ -176,7 +176,7 @@ None added or removed (`effect` came with #46). `pnpm credits:check` is up to da
 
 ## Notes for integration
 
-- DECISIONS #406-#410 may collide with the file-explorer session (#9); renumber as needed. References: PLAN §5.1, this
+- DECISIONS #440-#444 may collide with the file-explorer session (#9); renumber as needed. References: PLAN §5.1, this
   report, the `scheduler.ts` module comment.
 - No lockfile, packaging or credits change.
 - **For #48:** the runner's fibers take a context (`runnerTest.context` today). If the daemon's runtime should own

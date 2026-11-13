@@ -4763,7 +4763,7 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
 
 ## Effect runner scheduling and interruption (session, 2026-11-13; roadmap #47, step 30)
 
-406. **The runner's scheduler is `LaneSemaphore` (`packages/git-core/src/runner/scheduler.ts`), an Effect partitioned
+440. **The runner's scheduler is `LaneSemaphore` (`packages/git-core/src/runner/scheduler.ts`), an Effect partitioned
      semaphore with the two lanes of #44, not Effect's own `PartitionedSemaphore`.** It replaces the hand-written
      `LaneScheduler`/`FairQueue` of `runner.ts` and keeps their rules exactly:
      - one global limit (`concurrency`, both lanes share it, nothing reserved);
@@ -4786,7 +4786,7 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
        its cleanup runs, and with a scheduler yield in between a release can grant the permit to a fiber that will
        never see it. The cleanup releases a permit that was granted. A test forces the race with
        `MaxOpsBeforeYield = 1` (it failed with the release removed).
-407. **Every git run is a fiber; its AbortSignal interrupts it** (`GitRunner.schedule`). `run()` and `version()` fork
+441. **Every git run is a fiber; its AbortSignal interrupts it** (`GitRunner.schedule`). `run()` and `version()` fork
      `scheduler.withPermit(queueKey, lane, work)` with the runner's context and `{ signal }`
      (`Effect.runForkWith(context)`), and settle from the fiber's observer:
      - **queued**: the interruption removes the waiter synchronously (as the old abort listener did); the run rejects
@@ -4805,7 +4805,7 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      environment, `resolveExecutable`, the helper/direct spawn and the retry rules are untouched, and so are
      `GitRunOptions`, `GitCoreOptions` and the public `GitRunner` API. `runGit` (#46) is unchanged: interrupting it
      aborts the signal it hands to `run()`, which now interrupts the run's fiber.
-408. **The runner's timers read Effect's `Clock`.** The timeout, the abort grace SIGKILL and the helper exit watchdog
+442. **The runner's timers read Effect's `Clock`.** The timeout, the abort grace SIGKILL and the helper exit watchdog
      are `Effect.sleep` fibers started with the runner's context (`GitRunner.timer`, cancelled by interrupting the
      fiber). On the live clock the grace and watchdog sleeps use an unref'd timer, as the `setTimeout(...).unref()` they
      replace (Effect's own sleep keeps the event loop alive); the timeout stays ref'd, as before. A test-only option,
@@ -4814,12 +4814,12 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      client's own timers (the probe wait, the group-gone wait, the close wait, `reapGroup`'s repeats) and
      `git-helper.ts`. They are process supervision inside `helper-client.ts`, which #46 left on real timers on
      purpose (DECISIONS #401), and they wait for real processes, not for the scheduler.
-409. **No layer and no `ManagedRuntime` for the scheduler.** The semaphore owns no resources, so it is plain state of
+443. **No layer and no `ManagedRuntime` for the scheduler.** The semaphore owns no resources, so it is plain state of
      the runner, closed by `dispose()`. The helper pool keeps its lazily built runtime (it needs the resolved git
      binary). Per run the cost is one fiber for the run, one for its timeout and one `AbortController` (the callback's
      signal), all synchronous until the process is spawned: the bench numbers are in
      `docs/reports/effect-scheduler.md`.
-410. **Tests.** The acceptance tests are unchanged (`git diff main -- packages/git-core/test/lanes.test.ts
+444. **Tests.** The acceptance tests are unchanged (`git diff main -- packages/git-core/test/lanes.test.ts
      runner.test.ts helper.test.ts hostile-config.test.ts readonly.test.ts apps/daemon/test/cancel.real-git.test.ts`
      is empty) and they still run on the live clock, so the real 500 ms grace period and the real cancellation of both
      the direct and the helper path stay proven end to end. New:

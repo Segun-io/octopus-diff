@@ -220,7 +220,7 @@ multiple machines, fetch-on-demand (opt-in write-ish). (PR/CI status via `gh`/`g
   interruption; typed failures map to `GitCoreError` / `ApiErrorBody`); time-based tests use `TestClock`. Public APIs
   (`GitCore`, `DaemonCore`, the HTTP API) stay Promise-based. The runner's scheduling is an Effect partitioned
   semaphore with the two lanes of #44 (`LaneSemaphore`): every git run is a fiber, an AbortSignal interrupts it, and
-  the runner's timers (timeout, abort grace, helper exit watchdog) read Effect's `Clock` (#47, DECISIONS #406-#410).
+  the runner's timers (timeout, abort grace, helper exit watchdog) read Effect's `Clock` (#47, DECISIONS #440-#444).
   Next: the watch pipeline as Streams (#48), caches (#49). Not in `packages/contracts` (zod stays), not in the web app (React Query stays); Hono
   and `node:sqlite` stay.
 - Web: Vite + React + TypeScript, TanStack Query (data + SSE-driven invalidation), Tailwind CSS,
