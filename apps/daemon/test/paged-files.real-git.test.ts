@@ -222,6 +222,27 @@ describe('paged file lists through the daemon (#42)', { timeout: 120_000 }, () =
     expect(restarts).toBeGreaterThan(0);
   });
 
+  it('a cursor of an older state restarts, even when the same files are listed', async () => {
+    const fx = await makeRealGitFixture();
+    const dir = await repoWith(fx, 'same', { tracked: 40, modified: 40, untracked: 0 });
+    const { api, id } = await start(fx, dir);
+    await watching(api, id);
+    const first = await api.listFiles(id, { scope: WORKING, limit: 10 });
+    expect(first.nextCursor).toBeTruthy();
+    // Only a patch moves: the same 40 files, another state.
+    await writeFile(path.join(dir, 'a/f0004.txt'), 'line 4\nchanged again\n');
+    await eventually(async () => (await summaryOf(api, id))?.stateHash !== first.stateHash, 10_000);
+    const next = await api.listFiles(id, {
+      scope: WORKING,
+      limit: 10,
+      cursor: first.nextCursor as string,
+    });
+    expect(next.restarted).toBe(true);
+    expect(next.offset).toBe(0);
+    expect(next.stateHash).not.toBe(first.stateHash);
+    expect(keys(next.files)).toEqual(keys(first.files));
+  });
+
   it('serves every page of one state from one list', async () => {
     const fx = await makeRealGitFixture();
     const dir = await repoWith(fx, 'once', { tracked: 120, modified: 100, untracked: 30 });
