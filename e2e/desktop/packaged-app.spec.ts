@@ -69,8 +69,15 @@ test.afterAll(async () => {
       } catch {}
     }
   }
+  // A SIGKILLed process may still be writing for a moment (a daemon logging its last lines):
+  // wait for every one to be gone, and retry the removal, before the directory goes (a Linux CI
+  // run failed with ENOTEMPTY after the tampered-asar test left a daemon running).
+  const deadline = Date.now() + 15_000;
+  while ([...launched].some(alive) && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
   await fixtures?.cleanup();
-  if (root) rmSync(root, { recursive: true, force: true });
+  if (root) rmSync(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
 });
 
 const track = (pid: number | undefined) => {
