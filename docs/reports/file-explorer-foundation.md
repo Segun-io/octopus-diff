@@ -478,3 +478,38 @@ repository have. After that: 3 loaded runs and 10 runs of the explorer suites, a
 - `pnpm test:e2e -- --workers=1`: **106 passed (2.9 min)**; read-only proof 4330 lock polls, 0 violations.
 - `perf:smoke`: exit 0, no failed check.
 - **Warm listing** (`bench:tree`): p50 0.72-0.86 ms, p95 0.84-1.25 ms; cold leaf 14.8 ms.
+
+## PR #99 Greptile review, round 4 (one P1), 2026-11-13
+
+**P1, first listings missed edits** (#435). `flushTreeDirs` joined a first fetch in flight (react-query does that when
+a query has no data yet), so an answer from before the edit could stay cached for good.
+
+- **Fix:** `invalidateTrees` cancels matching queries whose first fetch is in flight, then invalidates, the
+  `invalidateFileLists` pattern. It covers named directories and `all` (working view, `HEAD` and branch views).
+- **Tests:** a gated fake holds the first request; the event arrives; the held request answers the old listing; the
+  cache must end on the new one. Both paths failed first.
+- **Also checked:**
+  - load-more during an edit, both orders: the refresh wins, and the wanted count keeps the loaded length;
+  - the palette's file search: its key holds the list's `stateHash`, so it is not affected.
+- **Mutants:** 5 of 5 killed.
+
+**Verification:**
+
+- `pnpm lint` exit 0 (4 warnings and 1 info in untouched files); `pnpm typecheck` exit 0; `pnpm build` exit 0.
+- web, run twice more: 496 passed each time.
+- `pnpm test` exit 0 in 1 min 41 s:
+
+  | Package | Passed | Skipped |
+  |---|---|---|
+  | contracts | 135 | 0 |
+  | forge | 101 | 5 |
+  | fixtures | 58 | 0 |
+  | web | 496 | 0 |
+  | git-core | 556 | 1 |
+  | daemon | 471 | 4 |
+  | e2e unit | 8 | 0 |
+  | cli | 141 | 0 |
+  | scripts | 34 | 0 |
+
+- `pnpm test:e2e -- --workers=1`: **106 passed (3.0 min)**; read-only proof 0 violations.
+- `perf:smoke`: exit 0, no failed check.
