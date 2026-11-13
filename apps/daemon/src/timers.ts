@@ -91,11 +91,9 @@ export class Timers {
    * (the returned fiber is already interrupted).
    */
   fork<A, E>(effect: Effect.Effect<A, E>): Fiber.Fiber<A, E> {
+    // Closed: an interrupted fiber that never ran any of `effect` (a fork starts synchronously).
+    if (this.#closed) return this.#fork(Effect.interrupt);
     const fiber = this.#fork(effect);
-    if (this.#closed) {
-      fiber.interruptUnsafe();
-      return fiber;
-    }
     if (fiber.pollUnsafe() === undefined) {
       this.#fibers.add(fiber);
       fiber.addObserver(() => this.#fibers.delete(fiber));
