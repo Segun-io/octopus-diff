@@ -5562,3 +5562,181 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
       `docs/DESKTOP.md` §2, #466, #468 and the report said "helper and watch host"; they now say which. (2) The plan
       asked to "add a Node 24 job" although `check` already runs on Node 24 and 26 and `package` on Node 24 (#472):
       `docs/DESKTOP.md` §7 and §9 now describe the existing coverage.
+
+## Desktop phase A: shell MVP (session, 2026-11-13; roadmap #18)
+
+486. **Layout of `apps/desktop` (WS6).** As DESKTOP §4, except that the policies live in their own Electron-free modules
+     so unit tests cover them without the binary: `policy.ts` (navigation, window-open, permissions, window options),
+     `menu.ts`, `window-state.ts`, `shell-env.ts`, `screens.ts`, `page-actions.ts`, `daemon-api.ts`, `args.ts`,
+     `backend-command.ts`, `log-file.ts`; `main.ts` only wires them to Electron. **No `preload.cts` and no `ipc.ts` in
+     phase A**: nothing needs the renderer to call the main process yet (the bridge is #20), and a preload with no API
+     is attack surface for nothing. `package.json`: `main: dist/main.js` (what `electron .` runs); `exports` has only the
+     `@octopus-diff/source` condition (`src/index.ts`, the pure modules), since no `dist/index.js` is built and nobody
+     imports the app. The root `pnpm build` orders it after `cli` and `web` through devDependencies on both.
+487. **Electron 45.3.2, and no install script.** `electron` is pinned to `45.3.2` (what phase 0 verified) as a
+     devDependency of `apps/desktop` (electron-builder expects it there in #19), with `esbuild` (`^0.28.2`, as the CLI).
+     **Electron 45's package has no `postinstall`**: it downloads its binary lazily, on the first `require('electron')`
+     (the `electron` bin, so `start`/`dev`) or through its `install-electron` bin. So the brief's two precautions are not
+     needed and were **not done**: no `allowBuilds` entry (there is no build script to allow), and **no CI change**
+     (`pnpm install --frozen-lockfile` downloads nothing; `ELECTRON_SKIP_BINARY_DOWNLOAD` would have no effect). pnpm
+     12 added `minimumReleaseAgeExclude: [electron@45.3.2]` to `pnpm-workspace.yaml` by itself when the package was
+     added (45.3.2 is newer than the minimum release age); kept, since the version was chosen on purpose. Code that
+     must not download it (the smoke scripts) finds the binary through `path.txt` (`scripts/electron-binary.mjs`).
+     The unit tests import only Electron's **types**; nothing in `pnpm check` needs the binary or a display.
+488. **Credits: not a shipped workspace yet.** The app is not shipped before #19, so `@octopus-diff/desktop` is **not** in
+     `shippedWorkspaces`; `pnpm credits` lists `electron` as a development tool and `esbuild` for `apps/cli, apps/desktop`.
+     Its runtime dependencies (`@octopus-diff/contracts`, `zod`, `@parcel/watcher`) are already credited through the
+     shipped packages. **For #19**: add it to `shippedWorkspaces` when the app ships, and credit what Electron itself
+     ships (Chromium, Node and their `LICENSES.chromium.html`), which the npm metadata does not describe.
+489. **Supervisor numbers.** Restart backoff 0.5, 1, 2, 4, 8 s; `failed` (the error screen) after **5 failures in a
+     row**; a started daemon that served for **60 s** resets the count when it exits; no ready line within **30 s**
+     fails the attempt (SIGTERM, SIGKILL 3 s later). Quit: close stdin, **8 s** for the daemon to exit (the CLI gives its
+     own close 10 s; normal closes take tens of ms), then SIGTERM, **3 s**, then SIGKILL. An attached daemon is
+     polled with `GET /api/health` every **5 s**; **2 misses in a row** mean it went away and `serve` runs again (which
+     starts one, or attaches to whoever started one meanwhile). DESKTOP §3.1 said "SSE drops and health fails": the
+     main process has no SSE connection, and two failed health polls are the same signal with less code. A child that
+     exits before fd 3 delivered its line is handled after fd 3 ends or after 500 ms (an attach run writes its line and
+     exits at once; Node may report the exit first).
+490. **The daemon writes `daemon.log` itself (stdout/stderr = the log file's descriptor), not through pipes.** Deviation
+     from the stdio tuple of DESKTOP §3.1 / the brief (`['pipe','pipe','pipe','pipe']`): it is now
+     `['pipe', logFd, logFd, 'pipe']` (stdin and fd 3 stay pipes; stdin is never `ignore`). Found by the smoke test: when
+     the parent dies, the daemon gets EOF and starts its graceful shutdown, but its first write ("stdin closed, shutting
+     down…") to a dead stderr **pipe** makes the CLI exit 1 halfway, leaving `daemon.json` (and an un-checkpointed
+     WAL) behind; reproduced by hand with a parent that destroys its pipe ends (exit 1). With the file descriptor the
+     writes succeed, the shutdown completes (`daemon.json` removed; checked after SIGKILL of the real Electron app and of
+     a supervising parent), and the log keeps the daemon's last lines after a crash. Bonus: the main process no longer
+     copies log chunks. The supervisor's own lines are synchronous O_APPEND writes to the same descriptor. Pipes remain
+     the fallback when the log cannot be opened. **Request for WS5 (CLI)**, not done here: with `--exit-with-stdin`
+     (or always), ignore `EPIPE` on stdout/stderr so a broken output pipe cannot abort the shutdown (`serve | head`
+     hits the same path).
+491. **Security handlers (DESKTOP §5).** All `webContents` get them (`web-contents-created`): `will-frame-navigate` and
+     `will-navigate` share one handler (the frame event comes first; a guard on it alone would decide before the
+     screen-action check), `will-redirect` is guarded, `will-attach-webview` is prevented, `setWindowOpenHandler` always
+     denies and passes only http(s) to `shell.openExternal`. A denied **navigation** is not opened externally (only
+     `window.open`/target links are, as §5 says): a page can navigate itself in a loop, so no browser tabs from that.
+     Denials are logged with the target's origin only. Permissions: `setPermissionRequestHandler` and
+     `setPermissionCheckHandler` deny everything (clipboard included: the web's copy commands fall back to
+     `execCommand('copy')`, which needs no permission) and `setDevicePermissionHandler` too. `webPreferences`:
+     `contextIsolation`, `sandbox`, `webSecurity` on; `nodeIntegration` (also in workers and subframes), `webviewTag`,
+     `allowRunningInsecureContent`, `experimentalFeatures`, `navigateOnDragDrop`, `spellcheck` off; `devTools` only with
+     `--dev`. Verified in the real window over CDP (no `require`/`process`, blocked navigation, denied
+     `Notification.requestPermission` and geolocation query, `window.open` returns null).
+492. **Screens.** Starting, restarting (only before the UI was ever shown: once it is, the web UI shows "offline" and
+     reconnects by itself), failed (reason, attempts, log path) and git missing (per-platform install commands) are
+     static HTML loaded as `data:` URLs: CSP `default-src 'none'; style-src 'unsafe-inline'`, no script, every dynamic
+     string escaped. Their buttons are links to `octopus-diff-desktop:retry|show-log`, which the navigation handler
+     denies and then acts on, only while a screen is shown in our window (`screenAction`). Fragment links (`#retry`)
+     were the first idea: on a `data:` page Electron 45 emits **no** event for them (probed: no `will-navigate`, no
+     `did-navigate-in-page`). The same actions are in the Help menu.
+493. **"git missing" comes from the daemon's health, not a separate check.** After each ready line the main process
+     reads `GET /api/health`; `git.supported === false` (git missing or older than 2.31) shows the git-missing screen
+     instead of the UI; "Try again" asks again (the daemon re-probes git while it has none). This needs no spawn from
+     Electron (DESKTOP: Electron never runs git; `doctor` would cost another process), it reflects the PATH the daemon
+     really has, and it covers an attached daemon too. Health unreachable (`unknown`) loads the UI anyway.
+494. **Login-shell PATH.** macOS and Linux (Windows keeps its PATH): `$SHELL -ilc` with a constant script that prints
+     `${PATH}` between markers (rc-file noise is skipped; `$PATH__MARKER` would have been read as one unset variable,
+     a bug the real `/bin/sh` test caught), stdin closed, SIGKILL at **5 s**, `OCTOPUS_DIFF_RESOLVING_ENVIRONMENT=1` in
+     its env (VS Code's convention, for slow rc files). Only absolute `sh/bash/zsh/ksh/dash/mksh/fish` shells; anything
+     else (csh, nushell, unset) keeps the inherited PATH. The result is the login PATH first, then inherited entries it
+     lacks; it goes into the daemon's env only (the app's own `process.env` is unchanged).
+495. **Menus.** App (macOS), File (Add Folder… `Cmd/Ctrl+O`; Settings `Ctrl+,` on Windows/Linux; Quit/Close), Edit,
+     View, Window, Help (Show Daemon Log, Restart Daemon Connection). Rule, tested over every item and the roles'
+     implicit accelerators (`ROLE_ACCELERATORS`): an accelerator has a Cmd/Ctrl-class modifier or is F1–F24; Shift or Alt
+     alone is not enough (`Shift+R` is the web's "review all"). The web UI has no hooks yet, and phase A does not change
+     `apps/web`, so the menu drives what the web already has, with constant scripts run only on the daemon's page:
+     **Settings** dispatches the web's own `,` keydown on `window`; **Refresh** (`Cmd/Ctrl+R`, never a page reload) clicks
+     the context bar's refresh button (`data-testid="refresh-indicator"`, the web's `commands.refreshNow`), a no-op when
+     no worktree is open; **Undo** (`Cmd/Ctrl+Z`) is not `role: 'undo'`, which would swallow the web's "undo the last bulk
+     mark": in a text field it runs the editing undo, elsewhere it dispatches the web's Cmd/Ctrl+Z. DevTools and "Reload
+     Page" only with `--dev`. **Request for WS3 (#20)**: explicit hooks (an `octopus:command` event or the bridge) to
+     replace the synthetic key events and the button click.
+496. **Add Folder.** `Cmd/Ctrl+O` opens the native folder dialog, then `POST /api/projects` through the contracts' API
+     client with the token from the ready line (what `octopus-diff add` does). `not_a_repository` offers "Scan for
+     Repositories" (a scan root at the default depth); other errors show a message box. The web UI updates through
+     its event stream. The main process never inspects the folder itself.
+497. **App identity and files.** `app.setName('octopus-diff')`; userData is `<appData>/octopus-diff-desktop`, **not**
+     `~/.config/octopus-diff` (the CLI's config dir on Linux: Chromium's profile must not land among the user's config).
+     Logs: `app.getPath('logs')/daemon.log` (macOS `~/Library/Logs/octopus-diff`, elsewhere `<userData>/logs`), mode
+     0600, rotated once to `daemon.log.1` past 5 MiB at start; the token is never written (ready line parsed, not
+     copied; tested). Window state: `<userData>/window-state.json` (`version: 1`, bounds, maximized, fullScreen),
+     zod-validated, restored on the display it overlaps most (at least 64 px each way), shrunk and moved inside its work
+     area, otherwise centered at the default size. `--app-data-dir` overrides userData (tests; also isolates the
+     single-instance lock, which is per userData). A second instance exits before it opens the log (opening could
+     rotate the first instance's live file), and a quit during the login-shell lookup starts no backend.
+498. **Window chrome.** The native frame on every platform in phase A: `titleBarStyle: 'hiddenInset'` on macOS needs the web
+     header's drag region first (WS3, phase C), or the window could not be moved. `show: false` until `ready-to-show`.
+     macOS keeps the app and its daemon when the window closes (Dock click reopens it); elsewhere closing the window
+     quits. SIGINT/SIGTERM to the main process quit like the menu (daemon stopped first).
+499. **Version notice.** When the attached daemon's version differs from the app's CLI (`__OCTOPUS_CLI_VERSION__`, defined
+     at build time from `apps/cli/package.json`, like the CLI bundle), the window title gets " — daemon X (app Y)" and the
+     log a line. Quiet, no dialog, no web change. Unit-tested; not seen in the real window (no second version here).
+500. **Dev loop.** `--backend source` runs `<electron> --import <tsx/esm> --conditions=@octopus-diff/source
+     apps/cli/src/index.ts serve …` with `ELECTRON_RUN_AS_NODE=1`: tsx as an import hook, not the `tsx` CLI, whose
+     wrapper starts another process and would not pass fd 3 on. `scripts/dev.mjs` builds `main.js`, runs Electron with
+     `--dev --backend source`, and restarts it (SIGTERM, so the daemon is stopped cleanly) on each esbuild rebuild.
+     `--renderer-url <origin>` loads the Vite dev server with the token fragment and adds `--allowed-host <its host>` to
+     `serve` (Vite proxies `/api` with its own Host header); the navigation origin is then Vite's.
+501. **Verification tooling.** `scripts/smoke-backend.mjs` (the real supervisor, the real CLI bundle, Electron as Node; no
+     display) and `scripts/smoke-app.mjs` (the real app; inspected through Chromium's `--remote-debugging-port` and a
+     plain WebSocket CDP client, no new dependency) skip without the binary/build/display; `scripts/mutation-check.mjs`
+     (43 mutations, all killed). None of them is part of `pnpm test` or CI yet: CI has no Electron binary (#487); the
+     Electron CI job with `xvfb-run` is #19's.
+502. **For #19 (packaging).** (a) Refuse `--remote-debugging-port` / `--inspect*` switches in packaged builds (the fuses
+     cover the Node inspector only; the smoke test uses the remote-debugging port on purpose). (b) The CLI bundle is in
+     `dist/cli/` next to `main.js`; `@parcel/watcher` resolves from `apps/desktop/node_modules` (a dependency of this
+     package, as DESKTOP §6 planned). (c) #488's credits. (d) Run `smoke-backend` and `smoke-app` in the Electron CI job.
+503. **Not verified here.** macOS and Windows (no machine): the menu layout, `hide`/`activate`, `Cmd` accelerators, the
+     login-shell PATH under a real GUI launch, SIGTERM-less Windows shutdown (stdin EOF is portable by design; the
+     SIGTERM/SIGKILL fallbacks map to `TerminateProcess`). Menu clicks themselves (native dialog of Add Folder, Undo)
+     were not driven; their scripts and the daemon calls were (unit tests; Settings and Refresh on the real web UI over
+     CDP). The user's real state dir was not used: every run had temp `--state-dir`/`--config-dir`/`--app-data-dir`.
+504. **Gaps in other streams found on the way** (requests, not done): WS5 #490 (EPIPE during `--exit-with-stdin`
+     shutdown); WS3 #495 (menu hooks). Nothing needed from the daemon, git-core or the contracts.
+
+### Desktop phase A: Greptile review of PR #108 (2026-11-13)
+
+505. **Three review fixes** (Greptile P1, P1, P2).
+     - **A health answer for a daemon that has left `ready` is dropped.** `showReady` awaited `fetchHealth`; if the
+       daemon exited meanwhile, the restart or failure screen was up, `ready` was unchanged, and the old request then
+       loaded the dead daemon's URL over it (on the last failed attempt that removed the retry button and the log
+       path). It now also requires the backend to still be in `ready` with this very daemon (`isReadyFor`, tested; a
+       mutant of the guard is killed).
+     - **The login-shell script parses in fish.** `PATH_SCRIPT` used `${PATH}`, which fish rejects, so with
+       `SHELL=/usr/bin/fish` the lookup failed and the inherited PATH was used (git missed on a GUI launch). It is now
+       `printf START; printenv PATH; printf END`: no expansion syntax, the exported PATH in every accepted shell.
+       Tests: the script has no braced or command-substitution expansion; a real fish run when fish is installed
+       (skipped here: no fish on this machine).
+     - **`mutation-check.mjs` cannot report success without testing.** It first requires each test file to pass
+       unchanged (with a non-zero test count), and counts a mutant as killed only when vitest reported failed tests; a
+       run that dies before reporting (missing vitest, a load error) is "BROKEN" and fails the check. The obsolete
+       braces mutant became a "braced expansion" mutant. 44 mutants, all killed.
+
+### Desktop phase A: independent review of PR #108 (2026-11-13; Greptile's credits had run out)
+
+506. **Review findings fixed here.**
+     - **P1, the token reached `daemon.log`.** When `loadURL` failed, `showReady` logged `error.message`, and Electron's
+       message carries the URL that failed (`ERR_CONNECTION_REFUSED (-102) loading 'http://…/#token=…'`). Only the error
+       code is logged now (`loadFailureNote`; anything without a plain code is "unknown error"). Test with a message
+       holding a token; a mutant that logs the message is killed.
+     - **P2, a failed load left a blank window nothing recovered.** `showing` was set to `ui` before the load and kept
+       on failure, so a later `ready` with the same token returned early and `restarting` showed no screen. A failed
+       load (not a superseded one, `ERR_ABORTED`) now shows the failed screen ("Try again" reloads through the forced
+       `showReady`).
+     - **P3, the shell PATH lookup waited for background jobs.** `close` waits for every holder of stdout, so an rc
+       file starting `foo &` made a lookup that had already printed its markers time out (5 s, inherited PATH). It
+       now resolves shortly after `exit` and drops the pipe (failed first: 3 s).
+     - **P3, a screen button on the page being replaced.** `showScreen` marks the screen as showing before the
+       `data:` page has loaded; a screen action now also requires the current page to be one of our screens
+       (`isScreenPage`).
+     - **P3, a second launch during quit** no longer brings the dying window back (`focusWindow` returns when quitting).
+507. **Review findings recorded for later (not in this PR).**
+     - **P2, dev switches in any build (for #19).** `--renderer-url` takes any http(s) origin (and adds
+       `--allowed-host` for it), `--dev` enables DevTools, `--backend source` runs from sources. #19 must refuse all
+       three when `app.isPackaged` (with #502's `--remote-debugging-port`), and limit `--renderer-url` to loopback
+       hosts. An attacker who can start the app as this user gains little, but §5 says "no remote content".
+     - **P3, clipboard.** Denying `clipboard-sanitized-write` can make `navigator.clipboard.writeText` reject;
+       `apps/web/src/lib/copy.ts` falls back to `execCommand` but `RequestView.tsx` ("copy the head branch") calls the
+       API directly. Request to WS3: use `copyText` there (the bridge in #20 can also provide a copy method).
+     - **P3, the log grows during a long session.** It is rotated at startup only and the daemon writes to it
+       directly. Acceptable for the MVP (5 MiB between launches); a size check on "Show the log" or a periodic
+       rotation is a follow-up.

@@ -2053,13 +2053,28 @@
       "noticeText": null
     },
     {
+      "name": "electron",
+      "version": "45.3.2",
+      "license": "MIT",
+      "author": "Electron Community",
+      "url": "https://github.com/electron/electron",
+      "usedBy": [
+        "apps/desktop"
+      ],
+      "via": null,
+      "note": null,
+      "licenseText": null,
+      "noticeText": null
+    },
+    {
       "name": "esbuild",
       "version": "0.28.2",
       "license": "MIT",
       "author": null,
       "url": "https://github.com/evanw/esbuild",
       "usedBy": [
-        "apps/cli"
+        "apps/cli",
+        "apps/desktop"
       ],
       "via": null,
       "note": null,
