@@ -487,3 +487,54 @@ describe('TreeCache', () => {
     expect(() => parseLsTree(`100644 blob ${oid} 1 no-tab\u0000`)).toThrow();
   });
 });
+
+describe('a rename from a name that is not UTF-8 (PR #99 review)', () => {
+  it('lists the source as oldRawPath (its bytes), in the list and the diff', async () => {
+    const dir = fx.repo('raw-rename', { files: { 'keep.txt': 'k\n' } });
+    const content = 'the same content, long enough to pair as a rename\n'.repeat(4);
+    const oid = blob(dir, content);
+    const raw = Buffer.from([0x6f, 0x6c, 0x64, 0xff, 0x2e, 0x74]); // "old\xff.t"
+    const keep = fx.git(dir, ['rev-parse', 'HEAD:keep.txt']).trim();
+    // HEAD holds the raw name; the index renames it to new.txt; the file system never sees it.
+    const tree = mktree(dir, [
+      { mode: '100644', type: 'blob', oid: keep, name: 'keep.txt' },
+      { mode: '100644', type: 'blob', oid, name: raw },
+    ]);
+    const parent = fx.git(dir, ['rev-parse', 'HEAD']).trim();
+    const commit = gitBytes(dir, ['commit-tree', tree, '-p', parent, '-m', 'raw'])
+      .toString()
+      .trim();
+    fx.git(dir, ['update-ref', 'refs/heads/main', commit]);
+    fx.git(dir, ['read-tree', 'HEAD']);
+    gitBytes(
+      dir,
+      ['update-index', '-z', '--index-info'],
+      Buffer.concat([
+        Buffer.from(`0 ${'0'.repeat(40)}\t`),
+        raw,
+        Buffer.from([0]),
+        Buffer.from(`100644 ${oid}\tnew.txt`),
+        Buffer.from([0]),
+      ]),
+    );
+    writeFileSync(path.join(dir, 'new.txt'), content);
+    const status = gitBytes(dir, ['status', '--porcelain=v1', '-z']).toString('latin1');
+    expect(status.startsWith('R  new.txt\u0000oldÿ.t')).toBe(true);
+    const local = locator(dir, path.join(dir, '.git'));
+    const files = await core.listChangedFiles(local, { kind: 'working' });
+    const renamed = files.find((f) => f.path === 'new.txt');
+    expect(renamed).toMatchObject({
+      status: 'renamed',
+      oldPath: 'old�.t',
+      oldRawPath: raw.toString('base64'),
+    });
+    const diff = await core.getFileDiff(local, { kind: 'working' }, { path: 'new.txt' });
+    expect(diff.oldRawPath).toBe(raw.toString('base64'));
+    // A UTF-8 source carries no oldRawPath.
+    fx.git(dir, ['mv', 'keep.txt', 'kept.txt']);
+    const again = await core.listChangedFiles(local, { kind: 'working' });
+    const kept = again.find((f) => f.path === 'kept.txt');
+    expect(kept?.oldPath).toBe('keep.txt');
+    expect(kept && 'oldRawPath' in kept).toBe(false);
+  });
+});

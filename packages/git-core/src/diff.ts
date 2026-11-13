@@ -511,6 +511,10 @@ function trackedIdentity(
     patchHash,
   };
   if (decoded.rawPath !== undefined) identity.rawPath = decoded.rawPath;
+  if (renamed) {
+    const source = decodeRepoPath(entry.srcPath).rawPath;
+    if (source !== undefined) identity.oldRawPath = source;
+  }
   return identity;
 }
 
@@ -545,6 +549,7 @@ function unreadableIdentity(plan: ScopePlan, entry: StatusEntry, statSig: string
   const working = plan.vsWorktree;
   let status: FileStatus = 'modified';
   let oldPath: string | null = null;
+  let oldRawPath: string | undefined;
   let oldMode: string | null = null;
   let newMode: string | null = null;
   if (entry.kind === 'unmerged') {
@@ -556,7 +561,9 @@ function unreadableIdentity(plan: ScopePlan, entry: StatusEntry, statSig: string
     newMode = modeOrNull(entry.modeWorktree);
     if (working && entry.kind === 'renamed') {
       status = entry.score.startsWith('C') ? 'copied' : 'renamed';
-      oldPath = decodeRepoPath(entry.origPath).path;
+      const source = decodeRepoPath(entry.origPath);
+      oldPath = source.path;
+      oldRawPath = source.rawPath;
     } else if (entry.y === 'A' || (working && entry.x === 'A')) status = 'added';
     else if (entry.y === 'T' || (working && entry.x === 'T')) status = 'typechange';
   }
@@ -580,6 +587,7 @@ function unreadableIdentity(plan: ScopePlan, entry: StatusEntry, statSig: string
     ),
   };
   if (decoded.rawPath !== undefined) identity.rawPath = decoded.rawPath;
+  if (oldRawPath !== undefined) identity.oldRawPath = oldRawPath;
   return identity;
 }
 
