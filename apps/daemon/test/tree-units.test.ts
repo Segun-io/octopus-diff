@@ -126,6 +126,30 @@ describe('workingEntries', () => {
     expect(asked).toBe(0);
   });
 
+  it('one row per name: the working copy replaces a file with a directory and the reverse', async () => {
+    const files = [
+      changed('d', 'deleted'),
+      changed('d/new.txt', 'untracked'),
+      changed('e/x', 'deleted'),
+      changed('e', 'untracked'),
+    ];
+    const index = overlayIndex(files, undefined);
+    const tree = listing('', [
+      ['d', 'file'],
+      ['e', 'dir'],
+    ]);
+    for (const count of [async () => 1, none]) {
+      const rows = await workingEntries(tree, '', index, count);
+      expect(rows.map((e) => [e.name, e.kind, e.status, e.replaces ?? null])).toEqual([
+        ['d', 'dir', 'untracked', 'file'],
+        ['e', 'file', 'untracked', 'dir'],
+      ]);
+    }
+    // Nothing replaced: no flag.
+    const plain = await workingEntries(tree, '', overlayIndex([], undefined), none);
+    expect(plain.every((e) => e.replaces === undefined)).toBe(true);
+  });
+
   it('lists omitted untracked directories (#43) with their counts', async () => {
     const omission: UntrackedOmission = {
       count: 5000,
@@ -188,7 +212,7 @@ describe('treeDelta', () => {
   const basis = (head: string, s: SummarySnapshot, omission?: UntrackedOmission) =>
     treeBasis('state', head, s, omission);
 
-  it('names the ancestors of a path whose status moved, not of a content edit', () => {
+  it('names the ancestors of a path whose status or content moved, and nothing when none did', () => {
     const prev = basis(OID, snap([{ path: 'a/b/c.ts' }, { path: 'x/new.ts', xy: '??' }]));
     const edited = basis(
       OID,
@@ -197,7 +221,12 @@ describe('treeDelta', () => {
         { path: 'x/new.ts', xy: '??' },
       ]),
     );
-    expect(treeDelta(prev, edited)).toEqual({ all: false, dirs: [] });
+    // A content edit can move a row (an MM path back to HEAD's content leaves the list): named.
+    expect(treeDelta(prev, edited)).toEqual({
+      all: false,
+      dirs: [{ path: '' }, { path: 'a' }, { path: 'a/b' }],
+    });
+    expect(treeDelta(prev, prev)).toEqual({ all: false, dirs: [] });
     const staged = basis(
       OID,
       snap([
@@ -217,6 +246,29 @@ describe('treeDelta', () => {
     const prev = basis(OID, snap([{ path: 'n/a.ts', xy: 'A.' }]));
     const cur = basis(OID, snap([{ path: 'n/a.ts', xy: 'A.', sig: 's2' }]));
     expect(treeDelta(prev, cur).dirs).toEqual([{ path: '' }, { path: 'n' }]);
+  });
+
+  it('every snapshot field counts: status, signature, index and HEAD ids, the source', () => {
+    const one = { path: 'p/f', xy: 'MM', sig: 's1', hH: 'a'.repeat(40), hI: 'b'.repeat(40) };
+    const prev = basis(OID, snap([one]));
+    for (const change of [
+      { xy: '.M' },
+      { xy: 'M.' },
+      { sig: 's2' },
+      { hI: 'c'.repeat(40) },
+      { hH: 'd'.repeat(40) },
+      { oldPath: 'q/f', xy: 'R.' },
+    ]) {
+      const cur = basis(OID, snap([{ ...one, ...change }]));
+      expect(treeDelta(prev, cur).dirs, JSON.stringify(change)).toContainEqual({ path: 'p' });
+    }
+    // A raw source and a display source of the same text are told apart.
+    const raw = basis(OID, snap([{ ...one, xy: 'R.', oldPath: 'ZP8=' }]));
+    const rawSource = basis(
+      OID,
+      snap([{ ...one, xy: 'R.', oldPath: 'd\ufffd', oldRawPath: 'ZP8=' }]),
+    );
+    expect(treeDelta(raw, rawSource).dirs.length).toBeGreaterThan(0);
   });
 
   it('a rename names both sides', () => {

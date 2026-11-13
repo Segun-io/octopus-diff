@@ -2249,7 +2249,7 @@ export class DaemonCore {
       // An unborn branch: its root is empty, every other path is not there.
       if (listing.kind !== 'dir' && !(commit === null && dirKey === ''))
         notADirectory(listing.kind);
-      const key = `t ${project.row.id} ${commit ?? ''} ${dirKey}`;
+      const key = `t\u0000${project.row.id}\u0000${commit ?? ''}\u0000${dirKey}`;
       cached = this.#treeListings.get(key);
       if (!cached) {
         const entries = treeEntries(listing);
@@ -2259,31 +2259,49 @@ export class DaemonCore {
     } else {
       await raceSignal(this.#ensureSummary(entry), signal);
       this.#summaryOrThrow(entry);
-      let listed = await this.#gitFilesAt(project, entry, { kind: 'working' }, want);
-      if (listed.of === 'now') {
-        // git-core listed a newer state than the summary held: wait for that summary, once.
-        await raceSignal(entry.refresher.current ?? Promise.resolve(), signal);
-        listed = await this.#gitFilesAt(project, entry, { kind: 'working' }, want);
+      // The file list and the commit must describe one state (PR #99 review): the list is taken
+      // only when git-core says it is of the summary it was asked for, and HEAD read *after* it is
+      // still that summary's HEAD (the list was read in between, so a commit cannot have landed
+      // under it). Otherwise a summary refresh runs and it is tried again, up to `LIST_ATTEMPTS`
+      // times; then a retryable 409, never a list of one commit laid over another's tree.
+      let agreed: {
+        listed: ListedAt<GitChangedFile>;
+        summary: WorktreeSummary;
+        now: Awaited<ReturnType<typeof list>>;
+      } | null = null;
+      for (let attempt = 1; attempt <= LIST_ATTEMPTS; attempt++) {
+        const listed = await this.#gitFilesAt(project, entry, { kind: 'working' }, want);
+        const held = listed.summary;
+        if (listed.of === 'summary' && held) {
+          const now = await list('HEAD');
+          if (now.commit === held.headSha) {
+            agreed = { listed, summary: held, now };
+            break;
+          }
+        }
+        if (attempt === LIST_ATTEMPTS) break;
+        await raceSignal(entry.refresher.current ?? this.#refresh(entry), signal);
       }
-      const summary = listed.summary ?? entry.summary;
-      if (!summary) throw this.#errorFromInfo(entry.error);
-      const omission = listed.of === 'now' ? listed.untrackedOmitted : summary.untrackedOmitted;
-      stateHash =
-        listed.of === 'now'
-          ? listedStateHash(listed.files, listed.untrackedOmitted)
-          : summary.stateHash;
+      if (!agreed) {
+        throw new ApiError('conflict', 'the worktree changed while it was listed; retry', {
+          details: { retryable: true },
+        });
+      }
+      const { listed, summary } = agreed;
+      const omission = summary.untrackedOmitted;
+      stateHash = summary.stateHash;
       // Conflicts the list lacks (content equal to HEAD), from the same state's snapshot.
       const basis = entry.treeBasis;
       const conflicts = basis?.stateHash === stateHash ? (basis.conflicts ?? []) : [];
       const index = overlayIndex(listed.files, omission, conflicts);
       const head = summary.headSha;
-      const listing = head === null ? null : await list(head);
+      const listing = head === null ? null : agreed.now;
       commit = listing?.commit ?? null;
       tree = listing?.tree ?? null;
       if (listing?.kind !== 'dir' && !overlayHasDir(index, dirKey)) {
         notADirectory(listing?.kind ?? null);
       }
-      const key = `w ${worktreeId} ${stateHash} ${head ?? ''} ${dirKey}`;
+      const key = `w\u0000${worktreeId}\u0000${stateHash}\u0000${head ?? ''}\u0000${dirKey}`;
       cached = this.#treeListings.get(key);
       if (!cached) {
         const locator = this.#locator(entry);

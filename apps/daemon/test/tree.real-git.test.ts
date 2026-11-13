@@ -211,6 +211,30 @@ async function expectMatchesGit(fx: RealGitFixture, repo: string, api: ApiClient
   // Files: everything tracked, plus every new path that exists; nothing else.
   const expectedFiles = new Set(git.headFiles);
   for (const [p, c] of git.expected) if (c !== 'deleted') expectedFiles.add(p);
+  // Directories: HEAD's, plus those holding a new path that exists.
+  const expectedDirs = new Set(git.headDirs);
+  for (const p of expectedFiles) for (const a of ancestors(p)) expectedDirs.add(a);
+  // One row per name (PR #99 review): where the working copy replaced a file with a directory or
+  // the reverse, the side that exists in the working copy is listed, saying what it replaces; the
+  // walk does not reach below a directory that became a file.
+  const liveFile = (p: string) => expectedFiles.has(p) && git.expected.get(p) !== 'deleted';
+  const liveDir = (p: string) =>
+    [...expectedFiles].some((f) => f.startsWith(`${p}/`) && liveFile(f));
+  const replaces = new Map<string, string>();
+  for (const p of [...expectedFiles].filter((f) => expectedDirs.has(f))) {
+    if (liveDir(p)) {
+      expectedFiles.delete(p);
+      if (git.headFiles.has(p)) replaces.set(p, 'file');
+    } else if (liveFile(p)) {
+      expectedDirs.delete(p);
+      for (const f of [...expectedFiles]) if (f.startsWith(`${p}/`)) expectedFiles.delete(f);
+      for (const d of [...expectedDirs]) if (d.startsWith(`${p}/`)) expectedDirs.delete(d);
+      if (git.headDirs.has(p)) replaces.set(p, 'dir');
+    }
+  }
+  for (const [key, entry] of listed) {
+    expect(entry.replaces, `replaces of ${entry.path}`).toBe(replaces.get(key));
+  }
   const listedFiles = new Set([...listed].filter(([, e]) => e.kind !== 'dir').map(([k]) => k));
   expect([...listedFiles].sort()).toEqual([...expectedFiles].sort());
   for (const key of listedFiles) {
@@ -221,9 +245,6 @@ async function expectMatchesGit(fx: RealGitFixture, repo: string, api: ApiClient
     if (git.headFiles.has(key)) expect(entry.oid, entry.path).not.toBeNull();
   }
 
-  // Directories: HEAD's, plus those holding a new path that exists.
-  const expectedDirs = new Set(git.headDirs);
-  for (const p of expectedFiles) for (const a of ancestors(p)) expectedDirs.add(a);
   const listedDirs = new Set([...listed].filter(([, e]) => e.kind === 'dir').map(([k]) => k));
   expect([...listedDirs].sort()).toEqual([...expectedDirs].sort());
   for (const key of listedDirs) {
@@ -272,8 +293,9 @@ describe('GET /tree working view vs git status (differential)', () => {
       'tc.txt': 'becomes a symlink\n',
       'run.sh': '#!/bin/sh\n',
       'Case.txt': 'upper\n',
+      'repl-f': 'a file that becomes a directory\n',
     };
-    for (const d of ['src', 'old', 'part', 'ren', 'docs/deep/er', 'dir with space']) {
+    for (const d of ['src', 'old', 'part', 'ren', 'docs/deep/er', 'dir with space', 'repl-d']) {
       mkdirSync(path.join(fx.root, 'shapes', d), { recursive: true });
     }
     Object.assign(files, {
@@ -288,6 +310,8 @@ describe('GET /tree working view vs git status (differential)', () => {
       'ren/from.txt': 'rename me, a few lines\nso the similarity holds\n',
       'docs/deep/er/doc.md': 'doc\n',
       'dir with space/ü.txt': 'unicode\n',
+      'repl-d/a.txt': 'a directory that becomes a file\n',
+      'repl-d/b.txt': 'b\n',
     });
     const repo = await makeRealRepo(fx, 'shapes', files);
     fx.git(repo, 'add', '-f', 'keep.log');
@@ -358,6 +382,12 @@ describe('GET /tree working view vs git status (differential)', () => {
       );
     }
     if (!FOLDS) writeFileSync(path.join(repo, 'case.txt'), 'lower, untracked\n');
+    // Replacements (PR #99 review): a tracked file by a directory, a tracked directory by a file.
+    rmSync(path.join(repo, 'repl-f'));
+    mkdirSync(path.join(repo, 'repl-f'));
+    writeFileSync(path.join(repo, 'repl-f/new.txt'), 'inside the new directory\n');
+    rmSync(path.join(repo, 'repl-d'), { recursive: true });
+    writeFileSync(path.join(repo, 'repl-d'), 'the new file\n');
 
     await api.addProject({ path: repo });
     for (const limit of [2, 7, 1000]) {
@@ -386,6 +416,16 @@ describe('GET /tree working view vs git status (differential)', () => {
       expect(listed.get('added')?.status).toBe('added');
       expect(listed.get('mix')?.status).toBe('added');
       expect(listed.has('build')).toBe(false);
+      expect(listed.get('repl-f')).toMatchObject({
+        kind: 'dir',
+        status: 'untracked',
+        replaces: 'file',
+      });
+      expect(listed.get('repl-d')).toMatchObject({
+        kind: 'file',
+        status: 'untracked',
+        replaces: 'dir',
+      });
       if (RAW_NAMES) {
         const raw = Buffer.from([0x74, 0xfe, 0x2e, 0x74]).toString('latin1');
         expect(listed.get(`src/${raw}`)).toMatchObject({
@@ -641,12 +681,13 @@ describe('GET /tree warm path and deltas', () => {
       all: false,
       dirs: [{ path: '' }, { path: 'src' }, { path: 'src/lib' }, { path: 'src/lib/new' }],
     });
-    // Editing an already modified file again moves no listing.
+    // Editing an already modified file again names its ancestors only (PR #99 review: a content
+    // edit can move a row).
     mark = events.events.length;
     writeFileSync(path.join(repo, 'src/b.ts'), 'b changed again\n');
     await capi.refreshWorktree(id);
     event = await changedAfter(mark);
-    expect(event.dirs).toEqual({ all: false, dirs: [] });
+    expect(event.dirs).toEqual({ all: false, dirs: [{ path: '' }, { path: 'src' }] });
     // A commit moves HEAD: everything.
     mark = events.events.length;
     fx.git(repo, 'add', '-A');

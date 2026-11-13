@@ -56,10 +56,12 @@ interface PathOverlay {
   status: FileStatus;
   staged: boolean;
   unstaged: boolean;
-  /** Display path of the rename / copy source. */
+  /** Display path of the rename / copy source, and its raw bytes when not UTF-8. */
   oldPath?: string;
-  /** Display path of the rename target (on the source's record). */
+  oldRawPath?: string;
+  /** Display path of the rename target (on the source's record), and its raw bytes. */
   renamedTo?: string;
+  renamedToRawPath?: string;
   newMode: string | null;
   /** The record comes from a rename's source, not from a file of the list. */
   derived: boolean;
@@ -181,15 +183,18 @@ export function overlayIndex(
     };
     if (f.oldPath !== null && (f.status === 'renamed' || f.status === 'copied')) {
       record.oldPath = f.oldPath;
+      if (f.oldRawPath !== undefined) record.oldRawPath = f.oldRawPath;
     }
     addRecord(index, key, record);
     if (f.status === 'renamed' && f.oldPath !== null) {
-      // The source no longer exists at its old path: listed there as deleted.
-      addRecord(index, bstrOf({ path: f.oldPath }), {
+      // The source no longer exists at its old path: listed there as deleted. Its key is its raw
+      // bytes (`oldRawPath`), never the lossy display form (PR #99 review).
+      addRecord(index, bstrOf({ path: f.oldPath, rawPath: f.oldRawPath }), {
         status: 'deleted',
         staged: f.staged,
         unstaged: f.unstaged,
         renamedTo: f.path,
+        ...(f.rawPath !== undefined ? { renamedToRawPath: f.rawPath } : {}),
         newMode: null,
         derived: true,
       });
@@ -272,7 +277,9 @@ function applyFile(entry: TreeEntry, record: PathOverlay): void {
   entry.staged = record.staged;
   entry.unstaged = record.unstaged;
   if (record.oldPath !== undefined) entry.oldPath = record.oldPath;
+  if (record.oldRawPath !== undefined) entry.oldRawPath = record.oldRawPath;
   if (record.renamedTo !== undefined) entry.renamedTo = record.renamedTo;
+  if (record.renamedToRawPath !== undefined) entry.renamedToRawPath = record.renamedToRawPath;
 }
 
 function applyDir(entry: TreeEntry, agg: DirAggregate): void {
@@ -345,8 +352,39 @@ export async function workingEntries(
     out.push({ key, dir: true, entry });
   }
   await Promise.all(deletedChecks);
-  out.sort((a, b) => compareTreeNames(a.key, a.dir, b.key, b.dir));
-  return out.map((o) => o.entry);
+  // One row per name (PR #99 review): when the working copy replaced HEAD's file `d` with a
+  // directory `d/` (or a directory with a file), HEAD's row and the working copy's would both be
+  // named `d`. The row that exists in the working copy wins and says what it `replaces`.
+  const byName = new Map<string, Array<{ key: string; dir: boolean; entry: TreeEntry }>>();
+  for (const o of out) {
+    const same = byName.get(o.key);
+    if (same) same.push(o);
+    else byName.set(o.key, [o]);
+  }
+  const rows: Array<{ key: string; dir: boolean; entry: TreeEntry }> = [];
+  for (const same of byName.values()) {
+    if (same.length === 1) {
+      rows.push(same[0] as (typeof same)[number]);
+      continue;
+    }
+    // At most two: a directory and a non-directory of the same name. A row that exists only in
+    // the working copy (no object id) and is live wins; else a live HEAD row; else HEAD's.
+    const winner =
+      same.find((o) => o.entry.oid === null && live(o.entry)) ??
+      same.find((o) => live(o.entry)) ??
+      same[0];
+    if (!winner) continue;
+    const loser = same.find((o) => o !== winner);
+    if (loser && loser.entry.oid !== null) winner.entry.replaces = loser.entry.kind;
+    rows.push(winner);
+  }
+  rows.sort((a, b) => compareTreeNames(a.key, a.dir, b.key, b.dir));
+  return rows.map((o) => o.entry);
+}
+
+/** The row's path exists in the working copy, as far as the row says (`deleted` does not). */
+function live(entry: TreeEntry): boolean {
+  return entry.status !== 'deleted';
 }
 
 // --- directory deltas on `worktree.changed` (#9) ------------------------------------------------
@@ -365,9 +403,6 @@ export interface TreeBasis {
   omitted: Map<string, number>;
 }
 
-/** Status letters whose rename pairing can move with the content (`diff --find-renames`). */
-const PAIRING = /[ADRC]/;
-
 /** Unmerged status pairs (`git status`): both sides touched the path. */
 const UNMERGED = new Set(['DD', 'AU', 'UD', 'UA', 'DU', 'AA', 'UU']);
 
@@ -381,11 +416,16 @@ export function treeBasis(
   const conflicts: string[] = [];
   for (const e of snapshot.entries) {
     if (UNMERGED.has(e.xy)) conflicts.push(bstrOf({ path: e.path, rawPath: e.rawPath }));
-    const old = e.oldRawPath ?? e.oldPath ?? '';
-    // A content edit of a modified file moves nothing in the explorer; one of an added or deleted
-    // path may pair it with another one as a rename.
-    const sig = PAIRING.test(e.xy) ? e.sig : '';
-    paths.set(bstrOf({ path: e.path, rawPath: e.rawPath }), `${e.xy}\u0000${old}\u0000${sig}`);
+    const old = e.oldRawPath !== undefined ? `r:${e.oldRawPath}` : `p:${e.oldPath ?? ''}`;
+    // Every field of the entry (PR #99 review): a content edit alone can move a row. An `MM` path
+    // whose working content goes back to HEAD's leaves the working list (`git diff HEAD`) with the
+    // same status letters; an added or deleted path can pair up as a rename; a submodule's commit
+    // is in its signature. The cost is a refresh of the edited file's open ancestors, which are
+    // warm listings.
+    paths.set(
+      bstrOf({ path: e.path, rawPath: e.rawPath }),
+      `${e.xy}\u0000${old}\u0000${e.sig}\u0000${e.hH ?? ''}\u0000${e.hI ?? ''}`,
+    );
     if (e.oldPath !== undefined) {
       const oldKey = bstrOf({ path: e.oldPath, rawPath: e.oldRawPath });
       if (!paths.has(oldKey)) paths.set(oldKey, `source\u0000${e.path}`);
