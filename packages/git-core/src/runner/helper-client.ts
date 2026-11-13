@@ -6,9 +6,9 @@
  *
  * Failure model: a helper that exits while git processes are in flight reports them `lost`. The
  * pid of every git process reaches this side through the helper's pid channel (fd 3, written
- * synchronously around `spawn()`), so the groups of a crashed helper are SIGKILLed here, and a
+ * synchronously around the call that starts git), so the groups of a crashed helper are SIGKILLed here, and a
  * lost request is retryable only once its group is gone, or when it never started. A request the
- * helper announced but whose pid never arrived (it died inside `spawn()`) is not retried: git
+ * helper announced but whose pid never arrived (it died while starting git) is not retried: git
  * may be running. A helper that exits before it says READY counts as
  * a start failure; after `MAX_START_FAILURES` in a row, or `MAX_CRASHES` within `CRASH_WINDOW_MS`,
  * the pool turns itself off and the runner spawns git directly (logged once).
@@ -401,7 +401,7 @@ class HelperProcess {
           request.handlers.lost(reason, gone),
         );
       } else {
-        // Announced but no pid: the helper died inside spawn(), git may be running unseen.
+        // Announced but no pid: the helper died while starting git, which may be running unseen.
         request.handlers.lost(reason, !request.started);
       }
     }

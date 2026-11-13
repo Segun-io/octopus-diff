@@ -464,6 +464,9 @@ describe('untracked files: no git process at all', () => {
   it('a .gitignore written just before the state was read is checked by the whole route', {
     retry: 5,
   }, async () => {
+    // "Just before" means within the 100 ms margin: a cold core (the version probe, the spawn
+    // helper starting, #45) can take longer than that to read its first state.
+    await fast.version();
     const repo = fx.repo('ignore-fresh', { files: { 'a.txt': 'a\n' } });
     text(repo, 'new.txt', 'new\n');
     text(repo, '.gitignore', 'ignored.txt\n');
