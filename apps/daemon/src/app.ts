@@ -42,6 +42,7 @@ import {
   SetBookmarkRequestSchema,
   SetReviewPolicyRequestSchema,
   type SettingsResponse,
+  TreeQuerySchema,
   UndoReviewRequestSchema,
   UpdateProjectRequestSchema,
   type UpdateProjectResponse,
@@ -370,6 +371,12 @@ export function createApp(deps: AppDeps): Hono {
     const worktreeId = idParam(c, 'worktreeId');
     const query = parseWith(FilesQuerySchema, c.req.query(), 'query');
     return c.json(await core.listFiles(worktreeId, query.scope, c.req.raw.signal, query.page));
+  });
+
+  route('getTree', async (c) => {
+    const worktreeId = idParam(c, 'worktreeId');
+    const query = parseWith(TreeQuerySchema, c.req.query(), 'query');
+    return c.json(await core.listTree(worktreeId, query, c.req.raw.signal));
   });
 
   route('getDiff', async (c) => {

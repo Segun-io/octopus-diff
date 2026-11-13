@@ -8,6 +8,7 @@ import {
 } from './common.js';
 import { WorktreeListItemSchema } from './domain.js';
 import { DiffScopeSchema, ScopeKindSchema } from './scope.js';
+import { WorktreeChangedDirsSchema } from './tree.js';
 
 /**
  * Server-Sent Events on `GET /api/events`. Each event is sent as a *named* SSE event whose
@@ -87,6 +88,12 @@ export const WorktreeChangedEventSchema = z.object({
    * for one: no git process is spent on the event), and from older daemons.
    */
   paths: WorktreeChangedPathsSchema.optional(),
+  /**
+   * The file explorer (#9): directories whose working-view listing (`GET /tree` without `ref`) may
+   * have changed (see `WorktreeChangedDirsSchema`). Absent when the daemon cannot tell (no
+   * snapshot of this state), and from older daemons: then refresh every open directory.
+   */
+  dirs: WorktreeChangedDirsSchema.optional(),
 });
 
 export const WorktreeAddedEventSchema = z.object({

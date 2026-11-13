@@ -1,0 +1,515 @@
+# file-explorer-foundation report (roadmap #9, step 27, M5)
+
+## Shipped
+
+- **git-core: a lazy per-directory listing** (`packages/git-core/src/tree.ts`; `GitCore.listTree`, `countTreeFiles`).
+  - **How it reads.** `listTree(worktree, { ref, path, rawPath })` resolves the commit and its root tree, then walks
+    tree objects one component at a time. Each tree is read with `ls-tree -z -l <tree oid>` and the next component is
+    looked up by its raw bytes.
+    - The ref is `HEAD` (from the HEAD file), a full id (memoized), or a branch or tag (from the ref files, else
+      `rev-parse --verify --end-of-options`).
+    - No path, pathspec or ref ever reaches git's command line.
+    - A symlink or a submodule ends the walk: it is never entered.
+    - The working tree is never read.
+  - **What it returns.** Entries `{name, rawName?, path, rawPath?, kind: file|dir|symlink|submodule, mode, oid,
+    size}` in git's tree order, plus `{commit, tree, kind}` of the path.
+  - **Cache.** Listings are cached by `(common dir, tree oid)` in a 64 MiB LRU (single-flight, cancellable), shared by
+    every worktree, branch and commit holding the same directory.
+  - **`countTreeFiles`.** One `ls-tree -r -z` of a tree, memoized. It tells whether a directory's tracked files are
+    all deleted.
+- **Allowlist.** `ls-tree` was added, but only with `-z`, `-l`/`--long`, `-r` and **exactly one full object id**. Paths,
+  refs, `--` / `--end-of-options` and every other option are refused, and there is no stdin (DECISIONS #407).
+- **Contracts** (one `contracts:` commit, DECISIONS #406; `packages/contracts/src/tree.ts`):
+  - the route `GET /api/worktrees/:worktreeId/tree?path=&rawPath=&ref=&limit=&cursor=`, with `ApiClient.getTree`;
+  - the schemas: `TreeQuerySchema`, `TreeResponseSchema`, `TreeEntrySchema`;
+  - the tree order (`compareTreeNames`) and paging (`pageTreeEntries`, `treeListingKey`): state-bound opaque cursors
+    `t1.<16 hex>.<offset>`, at most 5000 entries and 900 KB per page;
+  - `worktree.changed.dirs` (`{ all, dirs[] }`, at most 100 directories and 8000 characters).
+- **Daemon** (`apps/daemon/src/tree.ts`, `core.ts` `listTree`, route `getTree`):
+  - **Working view** (no `ref`): HEAD's listing (the summary's `headSha`) overlaid with the cached `working` list of the
+    same state. Warm, a listing spawns no git process.
+  - **Tree view** (`ref`): the commit's tree only.
+  - **Overlay rules** (DECISIONS #409):
+    - statuses come from the working list; a rename's source is listed as `deleted` with `renamedTo`;
+    - new files and directories are listed, a new directory as `untracked` or `added`;
+    - a HEAD directory whose tracked files are all deleted is `deleted`;
+    - a directory's `changes` counts the changed paths below it;
+    - directories omitted above the untracked cap (#43) carry `untrackedOmitted`;
+    - ignored files are not shown; a sparse checkout is documented, not refused.
+  - **Conflicts.** The working list leaves out a conflict whose content equals HEAD, so conflicts come from the
+    summary snapshot (#410).
+  - **Directory deltas** on `worktree.changed` come from consecutive summary snapshots, with no git process (#411).
+  - **Signals.** Request cancellation (#44/#81) runs through the interactive lane.
+- **Web data layer** (`apps/web/src/api/tree.ts`, plus a few lines in `api/cache.ts`; no pane, DECISIONS #413):
+  - `useTree(worktreeId, dir, { ref, enabled })`, `treeKeys`, `fetchTreeDir`, `loadMoreTree` (loaded-prefix paging as
+    in #42);
+  - `collectTreeDirs` / `flushTreeDirs`, wired into `collectEventEffects` / `flushEffects`: exactly the named open
+    directories refetch, and `all` (or no `dirs`) refetches the worktree's whole working view.
+- **Benches**:
+  - `pnpm --filter @octopus-diff/e2e bench:tree` (`e2e/bench/tree.ts`; results in `docs/bench/results-tree.{json,md}`);
+  - `pnpm --filter @octopus-diff/web perf:tree` (`apps/web/scripts/tree-perf.ts` and the dev-only page
+    `scripts/tree-perf/`; results in `docs/bench/results-tree-render.json`);
+  - both are described in the bench README.
+
+## Verification
+
+All runs are on this machine (12-core WSL2, Node 26, git 2.53), from the repository root, on the branch head unless
+noted. Another session's git-core tests (worktree `t3-ddbc7073`) were running on the machine during part of this, so
+timings are noisy upward.
+
+- `pnpm lint`: exit 0. It reports 4 warnings and 1 info, all in files this branch does not touch. Credits are up to
+  date (no dependency change).
+- `pnpm typecheck`: exit 0. `pnpm build`: exit 0.
+- `pnpm test`: exit 0 in 1 min 37 s. Counts by package:
+
+  | Package | Passed | Skipped |
+  |---|---|---|
+  | contracts | 130 | 0 |
+  | forge | 101 | 5 |
+  | fixtures | 58 | 0 |
+  | web | 487 | 0 |
+  | git-core | 503 | 1 |
+  | daemon | 441 | 4 |
+  | e2e unit | 8 | 0 |
+  | cli | 141 | 0 |
+  | scripts | 34 | 0 |
+
+- git-core and daemon, run twice more: the same counts each time. git-core: 503 passed, 1 skipped (49-50 s). Daemon:
+  441 passed, 4 skipped (26 s).
+- Folding mode (`OCTOPUS_DIFF_TEST_FOLDS_CASE=1`): git-core 488 passed, 16 skipped; daemon 439 passed, 6 skipped.
+- `pnpm test:e2e -- --workers=1`: **106 passed (3.5 min)**. The read-only proof covered 12 control repos and 4561 lock
+  polls, with **0 violations**. The `git-core has been disposed` lines in the log are the usual fixture-teardown noise
+  that earlier reports also mention.
+- `pnpm --filter @octopus-diff/web perf:smoke`: exit 0, no failed check.
+- CI-only steps from `.github/workflows/ci.yml`:
+  - CLI smoke: `--version` and `doctor` run, with 0 problems.
+  - `pack:tarball` (9.5 MB, 1070 files), installed into an empty directory: `--version` runs, the doctor's `git-helper`
+    check is `ok`, and `smoke-tarball.mjs` passes all three checks (diff through the daemon, helper present, nothing
+    left after SIGKILL).
+- **Default bench** (`pnpm --filter @octopus-diff/e2e bench --out /tmp/bench-default`, not committed): exit 0, all 9
+  budgets PASS:
+
+  | Budget | Measured |
+  |---|---|
+  | Cold first paint | 190 ms |
+  | Warm reload | 76 ms |
+  | Startup spawns per worktree | 4.6 |
+  | Idle CPU | 0.17 % |
+  | Write → SSE p95 | 22 ms |
+  | Diff during a burst p95 | 63 ms |
+  | Traffic per edit | 1449 B |
+  | `/api/projects` per edit | 0 |
+  | Write → sidebar p95 | 30 ms |
+- **New tests:**
+  - **contracts** `tree.test.ts` (8): tree order, and a paging property test (200 rounds of random page sizes that add
+    up exactly once). Also: restart on another listing, byte bounds, schema refusals (traversal, NUL, option-like refs,
+    revision syntax) and the event cap.
+  - **git-core** `tree.test.ts` (16):
+    - every listing is compared with the fixture's own `git ls-tree -z -l`, including a randomized differential over
+      every directory of 6 random trees;
+    - symlinks (inside, to `/`, `../..`) and submodules are never entered, also as a middle component;
+    - traversal and malformed paths are refused before any spawn;
+    - refs: HEAD, branches, annotated tags, full and short ids; unknown and option-like refs;
+    - only `ls-tree -z -l <40 hex>` lines are ever spawned;
+    - an unborn HEAD; the working tree is never read;
+    - the cache: a repeat and a linked worktree spawn nothing;
+    - names that are not UTF-8 and case-colliding names, both built with `git mktree` so the tests run on APFS;
+    - also: `countTreeFiles`, the LRU bound, the parser. `runner.test.ts` covers the allowlist, and
+      `readonly.test.ts` now lists every directory of HEAD.
+  - **daemon** `tree.real-git.test.ts` (10) and `tree-units.test.ts` (11):
+    - **Differential against `git status --porcelain=v1 -z -uall` / `--ignored` and `git ls-tree -r`.** The whole
+      working view is walked through the route in pages of 2, 7 and 1000. It is checked for: modified, staged, both;
+      deleted (a whole directory and part of one); a staged rename; untracked nested directories; staged additions in a
+      new directory; mixed new directories; ignored files and directories; a tracked file matching an ignore rule;
+      symlinks (to a directory, retargeted, untracked, to `/`); a type change, a mode change; a submodule whose commit
+      moved; Unicode and space names; a non-UTF-8 name (Linux); a case-only twin (non-folding file systems); a merge
+      conflict (`UU`, `AA`, `UD`); a sparse checkout.
+    - **Paging property.** 12 rounds of random page sizes, with edits and refreshes mid-paging: the pages always equal
+      the final listing, and restarts happened.
+    - **Security.** 14 malformed queries answer 400; option-like names are listed as plain names; symlinked directories
+      (in and out) answer 400 / 404 in both views; the tree view does not move when the working copy is deleted.
+    - **Warm path.** A warm listing spawns 0 git processes.
+    - **Deltas.** A new file names its 4 ancestor directories; re-editing a modified file names none; a commit sends
+      `all`.
+    - **Abort.** An aborted request spawns nothing.
+  - **web** `tree.test.tsx` (5): cursor following and restarts; `useTree` enabled and disabled; `loadMoreTree` and a
+    refresh that keeps the loaded count; batch accumulation; only the named open working-view directories refetch, and
+    tree views are untouched.
+- **Mutation checks:** 15 mutants, **15 killed** (script applied and reverted each one; the working tree is clean
+  after). Each mutant was killed by its targeted test:
+  - git-core: the allowlist accepts any argument; the walk enters non-directories; no `..` check; the kind is reported
+    for a middle component.
+  - daemon: no rename-source record; deleted directory without the count; no pairing signature; a HEAD move ignored;
+    no snapshot conflicts; a non-directory served in the working view; omitted directories left out.
+  - contracts: the cursor fingerprint ignored; the listing key without the overlay. The second one survives the daemon
+    test (the daemon's key also holds the `stateHash`) but the contracts test kills it.
+  - web: only the last event of a batch is kept; trees are not refreshed by events.
+  - One mutant is equivalent and was not counted: the git-core cache key without the common dir. An object id names
+    the same content everywhere; the common dir is kept for isolation, #408.
+- **Acceptance numbers** (100k `large` layout, `docs/bench/results-tree.md`):
+
+  | Check | Target | Measured |
+  |---|---|---|
+  | Directory listing, warm | < 20 ms | p50 0.8-0.9 ms, p95 0.9-1.3 ms, 0.3-0.7 ms daemon CPU per request |
+  | Directory listing, cold (first listing of the directory) | - | 1.6 ms (root), 8.0 ms (2 new trees), 14.4 ms (6 new trees); 0.8-0.9 ms in the other worktrees (trees shared) |
+  | 100k-path tree render | < 300 ms | 133 ms to paint, all 100k paths open (p95 134); 67 ms with prepared input; lazy root 33 ms |
+  | Scroll | p95 < 20 ms | frame p95 17.2 ms (60 Hz, full 100k) and 17.2 ms (lazy), 0 long tasks |
+  | Allowlist | unchanged, or only justified flags | `ls-tree` added with 4 flags and one object id (#407) |
+
+  - The **first** request of a worktree costs 200-580 ms. That is the worktree's `working` list (status plus diff of
+    the 300k-line rewrite in `main`), the same list `GET /files` builds; any later directory reuses it.
+  - Web render bench raw numbers (5 runs each):
+
+    | Scenario | Paint p50 / p95 |
+    |---|---|
+    | All closed | 133 / 150 ms |
+    | All open | 133 / 133 ms |
+    | Prepared | 67 / 68 ms |
+    | 300 statuses | 133 / 135 ms |
+
+    48 rows are mounted after scrolling 3.1 M px of rows. In the lazy scenario, 200 directories were opened one by one:
+    each open took 33 ms including two frame waits, and 0.2 ms (p95 0.4) of script.
+
+## Decisions
+
+All are in `docs/DECISIONS.md` (the next free number was 395):
+
+- **#406** Additive contracts. Without `ref` the route answers the working view; with `ref`, including `ref=HEAD`, the
+  committed tree.
+- **#407** The walk over tree objects, and the strict `ls-tree` allowlist entry.
+- **#408** git-core's cache by (common dir, tree oid), 64 MiB LRU; the daemon's composed pages by state.
+- **#409** The working-view rules: ignored files not shown; sparse checkout documented; case compared as bytes; nested
+  repositories.
+- **#410** Conflicts from the snapshot.
+- **#411** Directory deltas from snapshots, with caps and `all`.
+- **#412** Route errors.
+- **#413** The web data layer and its staleness rules.
+- **#414** `@pierre/trees` holds 100k paths, but the explorer stays lazy (transport and overlay, not render, are the
+  cost).
+- **#415** No `cat-file --batch` (numbers below).
+
+## Contract changes
+
+All additive, in commit `contracts: GET /tree …`:
+
+- `packages/contracts/src/tree.ts` (new; exported from the index);
+- `ROUTES.getTree`, `ApiClient.getTree`, `TreeParams`;
+- `WorktreeChangedEventSchema.dirs` (optional);
+- `GitCore.listTree?`, `GitCore.countTreeFiles?`, with `TreeListOptions`, `GitTreeEntry`, `GitTreeListing`;
+- `paging.ts` now exports `Hash64` (no behaviour change).
+
+Nothing was renamed or removed.
+
+## Dependencies
+
+None added or removed. `@pierre/trees` (already a dependency) is benchmarked as it is. `pnpm credits:check`: up to
+date.
+
+## Profile: where the time goes (100k layout)
+
+| Stage | Cost | Note |
+|---|---|---|
+| git: one tree | ~2.4 ms per `ls-tree` (through the spawn helper) | 7 ms for the root cold, including the commit → tree `rev-parse`; then cached forever (immutable) |
+| git: the whole tree | `ls-tree -r` of the root: 46 ms, 100,002 files | 5.3 MB as a JSON path list |
+| git: the overlay | the worktree's `working` list: 200-580 ms once per state | shared with `GET /files`; #40-#43 made it incremental |
+| parse | `ls-tree` parse about 0.6 µs per entry | a 50k-entry flat directory: 31 ms, ad hoc |
+| compose | overlay merge about 0.5 µs per entry; listing key 0.3 µs | 50k entries: 25 ms and 17 ms, once per state and directory, then cached |
+| transport | 0.8-4.7 KB per directory; a warm loopback round trip 0.8-0.9 ms, of which daemon CPU 0.3-0.7 ms | a 5000-entry page: 760 KB, 1.2 ms to stringify |
+| render | the root painted in 33 ms (lazy); 0.2 ms of script per opened directory; all 100k: 133 ms (67 ms prepared) | scroll stays on 60 Hz frames |
+
+Walking every directory through the route takes 4980 requests, 19.7 MB and 17 s. That is fine for an explorer, which
+opens what the user opens, and wrong for "all files": a search over all files belongs in the daemon (like
+`GET /files?q=`).
+
+**`cat-file --batch`: not built.** The explorer reads no blob content. A cold listing is one `ls-tree` per new tree
+(about 2.4 ms); warm there is none. A long-lived batch process would save about 2 ms per cold object read. It would
+cost stdin allowlisting for `cat-file` and a second supervised process next to the spawn helper. Revisit with a file
+preview, if reads dominate there.
+
+## Recommendation for local file data with Electron (short)
+
+- **Keep one owner.** The daemon (DaemonCore plus git-core) stays the only code that runs git and holds caches. In
+  Electron it should run in a utility process (or the main process), never the renderer. Several windows then share
+  one tree cache and one set of summaries.
+- **Transport.** Keep the HTTP + SSE contract: the browser and LAN clients need it. A warm directory costs about
+  0.9 ms round trip, of which 0.3-0.7 ms is daemon work, so IPC could save at most about 0.3-0.5 ms per request. That
+  is not decisive.
+  - If profiling of the real app shows otherwise, add an `ApiClient` over a `MessagePort` that carries the same
+    contracts objects (structured clone, no JSON). It is a drop-in, because every consumer uses `ApiClient`.
+- **What to cache where:**
+  - immutable data (tree listings, commit → tree, file counts, later blob content by oid) in the daemon, by
+    `(common dir, oid)`, bounded;
+  - working-copy data (status, overlay) per worktree in the daemon, keyed by `stateHash`;
+  - in the renderer, only the open directories (React Query, refreshed by `worktree.changed.dirs`).
+- **Never ship whole-repository lists to the renderer.** Page or search on the daemon side. Blob content can use the
+  oid as a cache key (or HTTP ETag) forever.
+
+## Known gaps
+
+- **No explorer pane.** The issue did not ask for one; the data layer and the measured lazy design are ready for it.
+- **The web mock** (`apps/web/mock`) does not serve `GET /tree`. Nothing in the UI calls it yet.
+- **What the working view does not show:**
+  - ignored files;
+  - the contents of omitted untracked directories, and single omitted untracked files outside them (no list holds
+    them, #43);
+  - a sparse checkout's out-of-cone paths are not flagged;
+  - an untracked nested repository appears as a file-like entry.
+- **When `dirs` is absent or `all`:**
+  - `dirs` is absent on a worktree's first summary and after an error (clients refresh all open directories then);
+  - it is `all` when the snapshot was cut at 2000 changed entries.
+  - `dirs` is a superset: a named directory may come back unchanged.
+- **The first `/tree` of a worktree** waits for its working list (200-580 ms on the 100k layout), like `GET /files`.
+- **Linux-only tests.** On APFS the daemon's non-UTF-8 differential case is skipped (the file system refuses such
+  names). git-core covers those names with `git mktree` on every platform.
+
+## Notes for integration
+
+- Commits on this branch, in order: `contracts:`, `git-core:`, `daemon:`, `web:`, `bench:`, a lint fix, then the
+  docs. They rebase independently of the Effect foundation session. The daemon changes are additive inside
+  `core.ts`: a `treeBasis` field, the `#announce` parameter `dirs`, the `listTree` method and the `#treeListings` LRU.
+  They do not touch runtime wiring, the watch host or helper supervision.
+- DECISIONS #406-#415 may need renumbering if #406+ is taken meanwhile.
+- `bench:tree` needs `pnpm build` and takes about 1.5 min. `perf:tree` builds its own page and takes about 1 min.
+  Neither runs in CI.
+
+## PR #99 review (Greptile: five P1, one P2), 2026-11-13
+
+Every fix has a test that failed first, real git where the comment describes a git state; DECISIONS #416-#422 (and
+#409, #411, #413 amended).
+
+1. **P1, listings mixed two commits** (#417, `DaemonCore.listTree`). The working view now uses a file list only when
+   git-core says it is of the summary it asked for, and HEAD read after the list must be that summary's HEAD (that
+   HEAD read is the listing used). Otherwise a summary refresh runs and it is tried again (3 attempts), then a
+   retryable 409 (`details.retryable`), which the web's tree queries retry (`treeRetry`). A warm hit of a listing
+   composed for the same state and HEAD reads nothing else. Tests (`tree-review.real-git.test.ts`, a gate in a wrapped
+   git-core): a commit lands before the list, after the list, on every list (409); git-core lists a newer state than
+   the daemon's summary (never labelled with the older summary).
+2. **P1, replaced paths appeared twice** (#418). One row per name: the working copy's side wins and says
+   `replaces: 'file' | 'dir' | ...`; HEAD's side stays reachable by path. Both directions in the `git status`
+   differential (`repl-f`, `repl-d`), a dedicated real-git test and a unit test.
+3. **P1, raw rename sources** (#419). git-core sets `GitChangedFile.oldRawPath` (additive); the overlay keys the
+   source by its bytes; rows carry `oldRawPath` / `renamedToRawPath`. Tested in git-core and in the daemon with a raw
+   name made only in a `git mktree` commit and the index, so both run on APFS too.
+4. **P1, stale change markers** (#420). Directory deltas compare every field of a snapshot entry (status letters,
+   rename source, worktree signature, HEAD and index ids), so a content edit names its ancestors. Tests: the A/B/C
+   `MM` case; a table of transitions; a property test of 40 random operations comparing every directory's listing
+   before and after with the event's `dirs`.
+5. **P1, raw and display directory identities** (#421). `treeDirIdentity` (`r:<base64>` / `p:<path>`) for the web's
+   query keys, wanted counts and `dirs` effects, and in the contracts' listing key. Web and contracts tests.
+6. **P2, the paging test never paged** (#422). Pages of 20 for 50 entries: three requests with the previous answers'
+   cursors; a listing that moves between page 1 and page 2: restart, then the new listing.
+
+**Mutation checks: 21 mutants, 21 killed**:
+
+- **#1** (R1a-e): no HEAD check; accepting `now` lists (it survived at first, so the newer-state gate test was added);
+  no 409; no refresh between attempts; a warm key without the state.
+- **#2**: no merge by name; HEAD's row wins; no `replaces`.
+- **#3**: a display source key; no `oldRawPath` in git-core; none on the row.
+- **#4**: status letters only; no signature; no index id.
+- **#5**: the web key, the effects and the listing key by `rawPath ?? path`.
+- **#6**: no cursor; `restarted` ignored; restarted pages kept.
+- **the 409 retry**: not retried; the retry option dropped.
+
+**Verification** (final head; the machine was shared with another session's tests, load average 7-15):
+
+- `pnpm lint` exit 0 (the same 4 warnings and 1 info in untouched files; credits up to date); `pnpm typecheck` exit 0;
+  `pnpm build` exit 0.
+- `pnpm test` exit 0 in 2 min 6 s:
+
+  | Package | Passed | Skipped |
+  |---|---|---|
+  | contracts | 134 | 0 |
+  | forge | 101 | 5 |
+  | fixtures | 58 | 0 |
+  | web | 490 | 0 |
+  | git-core | 504 | 1 |
+  | daemon | 452 | 4 |
+  | e2e unit | 8 | 0 |
+  | cli | 141 | 0 |
+  | scripts | 34 | 0 |
+
+- git-core, daemon and web, each run twice more: the same counts.
+- Folding mode: git-core 489 passed, 16 skipped; daemon 450 passed, 6 skipped.
+- `pnpm test:e2e -- --workers=1`, final head: **106 passed (3.4 min)**; read-only proof 4796 lock polls, 0 violations.
+  - An earlier run (before the warm-path change) had two failures. One was `07-readonly` (an element detached during
+    a re-render), which passed on the rerun.
+  - The other is a **pre-existing flake in `20-paged-files` "first page, then more"**: the same spec failed 2 of 5 on
+    the pre-review head `12c7700` (a temporary worktree, since removed) and 2 of 3 on this branch under the same load.
+  - Cause: the loop stops scrolling when the Load-more footer disappears, but the last page's rows arrive below the
+    scroll position, so the virtualised list never mounts the last row. Suggested fix for its owner: scroll to the end
+    once more after the footer is gone, or assert the row after `scrollIntoView` (e2e tests are not this stream's).
+- `perf:smoke`: exit 0, no failed check.
+- Default bench (`bench`), before the warm-path change and again on the Greptile-round head: all 9 budgets PASS both
+  times (cold paint 181 ms, warm 83 ms, 4.7 spawns per worktree, edit to SSE p95 28 ms).
+- **Warm listing re-measured** (`bench:tree`, final head, `docs/bench/results-tree.md`):
+  - warm p50 1.1-1.5 ms, p95 1.9-4.4 ms, under load average 11-13;
+  - in the same run git-core's own `ls-tree` timings were 35-45 % slower than the first run's, which had warm 0.8-0.9 /
+    0.9-1.3 ms;
+  - a cold leaf (6 new trees) took 22.9 ms;
+  - reading HEAD from files costs about 0.5 ms (measured in process), which is why a warm hit skips it.
+
+## PR #99 security review (no P1; two P2, six P3), 2026-11-13
+
+Every fix has a test that failed first except where noted, real git where the finding describes a git state;
+DECISIONS #423-#431 (#408 and #423 amended).
+
+- **P2-1, blobless partial clones** (#424). `ls-tree` drops `-l` below git 2.44 in a repository with a promisor
+  remote, and falls back to no `-l` (remembered per repository) when a lazy fetch was blocked; sizes are then null.
+  Tests use a real `--filter=blob:none` clone, a wrapper that unsets `GIT_NO_LAZY_FETCH`, and one that also reports git
+  2.40.
+- **P2-2, unbounded composed listings** (#425). `TreeListingCache`: LRU bounded by 64 MiB of estimated bytes; a
+  listing above the bound is served, not kept, and evicts nothing. A new summary drops the worktree's listings of
+  older states. Tests: unit tests of the cache, and a 3000-entry directory under 12 watcher-driven state changes keeps
+  2 listings.
+- **P3-1, untracked type and mode changes** (#426). Already covered by Greptile fix 4 (#420): the basis holds the
+  untracked lstat signature, mode included. Now tested (`chmod +x`, file to symlink), and the rule is written down:
+  the basis covers every field a row renders.
+- **P3-2, hostile tree entries** (#427). Entries flagged by `treeEntryProblem` (`..`, `a/b`, over the path limits) are
+  skipped and counted in `skipped`. Tested with a `hash-object -t tree --literally` tree and a 21-level chain.
+- **P3-3, one `ls-tree -r` per deleted-only directory** (#428). Up to 4 such directories are counted one by one;
+  more, with one `countTreeChildren` run of the listed tree. Failures are memoized in git-core (an output above the
+  cap for good, others for a minute). Tests: 30 siblings cost one `ls-tree -r`; a capped and a missing tree are not
+  retried.
+- **P3-4, per-page O(N) work** (#429). The tree view resolves the commit with `listTree({ withEntries: false })`
+  before the cache lookup. Test: 8 pages make one decoding call in each view.
+- **P3-5, ref views not refreshed** (#430). On `dirs.all` the web also refetches `HEAD` and branch views; views of a
+  full commit id are not refetched.
+- **P3-6, treeless clones and unchecked paths** (#431). A missing tree is `not_found` with
+  `details.reason: 'object_missing'` and a message that says so, in git-core and in the route; nothing is fetched.
+  The route checks the directory before anything else. The unborn case already answered 400 since Greptile fix 1
+  (the HEAD read goes through git-core), so that part of the test did not fail first; the explicit check removes
+  the dependency.
+
+**Mutation checks: 18 mutants, 18 killed.** Two survived the first pass and the tests were strengthened:
+
+- S2b, an oversized listing kept: the test now also checks that nothing else is evicted.
+- S2c, older states kept: the churn now goes through the watcher, because an explicit refresh already drops
+  everything.
+
+The killed mutants, by finding:
+
+- **P2-1:** no promisor fallback; no old-git skip; the fallback not remembered.
+- **P2-2:** no byte bound; an oversized listing kept; older states kept.
+- **P3-2:** hostile entries not filtered; a `/` in a name accepted; the length check removed.
+- **P3-3:** always per child; never per child; no failure memo.
+- **P3-4:** pages decode again; `withEntries` ignored.
+- **P3-5:** ref views not refetched; commit views refetched.
+- **P3-6:** a missing tree reported as "commit not found"; the daemon says "unknown ref".
+
+One equivalent mutant was not counted: removing the daemon's up-front path check, since git-core checks the path
+too.
+
+**A timeout found on the way.** One loaded daemon run failed: the two real-git property tests ran past vitest's 5 s
+default while git-core's suite ran alongside. They got a 60 s suite timeout, as the other real-git suites in the
+repository have. After that: 3 loaded runs and 10 runs of the explorer suites, all clean.
+
+**Verification** (final head; load average 0.5-2 for the e2e and bench runs):
+
+- `pnpm lint` exit 0 (the same 4 warnings and 1 info in untouched files; credits up to date); `pnpm typecheck` exit 0;
+  `pnpm build` exit 0.
+- `pnpm test` exit 0 in 1 min 33 s:
+
+  | Package | Passed | Skipped |
+  |---|---|---|
+  | contracts | 135 | 0 |
+  | forge | 101 | 5 |
+  | fixtures | 58 | 0 |
+  | web | 491 | 0 |
+  | git-core | 512 | 1 |
+  | daemon | 461 | 4 |
+  | e2e unit | 8 | 0 |
+  | cli | 141 | 0 |
+  | scripts | 34 | 0 |
+
+- Repeat runs:
+  - git-core and web twice more: the same counts.
+  - daemon: 5 more clean runs (2 alone, 3 under load after the timeout fix); the one loaded failure is the timeout
+    described above.
+  - The daemon's skip count varies between 3 and 4 run to run (an existing conditional skip).
+- Folding mode: git-core 497 passed, 16 skipped; daemon 459 passed, 6 skipped.
+- `pnpm test:e2e -- --workers=1`: **106 passed (3.0 min)**; read-only proof 4379 lock polls, 0 violations.
+- `perf:smoke`: exit 0, no failed check.
+- Default bench: all 9 budgets PASS (cold paint 158 ms, warm 80 ms, 4.7 spawns per worktree, edit to SSE p95 23 ms).
+- **Warm listing** (`bench:tree`, `docs/bench/results-tree.md`): p50 0.73-0.89 ms, p95 0.82-1.19 ms; cold leaf
+  (6 new trees) 14.4 ms. These are the original numbers again; the load is gone.
+
+## PR #99 Greptile review, round 3 (one P1, one P2), 2026-11-13
+
+1. **P1, rename targets stayed stale** (#433). The working list pairs a deleted path with a staged new path by
+   content. In the reported sequence the summary entry of the deleted side (` D src/a`) never changes, so `dirs`
+   named only `dst`.
+   - **Fix:** rename candidates (`D` sources; index `A`/`R`/`C` or worktree `A` targets; rename and copy sources) are
+     part of the basis. When any candidate moves, every candidate's directories, of both states, are named.
+   - **Tests:** the exact sequence with real git and its reverse (`dirs` holds `src` and `dst`; `src/a` gains and
+     loses `renamedTo`); a unit test; the brute-force property test extended to 60 operations with pair
+     making, breaking and remaking.
+   - **Mutants:** 4 of 5 killed; the property test alone kills the mutant without the rule. One is equivalent:
+     ignoring the previous state's candidates, which are named anyway because their entries changed.
+2. **P2, child counts outside any byte budget** (#434).
+   - **Fix:** `TreeCache` is one LRU for listings and child counts under 64 MiB. Child counts are compact (one
+     NUL-joined name string and two `Uint32Array`s), and `countTreeChildren({ names })` answers only the names asked
+     for; the daemon asks for the deleted-only directories it checks.
+   - **Tests:** 100k-child arrays across 20 roots under an 8 MiB budget; an oversized item is not kept and evicts
+     nothing; a real 100k-child tree is accounted at 0.8-3 MB and answers the asked names only; the daemon passes the
+     names.
+   - **Mutants:** 6 of 6 killed. The off-by-one in the binary search never ends, so its run hit the harness
+     timeout.
+
+**Verification** (final head; load average 2-3):
+
+- `pnpm lint` exit 0 (4 warnings and 1 info in untouched files; credits up to date); `pnpm typecheck` exit 0;
+  `pnpm build` exit 0.
+- `pnpm test` exit 0 in 1 min 30 s:
+
+  | Package | Passed | Skipped |
+  |---|---|---|
+  | contracts | 135 | 0 |
+  | forge | 101 | 5 |
+  | fixtures | 58 | 0 |
+  | web | 491 | 0 |
+  | git-core | 540 | 1 |
+  | daemon | 471 | 4 |
+  | e2e unit | 8 | 0 |
+  | cli | 141 | 0 |
+  | scripts | 34 | 0 |
+
+- git-core and daemon, run twice more: the same counts.
+- Folding mode: git-core 525 passed, 16 skipped; daemon 469 passed, 6 skipped.
+- `pnpm test:e2e -- --workers=1`: **106 passed (2.9 min)**; read-only proof 4330 lock polls, 0 violations.
+- `perf:smoke`: exit 0, no failed check.
+- **Warm listing** (`bench:tree`): p50 0.72-0.86 ms, p95 0.84-1.25 ms; cold leaf 14.8 ms.
+
+## PR #99 Greptile review, round 4 (one P1), 2026-11-13
+
+**P1, first listings missed edits** (#435). `flushTreeDirs` joined a first fetch in flight (react-query does that when
+a query has no data yet), so an answer from before the edit could stay cached for good.
+
+- **Fix:** `invalidateTrees` cancels matching queries whose first fetch is in flight, then invalidates, the
+  `invalidateFileLists` pattern. It covers named directories and `all` (working view, `HEAD` and branch views).
+- **Tests:** a gated fake holds the first request; the event arrives; the held request answers the old listing; the
+  cache must end on the new one. Both paths failed first.
+- **Also checked:**
+  - load-more during an edit, both orders: the refresh wins, and the wanted count keeps the loaded length;
+  - the palette's file search: its key holds the list's `stateHash`, so it is not affected.
+- **Mutants:** 5 of 5 killed.
+
+**Verification:**
+
+- `pnpm lint` exit 0 (4 warnings and 1 info in untouched files); `pnpm typecheck` exit 0; `pnpm build` exit 0.
+- web, run twice more: 496 passed each time.
+- `pnpm test` exit 0 in 1 min 41 s:
+
+  | Package | Passed | Skipped |
+  |---|---|---|
+  | contracts | 135 | 0 |
+  | forge | 101 | 5 |
+  | fixtures | 58 | 0 |
+  | web | 496 | 0 |
+  | git-core | 556 | 1 |
+  | daemon | 471 | 4 |
+  | e2e unit | 8 | 0 |
+  | cli | 141 | 0 |
+  | scripts | 34 | 0 |
+
+- `pnpm test:e2e -- --workers=1`: **106 passed (3.0 min)**; read-only proof 0 violations.
+- `perf:smoke`: exit 0, no failed check.

@@ -94,6 +94,8 @@ export const ROUTES = {
   // --- live view (additive; see activity.ts) ---
   getActivity: { method: 'GET', path: '/api/worktrees/:worktreeId/activity' },
   getBlob: { method: 'GET', path: '/api/worktrees/:worktreeId/blob/:oid' },
+  // --- file explorer foundation (additive, #9; see tree.ts) ---
+  getTree: { method: 'GET', path: '/api/worktrees/:worktreeId/tree' },
 } as const;
 export type RouteName = keyof typeof ROUTES;
 

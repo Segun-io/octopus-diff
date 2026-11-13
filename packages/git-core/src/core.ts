@@ -41,6 +41,7 @@ import {
 import { abortedError, callContext, raceAbort, withCall } from './runner/call-context.js';
 import { defaultBigFileThreshold, GitRunner } from './runner/runner.js';
 import { getSummary } from './summary.js';
+import { countTreeChildren, countTreeFiles, listTree, TreeCache, type TreeDeps } from './tree.js';
 import { createUntrackedCache } from './untracked.js';
 
 const DEFAULTS = {
@@ -130,6 +131,16 @@ async function getWatchTargets(ctx: GitContext, worktree: WorktreeLocator): Prom
   };
 }
 
+/** Each core's tree cache, for tests and memory checks (`treeCacheOf`). */
+const treeCaches = new WeakMap<GitCore, TreeCache>();
+
+/** The tree cache of a core made by `createGitCore` (its size in bytes, for tests). */
+export function treeCacheOf(
+  core: GitCore,
+): Pick<TreeCache, 'bytes' | 'size' | 'maxBytes'> | undefined {
+  return treeCaches.get(core);
+}
+
 /** Creates the git-core implementation of the `GitCore` contract. */
 export const createGitCore: CreateGitCore = (options: GitCoreOptions = {}): GitCore => {
   const settings = {
@@ -169,6 +180,7 @@ export const createGitCore: CreateGitCore = (options: GitCoreOptions = {}): GitC
     incremental: options.incremental !== false,
   };
   const reviewDeps: ReviewDeps = { ctx, commitCache: createCommitDetailsCache() };
+  const treeDeps: TreeDeps = { ctx, trees: new TreeCache() };
   let disposed = false;
 
   /**
@@ -204,7 +216,7 @@ export const createGitCore: CreateGitCore = (options: GitCoreOptions = {}): GitC
     };
   };
 
-  return {
+  const gitCore: GitCore = {
     version: guard(() => ctx.version()),
     resolveProject: guard(async (input: string) => {
       await ctx.ensureSupported();
@@ -267,8 +279,21 @@ export const createGitCore: CreateGitCore = (options: GitCoreOptions = {}): GitC
       (worktree, blobOptions) => readBlob(ctx, worktree, blobOptions),
       (_worktree, blobOptions) => blobOptions,
     ),
+    listTree: guard(
+      (worktree, treeOptions) => listTree(treeDeps, worktree, treeOptions),
+      (_worktree, treeOptions) => treeOptions,
+    ),
+    countTreeFiles: guard(
+      (worktree, countOptions) => countTreeFiles(treeDeps, worktree, countOptions),
+      (_worktree, countOptions) => countOptions,
+    ),
+    countTreeChildren: guard(
+      (worktree, countOptions) => countTreeChildren(treeDeps, worktree, countOptions),
+      (_worktree, countOptions) => countOptions,
+    ),
     dispose: async () => {
       disposed = true;
+      treeDeps.trees.clear();
       reviewDeps.commitCache.clear();
       deps.untrackedCache.clear();
       deps.attributeCache.clear();
@@ -278,4 +303,6 @@ export const createGitCore: CreateGitCore = (options: GitCoreOptions = {}): GitC
       await runner.dispose();
     },
   };
+  treeCaches.set(gitCore, treeDeps.trees);
+  return gitCore;
 };

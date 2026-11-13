@@ -8,7 +8,7 @@
 
 export { compareBstr, decodeRepoPath, selectorToBstr } from './bstr.js';
 export { computeFilterOverrides, EMPTY_TREE } from './context.js';
-export { createGitCore } from './core.js';
+export { createGitCore, treeCacheOf } from './core.js';
 export { PatchCollector, STATUS_ARGS } from './diff.js';
 export { SCAN_MAX_DIRS } from './discovery.js';
 export { hashId, PATCH_HASH_LENGTH, STATE_HASH_LENGTH } from './hash.js';
@@ -79,3 +79,4 @@ export const GIT_CORE_IMPLEMENTED: boolean = true;
 export { foldsCase } from './incremental.js';
 export { parseRemoteConfig, REMOTE_CONFIG_REGEX, rewriteUrl } from './remotes.js';
 export { readRepositoryInfo, stripUrlCredentials } from './repository.js';
+export { parseLsTree, TREE_CACHE_MAX_BYTES, TreeCache, treePathComponents } from './tree.js';
