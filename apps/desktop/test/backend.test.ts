@@ -7,6 +7,7 @@ import {
   backendStdio,
   backoffDelay,
   DEFAULT_POLICY,
+  isReadyFor,
   parseReadyLine,
   serveArgs,
 } from '../src/backend.js';
@@ -111,6 +112,37 @@ describe('parseReadyLine', () => {
     }
     expect(parseReadyLine('[]').ok).toBe(false);
     expect(parseReadyLine(readyLine({ authUrl: 'not a url' })).ok).toBe(false);
+  });
+});
+
+describe('isReadyFor (PR #108: a health answer for a daemon that has left ready is dropped)', () => {
+  const info = {
+    mode: 'started',
+    url: 'http://127.0.0.1:7428/',
+    authUrl: `http://127.0.0.1:7428/#token=${TOKEN}`,
+    pid: 1,
+    version: '1.0.0',
+    versionMismatch: false,
+  } as const;
+
+  it('is true only while the backend is ready with this very daemon', () => {
+    expect(isReadyFor({ kind: 'ready', ready: info }, info)).toBe(true);
+    // The same daemon announced again (a new state object) is a different one to wait for.
+    expect(isReadyFor({ kind: 'ready', ready: { ...info } }, info)).toBe(false);
+  });
+
+  it('is false once a restart, a failure or a stop screen is up', () => {
+    for (const state of [
+      { kind: 'restarting', attempt: 1, delayMs: 500, reason: 'exited' },
+      { kind: 'failed', reason: 'exited', failures: 5 },
+      { kind: 'stopping' },
+      { kind: 'stopped' },
+      { kind: 'starting', attempt: 1 },
+      { kind: 'idle' },
+    ] as const) {
+      expect(isReadyFor(state, info)).toBe(false);
+    }
+    expect(isReadyFor(undefined, info)).toBe(false);
   });
 });
 

@@ -244,8 +244,22 @@ const MUTATIONS = [
     'const result = ServeReadySchema.safeParse(json);',
     'const result = { success: true as const, data: json as ServeReady, error: undefined as never };',
   ],
+  // --- the health answer of a daemon that has left ready (PR #108) ---
+  [
+    'backend.ts',
+    'backend',
+    'a health answer is dropped once the daemon left ready',
+    "return state?.kind === 'ready' && state.ready === r;",
+    "return state?.kind === 'ready';",
+  ],
   // --- shell env ---
-  ['shell-env.ts', 'shell-env', 'PATH script without braces', '\\${PATH}', '$PATH'],
+  [
+    'shell-env.ts',
+    'shell-env',
+    'PATH script with a braced expansion (fish rejects it)',
+    '; printenv PATH;',
+    '; printf \'%s\' "\\${PATH}";',
+  ],
   [
     'shell-env.ts',
     'shell-env',
@@ -287,6 +301,44 @@ process.on('SIGINT', () => {
   process.exit(130);
 });
 
+/** One vitest run of a test file: its exit status and the failed-test count it printed (or null). */
+function runTests(test) {
+  const result = spawnSync(
+    process.execPath,
+    [
+      path.join(desktopRoot, '..', '..', 'node_modules', 'vitest', 'vitest.mjs'),
+      'run',
+      `test/${test}.test.ts`,
+    ],
+    {
+      cwd: desktopRoot,
+      encoding: 'utf8',
+      env: { ...process.env, NO_COLOR: '1', FORCE_COLOR: '0' },
+    },
+  );
+  const text = `${result.stdout ?? ''}\n${result.stderr ?? ''}`;
+  const summary = text.match(/Tests\s+(?:(\d+) failed\s*\|\s*)?(\d+) passed/);
+  return {
+    status: result.status,
+    error: result.error,
+    failed: summary ? Number(summary[1] ?? 0) : null,
+    passed: summary ? Number(summary[2]) : null,
+  };
+}
+
+// The unchanged tests must pass first: otherwise "tests fail" proves nothing (a missing vitest, a
+// runner that dies before loading a file, a test already broken).
+for (const test of new Set(MUTATIONS.map((m) => m[1]))) {
+  const base = runTests(test);
+  if (base.error || base.status !== 0 || base.failed !== 0 || !base.passed) {
+    console.error(
+      `mutation-check: the unchanged test/${test}.test.ts does not pass (exit ${base.status}, ` +
+        `${base.passed} passed, ${base.failed} failed${base.error ? `, ${base.error.message}` : ''})`,
+    );
+    process.exit(2);
+  }
+}
+
 const survivors = [];
 let killed = 0;
 for (const [file, test, description, from, to] of MUTATIONS) {
@@ -301,21 +353,17 @@ for (const [file, test, description, from, to] of MUTATIONS) {
   current = { file: abs, original };
   try {
     writeFileSync(abs, original.replace(from, to));
-    const result = spawnSync(
-      process.execPath,
-      [
-        path.join(desktopRoot, '..', '..', 'node_modules', 'vitest', 'vitest.mjs'),
-        'run',
-        `test/${test}.test.ts`,
-      ],
-      { cwd: desktopRoot, encoding: 'utf8' },
-    );
-    if (result.status === 0) {
+    const result = runTests(test);
+    if (result.status === 0 && result.failed === 0) {
       survivors.push(`${description} (${file})`);
       console.log(`SURVIVED  ${description}`);
-    } else {
+    } else if (result.failed !== null && result.failed > 0) {
+      // Caught: a test ran and failed. A run that died before reporting tests is not a catch.
       killed++;
       console.log(`killed    ${description}`);
+    } else {
+      survivors.push(`${description} (${file}: the test run did not report results)`);
+      console.log(`BROKEN    ${description} (exit ${result.status}, no test results)`);
     }
   } finally {
     restore();

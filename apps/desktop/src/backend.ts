@@ -131,6 +131,15 @@ export type BackendState =
   | { kind: 'stopping' }
   | { kind: 'stopped' };
 
+/**
+ * Whether `state` is still the `ready` state of this very daemon (`r` is the object the state
+ * carries). An answer to a request made while the daemon was ready must be dropped once it has
+ * left: a restart or failure screen is showing then (PR #108).
+ */
+export function isReadyFor(state: BackendState | undefined, r: ReadyInfo): boolean {
+  return state?.kind === 'ready' && state.ready === r;
+}
+
 export interface BackendOptions {
   spawn: SpawnLike;
   /** The program: Electron's binary (`process.execPath`), run in Node mode. */

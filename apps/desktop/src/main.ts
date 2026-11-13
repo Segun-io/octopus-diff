@@ -23,7 +23,13 @@ import {
   shell,
 } from 'electron';
 import { parseDesktopArgs, serveExtraArgs } from './args.js';
-import { type BackendState, BackendSupervisor, type ChildLike, type ReadyInfo } from './backend.js';
+import {
+  type BackendState,
+  BackendSupervisor,
+  type ChildLike,
+  isReadyFor,
+  type ReadyInfo,
+} from './backend.js';
 import { backendCommand } from './backend-command.js';
 import {
   addProject,
@@ -276,7 +282,9 @@ async function showReady(r: ReadyInfo, force = false): Promise<void> {
   notice = r.versionMismatch ? { daemon: r.version, app: cliVersion } : null;
   if (!win) return;
   const health = await fetchHealth(r.url, tokenFromAuthUrl(r.authUrl));
-  if (ready !== r || !win) return;
+  // The daemon may have left `ready` while the health request was out (a restart or failure screen
+  // is up then): this answer is for a daemon that is gone, and must not load over that screen.
+  if (ready !== r || !win || !isReadyFor(backend?.state, r)) return;
   if (gitStatus(health) === 'missing') {
     log.note('the daemon has no usable git: showing the git-missing screen');
     showScreen(gitMissingScreen(process.platform, MIN_GIT));

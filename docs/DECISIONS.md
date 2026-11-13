@@ -5692,3 +5692,21 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      CDP). The user's real state dir was not used: every run had temp `--state-dir`/`--config-dir`/`--app-data-dir`.
 504. **Gaps in other streams found on the way** (requests, not done): WS5 #490 (EPIPE during `--exit-with-stdin`
      shutdown); WS3 #495 (menu hooks). Nothing needed from the daemon, git-core or the contracts.
+
+### Desktop phase A: Greptile review of PR #108 (2026-11-13)
+
+505. **Three review fixes** (Greptile P1, P1, P2).
+     - **A health answer for a daemon that has left `ready` is dropped.** `showReady` awaited `fetchHealth`; if the
+       daemon exited meanwhile, the restart or failure screen was up, `ready` was unchanged, and the old request then
+       loaded the dead daemon's URL over it (on the last failed attempt that removed the retry button and the log
+       path). It now also requires the backend to still be in `ready` with this very daemon (`isReadyFor`, tested; a
+       mutant of the guard is killed).
+     - **The login-shell script parses in fish.** `PATH_SCRIPT` used `${PATH}`, which fish rejects, so with
+       `SHELL=/usr/bin/fish` the lookup failed and the inherited PATH was used (git missed on a GUI launch). It is now
+       `printf START; printenv PATH; printf END`: no expansion syntax, the exported PATH in every accepted shell.
+       Tests: the script has no braced or command-substitution expansion; a real fish run when fish is installed
+       (skipped here: no fish on this machine).
+     - **`mutation-check.mjs` cannot report success without testing.** It first requires each test file to pass
+       unchanged (with a non-zero test count), and counts a mutant as killed only when vitest reported failed tests; a
+       run that dies before reporting (missing vitest, a load error) is "BROKEN" and fails the check. The obsolete
+       braces mutant became a "braced expansion" mutant. 44 mutants, all killed.

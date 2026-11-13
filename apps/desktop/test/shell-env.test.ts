@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
   defaultRunShell,
@@ -144,13 +145,30 @@ describe('resolveShellPath', () => {
 });
 
 describe.skipIf(process.platform === 'win32')('defaultRunShell with a real /bin/sh', () => {
-  it('prints the real PATH between the markers (the script expands PATH in braces)', async () => {
+  it('prints the real PATH between the markers (printenv, so fish parses it too)', async () => {
     const out = await defaultRunShell('/bin/sh', ['-c', PATH_SCRIPT], {
       env: { PATH: '/usr/local/bin:/usr/bin:/bin' },
       timeoutMs: 5_000,
     });
     expect(extractPath(out)).toBe('/usr/local/bin:/usr/bin:/bin');
   });
+
+  it('the script uses no braced or command-substitution expansion, which fish rejects (PR #108)', () => {
+    expect(PATH_SCRIPT).not.toMatch(/\$[{(]/);
+    expect(PATH_SCRIPT).not.toContain('"');
+  });
+
+  it.skipIf(!existsSync('/usr/bin/fish') && !existsSync('/opt/homebrew/bin/fish'))(
+    'prints the PATH under a real fish',
+    async () => {
+      const fish = existsSync('/usr/bin/fish') ? '/usr/bin/fish' : '/opt/homebrew/bin/fish';
+      const out = await defaultRunShell(fish, ['-ilc', PATH_SCRIPT], {
+        env: { PATH: '/usr/local/bin:/usr/bin:/bin', HOME: '/tmp' },
+        timeoutMs: 5_000,
+      });
+      expect(extractPath(out)?.split(':')).toContain('/usr/bin');
+    },
+  );
 
   it('rejects on a non-zero exit and kills at the timeout', async () => {
     await expect(

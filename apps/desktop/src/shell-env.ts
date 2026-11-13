@@ -14,10 +14,12 @@ export const PATH_MARKER_END = '__OCTOPUS_DIFF_PATH_END__';
 export const SHELL_ENV_TIMEOUT_MS = 5_000;
 
 /**
- * The script run with `-ilc` (one argv entry, so `$PATH` is the shell's own). `${PATH}` with
- * braces: `$PATH__…` would be read as one longer (unset) variable name.
+ * The script run with `-ilc` (one argv entry). It must parse in every accepted shell, fish
+ * included: no `${PATH}` expansion (fish rejects it) and no `$(...)`; `printenv PATH` prints the
+ * exported PATH (what a child would inherit) in all of them, and `;` separates commands in all of
+ * them. The markers are printed by `printf`, whose output never gets a newline.
  */
-export const PATH_SCRIPT = `printf '%s' "${PATH_MARKER_START}\${PATH}${PATH_MARKER_END}"`;
+export const PATH_SCRIPT = `printf '%s' '${PATH_MARKER_START}'; printenv PATH; printf '%s' '${PATH_MARKER_END}'`;
 
 export type RunShell = (
   shell: string,
