@@ -284,16 +284,16 @@ class HelperProcess {
   private die(): void {
     if (this.dead) return;
     this.dead = true;
-    const beforeReady = !this.ready;
-    const requests = [...this.requests.entries()];
+    const requests = [...this.requests.values()];
     this.requests.clear();
-    for (const [, request] of requests) {
+    this.updateRef();
+    // The pool first (it may give up on helpers), so a retry below already knows.
+    this.onDead(this, !this.ready);
+    for (const request of requests) {
       // A crashed helper cannot clean up: kill what it started.
       if (request.pid !== undefined) killGroupDirect(request.pid);
       request.handlers.lost('the git helper process exited');
     }
-    this.updateRef();
-    this.onDead(this, beforeReady);
   }
 
   private read(chunk: Buffer): void {
