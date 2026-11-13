@@ -153,8 +153,36 @@ export const TreeResponseSchema = z.object({
   truncated: z.boolean(),
   /** The request's cursor was for another listing: this is the first page. */
   restarted: z.boolean(),
+  /**
+   * Entries of the directory left out of the listing because no client could take them (#9
+   * security review P3-2): a name git would never write (`..`, `.`, empty, with `/`), or a path
+   * longer than the contracts allow. Absent when none were. `total` and the pages do not count them.
+   */
+  skipped: z.object({ invalidName: Count, tooLong: Count }).optional(),
 });
 export type TreeResponse = z.infer<typeof TreeResponseSchema>;
+
+/**
+ * Why an entry git-core read from a tree cannot be sent (`TreeEntrySchema` would reject it, and a
+ * client would drop the whole page), or null: `invalid_name` for a name git never writes (empty,
+ * `.`, `..`, with `/` or NUL) or a path with such a segment; `too_long` above the path and raw-path
+ * limits (#9 security review P3-2). Cheap: no schema parse per entry.
+ */
+export function treeEntryProblem(
+  entry: Pick<TreeEntry, 'name' | 'rawName' | 'path' | 'rawPath'>,
+): 'invalid_name' | 'too_long' | null {
+  const { name, path } = entry;
+  if (name.length === 0 || name === '.' || name === '..' || /[/\u0000]/.test(name)) {
+    return 'invalid_name';
+  }
+  if (path.length === 0 || path.startsWith('/') || path.includes('\u0000')) return 'invalid_name';
+  for (const segment of path.split('/')) {
+    if (segment === '.' || segment === '..') return 'invalid_name';
+  }
+  if (name.length > 4096 || path.length > 4096) return 'too_long';
+  if ((entry.rawPath?.length ?? 0) > 8192 || (entry.rawName?.length ?? 0) > 8192) return 'too_long';
+  return null;
+}
 
 /** A directory named by `worktree.changed.dirs`. */
 export const ChangedDirSchema = z.object({

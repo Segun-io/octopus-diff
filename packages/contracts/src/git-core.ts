@@ -192,6 +192,17 @@ export interface GitCore {
     options: { tree: string } & CallOptions,
   ): Promise<number>;
 
+  /**
+   * Files below each child directory of a tree object, from one `ls-tree -r -z <tree oid>` (#9
+   * security review P3-3: one process for many sibling directories instead of one each). Only
+   * children that are directories are listed. Memoized by (common dir, oid); a failure is
+   * remembered too (an output above the cap for good, others for a minute). Optional.
+   */
+  countTreeChildren?(
+    worktree: WorktreeLocator,
+    options: { tree: string } & CallOptions,
+  ): Promise<GitTreeChildCount[]>;
+
   /** Kills in-flight git processes and rejects queued work. */
   dispose(): Promise<void>;
 }
@@ -207,7 +218,28 @@ export interface TreeListOptions {
   path: string;
   /** Base64 of the directory's raw bytes (a non-UTF-8 name); wins over `path`. */
   rawPath?: string;
+  /**
+   * False: resolve the commit and the directory (`commit`, `tree`, `kind`) but return no entries
+   * (no per-entry decoding), for callers that hold the composed listing already (#9 review P3-4).
+   * Default true.
+   */
+  withEntries?: boolean;
 }
+
+/** `GitCore.countTreeChildren`: one child directory and the files below it. */
+export interface GitTreeChildCount {
+  name: string;
+  /** Base64 of the name's raw bytes, only when they are not valid UTF-8. */
+  rawName?: string;
+  count: number;
+}
+
+/**
+ * `GitCoreError.details.reason` (`not_found`) when an object the listing needs is not in the
+ * repository (#9 review P3-6): a partial clone (`--filter=tree:0`) without that tree. git-core
+ * never fetches it.
+ */
+export const GIT_OBJECT_MISSING = 'object_missing';
 
 export interface GitTreeEntry {
   name: string;

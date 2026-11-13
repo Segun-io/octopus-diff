@@ -11,6 +11,7 @@ import {
   TreeQuerySchema,
   TreeResponseSchema,
   treeDirIdentity,
+  treeEntryProblem,
   treeListingKey,
   WorktreeChangedEventSchema,
 } from '../src/index.js';
@@ -196,6 +197,12 @@ describe('tree schemas', () => {
       restarted: false,
     };
     expect(TreeResponseSchema.parse(response)).toEqual(response);
+    const skipped = { ...response, skipped: { invalidName: 2, tooLong: 0 } };
+    expect(TreeResponseSchema.parse(skipped)).toEqual(skipped);
+    expect(
+      TreeResponseSchema.safeParse({ ...response, skipped: { invalidName: -1, tooLong: 0 } })
+        .success,
+    ).toBe(false);
     const event = {
       type: 'worktree.changed',
       projectId: '0123456789abcdef',
@@ -257,5 +264,39 @@ describe('raw and display identities (#9 review)', () => {
     const row = entry('d', { kind: 'dir', mode: null, oid: null, size: null, replaces: 'file' });
     expect(TreeEntrySchema.parse(row)).toEqual(row);
     expect(TreeEntrySchema.safeParse({ ...row, replaces: 'blob' }).success).toBe(false);
+  });
+});
+
+describe('treeEntryProblem (security review P3-2)', () => {
+  it('agrees with TreeEntrySchema for hostile and ordinary entries', () => {
+    const cases: Array<Partial<TreeEntry>> = [
+      { name: 'ok', path: 'ok' },
+      { name: '..', path: '..' },
+      { name: '.', path: 'd/.' },
+      { name: 'a/b', path: 'a/b' },
+      { name: '', path: 'd/' },
+      { name: 'x\u0000y', path: 'x\u0000y' },
+      { name: 'x', path: '../x' },
+      { name: 'x', path: '/x' },
+      { name: 'n', path: `${'d/'.repeat(2048)}n` },
+      { name: 'n'.repeat(4097), path: 'n'.repeat(4097) },
+      { name: 'n', path: 'n', rawPath: 'A'.repeat(8196) },
+      { name: 'ok\ufffd', path: 'dir/ok\ufffd', rawName: 'b2v/', rawPath: 'ZGlyL29r/w==' },
+    ];
+    for (const c of cases) {
+      const e = entry('x', c);
+      const problem = treeEntryProblem(e);
+      const label = JSON.stringify(c).slice(0, 60);
+      // Never let through what the schema rejects; stricter where a row would be wrong anyway (a
+      // name with `/` collides with a nested path).
+      if (!TreeEntrySchema.safeParse(e).success) expect(problem, label).not.toBeNull();
+      if (problem === null) expect(TreeEntrySchema.safeParse(e).success, label).toBe(true);
+    }
+    expect(treeEntryProblem(entry('x', { name: '..', path: '..' }))).toBe('invalid_name');
+    expect(treeEntryProblem(entry('x', { name: 'a/b', path: 'a/b' }))).toBe('invalid_name');
+    expect(treeEntryProblem(entry('x', { name: 'ok', path: 'ok' }))).toBeNull();
+    expect(treeEntryProblem(entry('x', { name: 'n', path: `${'d/'.repeat(2048)}n` }))).toBe(
+      'too_long',
+    );
   });
 });

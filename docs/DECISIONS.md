@@ -4753,3 +4753,12 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      assert three requests with the cursors of the previous answers, a restart when the listing moves between page 1
      and page 2 (restarted page, then a fresh first page) and that the result is the new listing. Mutants that drop the
      cursor, ignore `restarted` or keep the restarted pages are killed.
+
+### File explorer: security review of PR #99 (2026-11-13; no P1, two P2, six P3)
+
+412. **Additive contracts for the security review.** `TreeListOptions.withEntries` (false: resolve commit, tree and
+     kind without decoding entries, P3-4); `GitCore.countTreeChildren` with `GitTreeChildCount` (files below each child
+     directory from one `ls-tree -r`, P3-3); `GIT_OBJECT_MISSING` (`'object_missing'`, the `details.reason` of a
+     `not_found` for an object a partial clone lacks, P3-6); `TreeResponse.skipped` (`{ invalidName, tooLong }`, entries
+     left out, P2-3 / P3-2); `treeEntryProblem(entry)`, which flags what `TreeEntrySchema` would reject (and a name
+     with `/`, which the schema accepts but which would collide with a nested path). Nothing renamed or removed.
