@@ -526,7 +526,13 @@ export function createApp(deps: AppDeps): Hono {
   }
 
   route('events', (c) => {
-    const stream = hub.createStream(deps.hello(), c.req.header('last-event-id') ?? null);
+    // The request's signal aborts when the client goes away: its subscription is released then
+    // (and when the body stream is cancelled, whichever comes first).
+    const stream = hub.createStream(
+      deps.hello(),
+      c.req.header('last-event-id') ?? null,
+      c.req.raw.signal,
+    );
     return c.body(stream, 200, {
       'Content-Type': 'text/event-stream; charset=utf-8',
       'Cache-Control': 'no-store',
