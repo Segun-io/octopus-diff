@@ -66,7 +66,7 @@ export function findExecutable(location: string): string {
 }
 
 export function packagedApp(): PackagedApp {
-  const executable = findExecutable(process.env[DESKTOP_APP_ENV] ?? defaultLocation());
+  const executable = findExecutable(process.env[DESKTOP_APP_ENV] || defaultLocation());
   const resources =
     process.platform === 'darwin'
       ? join(dirname(dirname(executable)), 'Resources')
