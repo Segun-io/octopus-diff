@@ -14,6 +14,7 @@ import {
   ChangedFileSchema,
   CommitInfoSchema,
   FileDiffSchema,
+  FileListCountsSchema,
   GitRepositoryInfoSchema,
   InboxEntrySchema,
   ProjectListItemSchema,
@@ -23,6 +24,13 @@ import {
   UntrackedOmissionSchema,
   WorktreeSummarySchema,
 } from './domain.js';
+import {
+  FILE_CURSOR_MAX_CHARS,
+  FILE_CURSOR_PATTERN,
+  FILES_PAGE_MAX,
+  FILES_SEARCH_MAX_CHARS,
+  type FilePageRequest,
+} from './paging.js';
 import {
   DiffScopeSchema,
   refineScopeQuery,
@@ -259,6 +267,12 @@ export const InboxQuerySchema = z
       .transform((v) => [...new Set(v.split(',').filter((s) => s.length > 0))])
       .pipe(z.array(IdSchema).min(1).max(INBOX_WORKTREES_MAX))
       .optional(),
+    /**
+     * Files per row at most (#42; 0: counts only). Default `INBOX_FILES_PER_WORKTREE`; the
+     * response as a whole carries at most `INBOX_FILES_MAX` files and `INBOX_FILES_MAX_BYTES` of
+     * them, so later rows may get fewer. A row's `filesTotal` and `filesNextCursor` say what is left.
+     */
+    filesLimit: z.coerce.number().int().min(0).max(FILES_PAGE_MAX).optional(),
   })
   .superRefine(refineScopeQuery)
   .transform(({ scope, base, sha, working, ...rest }) => ({
@@ -278,10 +292,54 @@ export const InboxResponseSchema = z.object({
 });
 export type InboxResponse = z.infer<typeof InboxResponseSchema>;
 
+/** An opaque `GET /files` cursor (`FilesResponse.nextCursor`). */
+export const FileCursorSchema = z.string().max(FILE_CURSOR_MAX_CHARS).regex(FILE_CURSOR_PATTERN);
+
+/**
+ * `GET /files` (#42 adds paging; every new parameter is optional). Without `limit` the answer is
+ * today's whole list, up to `FILES_UNPAGED_MAX` files (`truncated` says when it is cut). The order
+ * is `compareFileOrder` (own and mixed files, then the default branch's, each by path), the same
+ * for every page; the filters below make a *view* of it, and pages are slices of the view (see
+ * `paging.ts`).
+ */
 export const FilesQuerySchema = z
-  .object({ ...scopeQueryShape })
+  .object({
+    ...scopeQueryShape,
+    /** Files in the page at most (also bounded by `FILES_PAGE_MAX_BYTES`). */
+    limit: z.coerce.number().int().min(1).max(FILES_PAGE_MAX).optional(),
+    /** `nextCursor` of the previous page; a cursor of another state restarts (`restarted`). */
+    cursor: FileCursorSchema.optional(),
+    /** Start after this file (`n`: the next unreviewed one after the selection). Ignored with `cursor`. */
+    after: RepoPathSchema.optional(),
+    afterRawPath: RawPathSchema.optional(),
+    /** Only files not reviewed. */
+    unreviewed: QueryBool.optional(),
+    /** Only own and mixed files (`own`), or only the default branch's (`base`). */
+    origin: z.enum(['own', 'base']).optional(),
+    /** File search (the palette): files whose path fuzzy-matches, best first. */
+    q: z.string().min(1).max(FILES_SEARCH_MAX_CHARS).optional(),
+  })
   .superRefine(refineScopeQuery)
-  .transform((fields) => ({ scope: scopeFromQueryFields(fields) }));
+  .transform(({ limit, cursor, after, afterRawPath, unreviewed, origin, q, ...fields }) => {
+    const page: FilePageRequest = {
+      ...(limit !== undefined ? { limit } : {}),
+      ...(cursor !== undefined ? { cursor } : {}),
+      ...(after !== undefined
+        ? {
+            after:
+              afterRawPath !== undefined ? { path: after, rawPath: afterRawPath } : { path: after },
+          }
+        : {}),
+      ...(unreviewed ? { unreviewed } : {}),
+      ...(origin !== undefined ? { origin } : {}),
+      ...(q !== undefined ? { q } : {}),
+    };
+    // Without any paging parameter the query is exactly what it was before #42.
+    return {
+      scope: scopeFromQueryFields(fields),
+      ...(Object.keys(page).length > 0 ? { page } : {}),
+    };
+  });
 export type FilesQuery = z.output<typeof FilesQuerySchema>;
 
 export const FilesResponseSchema = z.object({
@@ -298,6 +356,21 @@ export const FilesResponseSchema = z.object({
    * from the list or marked reviewed. Absent from older daemons.
    */
   untrackedOmitted: UntrackedOmissionSchema.optional(),
+  /**
+   * Paging (#42); absent from older daemons, whose `files` is always the whole list. `total`:
+   * files in the view (the list after the filters); `offset`: the page's first file in the view;
+   * `position`: in the whole ordered list (null for an empty page), so a client can load the
+   * list through it. `nextCursor`: the next page, null at the end. `truncated`: `files` is not
+   * the whole view. `restarted`: the request's cursor was for another state or view, so this is
+   * the first page: drop the pages you had. `counts`: the whole list's (before the filters).
+   */
+  total: z.number().int().min(0).optional(),
+  offset: z.number().int().min(0).optional(),
+  position: z.number().int().min(0).nullable().optional(),
+  nextCursor: z.string().max(FILE_CURSOR_MAX_CHARS).nullable().optional(),
+  truncated: z.boolean().optional(),
+  restarted: z.boolean().optional(),
+  counts: FileListCountsSchema.optional(),
 });
 export type FilesResponse = z.infer<typeof FilesResponseSchema>;
 

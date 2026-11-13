@@ -4116,3 +4116,37 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      isolates the case (other refusals come first), so it keeps the equality but did not kill the check-removed mutant:
      the deterministic tests are the guard.
 
+
+## Paged file lists and inbox (session, 2026-11-12; roadmap #42, step 26)
+
+348. **Contracts for paged file lists (additive, `contracts:` commit).** New `packages/contracts/src/paging.ts`
+     (pure, browser-safe, shared by the daemon and the web mock so both page alike): the paging order
+     `compareFileOrder` (own and mixed files first, then `origin: 'base'`, each by path in UTF-16 code-unit order,
+     then `rawPath`: exactly the web list's `ownFirst(sortFiles())`), `fileListCounts`, `fileListKey` (a list's
+     identity: its state key plus every file's place and group, non-cryptographic 64-bit hash), `pageFileList`
+     (one page of a view), `fuzzyMatch` (moved from the web palette so the daemon's search ranks like the palette)
+     and the limits: `FILES_PAGE_MAX` 2000 (a page's `limit`), `FILES_PAGE_DEFAULT` 500 (what the web asks for),
+     `FILES_UNPAGED_MAX` 2000 (a request without `limit`), `FILES_PAGE_MAX_BYTES` 900 000 (bytes of a page's file
+     rows: with the envelope a response stays under about 1 MB whatever the path lengths), `INBOX_FILES_PER_WORKTREE`
+     200, `INBOX_FILES_MAX` 4000 and `INBOX_FILES_MAX_BYTES` 900 000 (per inbox response). `GET /files` gains
+     `limit`, `cursor`, `after`/`afterRawPath`, `unreviewed`, `origin` (`own` | `base`) and `q`; `FilesQuery` gains
+     `page` only when one of them is given (an old query parses exactly as before). `FilesResponse` gains `total`,
+     `offset`, `position`, `nextCursor`, `truncated`, `restarted` and `counts` (`FileListCounts`: `total`,
+     `reviewed`, `base`, `baseReviewed` of the whole list). `GET /api/inbox` gains `filesLimit` (0-2000; 0 = counts
+     only); `InboxEntry` gains `filesTotal`, `filesNextCursor` and `fileCounts`. `ApiClient.listFiles` takes the new
+     parameters (`FilesParams`), `ApiClient.inbox` takes `filesLimit`. Nothing renamed or removed; older clients'
+     schemas strip the new fields.
+     **The cursor** is `1.<fingerprint>.<offset>` (opaque to clients, `FILE_CURSOR_PATTERN`): the fingerprint covers
+     the list key (so the worktree's `stateHash`, the resolved scope, every file's place and group), the filters,
+     and for an `unreviewed` view which files are reviewed. Any other view answers with its first page and
+     `restarted: true`, never an error: the client drops its pages and pages again, so paging always yields one
+     state's files exactly once (property tests in `packages/contracts/test/paging.test.ts`). An offset cursor (not
+     "after this key") was chosen because the fingerprint already pins the list: the slice is O(1) and a key cursor
+     would only matter for a list that changed, which restarts anyway. Binding the cursor to the state (as the issue
+     asks) rather than only to the set of paths means every edit restarts a paging in progress; the web refetches
+     its loaded length in one go (#352), so a restart costs what a refetch cost before.
+     **Why `after` and `q` live on `/files`** (and not in a new route): `n` across pages needs "the next unreviewed
+     own file after X" (`after=X&unreviewed=true&origin=own&limit=1`), the palette's file jump needs "files matching
+     Q" (`q=Q&limit=20`); both are views of the same cached list with the same paging, so one route and one helper
+     serve all three. `position` (the page's first file in the whole list) lets the web load the list through a
+     file it jumped to. `after` of a file no longer in the list starts where it would sort (as an own file).
