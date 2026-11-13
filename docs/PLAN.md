@@ -213,6 +213,14 @@ multiple machines, fetch-on-demand (opt-in write-ish). (PR/CI status via `gh`/`g
   (`~/.config/octopus-diff/`, state in `~/.local/state/octopus-diff/`).
 - Watcher: `@parcel/watcher`, run in a child process (the watch host) so a native hang cannot block the daemon
   (DECISIONS #130).
+- Daemon core and git-core runner internals: **Effect 4** (`effect`), adopted incrementally (#25 decision 1, #46,
+  DECISIONS #395-#402). Long-lived child processes (the watch host, the git spawn helpers) are supervised by scoped
+  Layers (lazy start, bounded restart schedule, released on scope close) in a `ManagedRuntime` per owner (the daemon,
+  each git runner); Promise callers (Hono handlers, the CLI, tests) enter through `runAtBoundary` (AbortSignal ↔
+  interruption; typed failures map to `GitCoreError` / `ApiErrorBody`); time-based tests use `TestClock`. Public APIs
+  (`GitCore`, `DaemonCore`, the HTTP API) stay Promise-based. Next: runner scheduling (#47), the watch pipeline as
+  Streams (#48), caches (#49). Not in `packages/contracts` (zod stays), not in the web app (React Query stays); Hono
+  and `node:sqlite` stay.
 - Web: Vite + React + TypeScript, TanStack Query (data + SSE-driven invalidation), Tailwind CSS,
   `@pierre/diffs` (+ worker pool for highlighting, as in T3 Code), `@pierre/trees`.
 - Distribution: `npx octopus-diff` / `octopus-diff serve`, serving the built web assets from the daemon.
