@@ -41,17 +41,33 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  for (const child of children.splice(0)) {
-    if (child.pid !== undefined && child.exitCode === null && child.signalCode === null) {
-      try {
-        process.kill(child.pid);
-      } catch {
-        // already gone
-      }
-    }
-  }
+  // Stop every child and wait for it to be gone before its state dir is removed (a daemon still
+  // holds its SQLite file open on Windows); a forced kill is the bounded fallback.
+  await Promise.all(children.splice(0).map(stopChild));
   await dirs.cleanup();
 });
+
+async function stopChild(child: ChildProcess): Promise<void> {
+  if (child.pid === undefined || child.exitCode !== null || child.signalCode !== null) return;
+  const gone = new Promise<void>((resolve) => child.once('exit', () => resolve()));
+  try {
+    child.kill();
+  } catch {
+    return;
+  }
+  const timer = setTimeout(() => {
+    try {
+      child.kill('SIGKILL');
+    } catch {
+      // already gone
+    }
+  }, 5000);
+  try {
+    await Promise.race([gone, new Promise<void>((r) => setTimeout(r, 10_000).unref())]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 function serve(
   extra: string[],

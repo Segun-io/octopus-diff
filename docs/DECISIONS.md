@@ -5449,3 +5449,19 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      `fs.writeSync` on an inherited fd and stdin events, which Node supports on both; if a CI OS shows a difference, it
      is a bug to fix, not a skip. `readme.test.ts` requires every serve flag in the README table, so both flags are listed
      there.
+
+### Desktop phase A0: Greptile review of PR #106 (2026-11-13)
+
+483. **The standalone bundle finds its UI and knows its version wherever it is written** (Greptile P1 + P2).
+     - `bundle.mjs --out <dir>` wrote `<dir>/web`, but `webRootCandidates()` looked in `<module dir>/../dist/web`, so a
+       bundle outside a package layout served no UI. `webRootCandidates` now also lists `<module dir>/web` (the same
+       directory as `<pkg>/dist/web` in a packed CLI, so the tarball's candidates are unchanged).
+     - `cliVersion()` read `../package.json` from the bundle, giving `0.0.0` (or an unrelated parent package's version)
+       for a standalone bundle, and so a wrong `ServeReady.version` and daemon version. The version is now embedded at
+       bundle time (esbuild `define`, `__OCTOPUS_CLI_VERSION__`, read with a `typeof` guard so sources still read
+       `package.json`).
+     - **Tests:** `bundle.test.ts` bundles into a temp dir with no package.json above it and checks that `serve` answers
+       `/` and reports the CLI version in the ready line (both failed first); a candidates test for the layout.
+484. **The ready-fd tests wait for each child before removing its state dir** (Greptile P2). The cleanup killed the child
+     and deleted the temp dir at once; a daemon still holding its SQLite file open (Windows) could fail the removal and
+     hide the test's result. It now waits for the exit, with a forced kill after 5 s as the bounded fallback.

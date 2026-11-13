@@ -11,6 +11,10 @@ import { readTextSync } from './platform.js';
  * 2. `<cli package>/dist/web`: copied there by the CLI build (`scripts/copy-web-assets.mjs`), so a
  *    packed/installed CLI carries its own UI.
  *
+ * 3. `<dir of this module>/web`: the standalone bundle (`scripts/bundle.mjs --out <dir>`) puts
+ *    `index.js` and `web/` side by side wherever it is written (the desktop app); in a packed CLI
+ *    this is the same directory as 2.
+ *
  * The workspace check matters: in an installed package `../web` would be some unrelated
  * `node_modules/web`. `--web-root` / config `webRoot` override both.
  */
@@ -20,8 +24,11 @@ export function webRootCandidates(
 ): string[] {
   // This module lives in `<pkg>/src/` (dev) or `<pkg>/dist/` (built or bundled); either way the
   // package root is one level up.
-  const packageRoot = path.resolve(path.dirname(fileURLToPath(moduleUrl)), '..');
+  const moduleDir = path.dirname(fileURLToPath(moduleUrl));
+  const packageRoot = path.resolve(moduleDir, '..');
   const bundled = path.join(packageRoot, 'dist', 'web');
+  const beside = path.join(moduleDir, 'web');
+  const shipped = beside === bundled ? [bundled] : [bundled, beside];
   const webPackage = path.resolve(packageRoot, '..', 'web');
   let isWorkspace = false;
   try {
@@ -32,7 +39,7 @@ export function webRootCandidates(
   } catch {
     isWorkspace = false;
   }
-  return isWorkspace ? [path.join(webPackage, 'dist'), bundled] : [bundled];
+  return isWorkspace ? [path.join(webPackage, 'dist'), ...shipped] : shipped;
 }
 
 export function hasWebAssets(dir: string, exists: (p: string) => boolean = existsSync): boolean {

@@ -10,6 +10,7 @@
 //   index.js.map    its source map (and index.js.LEGAL.txt with the bundled licenses' notices)
 //   git-helper.js   git-core's spawn helper (#45): a separate process entry, found next to index.js
 //   web/            the built web UI (apps/web/dist); `serve` serves <index.js dir>/web
+//                   (the CLI version is embedded in index.js, so <dir> needs no package.json)
 //
 // Whoever ships <dir> must make EXTERNAL_PACKAGES resolvable from it (`node_modules/@parcel/watcher`
 // next to or above it) and run it with Node >= 24: `node <dir>/index.js serve ...`.
@@ -61,6 +62,8 @@ export async function bundleCli({ outDir }) {
   }
   await mkdir(outDir, { recursive: true });
   await rm(path.join(outDir, 'web'), { recursive: true, force: true });
+  // The version travels inside the bundle: `outDir` need not have a package.json above it.
+  const cliPkg = JSON.parse(await readFile(path.join(packageRoot, 'package.json'), 'utf8'));
 
   await build({
     entryPoints: [path.join(packageRoot, 'src', 'index.ts')],
@@ -71,6 +74,7 @@ export async function bundleCli({ outDir }) {
     target: 'node24',
     conditions: ['@octopus-diff/source'],
     external: EXTERNAL_PACKAGES,
+    define: { __OCTOPUS_CLI_VERSION__: JSON.stringify(String(cliPkg.version)) },
     sourcemap: true,
     legalComments: 'linked',
     logLevel: 'warning',

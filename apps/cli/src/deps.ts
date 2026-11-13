@@ -297,11 +297,18 @@ export function defaultDeps(): CliDeps {
   };
 }
 
+/** Set by `scripts/bundle.mjs` (esbuild `define`): a standalone bundle has no package.json above it. */
+declare const __OCTOPUS_CLI_VERSION__: string | undefined;
+
 let cachedVersion: string | undefined;
 
-/** The CLI package version (from `<pkg>/package.json`, one level above `src/` and `dist/`). */
+/** The CLI package version (embedded in a bundle, else `<pkg>/package.json` above `src/`/`dist/`). */
 export function cliVersion(): string {
   if (cachedVersion === undefined) {
+    if (typeof __OCTOPUS_CLI_VERSION__ === 'string') {
+      cachedVersion = __OCTOPUS_CLI_VERSION__;
+      return cachedVersion;
+    }
     try {
       const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as {
         version?: unknown;

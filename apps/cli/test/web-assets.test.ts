@@ -47,6 +47,17 @@ describe('webRootCandidates', () => {
     ]);
   });
 
+  it('also looks next to the module: a standalone bundle keeps index.js and web/ together', async () => {
+    // A bundle written to <dir>: <dir>/index.js and <dir>/web; the package root (<dir>/..) has no dist.
+    const dir = path.join(dirs.root, 'standalone', 'cli');
+    await mkdir(dir, { recursive: true });
+    const moduleUrl = pathToFileURL(path.join(dir, 'index.js')).href;
+    expect(webRootCandidates(moduleUrl, readTextSync)).toEqual([
+      path.join(dirs.root, 'standalone', 'dist', 'web'),
+      path.join(dir, 'web'),
+    ]);
+  });
+
   it('finds the real workspace from the source tree', () => {
     const candidates = webRootCandidates();
     expect(candidates[0]).toMatch(/apps[/\\]web[/\\]dist$/);
