@@ -453,6 +453,19 @@ export const ProjectListItemSchema = z.object({
 export type ProjectListItem = z.infer<typeof ProjectListItemSchema>;
 
 /** One dirty worktree in the cross-project inbox. */
+/**
+ * Counts of a worktree's whole file list in a scope (#42), whatever part of it a response carries:
+ * `reviewed` of `total`, and of them the files that came from the default branch (`origin: 'base'`,
+ * never marked in bulk). Own unreviewed files = `total - base - (reviewed - baseReviewed)`.
+ */
+export const FileListCountsSchema = z.object({
+  total: Count,
+  reviewed: Count,
+  base: Count,
+  baseReviewed: Count,
+});
+export type FileListCounts = z.infer<typeof FileListCountsSchema>;
+
 export const InboxEntrySchema = z.object({
   project: ProjectSchema,
   worktree: WorktreeSchema,
@@ -468,6 +481,17 @@ export const InboxEntrySchema = z.object({
    * daemons.
    */
   listing: z.enum(['overtaken']).optional(),
+  /**
+   * Paged rows (#42): `files` is the first page of the worktree's list in the paging order
+   * (`compareFileOrder`), at most `filesLimit` files and fewer when the response's budget ran out.
+   * `filesTotal`: files of the row's list (after `onlyUnreviewed`); more than `files.length` means
+   * the rest is not here, and `filesNextCursor` pages on with `GET /files` (same scope, plus
+   * `unreviewed=true` for an `onlyUnreviewed` inbox). `fileCounts`: the whole list's counts
+   * (before `onlyUnreviewed`). Absent from older daemons (their `files` is the whole list).
+   */
+  filesTotal: Count.optional(),
+  filesNextCursor: z.string().max(64).optional(),
+  fileCounts: FileListCountsSchema.optional(),
 });
 export type InboxEntry = z.infer<typeof InboxEntrySchema>;
 

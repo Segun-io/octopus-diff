@@ -52,6 +52,67 @@ export interface FileListOrigin {
   onToggle: (worktreeId: string) => void;
 }
 
+/** The footer row of a list that is not all loaded (#42). */
+export const FILE_LIST_MORE_TEST_ID = 'file-list-more';
+
+/** A paged list (#42): what is loaded of it, and how to load more. */
+export interface FileListMore {
+  loaded: number;
+  total: number;
+  /** Files the list would show may be beyond the loaded ones: the footer shows and loads them. */
+  visibleMore: boolean;
+  /** Every own and mixed file is loaded (the "from main" row may follow them). */
+  ownComplete: boolean;
+  /** A page is on its way. */
+  loading: boolean;
+  /**
+   * The next page failed (PR #97 review): `retrying` while delayed retries remain, `stopped`
+   * once they are spent (only the Retry button tries again). Either way nothing loads on its own.
+   */
+  error?: 'retrying' | 'stopped' | null;
+  onLoadMore: () => void;
+  /** Tries the failed page again (resets the delayed retries). */
+  onRetry?: () => void;
+}
+
+/** What the footer (or the tree's bar) says and offers: progress, Load more, or the failure. */
+export function MoreStatus({ more }: { more: FileListMore }) {
+  const counts = `${more.loaded.toLocaleString()} of ${more.total.toLocaleString()} files loaded`;
+  if (more.error) {
+    return (
+      <>
+        <span role="alert" aria-live="assertive" className="text-danger">
+          Could not load more files
+          {more.error === 'retrying' ? '; trying again…' : '.'}
+        </span>
+        <span className="sr-only">{counts}</span>
+        {more.error === 'stopped' && !more.loading && (
+          <button
+            type="button"
+            className="text-accent hover:underline"
+            onClick={more.onRetry ?? more.onLoadMore}
+          >
+            Retry
+          </button>
+        )}
+      </>
+    );
+  }
+  return (
+    <>
+      <span aria-live="polite">
+        {more.loading ? 'Loading more files… ' : ''}
+        {counts}
+      </span>
+      {!more.loading && (
+        <button type="button" className="text-accent hover:underline" onClick={more.onLoadMore}>
+          Load more
+        </button>
+      )}
+    </>
+  );
+}
+
 export interface FileListProps {
   groups: readonly FileGroup[];
   entries: readonly NavEntry[];
@@ -60,6 +121,7 @@ export interface FileListProps {
   onSelect: (entry: NavEntry) => void;
   emptyMessage: string;
   origin?: FileListOrigin;
+  more?: FileListMore | undefined;
 }
 
 function rowId(key: string): string {
@@ -81,9 +143,10 @@ export function FileList({
   onSelect,
   emptyMessage,
   origin,
+  more,
 }: FileListProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
-  const [viewport, setViewport] = useState({ top: 0, height: 800 });
+  const [viewport, setViewport] = useState({ top: 0, height: 800, measured: false });
   const store = useUiStore();
   const menu = useContextMenu<NavEntry>();
   const openMenu = menu.open;
@@ -119,13 +182,17 @@ export function FileList({
         noiseAt = 0;
         while (noiseAt < rows.length && !isBaseFile(rows[noiseAt]?.file ?? {})) noiseAt++;
       }
-      const slots = rows.length + (noise ? 1 : 0);
+      // A paged list (#42) whose own files are not all loaded yet has no place for the row yet.
+      const placed = noise && (noiseAt < rows.length || !more || more.ownComplete) ? noise : null;
+      if (!placed) noiseAt = -1;
+      const slots = rows.length + (placed ? 1 : 0);
       const height = slots * ROW_HEIGHT;
-      out.push({ group, top, height, rows, noiseAt, noise, slots });
+      out.push({ group, top, height, rows, noiseAt, noise: placed, slots });
       top += height;
     }
-    return { groups: out, total: top };
-  }, [groups, entries, visible, ROW_HEIGHT, origin]);
+    const footer = more?.visibleMore ? ROW_HEIGHT : 0;
+    return { groups: out, total: top + footer, footerTop: footer ? top : -1 };
+  }, [groups, entries, visible, ROW_HEIGHT, origin, more]);
 
   // Track viewport (scroll + size), throttled to animation frames.
   useLayoutEffect(() => {
@@ -135,9 +202,9 @@ export function FileList({
     const update = () => {
       frame = 0;
       setViewport((v) =>
-        v.top === el.scrollTop && v.height === el.clientHeight
+        v.measured && v.top === el.scrollTop && v.height === el.clientHeight
           ? v
-          : { top: el.scrollTop, height: el.clientHeight },
+          : { top: el.scrollTop, height: el.clientHeight, measured: true },
       );
     };
     const onScroll = () => {
@@ -176,6 +243,19 @@ export function FileList({
 
   const windowTop = viewport.top - OVERSCAN_PX;
   const windowBottom = viewport.top + viewport.height + OVERSCAN_PX;
+
+  // Paged (#42): within two screens of the loaded end, the next page loads (single-flight there).
+  const footerTop = layout.footerTop;
+  const onLoadMore = more?.onLoadMore;
+  // Not before the viewport was measured: the first render's size is a guess.
+  const nearEnd =
+    viewport.measured && footerTop >= 0 && windowBottom + viewport.height * 2 >= footerTop;
+  const loadingMore = more?.loading ?? false;
+  // A failed page is not loaded again on its own from here (its retries are delayed and bounded).
+  const failedMore = Boolean(more?.error);
+  useEffect(() => {
+    if (nearEnd && !loadingMore && !failedMore) onLoadMore?.();
+  }, [nearEnd, loadingMore, failedMore, onLoadMore]);
   const selectedVisible =
     selectedKey !== null && layout.groups.some((g) => g.rows.some((r) => r.key === selectedKey));
 
@@ -271,6 +351,18 @@ export function FileList({
             </div>
           );
         })}
+        {more && layout.footerTop >= 0 && (
+          <div
+            data-testid={FILE_LIST_MORE_TEST_ID}
+            data-loaded={more.loaded}
+            data-total={more.total}
+            role="presentation"
+            className="absolute right-0 left-0 flex items-center gap-2 px-3 text-xs text-muted"
+            style={{ top: layout.footerTop, height: ROW_HEIGHT }}
+          >
+            <MoreStatus more={more} />
+          </div>
+        )}
       </div>
     </div>
   );

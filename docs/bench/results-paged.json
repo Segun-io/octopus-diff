@@ -1,0 +1,106 @@
+{
+  "generatedAt": "2026-11-13T01:21:45.354Z",
+  "machine": "linux 6.18.58.1-microsoft-standard-WSL2, 12 cores, Node 26.13.0",
+  "layout": {
+    "files": 40000,
+    "dirtyTracked": 100,
+    "untracked": 150,
+    "manyUntracked": 1000,
+    "rewriteLines": 30000,
+    "manyChanged": 36000,
+    "generationMs": 5280
+  },
+  "startupMs": 5047,
+  "pageSize": 500,
+  "files": [
+    {
+      "scope": "working",
+      "total": 36150,
+      "unpaged": {
+        "rows": 2000,
+        "truncated": true,
+        "coldMs": 2049,
+        "warmMs": 10,
+        "rawBytes": 562532,
+        "wireBytes": 59152,
+        "coldCpuMs": 2960,
+        "warmCpuMs": 10
+      },
+      "paged": {
+        "pageSize": 500,
+        "pages": 73,
+        "firstMs": 8,
+        "firstRawBytes": 140851,
+        "firstWireBytes": 15128,
+        "maxRawBytes": 140860,
+        "maxMs": 8,
+        "allMs": 270,
+        "rows": 36150,
+        "duplicates": 0,
+        "complete": true
+      }
+    },
+    {
+      "scope": "All on branch",
+      "total": 36150,
+      "unpaged": {
+        "rows": 2000,
+        "truncated": true,
+        "coldMs": 2083,
+        "warmMs": 10,
+        "rawBytes": 562553,
+        "wireBytes": 59177,
+        "coldCpuMs": 2870,
+        "warmCpuMs": 10
+      },
+      "paged": {
+        "pageSize": 500,
+        "pages": 73,
+        "firstMs": 4,
+        "firstRawBytes": 140872,
+        "firstWireBytes": 15154,
+        "maxRawBytes": 140881,
+        "maxMs": 5,
+        "allMs": 297,
+        "rows": 36150,
+        "duplicates": 0,
+        "complete": true
+      }
+    }
+  ],
+  "inbox": [
+    {
+      "scope": "working",
+      "ms": 81,
+      "warmMs": 6,
+      "rawBytes": 220596,
+      "wireBytes": 28252,
+      "rows": 800,
+      "total": 37901
+    },
+    {
+      "scope": "All on branch",
+      "ms": 81,
+      "warmMs": 8,
+      "rawBytes": 220617,
+      "wireBytes": 28274,
+      "rows": 800,
+      "total": 37901
+    }
+  ],
+  "ui": {
+    "coldOpenMs": 180,
+    "warmOpenMs": 118,
+    "switchOpenMs": 119,
+    "mountedRows": 49,
+    "edit": {
+      "sseMs": 4124,
+      "bytes": 23748,
+      "requests": [
+        "/api/worktrees/d7ffe5b84def9b92/activity 734",
+        "/api/inbox?worktreeIds 7343",
+        "/api/worktrees/d7ffe5b84def9b92/files?limit=500 15671"
+      ]
+    }
+  }
+}

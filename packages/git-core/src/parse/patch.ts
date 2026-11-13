@@ -242,9 +242,14 @@ export class PatchSplitter {
   /** Processes complete lines in `text[0, end)`. */
   private process(text: string, end: number): void {
     let pos = 0;
+    // Where each marker next occurs in `text` (-1: nowhere after; -2: not searched yet). `pos`
+    // only grows, so a found index stays valid until passed and an absent marker stays absent:
+    // each marker is searched once per pass instead of once per patch (#42: one search of the
+    // whole rest per file made a 36k-file diff spend seconds here).
+    const nextAt = NEWLINE_MARKERS.map(() => -2);
     while (pos < end) {
       if (this.mode === 'body') {
-        const next = this.findChunkStart(text, pos, end);
+        const next = this.findChunkStart(text, pos, end, nextAt);
         if (next < 0) {
           this.sink?.write(text.slice(pos, end));
           return;
@@ -304,13 +309,17 @@ export class PatchSplitter {
   }
 
   /** Index of the next chunk start at a line beginning within `[pos, end)`, or -1. */
-  private findChunkStart(text: string, pos: number, end: number): number {
+  private findChunkStart(text: string, pos: number, end: number, nextAt: number[]): number {
     if (pos === 0 || text[pos - 1] === '\n') {
       if (START_MARKERS.some((marker) => text.startsWith(marker, pos))) return pos;
     }
     let best = -1;
-    for (const marker of NEWLINE_MARKERS) {
-      const index = text.indexOf(marker, pos);
+    for (let m = 0; m < NEWLINE_MARKERS.length; m++) {
+      let index = nextAt[m] as number;
+      if (index === -2 || (index >= 0 && index < pos)) {
+        index = text.indexOf(NEWLINE_MARKERS[m] as string, pos);
+        nextAt[m] = index;
+      }
       if (index >= 0 && index + 1 < end && (best < 0 || index + 1 < best)) best = index + 1;
     }
     return best;

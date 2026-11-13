@@ -208,18 +208,18 @@ helpers therefore add about 40 MB of private memory to a daemon that uses 140-21
 
 ## Decisions
 
-DECISIONS #348-#357 (`docs/DECISIONS.md`, "Spawn helper for git"):
+DECISIONS #365-#374 (`docs/DECISIONS.md`, "Spawn helper for git"):
 
-- #348: the contracts field;
-- #349: stdio frames from `spawn(process.execPath)` rather than fork IPC or `utilityProcess`, for Node and Electron;
-- #350: what stays in the runner, the helper's strictness rules and caps;
-- #351: the failure model (retry, orphan kill, fallback);
-- #352: two lazy helpers by default;
-- #353: Windows keeps the direct path;
-- #354: the kill switches;
-- #355: `no-shell.test.ts` lists the three spawning modules;
-- #356: CLI packaging, doctor and the CI smoke;
-- #357: the RSS premise no longer reproduces.
+- #365: the contracts field;
+- #366: stdio frames from `spawn(process.execPath)` rather than fork IPC or `utilityProcess`, for Node and Electron;
+- #367: what stays in the runner, the helper's strictness rules and caps;
+- #368: the failure model (retry, orphan kill, fallback);
+- #369: two lazy helpers by default;
+- #370: Windows keeps the direct path;
+- #371: the kill switches;
+- #372: `no-shell.test.ts` lists the three spawning modules;
+- #373: CLI packaging, doctor and the CI smoke;
+- #374: the RSS premise no longer reproduces.
 
 ## Contract changes
 
@@ -246,7 +246,7 @@ None added or removed. The tarball's second esbuild entry uses the existing esbu
 ## Notes for integration
 
 - Commit order: `contracts:` (f1c64c8) → git-core → daemon → cli → `contracts:` doc fix → tests → orphan race fix →
-  e2e trace. The DECISIONS numbers #348-#357 may collide with the #42 session's entries; renumber freely (the report
+  e2e trace. The DECISIONS numbers #365-#374 may collide with the #42 session's entries; renumber freely (the report
   and the code comments cite the numbers only in this file and `DECISIONS.md`).
 - #19 (Electron packaging) must ship `dist/git-helper.js` outside the asar (or pass `helper.entry`). With
   `ELECTRON_RUN_AS_NODE`, nothing else is needed.

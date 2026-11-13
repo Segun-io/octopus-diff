@@ -162,7 +162,10 @@ export function createMockRouter(backend: MockBackend, options: MockRouterOption
       }
       if (path === '/api/inbox' && method === 'GET') {
         const q = parse(InboxQuerySchema, queryObject(url));
-        return json(200, backend.inbox(q.scope, q.onlyUnreviewed, q.projectIds, q.worktreeIds));
+        return json(
+          200,
+          backend.inbox(q.scope, q.onlyUnreviewed, q.projectIds, q.worktreeIds, q.filesLimit),
+        );
       }
       const wtMatch = path.match(/^\/api\/worktrees\/([^/]+)\/(files|diff|commits|refresh)$/);
       if (wtMatch) {
@@ -170,7 +173,7 @@ export function createMockRouter(backend: MockBackend, options: MockRouterOption
         const action = wtMatch[2];
         if (action === 'files' && method === 'GET') {
           const q = parse(FilesQuerySchema, queryObject(url));
-          return json(200, backend.listFiles(worktreeId, q.scope));
+          return json(200, backend.listFiles(worktreeId, q.scope, q.page));
         }
         if (action === 'diff' && method === 'GET') {
           const q = parse(DiffQuerySchema, queryObject(url));

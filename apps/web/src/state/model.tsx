@@ -1,10 +1,13 @@
 import type {
+  ChangedFile,
   DiffScope,
   EffectiveReviewPolicy,
+  FileListCounts,
   InboxEntry,
   WorktreeForge,
 } from '@octopus-diff/contracts';
 import { createContext, type ReactNode, useContext, useEffect, useMemo, useRef } from 'react';
+import { filesComplete, filesTotal } from '../api/files.ts';
 import { useForgeIndex } from '../api/forges.ts';
 import { isPartialInbox, useFilesQuery, useInboxQuery, useProjectsQuery } from '../api/queries.ts';
 import { useScanRootsQuery } from '../api/settings.ts';
@@ -14,6 +17,7 @@ import {
   type FileGroup,
   flattenGroups,
   hasSidebarFilters,
+  isBaseFile,
   isMixedFile,
   listsReviewed,
   type NavEntry,
@@ -34,6 +38,24 @@ import {
 } from '../lib/model.ts';
 import { effectivePolicy } from '../lib/policy.ts';
 import { useUi, type View } from './ui.tsx';
+
+/**
+ * What a worktree's loaded files are of its whole list (#42): the open list's prefix, or an inbox
+ * row's first page. `counts` are the whole list's (null from an older daemon, whose lists are
+ * always complete).
+ */
+export interface ListInfo {
+  complete: boolean;
+  loaded: number;
+  total: number;
+  counts: FileListCounts | null;
+  /**
+   * The last loaded file in the daemon's paging order (where the next page starts), whatever
+   * order the list is shown in (the tree layout sorts the loaded files its own way, PR #97
+   * review). Null when nothing is loaded.
+   */
+  boundary: ChangedFile | null;
+}
 
 export interface AppModel {
   view: View;
@@ -57,6 +79,8 @@ export interface AppModel {
   allEntries: NavEntry[];
   /** Files across all worktrees for `n` (current scope; commit scope: current list only). */
   globalEntries: NavEntry[];
+  /** The groups `globalEntries` is made of, rows without loaded files included (#42). */
+  globalGroups: FileGroup[];
   /** What `j`/`k` reach and the list shows: the eye and the "from main" view (wrapped group, chip). */
   visible: VisiblePredicate;
   /** Only the origin part of `visible`; `n` honours it too (a collapsed group is skipped). */
@@ -117,6 +141,19 @@ export interface AppModel {
   allUnfiltered: boolean;
   /** Effective policy of the selected worktree view (null outside a worktree). */
   viewPolicy: EffectiveReviewPolicy | null;
+  /**
+   * Paged lists (#42), per worktree: the open list's prefix, else the inbox row's first page. A
+   * worktree without an entry has its whole list loaded (or none).
+   */
+  lists: ReadonlyMap<string, ListInfo>;
+  /** The open worktree's list (null outside a worktree or before it loads). */
+  openList: ListInfo | null;
+  /**
+   * The open list is partly loaded (#42): whether files it would show are beyond the loaded ones
+   * (from the counts and the eye / "from main" view), and whether its own files are all loaded.
+   * Null when the list is complete.
+   */
+  openMore: { visibleMore: boolean; ownComplete: boolean } | null;
 }
 
 const AppModelContext = createContext<AppModel | null>(null);
@@ -312,8 +349,37 @@ function useBuildAppModel(): AppModel {
   const viewPolicy =
     view.kind === 'worktree' ? (sidebar.byId.get(view.worktreeId)?.review ?? null) : null;
 
-  const globalEntries = useMemo(() => {
-    if (scope.kind === 'commit') return entries;
+  const lists = useMemo(() => {
+    const out = new Map<string, ListInfo>();
+    for (const entry of inboxEntries) {
+      const total = entry.filesTotal ?? entry.files.length;
+      out.set(entry.worktree.id, {
+        complete: entry.listing === 'overtaken' ? false : entry.files.length >= total,
+        loaded: entry.files.length,
+        total,
+        counts: entry.fileCounts ?? null,
+        boundary: entry.files.at(-1) ?? null,
+      });
+    }
+    if (filesData) {
+      out.set(filesData.worktreeId, {
+        complete: filesComplete(filesData),
+        loaded: filesData.files.length,
+        total: filesTotal(filesData),
+        counts: filesData.counts ?? null,
+        // The query's files are the daemon's pages in its order (`api/files.ts`).
+        boundary: filesData.files.at(-1) ?? null,
+      });
+    }
+    return out;
+  }, [inboxEntries, filesData]);
+  const openList =
+    view.kind === 'worktree' && filesData?.worktreeId === view.worktreeId
+      ? (lists.get(view.worktreeId) ?? null)
+      : null;
+
+  const globalGroups = useMemo(() => {
+    if (scope.kind === 'commit') return groups;
     const all: FileGroup[] = [];
     for (const entry of inboxEntries) {
       if (view.kind === 'worktree' && entry.worktree.id === view.worktreeId && groups[0]) {
@@ -327,15 +393,44 @@ function useBuildAppModel(): AppModel {
     if (view.kind === 'worktree' && groups[0] && !sortedInboxFiles.has(view.worktreeId)) {
       all.push(groups[0]);
     }
-    return flattenGroups(all);
-  }, [scope.kind, entries, inboxEntries, sortedInboxFiles, view, groups]);
+    return all;
+  }, [scope.kind, inboxEntries, sortedInboxFiles, view, groups]);
+  const globalEntries = useMemo(() => flattenGroups(globalGroups), [globalGroups]);
 
   const visible = useMemo(() => visibleIf(showsReviewed, originView), [showsReviewed, originView]);
   const originVisible = useMemo(() => originVisibleIf(originView), [originView]);
-  const originStatsByWorktree = useMemo(
-    () => originStats(entries, visibleIf(showsReviewed)),
-    [entries, showsReviewed],
-  );
+  // Lists come in pages (#42): the base files of a partly loaded list are counted from the
+  // whole list's counts (the chip and the "from main" row), not from the loaded ones.
+  const openCounts = openList && !openList.complete ? openList.counts : null;
+  const originStatsByWorktree = useMemo(() => {
+    const stats = originStats(entries, visibleIf(showsReviewed));
+    if (openCounts && view.kind === 'worktree') {
+      const s = stats.get(view.worktreeId) ?? { own: 0, base: 0, mixed: 0, vias: new Set() };
+      s.base = showsReviewed ? openCounts.base : openCounts.base - openCounts.baseReviewed;
+      stats.set(view.worktreeId, s);
+    }
+    return stats;
+  }, [entries, showsReviewed, openCounts, view]);
+  const openMore = useMemo<AppModel['openMore']>(() => {
+    if (!openList || openList.complete || view.kind !== 'worktree') return null;
+    const c = openList.counts;
+    let ownLoaded = 0;
+    for (const e of entries) if (!isBaseFile(e.file)) ownLoaded++;
+    const ownComplete = c !== null && ownLoaded >= c.total - c.base;
+    if (!c) return { visibleMore: true, ownComplete };
+    // Would the list show more than it does? From the whole list's counts and what is on screen.
+    const ownTotal = c.total - c.base;
+    const ownUnreviewed = ownTotal - (c.reviewed - c.baseReviewed);
+    const baseUnreviewed = c.base - c.baseReviewed;
+    const ownShown = !fromMainOnly;
+    const baseShown = fromMainOnly || originView.expanded.has(view.worktreeId);
+    const full =
+      (ownShown ? (showsReviewed ? ownTotal : ownUnreviewed) : 0) +
+      (baseShown ? (showsReviewed ? c.base : baseUnreviewed) : 0);
+    let shown = 0;
+    for (const e of entries) if (visible(e)) shown++;
+    return { visibleMore: full > shown, ownComplete };
+  }, [openList, view, entries, fromMainOnly, originView, showsReviewed, visible]);
   const originRefs = useMemo(() => {
     const out = new Map<string, string>();
     for (const g of groups) {
@@ -404,12 +499,16 @@ function useBuildAppModel(): AppModel {
     listedIds,
     allUnfiltered,
     viewPolicy,
+    lists,
+    openList,
+    openMore,
     inboxEntries,
     groups,
     entries,
     allGroups,
     allEntries,
     globalEntries,
+    globalGroups,
     visible,
     originVisible,
     originView,

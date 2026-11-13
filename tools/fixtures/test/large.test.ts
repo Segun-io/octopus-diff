@@ -12,7 +12,14 @@ import {
 } from '../src/index.js';
 
 // Same shape as the real layouts, tiny so the unit test stays quick.
-const TINY = { files: 400, dirtyTracked: 10, untracked: 8, manyUntracked: 250, rewriteLines: 500 };
+const TINY = {
+  files: 400,
+  dirtyTracked: 10,
+  untracked: 8,
+  manyUntracked: 250,
+  rewriteLines: 500,
+  manyChanged: 120,
+};
 
 let set: LargeFixtureSet;
 
@@ -43,9 +50,15 @@ describe('large layout', () => {
     expect(new Set(Array.from({ length: 3000 }, (_, i) => largeFilePath(i))).size).toBe(3000);
   });
 
-  it('lives under the OS temp dir with one monorepo and three worktrees', async () => {
+  it('lives under the OS temp dir with one monorepo and four worktrees (#42 adds many-changed)', async () => {
     expect(set.root.startsWith(`${await realpath(tmpdir())}/octopus-diff-large-test-`)).toBe(true);
-    expect(set.worktrees.map((w) => w.role)).toEqual(['main', 'stale-index', 'untracked-heavy']);
+    expect(set.worktrees.map((w) => w.role)).toEqual([
+      'main',
+      'stale-index',
+      'untracked-heavy',
+      'many-changed',
+    ]);
+    expect(LARGE_LAYOUTS['large-paged'].manyChanged).toBe(36_000);
     const list = lines(await git(set.projectPath, ['worktree', 'list', '--porcelain']))
       .filter((l) => l.startsWith('worktree '))
       .map((l) => l.slice('worktree '.length));

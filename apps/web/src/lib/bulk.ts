@@ -3,7 +3,7 @@
  * matches what the user is looking at, including the sidebar filters and "show reviewed".
  * Pure, so it is unit-tested; `state/bulk.ts` executes the plan.
  */
-import type { BulkReviewRequest, DiffScope } from '@octopus-diff/contracts';
+import type { BulkReviewRequest, DiffScope, FileListCounts } from '@octopus-diff/contracts';
 import { type FileGroup, isBaseFile, type NavEntry, type VisiblePredicate } from './model.ts';
 
 export interface BulkPlan {
@@ -30,6 +30,23 @@ export interface BulkPlanInput {
   /** True when every dirty worktree is covered and no file is hidden: one `all` request. */
   allUnfiltered: boolean;
   includeDisabled?: boolean;
+  /**
+   * Paged lists (#42): worktrees whose loaded files are not their whole list, with the whole
+   * list's counts (null: unknown). Their files are marked by the daemon from its whole list (a
+   * request without `paths`), counted from `counts`, unless what the view hides would change.
+   */
+  partial?: ReadonlyMap<string, FileListCounts | null>;
+  /** The eye: reviewed files are listed (default true). */
+  showsReviewed?: boolean;
+  /** The "From main" chip: only the default branch's files are listed (default false). */
+  fromMainOnly?: boolean;
+}
+
+/** Own files of a whole list whose mark is not `reviewed` (`api/files.ts` `ownToChange`). */
+function ownToChangeOf(counts: FileListCounts, reviewed: boolean): number {
+  const own = counts.total - counts.base;
+  const ownReviewed = counts.reviewed - counts.baseReviewed;
+  return reviewed ? own - ownReviewed : ownReviewed;
 }
 
 function hashesFor(ids: Iterable<string>, hashes: ReadonlyMap<string, string>) {
@@ -53,7 +70,27 @@ export function planBulk(input: BulkPlanInput): BulkPlan {
   // lists base files only): a request without `paths` would mark it, so those get no bookmark-only
   // request. Bulk review with the chip on stays a no-op.
   const hidesOwn = new Set<string>();
+  const partial = input.partial ?? new Map<string, FileListCounts | null>();
+  // Partly loaded worktrees (#42): what a whole-worktree request would change, from the counts.
+  const partialCounts = new Map<string, number>();
+  for (const [worktreeId, counts] of partial) {
+    if (disabled.has(worktreeId) && !input.includeDisabled) continue;
+    if (!groups.some((g) => g.worktree.id === worktreeId)) continue;
+    // The chip lists base files only, which are never marked in bulk; with the eye off, marking
+    // unreviewed would change the reviewed files the list hides: nothing a click should change.
+    if (input.fromMainOnly || (!reviewed && input.showsReviewed === false)) continue;
+    let loaded = 0;
+    for (const e of entries) {
+      if (e.worktreeId === worktreeId && !isBaseFile(e.file) && e.file.reviewed !== reviewed) {
+        loaded++;
+      }
+    }
+    const change = counts ? ownToChangeOf(counts, reviewed) : loaded;
+    if (change > 0) partialCounts.set(worktreeId, change);
+    else if (advance && counts && counts.base > counts.baseReviewed) advanceOnly.add(worktreeId);
+  }
   for (const e of entries) {
+    if (partial.has(e.worktreeId)) continue;
     if (advance && isBaseFile(e.file) && !(disabled.has(e.worktreeId) && !input.includeDisabled)) {
       advanceOnly.add(e.worktreeId);
     }
@@ -72,7 +109,9 @@ export function planBulk(input: BulkPlanInput): BulkPlan {
   }
   let count = 0;
   for (const list of byWorktree.values()) count += list.length;
+  for (const n of partialCounts.values()) count += n;
   for (const id of byWorktree.keys()) advanceOnly.delete(id);
+  for (const id of partialCounts.keys()) advanceOnly.delete(id);
   for (const id of hidesOwn) advanceOnly.delete(id);
   const base = { scope: scopeField, reviewed, includeDisabled: input.includeDisabled ?? false };
   // "Review all" in To review (docs/STATUS-FLOW.md §2.3) also moves the bookmark to HEAD. Hidden
@@ -83,7 +122,7 @@ export function planBulk(input: BulkPlanInput): BulkPlan {
     return {
       target: 'all',
       count,
-      worktrees: byWorktree.size + advanceOnly.size,
+      worktrees: byWorktree.size + partialCounts.size + advanceOnly.size,
       requests: [
         {
           ...base,
@@ -111,6 +150,15 @@ export function planBulk(input: BulkPlanInput): BulkPlan {
       expectedStateHashes: hashesFor([worktreeId], stateHashes),
     });
   }
+  // Partly loaded worktrees: the daemon marks its whole list (base files are skipped there too).
+  for (const worktreeId of partialCounts.keys()) {
+    requests.push({
+      ...base,
+      target: { kind: 'worktree', worktreeId },
+      ...(advance ? { advanceBookmarks: true } : {}),
+      expectedStateHashes: hashesFor([worktreeId], stateHashes),
+    });
+  }
   // Worktrees with base files only: nothing to mark, but the bookmark moves like the others'.
   for (const worktreeId of advanceOnly) {
     requests.push({
@@ -120,7 +168,12 @@ export function planBulk(input: BulkPlanInput): BulkPlan {
       expectedStateHashes: hashesFor([worktreeId], stateHashes),
     });
   }
-  return { target: 'worktree', count, worktrees: byWorktree.size + advanceOnly.size, requests };
+  return {
+    target: 'worktree',
+    count,
+    worktrees: byWorktree.size + partialCounts.size + advanceOnly.size,
+    requests,
+  };
 }
 
 /** A plan for a sidebar node (whole folder / project / worktree), ignoring UI filters. */

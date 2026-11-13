@@ -6,10 +6,12 @@ import {
   type ApiClient,
   type ChangedFile,
   type DiffResponse,
+  type FileListCounts,
   type FilesResponse,
   INBOX_WORKTREES_MAX,
   type InboxEntry,
   type InboxResponse,
+  isBaseOrigin,
   type ProjectsResponse,
   type ScopeKind,
   type ServerEvent,
@@ -27,6 +29,7 @@ import {
   isDeltaEvent,
   type WorktreeDeltaEvent,
 } from './deltas.ts';
+import { inboxFilesParam } from './files.ts';
 import { type DiffQueryData, queryKeys, settleOvertaken } from './queries.ts';
 
 export interface ReviewPatch {
@@ -68,6 +71,33 @@ function patchFiles(files: ChangedFile[], patch: ReviewPatch): ChangedFile[] | n
 }
 
 /**
+ * The whole list's counts (#42) after `patchFiles` flipped files of its loaded part: they say
+ * what bulk review and `n` may expect of the files that are not loaded, so they follow the marks.
+ */
+function patchCounts(
+  counts: FileListCounts | undefined,
+  before: readonly ChangedFile[],
+  after: readonly ChangedFile[],
+): FileListCounts | undefined {
+  if (!counts) return counts;
+  let reviewed = counts.reviewed;
+  let baseReviewed = counts.baseReviewed;
+  for (let i = 0; i < after.length; i++) {
+    const a = after[i] as ChangedFile;
+    const b = before[i] as ChangedFile;
+    if (a === b || a.reviewed === b.reviewed) continue;
+    const step = a.reviewed ? 1 : -1;
+    reviewed += step;
+    if (isBaseOrigin(a)) baseReviewed += step;
+  }
+  return {
+    ...counts,
+    reviewed: Math.max(0, Math.min(counts.total, reviewed)),
+    baseReviewed: Math.max(0, Math.min(counts.base, baseReviewed)),
+  };
+}
+
+/**
  * Sets the reviewed flag on every cached file that matches (projectId, path, patchHash), in any
  * scope. Returns a function that restores the previous cache values (for rollback).
  */
@@ -86,7 +116,8 @@ export function applyReviewToCaches(queryClient: QueryClient, patch: ReviewPatch
       const files = patchFiles(entry.files, patch);
       if (!files) return entry;
       changed = true;
-      return { ...entry, files };
+      const fileCounts = patchCounts(entry.fileCounts, entry.files, files);
+      return { ...entry, files, ...(fileCounts ? { fileCounts } : {}) };
     });
     if (!changed) continue;
     queryClient.setQueryData(key, { ...data, entries });
@@ -99,7 +130,8 @@ export function applyReviewToCaches(queryClient: QueryClient, patch: ReviewPatch
     if (projectId !== undefined && projectId !== patch.projectId) continue;
     const files = patchFiles(data.files, patch);
     if (!files) continue;
-    queryClient.setQueryData(key, { ...data, files });
+    const counts = patchCounts(data.counts, data.files, files);
+    queryClient.setQueryData(key, { ...data, files, ...(counts ? { counts } : {}) });
     restore.push(() => queryClient.setQueryData(key, data));
   }
 
@@ -354,7 +386,10 @@ async function applyInboxDelta(
         queryKey: queryKeys.inboxDelta(before.scope, worktreeIds, seq),
         // Rows the daemon marks overtaken are asked for again (#43, Greptile P1 on PR #95).
         queryFn: async () =>
-          settleOvertaken(api, await api.inbox({ scope: before.scope, worktreeIds })),
+          settleOvertaken(
+            api,
+            await api.inbox({ scope: before.scope, worktreeIds, ...inboxFilesParam() }),
+          ),
         staleTime: 0,
         gcTime: 0,
         retry: false,
@@ -430,14 +465,19 @@ function currentFile(
     !state.isInvalidated &&
     state.data.stateHash === stateHash
   ) {
-    return state.data.files.find((f) => fileKeyOf(f) === fileKey) ?? null;
+    const found = state.data.files.find((f) => fileKeyOf(f) === fileKey);
+    // A partly loaded list (#42) says nothing about a file it has not loaded.
+    return found ?? (state.data.nextCursor ? undefined : null);
   }
   const inbox = queryClient
     .getQueryCache()
     .find<InboxResponse>({ queryKey: ['inbox', viewScopeKey], exact: true });
   const entry = inbox?.state.data?.entries.find((e) => e.worktree.id === worktreeId);
   if (entry && !inbox?.state.isInvalidated && entry.summary.stateHash === stateHash) {
-    return entry.files.find((f) => fileKeyOf(f) === fileKey) ?? null;
+    const found = entry.files.find((f) => fileKeyOf(f) === fileKey);
+    if (found) return found;
+    // An inbox row carries the first page of its list (#42): absent from it says nothing.
+    return entry.files.length < (entry.filesTotal ?? entry.files.length) ? undefined : null;
   }
   return undefined;
 }
