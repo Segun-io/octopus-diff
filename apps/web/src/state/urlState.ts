@@ -200,12 +200,15 @@ export function historyMode(
 ): 'push' | 'replace' {
   if (prev.view.kind === 'none' || !known(prev.view)) return 'replace';
   if (placeKey(prev) === placeKey(next)) return 'replace';
-  // The first file chosen inside a worktree that had none is part of opening it.
+  // The first file chosen inside a worktree that had none is part of opening it. A tab change is
+  // not: on a clean worktree, Changes and Request must stay two entries (PR #105).
   if (
     prev.view.kind === 'worktree' &&
     next.view.kind === 'worktree' &&
     prev.view.worktreeId === next.view.worktreeId &&
-    prev.selected === null
+    prev.selected === null &&
+    next.selected !== null &&
+    (prev.view.tab === 'request') === (next.view.tab === 'request')
   ) {
     return 'replace';
   }

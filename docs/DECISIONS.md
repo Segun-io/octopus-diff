@@ -5381,3 +5381,13 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      shape), so such a link shows the daemon's error for that scope like any other bad commit selection; the other scopes always
      exist. `?file=` of a file that is not in the scope's list is repaired by the existing selection repair (it selects
      another file, or none) and the URL follows. The folder/project Overviews carry no file or scope.
+
+### TanStack Router: Greptile review of PR #105 (2026-11-13)
+
+465. **Switching tabs on a worktree with no selected file is a history entry** (Greptile P2). `historyMode` replaced
+     every change on a worktree that had no file, meant for "opening a worktree and choosing its first file is one
+     entry". On a clean worktree with a pull request that also covered Changes ↔ Request, so Back skipped the previous
+     tab. The exception now applies only when the file goes from none to one and the tab is the same.
+     - **Test:** a tab change in both directions with `selected === null` pushes (failed first: it replaced); the
+       first-file case still replaces.
+     - **Mutant killed:** the exception without the tab and `next.selected` conditions.

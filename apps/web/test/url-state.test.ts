@@ -142,6 +142,18 @@ describe('URL <-> state mapping (#459)', () => {
       expect(historyMode(here, { ...here, scope: { kind: 'branch' } }, k)).toBe('replace');
     });
 
+    it('a tab change on a worktree with no file is a new entry (PR #105)', () => {
+      const k = known([WT]);
+      const changes = wt();
+      const request = {
+        ...changes,
+        view: { kind: 'worktree', worktreeId: WT, tab: 'request' },
+      } as UrlState;
+      expect(changes.selected).toBeNull();
+      expect(historyMode(changes, request, k)).toBe('push');
+      expect(historyMode(request, changes, k)).toBe('push');
+    });
+
     it('opening a worktree and its first file is one entry', () => {
       expect(
         historyMode(wt(), wt({ selected: { worktreeId: WT, path: 'a.ts' } }), known([WT])),
