@@ -224,6 +224,29 @@ describe('patch splitting', () => {
     }
   });
 
+  it('splits a long run of patches with every marker kind the same in one write or many (#42)', () => {
+    const run = SAMPLE_PATCH.repeat(60);
+    const one = splitPatch(SAMPLE_PATCH);
+    const all = splitPatch(run);
+    expect(all.map((c) => c.key)).toEqual(
+      Array.from({ length: 60 }, () => one.map((c) => c.key)).flat(),
+    );
+    expect(all.map((c) => c.text).join('')).toBe(run);
+    const rawKeys = (size: number) => {
+      const keys: string[] = [];
+      const splitter = new PatchSplitter((info) => {
+        if (info) keys.push(info.key);
+        return null;
+      });
+      for (let i = 0; i < run.length; i += size) splitter.write(run.slice(i, i + size));
+      splitter.end();
+      return keys;
+    };
+    const whole = rawKeys(run.length);
+    expect(whole.length).toBe(60 * (one.length + 1)); // `tc` is two chunks before merging
+    for (const size of [5, 4096]) expect(rawKeys(size), `chunk size ${size}`).toEqual(whole);
+  });
+
   it('streams very long lines without losing chunk boundaries', () => {
     const long = `+${'x'.repeat(200_000)}\n`;
     const patch = `diff --git a/min.js b/min.js\n@@ -1 +1 @@\n-a\n${long}diff --git a/b b/b\n@@ -1 +1 @@\n-1\n+2\n`;
