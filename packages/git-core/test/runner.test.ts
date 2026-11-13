@@ -70,6 +70,7 @@ describe('subcommand allowlist', () => {
         'config',
         'check-attr',
         'patch-id',
+        'ls-tree',
       ].sort(),
     );
     for (const args of [
@@ -92,6 +93,41 @@ describe('subcommand allowlist', () => {
     ]) {
       expect(() => assertAllowedGitArgs(args), args.join(' ')).not.toThrow();
     }
+  });
+
+  it('ls-tree takes only -z, -l/--long, -r and exactly one full object id (#9)', () => {
+    const oid = 'a'.repeat(40);
+    const sha256 = 'b'.repeat(64);
+    for (const args of [
+      ['ls-tree', '-z', '-l', oid],
+      ['ls-tree', '-z', '--long', sha256],
+      ['ls-tree', '-r', '-z', oid],
+      ['ls-tree', oid],
+    ]) {
+      expect(() => assertAllowedGitArgs(args), args.join(' ')).not.toThrow();
+    }
+    for (const args of [
+      ['ls-tree'],
+      ['ls-tree', '-z'],
+      ['ls-tree', '-z', oid, oid],
+      ['ls-tree', '-z', 'HEAD'],
+      ['ls-tree', '-z', 'main'],
+      ['ls-tree', '-z', `${oid}:src`],
+      ['ls-tree', '-z', 'a'.repeat(39)],
+      ['ls-tree', '-z', 'A'.repeat(40)],
+      ['ls-tree', '-z', oid, '--', 'src/'],
+      ['ls-tree', '-z', oid, 'src'],
+      ['ls-tree', '-z', '--end-of-options', oid],
+      ['ls-tree', '-z', '--full-tree', oid],
+      ['ls-tree', '-z', '--format=%(path)', oid],
+      ['ls-tree', '-z', '--output=x', oid],
+      ['ls-tree', '-t', oid],
+      ['ls-tree', '-d', oid],
+      ['ls-tree', '--name-only', oid],
+    ]) {
+      expect(() => assertAllowedGitArgs(args), args.join(' ')).toThrow(/not allowed|exactly one/);
+    }
+    expect(() => assertStdinAllowed(['ls-tree', '-z', oid])).toThrow(/stdin/);
   });
 
   it('rejects every writing subcommand', () => {

@@ -19,6 +19,7 @@
     "check:browser": "tsx scripts/browser-check.ts",
     "perf": "tsx --conditions=@octopus-diff/source scripts/perf.ts",
     "perf:smoke": "PERF_SMOKE=1 tsx --conditions=@octopus-diff/source scripts/perf.ts",
+    "perf:tree": "tsx scripts/tree-perf.ts",
     "icons": "tsx scripts/icons.ts",
     "shots": "tsx scripts/shots.ts"
   },

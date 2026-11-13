@@ -24,6 +24,9 @@ export const ALLOWED_SUBCOMMANDS: ReadonlySet<string> = new Set([
   'check-attr',
   // Reads a patch on stdin and prints its id; only `--stable` (status flow §2.4).
   'patch-id',
+  // Lists one tree object (the file explorer, #9): only `-z`, `-l`/`--long` and `-r`, and exactly
+  // one argument, a full object id: never a path, a pathspec, a ref or revision syntax.
+  'ls-tree',
 ]);
 
 /** Subcommands that produce diffs and therefore always get `--no-ext-diff --no-textconv`. */
@@ -86,6 +89,9 @@ const CHECK_ATTR_OPTIONS = new Set(['-z', '--stdin', '-a', '--all', '--cached'])
 const PATCH_ID_OPTIONS = new Set(['--stable']);
 
 const SYMBOLIC_REF_OPTIONS = new Set(['-q', '--quiet', '--short', '--no-recurse', '--recurse']);
+
+const LS_TREE_OPTIONS = new Set(['-z', '-l', '--long', '-r']);
+const FULL_OBJECT_ID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 
 /**
  * Throws `command_not_allowed` unless `args` may receive data on stdin. Stdin is explicit:
@@ -176,6 +182,19 @@ export function assertAllowedGitArgs(args: readonly string[]): void {
         } else positional += 1;
       }
       if (positional !== 1) deny('symbolic-ref may only read a single ref', args);
+      return;
+    }
+    case 'ls-tree': {
+      // Every argument is checked (no `--` / `--end-of-options` escape): options from the set,
+      // then exactly one full object id. ls-tree reads objects only; with a bare object id it
+      // never resolves a ref, never takes a path and never reads the working tree.
+      let positional = 0;
+      for (const arg of rest) {
+        if (LS_TREE_OPTIONS.has(arg)) continue;
+        if (FULL_OBJECT_ID.test(arg)) positional += 1;
+        else deny(`ls-tree argument not allowed: ${arg}`, args);
+      }
+      if (positional !== 1) deny('ls-tree lists exactly one tree object id', args);
       return;
     }
     default:

@@ -103,7 +103,8 @@ export function fileListCounts(
 
 // --- hashing (not cryptographic: a cursor only pages a list its holder may read anyway) --------
 
-class Hash64 {
+/** A small 64-bit string hash for list identities and cursors (also used by `tree.ts`, #9). */
+export class Hash64 {
   #a = 0x811c9dc5;
   #b = 0x01000193 ^ 0x9e3779b9;
   update(text: string): this {

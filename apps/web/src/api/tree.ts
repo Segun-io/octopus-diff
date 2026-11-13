@@ -1,0 +1,313 @@
+/**
+ * The file explorer's data layer (#9). No pane uses it yet: this is what a future explorer builds
+ * on (docs/reports/file-explorer-foundation.md).
+ *
+ * - **One query per open directory**: `['tree', worktreeId, ref ?? '', treeDirIdentity(dir)]` (`r:<base64>` for a raw
+ *   path, `p:<path>` otherwise: never `rawPath ?? path`, PR #99 review). A
+ *   directory's data is one `TreeResponse` whose `entries` is the *loaded prefix* of its listing
+ *   (the `files.ts` pattern, #42): a refresh asks for as many entries as were loaded, so a long
+ *   directory keeps what the user scrolled to. Pages after the first follow `nextCursor`; a
+ *   `restarted` page (the state moved in between) starts over.
+ * - **Lazy**: only directories someone expands are asked for (`useTree(..., { enabled })`); a
+ *   tree component adds their entries to its model as they arrive (see
+ *   `apps/web/scripts/tree-perf.ts` for the measured design).
+ * - **Freshness**: the working view (no `ref`) never goes stale by time; `worktree.changed`
+ *   invalidates exactly the directories its `dirs` names (`collectTreeDirs` / `flushTreeDirs`),
+ *   every working-view directory of the worktree when it says `all` or carries no `dirs` (older
+ *   daemons, replays). A tree view of a full commit id never changes; one of a branch or `HEAD`
+ *   is refetched on focus after `TREE_REF_STALE_MS`.
+ */
+import {
+  type ApiClient,
+  ApiClientError,
+  type ServerEventOf,
+  TREE_PAGE_MAX,
+  type TreeResponse,
+  treeDirIdentity,
+} from '@octopus-diff/contracts';
+import {
+  type QueryClient,
+  type QueryFilters,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query';
+import { useApi } from './queries.ts';
+
+export const treePaging = {
+  /** Entries per page the web asks for (a directory rarely has more). */
+  pageSize: 1000,
+  /** Restarts (the state moved mid-paging) before the restarted page is kept as it is. */
+  restarts: 3,
+};
+
+/**
+ * The daemon answers 409 with `details.retryable` when the worktree changed while a directory was
+ * listed (DECISIONS #417): retried (unlike other 4xx), at most `TREE_CONFLICT_RETRIES` times; other
+ * errors as the app's default (twice, never a 4xx).
+ */
+export const TREE_CONFLICT_RETRIES = 3;
+
+export function isRetryableTreeConflict(error: unknown): boolean {
+  return (
+    error instanceof ApiClientError &&
+    error.status === 409 &&
+    typeof error.details === 'object' &&
+    error.details !== null &&
+    (error.details as { retryable?: unknown }).retryable === true
+  );
+}
+
+export function treeRetry(failureCount: number, error: unknown): boolean {
+  if (isRetryableTreeConflict(error)) return failureCount < TREE_CONFLICT_RETRIES;
+  if (error instanceof ApiClientError && error.status >= 400 && error.status < 500) return false;
+  return failureCount < 2;
+}
+
+/** How long a tree view of a branch or `HEAD` is fresh. */
+export const TREE_REF_STALE_MS = 30_000;
+
+const FULL_OID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+
+export interface TreeDir {
+  path: string;
+  rawPath?: string | undefined;
+}
+
+export const treeKeys = {
+  /** Every directory of a worktree, in every view. */
+  all: (worktreeId: string) => ['tree', worktreeId] as const,
+  /** Every directory of a worktree's working view (`ref` absent). */
+  working: (worktreeId: string) => ['tree', worktreeId, ''] as const,
+  dir: (worktreeId: string, dir: TreeDir, ref?: string) =>
+    ['tree', worktreeId, ref ?? '', treeDirIdentity(dir)] as const,
+};
+
+const wanted = new WeakMap<QueryClient, Map<string, number>>();
+
+function wantedMap(queryClient: QueryClient): Map<string, number> {
+  let map = wanted.get(queryClient);
+  if (!map) {
+    map = new Map();
+    wanted.set(queryClient, map);
+  }
+  return map;
+}
+
+function wantKey(worktreeId: string, dir: TreeDir, ref?: string): string {
+  return JSON.stringify(treeKeys.dir(worktreeId, dir, ref));
+}
+
+/**
+ * The first `want` entries of a directory (at least one page), following cursors; starts over when
+ * a page says its listing moved (`restarted`), at most `treePaging.restarts` times.
+ */
+export async function fetchTreeDir(
+  api: ApiClient,
+  worktreeId: string,
+  dir: TreeDir,
+  options: { ref?: string; want?: number; signal?: AbortSignal } = {},
+): Promise<TreeResponse> {
+  const target = Math.max(1, options.want ?? treePaging.pageSize);
+  const base = {
+    path: dir.path,
+    ...(dir.rawPath !== undefined ? { rawPath: dir.rawPath } : {}),
+    ...(options.ref !== undefined ? { ref: options.ref } : {}),
+    ...(options.signal ? { signal: options.signal } : {}),
+  };
+  for (let attempt = 0; ; attempt++) {
+    const first = await api.getTree(worktreeId, {
+      ...base,
+      limit: Math.min(target, TREE_PAGE_MAX),
+    });
+    if (!first.nextCursor || first.entries.length >= target) return first;
+    const entries = [...first.entries];
+    let last = first;
+    let restarted = false;
+    while (entries.length < target && last.nextCursor) {
+      const page = await api.getTree(worktreeId, {
+        ...base,
+        limit: Math.min(target - entries.length, TREE_PAGE_MAX),
+        cursor: last.nextCursor,
+      });
+      if (page.restarted) {
+        restarted = true;
+        last = page;
+        break;
+      }
+      entries.push(...page.entries);
+      last = page;
+    }
+    if (!restarted) {
+      return {
+        ...first,
+        entries,
+        nextCursor: last.nextCursor,
+        truncated: last.nextCursor !== null,
+      };
+    }
+    if (attempt + 1 >= treePaging.restarts) return { ...last, restarted: false };
+  }
+}
+
+export function treeQueryOptions(
+  api: ApiClient,
+  queryClient: QueryClient,
+  worktreeId: string,
+  dir: TreeDir,
+  ref?: string,
+) {
+  return {
+    queryKey: treeKeys.dir(worktreeId, dir, ref),
+    queryFn: ({ signal }: { signal: AbortSignal }) =>
+      fetchTreeDir(api, worktreeId, dir, {
+        ...(ref !== undefined ? { ref } : {}),
+        want: Math.max(
+          treePaging.pageSize,
+          wantedMap(queryClient).get(wantKey(worktreeId, dir, ref)) ?? 0,
+        ),
+        signal,
+      }),
+    retry: treeRetry,
+    // A conflict clears as soon as the daemon's summary caught up: retry soon.
+    retryDelay: (attempt: number) => Math.min(200 * 2 ** attempt, 2000),
+    // The working view follows events; a commit's tree never changes; a ref's may move.
+    staleTime:
+      ref === undefined || FULL_OID.test(ref) ? Number.POSITIVE_INFINITY : TREE_REF_STALE_MS,
+  };
+}
+
+/**
+ * One directory of the file explorer: the working view, or `ref`'s tree. `enabled: false` for a
+ * collapsed directory: nothing is fetched until it opens.
+ */
+export function useTree(
+  worktreeId: string | null,
+  dir: TreeDir,
+  options: { ref?: string; enabled?: boolean } = {},
+) {
+  const api = useApi();
+  const queryClient = useQueryClient();
+  return useQuery({
+    ...treeQueryOptions(api, queryClient, worktreeId ?? '', dir, options.ref),
+    enabled: worktreeId !== null && (options.enabled ?? true),
+  });
+}
+
+/**
+ * Loads more of a directory into its cached prefix (scrolling a long directory). Records the
+ * wanted count, so a refresh keeps it. Returns the cached data.
+ */
+export async function loadMoreTree(
+  queryClient: QueryClient,
+  api: ApiClient,
+  worktreeId: string,
+  dir: TreeDir,
+  options: { ref?: string; count?: number } = {},
+): Promise<TreeResponse | undefined> {
+  const key = treeKeys.dir(worktreeId, dir, options.ref);
+  const data = queryClient.getQueryData<TreeResponse>(key);
+  if (!data?.nextCursor) return data;
+  const want = data.entries.length + (options.count ?? treePaging.pageSize);
+  const map = wantedMap(queryClient);
+  const k = wantKey(worktreeId, dir, options.ref);
+  map.set(k, Math.max(map.get(k) ?? 0, want));
+  const page = await api.getTree(worktreeId, {
+    path: dir.path,
+    ...(dir.rawPath !== undefined ? { rawPath: dir.rawPath } : {}),
+    ...(options.ref !== undefined ? { ref: options.ref } : {}),
+    limit: Math.min(want - data.entries.length, TREE_PAGE_MAX),
+    cursor: data.nextCursor,
+  });
+  const current = queryClient.getQueryData<TreeResponse>(key);
+  // A refresh replaced the data meanwhile: it wins (and fetches the wanted count itself).
+  if (current !== data) return current;
+  const next: TreeResponse = page.restarted
+    ? page
+    : {
+        ...data,
+        entries: [...data.entries, ...page.entries],
+        nextCursor: page.nextCursor,
+        truncated: page.nextCursor !== null,
+      };
+  queryClient.setQueryData(key, next);
+  return next;
+}
+
+// --- events -------------------------------------------------------------------------------------
+
+/** Directories to refresh per worktree, from the events of one batch: a set of keys, or `all`. */
+export type TreeDirEffects = Map<string, Set<string> | 'all'>;
+
+/**
+ * Folds one `worktree.changed` into the batch's tree effects. Every event of the batch counts
+ * (not only the latest per worktree): two edits in one batch may name different directories.
+ */
+export function collectTreeDirs(
+  effects: TreeDirEffects,
+  event: ServerEventOf<'worktree.changed'>,
+): void {
+  const id = event.worktreeId;
+  const held = effects.get(id);
+  if (held === 'all') return;
+  if (!event.dirs || event.dirs.all) {
+    effects.set(id, 'all');
+    return;
+  }
+  const set = held ?? new Set<string>();
+  for (const d of event.dirs.dirs) set.add(treeDirIdentity(d));
+  effects.set(id, set);
+}
+
+/**
+ * Refetches the working-view directories the batch named (only those someone observes refetch
+ * now; the rest are marked stale). On `all` (HEAD moved, or no `dirs`) the tree views of a ref
+ * name (`HEAD`, a branch) refetch too; a full commit id's view never changes.
+ */
+/**
+ * Invalidates the tree queries `filters` match, first cancelling those whose *first* request is
+ * still in flight (Greptile, PR #99 round 4; the files lists' `invalidateFileLists`, #42): with no
+ * data yet, `invalidateQueries` joins that request instead of replacing it (react-query only
+ * cancels a refetch over existing data), and its answer may be the listing from before the edit;
+ * with an infinite `staleTime` the working view would then keep it.
+ */
+async function invalidateTrees(queryClient: QueryClient, filters: QueryFilters): Promise<void> {
+  for (const query of queryClient.getQueryCache().findAll(filters)) {
+    if (query.state.fetchStatus === 'fetching' && query.state.data === undefined) {
+      await queryClient.cancelQueries({ queryKey: query.queryKey, exact: true });
+    }
+  }
+  await queryClient.invalidateQueries(filters);
+}
+
+export async function flushTreeDirs(
+  queryClient: QueryClient,
+  effects: TreeDirEffects,
+): Promise<void> {
+  const tasks: Promise<unknown>[] = [];
+  for (const [worktreeId, dirs] of effects) {
+    if (dirs === 'all') {
+      // Everything of the working view, and the tree views that follow a ref (`HEAD`, a branch):
+      // `all` is what HEAD moving sends (security review P3-5). A full commit id's view never moves.
+      tasks.push(
+        invalidateTrees(queryClient, {
+          predicate: (query) => {
+            const [kind, id, ref] = query.queryKey as readonly unknown[];
+            return (
+              kind === 'tree' &&
+              id === worktreeId &&
+              typeof ref === 'string' &&
+              (ref === '' || !FULL_OID.test(ref))
+            );
+          },
+        }),
+      );
+      continue;
+    }
+    for (const dir of dirs) {
+      tasks.push(
+        invalidateTrees(queryClient, { queryKey: ['tree', worktreeId, '', dir], exact: true }),
+      );
+    }
+  }
+  await Promise.all(tasks);
+}
