@@ -5863,3 +5863,7 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      the app's CLI, and does not run the read-only proof or the agent simulator (annotated in the report). Linux and
      macOS keep the full layout, proof and simulator. Known gap: no read-only proof against the packaged app on
      Windows (the unit-level guarantee is unchanged: the app never spawns git).
+524. **`smoke-app.mjs` waits on screen text tolerate a page that is still loading.** The Linux CI run failed on "git
+     missing: a screen with install instructions": the wait read `document.body.innerText` just after the `data:` page
+     was reached, when the body did not exist yet (`Uncaught`), and the throw escaped the retry loop. The three such
+     waits now treat an evaluation error as "not yet" (the 30 s / 10 s deadlines still apply).
