@@ -303,8 +303,13 @@ const fileIdentityShape = {
   path: RepoPathSchema,
   /** Base64 of the raw path bytes, present only when the path is not valid UTF-8. */
   rawPath: RawPathSchema.optional(),
-  /** Previous path for renames and copies, else null. */
+  /** Previous path for renames and copies, else null (display form, lossy as `path`). */
   oldPath: RepoPathSchema.nullable(),
+  /**
+   * Base64 of `oldPath`'s raw bytes, present only when it is not valid UTF-8 (#9 review: the
+   * display form cannot name the source). Absent from older git-core versions.
+   */
+  oldRawPath: RawPathSchema.optional(),
   status: FileStatusSchema,
   binary: z.boolean(),
   /** Git modes; 120000 = symlink, 160000 = submodule (gitlink). Null when the side is absent. */

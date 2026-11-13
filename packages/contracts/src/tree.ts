@@ -90,8 +90,18 @@ export const TreeEntrySchema = z.object({
   unstaged: z.boolean().optional(),
   /** Working view: a renamed or copied file's previous path. */
   oldPath: RepoPathSchema.optional(),
+  /** Base64 of `oldPath`'s raw bytes, only when they are not valid UTF-8. */
+  oldRawPath: RawPathSchema.optional(),
   /** Working view: the old path of a rename points at the new one. */
   renamedTo: RepoPathSchema.optional(),
+  /** Base64 of `renamedTo`'s raw bytes, only when they are not valid UTF-8. */
+  renamedToRawPath: RawPathSchema.optional(),
+  /**
+   * Working view: the working copy replaced what HEAD has at this name with another kind (a
+   * tracked file `d` deleted and a directory `d/` created, or the reverse). The listing holds one
+   * row per name, the working copy's; this says what HEAD's row was (#9 review).
+   */
+  replaces: TreeEntryKindSchema.optional(),
   /** Working view, directories: changed paths below it. Absent: none. */
   changes: Count.optional(),
   /** Working view, directories: untracked files below it that no list holds (#43). */
@@ -198,11 +208,20 @@ export interface TreePage<T> {
 }
 
 /** The identity of one directory listing for its cursors (callers memoize it per listing). */
+/**
+ * A directory's (or entry's) identity: `r:<base64>` for a raw (non-UTF-8) path, `p:<path>` for a
+ * display path. Never `rawPath ?? path`: a directory literally named like the base64 of another's
+ * bytes (`ZP8=` and the bytes `64 ff`) would share it (#9 review). Use it for cache keys.
+ */
+export function treeDirIdentity(dir: { path: string; rawPath?: string | undefined }): string {
+  return dir.rawPath !== undefined ? `r:${dir.rawPath}` : `p:${dir.path}`;
+}
+
 export function treeListingKey(stateKey: string, entries: readonly TreeEntry[]): string {
   const h = new Hash64().update(stateKey);
   for (const e of entries) {
     h.update(
-      `${e.rawPath ?? e.path}\u0001${e.kind}\u0001${e.oid ?? ''}\u0001${e.status ?? ''}\u0001${e.changes ?? ''}\u0001${e.untrackedOmitted ?? ''}\u0001${e.staged ? 1 : 0}${e.unstaged ? 1 : 0}`,
+      `${treeDirIdentity(e)}\u0001${e.replaces ?? ''}\u0001${e.kind}\u0001${e.oid ?? ''}\u0001${e.status ?? ''}\u0001${e.changes ?? ''}\u0001${e.untrackedOmitted ?? ''}\u0001${e.staged ? 1 : 0}${e.unstaged ? 1 : 0}`,
     );
   }
   return h.hex();

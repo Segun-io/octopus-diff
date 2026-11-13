@@ -1,13 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import {
   compareTreeNames,
+  GitChangedFileSchema,
   pageTreeEntries,
   ROUTES,
   TREE_PAGE_DEFAULT,
   TREE_PAGE_MAX,
   type TreeEntry,
+  TreeEntrySchema,
   TreeQuerySchema,
   TreeResponseSchema,
+  treeDirIdentity,
   treeListingKey,
   WorktreeChangedEventSchema,
 } from '../src/index.js';
@@ -207,5 +210,52 @@ describe('tree schemas', () => {
         dirs: { all: false, dirs: Array.from({ length: 101 }, () => ({ path: 'a' })) },
       }).success,
     ).toBe(false);
+  });
+});
+
+describe('raw and display identities (#9 review)', () => {
+  it('a raw directory and one literally named like its base64 never share an identity', () => {
+    const raw = { path: 'd\ufffd', rawPath: Buffer.from([0x64, 0xff]).toString('base64') };
+    const literal = { path: raw.rawPath };
+    expect(raw.rawPath).toBe('ZP8=');
+    expect(treeDirIdentity(raw)).not.toBe(treeDirIdentity(literal));
+    expect(treeDirIdentity(literal)).toBe('p:ZP8=');
+    expect(treeDirIdentity(raw)).toBe('r:ZP8=');
+    expect(treeDirIdentity({ path: '' })).toBe('p:');
+  });
+
+  it('the listing key tells a raw entry from a display entry of the same text', () => {
+    const base = entry('x', { path: 'ZP8=' });
+    const raw = { ...base, path: 'd\ufffd', rawPath: 'ZP8=' };
+    expect(treeListingKey('s', [base])).not.toBe(treeListingKey('s', [{ ...raw, path: 'ZP8=' }]));
+  });
+
+  it('the listing key moves with replaces', () => {
+    const e = entry('d', { kind: 'dir', status: 'untracked' });
+    expect(treeListingKey('s', [e])).not.toBe(treeListingKey('s', [{ ...e, replaces: 'file' }]));
+  });
+
+  it('schemas carry the raw old path and replaces', () => {
+    const file = {
+      path: 'new',
+      oldPath: 'old\ufffd',
+      oldRawPath: Buffer.from([0x6f, 0x6c, 0x64, 0xff]).toString('base64'),
+      status: 'renamed',
+      binary: false,
+      oldMode: '100644',
+      newMode: '100644',
+      additions: 0,
+      deletions: 0,
+      patchHash: 'h',
+      staged: true,
+      unstaged: false,
+    };
+    expect(GitChangedFileSchema.parse(file)).toEqual(file);
+    expect(GitChangedFileSchema.safeParse({ ...file, oldRawPath: 'not base64!' }).success).toBe(
+      false,
+    );
+    const row = entry('d', { kind: 'dir', mode: null, oid: null, size: null, replaces: 'file' });
+    expect(TreeEntrySchema.parse(row)).toEqual(row);
+    expect(TreeEntrySchema.safeParse({ ...row, replaces: 'blob' }).success).toBe(false);
   });
 });

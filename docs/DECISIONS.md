@@ -4697,3 +4697,13 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      future file preview), would need stdin allowlisted for `cat-file` and its own lifecycle next to the spawn
      helper's supervision (#45, being reworked by the Effect session). Not worth it until a content view shows reads
      dominating; revisit with the preview.
+
+### File explorer: Greptile review of PR #99 (2026-11-13)
+
+405. **Additive contracts for the review fixes.** `GitChangedFile.oldRawPath` (and so `ChangedFile`, `GitFileDiff`):
+     base64 of a rename or copy source that is not UTF-8, which `oldPath` (display form) cannot name. `TreeEntry` gains
+     `oldRawPath`, `renamedToRawPath` and `replaces` (#407). `treeDirIdentity(dir)` gives `r:<base64>` for a raw path and
+     `p:<path>` otherwise, for cache keys; `treeListingKey` hashes entries by it (and by `replaces`), so an entry named
+     `ZP8=` and one whose bytes are `64 ff` (base64 `ZP8=`) no longer hash alike. `worktree.changed.dirs` entries were
+     already unambiguous (`rawPath` present or not); clients key them with `treeDirIdentity` too. Nothing renamed or
+     removed.
