@@ -79,6 +79,7 @@ import {
   type UndoReviewResponse,
   UndoReviewResponseSchema,
 } from './settings.js';
+import { type TreeResponse, TreeResponseSchema } from './tree.js';
 
 export type ApiClientErrorCode = ApiErrorCode | 'network' | 'invalid_response' | 'aborted';
 
@@ -133,6 +134,15 @@ export interface FilesParams extends ScopeParams {
   unreviewed?: boolean;
   origin?: 'own' | 'base';
   q?: string;
+}
+
+/** `GET /tree` (#9; see `TreeQuerySchema`): the root of the working view by default. */
+export interface TreeParams extends RequestParams {
+  path?: string;
+  rawPath?: string;
+  ref?: string;
+  limit?: number;
+  cursor?: string;
 }
 
 export interface InboxParams extends ScopeParams {
@@ -227,6 +237,8 @@ export interface ApiClient {
     oid: string,
     params?: { maxBytes?: number } & RequestParams,
   ): Promise<BlobResponse>;
+  /** File explorer (#9): one directory of the worktree (working view, or `ref`'s tree). */
+  getTree(worktreeId: string, params?: TreeParams): Promise<TreeResponse>;
   /** Absolute or same-origin URL of the SSE stream. */
   eventsUrl(): string;
   /** Subscribes via fetch streaming with the bearer token (browsers and Node). */
@@ -536,6 +548,18 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
       const query = new URLSearchParams();
       if (params.maxBytes !== undefined) query.set('maxBytes', String(params.maxBytes));
       return request(BlobResponseSchema, 'GET', p(ROUTES.getBlob, { worktreeId, oid }), {
+        query,
+        signal: params.signal,
+      });
+    },
+    getTree: (worktreeId, params = {}) => {
+      const query = new URLSearchParams();
+      if (params.path !== undefined && params.path !== '') query.set('path', params.path);
+      if (params.rawPath !== undefined) query.set('rawPath', params.rawPath);
+      if (params.ref !== undefined) query.set('ref', params.ref);
+      if (params.limit !== undefined) query.set('limit', String(params.limit));
+      if (params.cursor !== undefined) query.set('cursor', params.cursor);
+      return request(TreeResponseSchema, 'GET', p(ROUTES.getTree, { worktreeId }), {
         query,
         signal: params.signal,
       });

@@ -168,8 +168,71 @@ export interface GitCore {
    */
   readBlob?(worktree: WorktreeLocator, options: BlobReadOptions & CallOptions): Promise<BlobRead>;
 
+  /**
+   * The file explorer (#9): one directory of a commit's tree, in git's tree order. Reads objects
+   * only (`ls-tree -z -l <tree oid>`, never a path or a ref on its command line, never the working
+   * tree); listings are cached by (common dir, tree oid), shared by every worktree of the project.
+   * The directory is reached by walking tree objects from the commit's root tree, so a symlink or
+   * submodule is never entered. Rejects with `not_found` for an unknown `ref`, `invalid_argument`
+   * for a path that is not a plain repo-relative path. Optional (test doubles, older
+   * implementations).
+   */
+  listTree?(
+    worktree: WorktreeLocator,
+    options: TreeListOptions & CallOptions,
+  ): Promise<GitTreeListing>;
+
+  /**
+   * Files (blobs, symlinks and submodules, recursively) below a tree object (#9: a directory whose
+   * tracked files are all deleted). One `ls-tree -r -z <tree oid>`, memoized by (common dir, oid).
+   * Optional.
+   */
+  countTreeFiles?(
+    worktree: WorktreeLocator,
+    options: { tree: string } & CallOptions,
+  ): Promise<number>;
+
   /** Kills in-flight git processes and rejects queued work. */
   dispose(): Promise<void>;
+}
+
+/** `GitCore.listTree` (#9). */
+export interface TreeListOptions {
+  /**
+   * `HEAD` (the worktree's), a branch, remote-tracking branch or tag name (`RefNameSchema`), or a
+   * commit id. A full commit id needs no ref lookup (memoized).
+   */
+  ref: string;
+  /** The directory: `''` for the root, else repo-relative without a trailing `/`. */
+  path: string;
+  /** Base64 of the directory's raw bytes (a non-UTF-8 name); wins over `path`. */
+  rawPath?: string;
+}
+
+export interface GitTreeEntry {
+  name: string;
+  rawName?: string;
+  path: string;
+  rawPath?: string;
+  kind: 'file' | 'dir' | 'symlink' | 'submodule';
+  /** Six octal digits (`040000` for a directory). */
+  mode: string;
+  oid: string;
+  /** Blob size; null for directories and submodules. */
+  size: number | null;
+}
+
+export interface GitTreeListing {
+  /** The commit listed; null on an unborn branch (`HEAD` with no commit). */
+  commit: string | null;
+  /** The directory's tree object; null when it is not a directory of the commit. */
+  tree: string | null;
+  /**
+   * What the path is in the commit: `dir` (listed), another kind (not listed: never entered), or
+   * null when the commit has no such path (or no commit).
+   */
+  kind: GitTreeEntry['kind'] | null;
+  entries: GitTreeEntry[];
 }
 
 export interface SummaryOptions extends ScopeOptions {

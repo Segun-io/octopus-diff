@@ -4596,3 +4596,18 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
 394. **Warm-ups are quick (Greptile P2 on PR #98).** A warm-up in a `FAKE_MODE: 'hang'` runner ran `sleep 30`. The fake
      now runs every `warm` job in its fast default mode, whatever `FAKE_MODE` says. `helper.test.ts` went from 58 s to
      29 s.
+
+## File explorer foundation (session, 2026-11-13; roadmap #9, step 27)
+
+395. **Contracts for the explorer are additive (`packages/contracts/src/tree.ts`).** A new route
+     `GET /api/worktrees/:worktreeId/tree?path=&rawPath=&ref=&limit=&cursor=` (`ROUTES.getTree`,
+     `ApiClient.getTree`), `TreeQuerySchema`, `TreeResponseSchema`, `TreeEntrySchema`, the tree order
+     (`compareTreeNames`), the paging helper (`pageTreeEntries`, `treeListingKey`, cursors `t1.<16 hex>.<offset>`)
+     and an optional `worktree.changed.dirs` (`WorktreeChangedDirsSchema`: `{ all, dirs[] }`, at most
+     `WORKTREE_CHANGED_DIRS_MAX` = 100 directories and 8000 characters, else `all: true`). `GitCore` gains two
+     optional methods, `listTree` and `countTreeFiles`. `paging.ts` now exports its `Hash64` (no behaviour change)
+     so tree cursors hash like file cursors. Nothing was renamed or removed; older clients strip `dirs`.
+     - Without `ref` the route answers the *working view* (HEAD's tree with the worktree's changes laid over it);
+       with `ref` the *tree view* (that commit's tree only). An explicit `ref=HEAD` is the committed tree, so a
+       client can ask for either without a second flag.
+     - Tree cursors are not file cursors (another prefix, `t1`), so a cursor of one route can never page the other.
