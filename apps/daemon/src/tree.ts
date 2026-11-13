@@ -429,6 +429,23 @@ export interface TreeBasis {
   paths: Map<string, string>;
   /** The omitted untracked directories (bstr → count), #43. */
   omitted: Map<string, number>;
+  /**
+   * Paths the working list may pair as a rename (bstr): sources (deleted: `D` in either column, a
+   * rename's or copy's old path) and targets (new in the index: `A`, `R`, `C`). Greptile, round 3:
+   * `git diff HEAD --find-renames` pairs them by content, so a pair can appear or go while the
+   * summary entry of one side (an unstaged ` D`) stays the same.
+   */
+  candidates: Set<string>;
+}
+
+/** Status letters of a path the working list's rename detection may take as a source / target. */
+function renameRole(xy: string): { source: boolean; target: boolean } {
+  const x = xy[0] ?? '.';
+  const y = xy[1] ?? '.';
+  return {
+    source: x === 'D' || y === 'D',
+    target: x === 'A' || x === 'R' || x === 'C' || y === 'A',
+  };
 }
 
 /** Unmerged status pairs (`git status`): both sides touched the path. */
@@ -442,7 +459,14 @@ export function treeBasis(
 ): TreeBasis {
   const paths = new Map<string, string>();
   const conflicts: string[] = [];
+  const candidates = new Set<string>();
   for (const e of snapshot.entries) {
+    if (e.xy !== '??' && !UNMERGED.has(e.xy)) {
+      const role = renameRole(e.xy);
+      if (role.source || role.target) candidates.add(bstrOf({ path: e.path, rawPath: e.rawPath }));
+      if (e.oldPath !== undefined)
+        candidates.add(bstrOf({ path: e.oldPath, rawPath: e.oldRawPath }));
+    }
     if (UNMERGED.has(e.xy)) conflicts.push(bstrOf({ path: e.path, rawPath: e.rawPath }));
     const old = e.oldRawPath !== undefined ? `r:${e.oldRawPath}` : `p:${e.oldPath ?? ''}`;
     // Every field of the entry (PR #99 review): a content edit alone can move a row. An `MM` path
@@ -468,6 +492,7 @@ export function treeBasis(
     truncated: snapshot.truncated,
     paths,
     omitted,
+    candidates,
   };
 }
 
@@ -490,11 +515,22 @@ export function treeDelta(prev: TreeBasis, cur: TreeBasis): WorktreeChangedDirs 
   const all: WorktreeChangedDirs = { all: true, dirs: [] };
   if (prev.head !== cur.head || prev.truncated || cur.truncated) return all;
   const dirs = new Set<string>();
+  let pairing = false;
+  const moved = (key: string) => {
+    addAncestors(dirs, key, false);
+    if (prev.candidates.has(key) || cur.candidates.has(key)) pairing = true;
+  };
   for (const [key, value] of cur.paths) {
-    if (prev.paths.get(key) !== value) addAncestors(dirs, key, false);
+    if (prev.paths.get(key) !== value) moved(key);
   }
   for (const key of prev.paths.keys()) {
-    if (!cur.paths.has(key)) addAncestors(dirs, key, false);
+    if (!cur.paths.has(key)) moved(key);
+  }
+  // A rename candidate moved: the working list may pair (or unpair) it with any other candidate,
+  // whose own entry did not change. Every candidate's directories, of both states (Greptile, round 3).
+  if (pairing) {
+    for (const key of prev.candidates) addAncestors(dirs, key, false);
+    for (const key of cur.candidates) addAncestors(dirs, key, false);
   }
   for (const [key, count] of cur.omitted) {
     if (prev.omitted.get(key) !== count) addAncestors(dirs, key, true);

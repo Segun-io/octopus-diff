@@ -412,6 +412,68 @@ describe('4. worktree.changed.dirs covers every listing that moved', { timeout: 
     ).toBeUndefined();
   });
 
+  it('a rename pair the working list makes from unchanged summary entries names both sides (Greptile, round 3)', async () => {
+    const fx = await makeRealGitFixture();
+    const repo = await makeRealRepo(fx, 'pair', { 'top.txt': 't\n' });
+    const content = 'the content of a, long enough for rename detection to pair it\n'.repeat(6);
+    mkdirSync(path.join(repo, 'src'));
+    mkdirSync(path.join(repo, 'dst'));
+    writeFileSync(path.join(repo, 'src/a'), content);
+    writeFileSync(path.join(repo, 'dst/keep'), 'k\n');
+    fx.git(repo, 'add', '-A');
+    fx.git(repo, 'commit', '-q', '-m', 'a');
+    const { daemon, api } = await start(fx);
+    await api.addProject({ path: repo });
+    const id = hashId(repo);
+    const events = recordEvents(daemon);
+    await events.opened;
+    // src/a deleted (not staged); a different dst/b staged.
+    rmSync(path.join(repo, 'src/a'));
+    writeFileSync(path.join(repo, 'dst/b'), 'something else entirely\n');
+    fx.git(repo, 'add', 'dst/b');
+    await api.refreshWorktree(id);
+    expect((await api.getTree(id, { path: 'src' })).entries[0]).toMatchObject({
+      name: 'a',
+      status: 'deleted',
+    });
+    expect((await api.getTree(id, { path: 'src' })).entries[0]?.renamedTo).toBeUndefined();
+    const step = async (op: () => void) => {
+      const mark = events.events.length;
+      op();
+      const summary = (await api.refreshWorktree(id)).summary;
+      return (await eventually(
+        () =>
+          events.events
+            .slice(mark)
+            .find(
+              (e): e is Changed =>
+                e.type === 'worktree.changed' && e.stateHash === summary.stateHash,
+            ),
+        8000,
+      )) as Changed;
+    };
+    // dst/b's working content becomes src/a's: `git diff HEAD --find-renames` pairs them. The
+    // summary's entry for src/a (` D`) does not change.
+    const paired = await step(() => writeFileSync(path.join(repo, 'dst/b'), content));
+    expect(fx.git(repo, 'status', '--porcelain').split('\n').sort().filter(Boolean)).toEqual([
+      ' D src/a',
+      'AM dst/b',
+    ]);
+    expect(paired.dirs?.all).toBe(false);
+    expect(paired.dirs?.dirs).toEqual(expect.arrayContaining([{ path: 'src' }, { path: 'dst' }]));
+    expect((await api.getTree(id, { path: 'src' })).entries[0]).toMatchObject({
+      name: 'a',
+      status: 'deleted',
+      renamedTo: 'dst/b',
+    });
+    // The reverse: the pair goes again.
+    const broken = await step(() =>
+      writeFileSync(path.join(repo, 'dst/b'), 'something else entirely\n'),
+    );
+    expect(broken.dirs?.dirs).toEqual(expect.arrayContaining([{ path: 'src' }, { path: 'dst' }]));
+    expect((await api.getTree(id, { path: 'src' })).entries[0]?.renamedTo).toBeUndefined();
+  });
+
   it('a table of transitions', async () => {
     const fx = await makeRealGitFixture();
     const repo = await makeRealRepo(fx, 'table', { '.gitignore': 'ignored/\n', 'top.txt': 't\n' });
@@ -521,6 +583,39 @@ describe('4. worktree.changed.dirs covers every listing that moved', { timeout: 
         },
       ],
       [
+        'pair: a staged new file takes a tracked file content',
+        () => {
+          const f = pick(tracked);
+          const target = pick(['d/new-1.txt', 'a/new-2.txt', 'n/new-3.txt']);
+          mkdirSync(path.join(repo, path.dirname(target)), { recursive: true });
+          writeFileSync(path.join(repo, target), `staged ${random()}\n`);
+          try {
+            fx.git(repo, 'add', '--', target);
+          } catch {
+            // An ignored directory: skipped.
+          }
+          writeFileSync(path.join(repo, target), heads.get(f) as string);
+          rmSync(path.join(repo, f), { force: true });
+        },
+      ],
+      [
+        'unpair: a staged new file changes away',
+        () => {
+          const target = pick(['d/new-1.txt', 'a/new-2.txt', 'n/new-3.txt']);
+          if (exists(target)) writeFileSync(path.join(repo, target), `away ${random()}\n`);
+        },
+      ],
+      [
+        'repair: a staged new file gets a deleted file content back',
+        () => {
+          const target = pick(['d/new-1.txt', 'a/new-2.txt', 'n/new-3.txt']);
+          const gone = tracked.filter((f) => !exists(f));
+          if (exists(target) && gone.length > 0) {
+            writeFileSync(path.join(repo, target), heads.get(pick(gone)) as string);
+          }
+        },
+      ],
+      [
         'rename',
         () => {
           const f = pick(tracked);
@@ -534,7 +629,7 @@ describe('4. worktree.changed.dirs covers every listing that moved', { timeout: 
         },
       ],
     ];
-    for (let i = 0; i < 40; i++) {
+    for (let i = 0; i < 60; i++) {
       const [name, op] = pick(ops);
       await check.step(`#${i} ${name}`, op);
     }

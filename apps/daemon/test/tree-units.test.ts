@@ -271,6 +271,34 @@ describe('treeDelta', () => {
     expect(treeDelta(raw, rawSource).dirs.length).toBeGreaterThan(0);
   });
 
+  it('a moved rename candidate names every candidate directory (Greptile, round 3)', () => {
+    // src/a deleted (unchanged entry), dst/b staged and edited: the list may pair them.
+    const before = [
+      { path: 'src/a', xy: '.D' },
+      { path: 'dst/b', xy: 'A.', sig: 's1' },
+      { path: 'm/x', xy: '.M' },
+    ];
+    const prev = basis(OID, snap(before));
+    const cur = basis(
+      OID,
+      snap([before[0], { path: 'dst/b', xy: 'AM', sig: 's2' }, before[2]] as typeof before),
+    );
+    expect(treeDelta(prev, cur).dirs).toEqual([{ path: '' }, { path: 'dst' }, { path: 'src' }]);
+    // A modified file is no candidate: its edit names its own directories only.
+    const edited = basis(
+      OID,
+      snap([before[0], before[1], { path: 'm/x', xy: '.M', sig: 's9' }] as typeof before),
+    );
+    expect(treeDelta(prev, edited).dirs).toEqual([{ path: '' }, { path: 'm' }]);
+    // A source that goes (restored) names the targets too.
+    const restored = basis(OID, snap([before[1], before[2]] as typeof before));
+    expect(treeDelta(prev, restored).dirs).toEqual([
+      { path: '' },
+      { path: 'dst' },
+      { path: 'src' },
+    ]);
+  });
+
   it('a rename names both sides', () => {
     const prev = basis(OID, snap([]));
     const cur = basis(OID, snap([{ path: 'to/x', xy: 'R.', oldPath: 'from/x' }]));
