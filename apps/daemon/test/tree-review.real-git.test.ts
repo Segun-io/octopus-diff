@@ -126,6 +126,41 @@ describe('1. one state per listing', () => {
     ]);
   });
 
+  it('a list of a newer state than the summary is never labelled with the older summary', async () => {
+    const fx = await makeRealGitFixture();
+    const repo = await makeRealRepo(fx, 'label', { 'a.txt': 'a\n' });
+    const gate = { armed: false };
+    const { api } = await start(fx, (real) => ({
+      ...real,
+      listChangedFilesWithState: async (worktree, scope, options) => {
+        if (gate.armed) {
+          gate.armed = false;
+          // The worktree moves on and git-core's own summary follows it before the daemon's does:
+          // git-core then lists the worktree as it is now (`summaryState: null`).
+          writeFileSync(path.join(repo, 'late.txt'), 'late\n');
+          await real.getSummary(worktree, {});
+        }
+        const list = real.listChangedFilesWithState;
+        if (!list) throw new Error('no listChangedFilesWithState');
+        return list.call(real, worktree, scope, options);
+      },
+    }));
+    await api.addProject({ path: repo });
+    const id = hashId(repo);
+    const before = await api.refreshWorktree(id);
+    gate.armed = true;
+    const tree = await api.getTree(id, {});
+    expect(tree.entries.map((e) => [e.name, e.status ?? null])).toEqual([
+      ['a.txt', null],
+      ['late.txt', 'untracked'],
+    ]);
+    // The listing holds `late.txt`, which the earlier summary did not: it is not that state's.
+    expect(tree.stateHash).not.toBe(before.summary.stateHash);
+    const { projects } = await api.listProjects();
+    const row = projects.flatMap((p) => p.worktrees).find((w) => w.worktree.id === id);
+    expect(row?.summary?.stateHash).toBe(tree.stateHash);
+  });
+
   it('a HEAD that keeps moving: a retryable 409, never a mix', async () => {
     const fx = await makeRealGitFixture();
     const repo = await makeRealRepo(fx, 'moving', { 'a.txt': 'a\n' });
