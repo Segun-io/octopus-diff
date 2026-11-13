@@ -12,7 +12,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { chmodSync, existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { isGitCoreError } from '@octopus-diff/contracts';
+import { type GitCoreError, isGitCoreError } from '@octopus-diff/contracts';
 import { afterAll, beforeAll, describe, expect, it, onTestFinished } from 'vitest';
 import {
   ABORT_GRACE_MS,
@@ -21,6 +21,7 @@ import {
   gitHelperDisabledByEnv,
 } from '../src/index.js';
 import { currentCall, withCall } from '../src/runner/call-context.js';
+import { HELPER_MAX_ARGV, HELPER_MAX_REQUEST_FRAME } from '../src/runner/helper-client.js';
 import { createFixture, type Fixture } from './helpers/fixture.js';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
@@ -579,6 +580,17 @@ describe.skipIf(process.platform === 'win32')(
 
 const helperOn = !gitHelperDisabledByEnv() && process.platform !== 'win32';
 
+/** What exec takes for argv and env together (POSIX getconf: 2 MiB on Linux, 1 MiB on macOS). */
+const ARG_MAX = ((): number => {
+  const value = Number(spawnSync('getconf', ['ARG_MAX'], { encoding: 'utf8' }).stdout?.trim());
+  return Number.isFinite(value) && value > 0 ? value : 256 * 1024;
+})();
+/**
+ * Pathspecs `p0`, `p1`, ... that fit: about 15 bytes each as exec counts them (text, NUL, 8-byte
+ * pointer), in 60 % of ARG_MAX (the environment and the runner's pins take the rest).
+ */
+const FITTING_PATHSPECS = Math.min(70_000, Math.floor((0.6 * ARG_MAX) / 15));
+
 function runnerWith(env: Record<string, string> = {}, extra: Record<string, unknown> = {}) {
   return new GitRunner({ gitBinary: fakeGit, env, helper: { processes: 1 }, ...extra });
 }
@@ -749,32 +761,103 @@ describe.skipIf(!helperOn)('runner through the helper', { timeout: 60_000 }, () 
     await Promise.all([runner.dispose(), counted.dispose()]);
   });
 
-  it('70,000 pathspecs: the helper path answers as the direct path does (review #2)', async () => {
-    const paths = Array.from({ length: 70_000 }, (_, i) => `p${i}`);
+  const quietLogger = (warnings: string[]) => ({
+    debug: () => {},
+    info: () => {},
+    warn: (message: string) => warnings.push(message),
+    error: () => {},
+  });
+  const pathspecs = (n: number) => Array.from({ length: n }, (_, i) => `p${i}`);
+
+  it('as many pathspecs as this platform can exec: the helper answers as the direct path does (review #2)', async () => {
+    writeFileSync(log, '');
+    // At most the helper's own limit: this one goes through the helper.
+    const count = Math.min(FITTING_PATHSPECS, HELPER_MAX_ARGV - 200);
     const warnings: string[] = [];
     const viaHelper = new GitRunner({
       gitBinary: fakeGit,
       env: { FAKE_MODE: 'argc' },
       helper: { processes: 1 },
-      logger: {
-        debug: () => {},
-        info: () => {},
-        warn: (message: string) => warnings.push(message),
-        error: () => {},
-      },
+      logger: quietLogger(warnings),
     });
     const direct = new GitRunner({ gitBinary: fakeGit, env: { FAKE_MODE: 'argc' }, helper: false });
-    const [a, b] = await Promise.all([
-      viaHelper.run(['diff', '--', ...paths], { cwd: fx.root }),
-      direct.run(['diff', '--', ...paths], { cwd: fx.root }),
-    ]);
+    const a = await viaHelper.run(['diff', '--', ...pathspecs(count)], { cwd: fx.root });
+    const b = await direct.run(['diff', '--', ...pathspecs(count)], { cwd: fx.root });
     expect(a.stdout.toString()).toBe(b.stdout.toString());
-    expect(Number(a.stdout.toString())).toBeGreaterThan(70_000);
-    expect(viaHelper.usesHelper).toBe(true);
-    // Sent directly up front: the helper never had to refuse it.
+    expect(Number(a.stdout.toString())).toBeGreaterThan(count);
+    expect(starts()[0]?.ppid).toBe(viaHelper.helperPids()[0]);
     expect(warnings).toEqual([]);
     await Promise.all([viaHelper.dispose(), direct.dispose()]);
   });
+
+  // Only where that many arguments can be exec'd at all (Linux: 2 MiB; macOS gives 1 MiB to argv
+  // and env together, pointers included, so 70 000 arguments are E2BIG there on any path).
+  it.runIf(FITTING_PATHSPECS > HELPER_MAX_ARGV)(
+    'more pathspecs than the helper takes: sent directly up front, same answer (review #2)',
+    async () => {
+      const count = FITTING_PATHSPECS;
+      const warnings: string[] = [];
+      const viaHelper = new GitRunner({
+        gitBinary: fakeGit,
+        env: { FAKE_MODE: 'argc' },
+        helper: { processes: 1 },
+        logger: quietLogger(warnings),
+      });
+      const direct = new GitRunner({
+        gitBinary: fakeGit,
+        env: { FAKE_MODE: 'argc' },
+        helper: false,
+      });
+      const [a, b] = await Promise.all([
+        viaHelper.run(['diff', '--', ...pathspecs(count)], { cwd: fx.root }),
+        direct.run(['diff', '--', ...pathspecs(count)], { cwd: fx.root }),
+      ]);
+      expect(a.stdout.toString()).toBe(b.stdout.toString());
+      expect(Number(a.stdout.toString())).toBeGreaterThan(HELPER_MAX_ARGV);
+      expect(viaHelper.usesHelper).toBe(true);
+      // Sent directly up front: the helper never had to refuse it.
+      expect(warnings).toEqual([]);
+      await Promise.all([viaHelper.dispose(), direct.dispose()]);
+    },
+  );
+
+  // 1.5 times what exec takes, in arguments of 100 KB (Linux caps one argument at 128 KB): E2BIG on
+  // every platform, and still a request the client sends to the helper (it estimates 2 bytes per
+  // character against HELPER_MAX_REQUEST_FRAME). Skipped where ARG_MAX is huge.
+  it.runIf(2 * 1.5 * ARG_MAX + 64 * 1024 < HELPER_MAX_REQUEST_FRAME)(
+    'an argv beyond what the OS can exec: the same error on both paths, no retry, no lost helper',
+    async () => {
+      writeFileSync(log, '');
+      const big = Array.from({ length: Math.ceil((1.5 * ARG_MAX) / 100_000) }, (_, i) =>
+        `${i}`.padEnd(100_000, 'x'),
+      );
+      const warnings: string[] = [];
+      const viaHelper = new GitRunner({
+        gitBinary: fakeGit,
+        helper: { processes: 1 },
+        logger: quietLogger(warnings),
+      });
+      const direct = new GitRunner({ gitBinary: fakeGit, helper: false });
+      await viaHelper.run(job('warm'), { cwd: fx.root });
+      const [helper] = viaHelper.helperPids();
+      const errorOf = (runner: GitRunner) =>
+        runner.run(['diff', '--', ...big], { cwd: fx.root }).then(
+          () => null,
+          (e: unknown) => e as GitCoreError,
+        );
+      const [a, b] = [await errorOf(viaHelper), await errorOf(direct)];
+      expect(isGitCoreError(b, 'git_failed')).toBe(true);
+      expect(b?.message).toMatch(/E2BIG/);
+      expect(a?.code).toBe(b?.code);
+      expect(a?.message).toBe(b?.message);
+      expect(a?.details.helper).toBeUndefined();
+      // Nothing ran, nothing was retried, and the helper is the same one.
+      expect(starts().map(last)).toEqual(['warm']);
+      expect(viaHelper.helperPids()).toEqual([helper]);
+      expect(warnings).toEqual([]);
+      await Promise.all([viaHelper.dispose(), direct.dispose()]);
+    },
+  );
 
   it('a request the helper refuses runs directly instead of failing (review #2)', async () => {
     writeFileSync(log, '');
