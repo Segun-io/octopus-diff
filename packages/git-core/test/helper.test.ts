@@ -1398,9 +1398,11 @@ describe.skipIf(!helperOn)('helper crashes', { timeout: 60_000 }, () => {
         'python3',
         [
           '-c',
-          'import os, sys, time\npid = os.fork()\nif pid == 0:\n    os.setsid()\n    os._exit(0)\nprint(pid, flush=True)\ntime.sleep(30)',
+          // The parent reaps its child itself when told to (stdin line), so the test never depends
+          // on PID 1 reaping orphans (a container without an init leaves the zombie for good).
+          'import os, sys\npid = os.fork()\nif pid == 0:\n    os.setsid()\n    os._exit(0)\nprint(pid, flush=True)\nsys.stdin.readline()\nos.waitpid(pid, 0)',
         ],
-        { stdio: ['ignore', 'pipe', 'ignore'] },
+        { stdio: ['pipe', 'pipe', 'ignore'] },
       );
       onTestFinished(() => {
         parent.kill('SIGKILL');
@@ -1433,8 +1435,8 @@ describe.skipIf(!helperOn)('helper crashes', { timeout: 60_000 }, () => {
       expect(warnings).toEqual([
         `a git process group survived SIGKILL {"pgid":${zombie},"code":null}`,
       ]);
-      // Once its parent is gone, the zombie is reaped and the same call says so.
-      parent.kill('SIGKILL');
+      // Once its parent has reaped it, the zombie is gone and the same call says so.
+      parent.stdin?.write('reap\n');
       await until(
         () => !processTable().some((p) => p.pgid === zombie),
         20_000,

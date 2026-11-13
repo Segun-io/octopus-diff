@@ -506,9 +506,17 @@ class HelperProcess {
         if (skipFirst && this.options.test) this.options.test.missFirstGroupKill = false;
         const reaped = reapGroup(request.pid, { logger: this.options.logger, skipFirst });
         const wait = this.options.test?.groupGoneWaitMs ?? GROUP_GONE_WAIT_MS;
-        void Promise.race([reaped, new Promise((resolve) => setTimeout(resolve, wait))]).then(() =>
-          request.handlers.lost(reason, true),
-        );
+        // The bounded wait's timer is cleared when the cleanup wins (an unused timer would keep a
+        // short-lived process alive for the rest of the wait) and never holds the loop open.
+        let timer: NodeJS.Timeout | undefined;
+        const waited = new Promise<void>((resolve) => {
+          timer = setTimeout(resolve, wait);
+          timer.unref();
+        });
+        void Promise.race([reaped, waited]).then(() => {
+          clearTimeout(timer);
+          request.handlers.lost(reason, true);
+        });
       } else {
         // Announced but no pid: the helper died while starting git, which may be running unseen.
         request.handlers.lost(reason, !request.started);
