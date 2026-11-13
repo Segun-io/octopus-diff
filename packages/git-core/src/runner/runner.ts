@@ -50,7 +50,11 @@ interface HelperConfig {
   execPath: string | undefined;
 }
 
-function helperConfig(option: GitRunnerOptions['helper'], logger: Logger): HelperConfig | null {
+function helperConfig(
+  option: GitRunnerOptions['helper'],
+  concurrency: number,
+  logger: Logger,
+): HelperConfig | null {
   if (option === false || gitHelperDisabledByEnv()) return null;
   // Windows keeps the direct path: no process groups to kill there (see docs/reports/spawn-helper.md).
   if (process.platform === 'win32') return null;
@@ -62,7 +66,9 @@ function helperConfig(option: GitRunnerOptions['helper'], logger: Logger): Helpe
   }
   return {
     entry,
-    processes: Math.min(4, Math.max(1, Math.floor(settings.processes ?? 1))),
+    // Two by default: one helper's event loop starts about 1 000 processes a second, two keep up
+    // with the runner's whole concurrency (docs/reports/spawn-helper.md).
+    processes: Math.min(4, Math.max(1, Math.floor(settings.processes ?? Math.min(2, concurrency)))),
     execPath: settings.execPath,
   };
 }
@@ -377,12 +383,13 @@ export class GitRunner {
     this.maxOutputBytes = options.maxOutputBytes ?? DEFAULT_MAX_OUTPUT;
     this.env = buildGitEnv(process.env, options.env);
     this.logger = options.logger ?? noopLogger;
-    this.scheduler = new LaneScheduler(Math.max(1, Math.floor(options.concurrency ?? 4)));
+    const concurrency = Math.max(1, Math.floor(options.concurrency ?? 4));
+    this.scheduler = new LaneScheduler(concurrency);
     // Diff files above the threshold as binary, so no single file's patch can exceed about
     // twice this size while it is streamed and hashed (`core.bigFileThreshold`).
     const threshold = options.bigFileThreshold ?? defaultBigFileThreshold(this.maxOutputBytes);
     this.extraPins = ['-c', `core.bigFileThreshold=${Math.floor(threshold)}`];
-    this.helper = helperConfig(options.helper, this.logger);
+    this.helper = helperConfig(options.helper, concurrency, this.logger);
   }
 
   private readonly extraPins: readonly string[];
@@ -545,7 +552,9 @@ export class GitRunner {
             return;
           }
           // Once (#45): a read-only command can run again, unless streamed output already went out.
-          if (attempt === 0 && (!options.onStdout || stdoutBytes === 0)) {
+          // Once more when the pool just gave up (a helper that cannot start): then directly.
+          const again = attempt === 0 || (attempt === 1 && !this.usesHelper);
+          if (again && (!options.onStdout || stdoutBytes === 0)) {
             this.logger.debug('git retried', { args, cwd, reason });
             retrying = true;
             finish(null);

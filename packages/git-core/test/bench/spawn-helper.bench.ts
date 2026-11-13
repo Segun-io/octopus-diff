@@ -20,7 +20,8 @@ import { GitRunner } from '../../src/index.js';
 const self = fileURLToPath(import.meta.url);
 
 interface Sample {
-  helper: boolean;
+  /** 0: direct spawn; n: n helper processes. */
+  helper: number;
   heapMiB: number;
   runs: number;
   rssMiB: number;
@@ -50,14 +51,18 @@ function retainHeap(mib: number): unknown[] {
 }
 
 async function child(
-  helper: boolean,
+  helper: number,
   heapMiB: number,
   runs: number,
   repo: string,
   env: Record<string, string>,
 ) {
   const keep = retainHeap(heapMiB);
-  const runner = new GitRunner({ concurrency: 4, env, helper });
+  const runner = new GitRunner({
+    concurrency: 4,
+    env,
+    helper: helper > 0 ? { processes: helper } : false,
+  });
   // Warm up: the helper starts lazily, and the first spawns page in git itself.
   await Promise.all(
     Array.from({ length: 8 }, () => runner.run(['status', '--porcelain=v2', '-z'], { cwd: repo })),
@@ -95,7 +100,7 @@ async function main(): Promise<void> {
   if (process.argv[2] === '--child') {
     const [, , , helper, heap, runs, repo, env] = process.argv;
     await child(
-      helper === '1',
+      Number(helper),
       Number(heap),
       Number(runs),
       repo as string,
@@ -123,7 +128,7 @@ async function main(): Promise<void> {
     writeFileSync(path.join(repo, 'f1.txt'), 'changed\n');
     const results: Sample[] = [];
     for (const heapMiB of heaps) {
-      for (const helper of [false, true]) {
+      for (const helper of [0, 1, 2]) {
         const out = spawnSync(
           process.execPath,
           [
@@ -131,7 +136,7 @@ async function main(): Promise<void> {
             '--max-old-space-size=4096',
             self,
             '--child',
-            helper ? '1' : '0',
+            String(helper),
             String(heapMiB),
             String(runs),
             repo,
@@ -152,7 +157,7 @@ async function main(): Promise<void> {
     console.log('|---|---|---|---|---|---|---|');
     for (const s of results) {
       console.log(
-        `| ${s.heapMiB} MiB | ${s.rssMiB} MiB | ${s.helper ? 'helper' : 'direct'} | ${s.wallMs} ms | ${s.busyMs} ms | ${s.busyPerSpawnMs} ms | ${s.delayP50Ms} / ${s.delayP99Ms} / ${s.delayMaxMs} ms |`,
+        `| ${s.heapMiB} MiB | ${s.rssMiB} MiB | ${s.helper > 0 ? `${s.helper} helper${s.helper > 1 ? 's' : ''}` : 'direct'} | ${s.wallMs} ms | ${s.busyMs} ms | ${s.busyPerSpawnMs} ms | ${s.delayP50Ms} / ${s.delayP99Ms} / ${s.delayMaxMs} ms |`,
       );
     }
   } finally {
