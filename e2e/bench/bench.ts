@@ -172,6 +172,8 @@ interface ChildDaemon {
   spawnFile: string;
   /** '+' per git child started, '-' per child gone: its balance is how many are running. */
   activeFile: string;
+  /** Where the child writes its cache counters when sent SIGUSR2 (`cacheStats`). */
+  statsFile: string;
 }
 
 /** What the bench runs against, whichever layout generated it. */
@@ -261,6 +263,7 @@ async function spawnDaemon(setup: BenchSetup, stateBase: string): Promise<ChildD
   await writeFile(spawnFile, '');
   const activeFile = join(setup.root, 'spawns.active');
   await writeFile(activeFile, '');
+  const statsFile = join(setup.root, 'cache-stats.json');
   const options = {
     host: '127.0.0.1',
     port: 0,
@@ -288,6 +291,7 @@ async function spawnDaemon(setup: BenchSetup, stateBase: string): Promise<ChildD
         OCTOPUS_BENCH_DAEMON_OPTIONS: JSON.stringify(options),
         OCTOPUS_SPAWN_TRACE: spawnFile,
         OCTOPUS_SPAWN_ACTIVE: activeFile,
+        OCTOPUS_BENCH_CACHE_STATS: statsFile,
       },
       stdio: ['ignore', 'pipe', 'inherit'],
     },
@@ -308,7 +312,41 @@ async function spawnDaemon(setup: BenchSetup, stateBase: string): Promise<ChildD
       `daemon failed to start: ${message.error}${/placeholder/i.test(message.error ?? '') ? ' (merge WS2 and run `pnpm build`)' : ''}`,
     );
   }
-  return { child, url: message.url, authUrl: message.authUrl, token, spawnFile, activeFile };
+  return {
+    child,
+    url: message.url,
+    authUrl: message.authUrl,
+    token,
+    spawnFile,
+    activeFile,
+    statsFile,
+  };
+}
+
+/** The daemon's cache counters (#49: hits, misses, in-flight joins), or null when it has none. */
+interface CacheCounters {
+  hits: number;
+  misses: number;
+  joins: number;
+  entries: number;
+  pending: number;
+  capacity: number;
+}
+interface CacheStatsReport {
+  files: CacheCounters;
+  ranges: CacheCounters;
+}
+
+async function cacheStats(daemon: ChildDaemon): Promise<CacheStatsReport | null> {
+  await writeFile(daemon.statsFile, '');
+  daemon.child.kill('SIGUSR2');
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    const text = await readFile(daemon.statsFile, 'utf8').catch(() => '');
+    if (text.trim()) return JSON.parse(text) as CacheStatsReport;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  return null;
 }
 
 async function stopChild(child: ChildProcess) {
@@ -918,6 +956,13 @@ async function main() {
       );
     }
     const mem = await memory(daemon.child.pid as number);
+    const caches = await cacheStats(daemon);
+    if (caches) {
+      const f = caches.files;
+      log(
+        `file list cache: ${f.hits} hits, ${f.misses} misses, ${f.joins} in-flight joins, ${f.entries}/${f.capacity} entries; review ranges: ${caches.ranges.hits} hits, ${caches.ranges.misses} misses`,
+      );
+    }
 
     // Spawns per phase and per edit, from the trace the daemon wrote.
     const allGit = gitSpawns(await readSpawns(daemon.spawnFile));
@@ -1155,6 +1200,7 @@ async function main() {
         : { skipped: uiProblem },
       idleCpu: idle,
       memory: mem,
+      caches,
       refresh: {
         iterations,
         sse: sseStats,
@@ -1426,6 +1472,8 @@ Tracked budgets are known to fail until the issue they name lands: they are list
 | Browser traffic per edit, worktree view (median / worst; requests median / worst; \`/api/projects\` in all edits) | ${trafficCell(r.refresh.trafficPerEdit)} |
 | Daemon startup: listening / all summaries | ${fmt(r.startup.listeningMs)} / ${fmt(r.startup.allSummariesMs)} |
 | Daemon RSS: end of run / peak | ${bytes(r.memory.rssBytes)} / ${bytes(r.memory.peakRssBytes)} |
+| File list cache (#49): hits / misses / in-flight joins (entries / capacity) | ${r.caches ? `${r.caches.files.hits} / ${r.caches.files.misses} / ${r.caches.files.joins} (${r.caches.files.entries} / ${r.caches.files.capacity})` : 'n/a'} |
+| Review range cache (#49): hits / misses / in-flight joins | ${r.caches ? `${r.caches.ranges.hits} / ${r.caches.ranges.misses} / ${r.caches.ranges.joins}` : 'n/a'} |
 
 ## Startup git spawns (${r.startup.gitSpawns} for ${r.layout.worktrees} worktrees = ${r.startup.gitSpawnsPerWorktree} per worktree, ${r.startup.gitWallMs} ms of git wall time summed)
 
