@@ -974,6 +974,94 @@ export function nextUnreviewed(
   return null;
 }
 
+/** One worktree of `n`'s walk (#42): its loaded files in order and what they are of its list. */
+export interface NextSegment {
+  worktreeId: string;
+  projectId: string;
+  /** Its loaded files, in display order (a prefix of its list). */
+  entries: readonly NavEntry[];
+  /** False: more files of its list are not loaded. */
+  complete: boolean;
+  /** Unreviewed files `n` may go to in its whole list (by the counts); null: unknown. */
+  eligibleTotal: number | null;
+  /** `n` never goes there (review off). */
+  skip: boolean;
+}
+
+/** A leg of the walk: a range of one segment's loaded files, and whether its unloaded rest follows. */
+interface Leg {
+  segment: number;
+  from: number;
+  to: number;
+  /** The leg ends at the segment's loaded end: the daemon may know more after it. */
+  tail: boolean;
+}
+
+export type NextUnreviewedStep =
+  /** Found in loaded files. */
+  | { kind: 'local'; entry: NavEntry }
+  /** Ask the daemon for the segment's next unreviewed file after `after` (null: from its top); go on at `resume` when it has none. */
+  | { kind: 'ask'; segment: number; after: ChangedFile | null; resume: number }
+  | { kind: 'none' };
+
+/**
+ * `n` over paged lists (#42): the same walk as `nextUnreviewed` (after the selection, the
+ * following worktrees, around, back to the selection), but where a worktree's list is not all
+ * loaded and its counts say unreviewed files may be beyond the loaded ones, the walk stops and
+ * says to ask the daemon (`after` + `unreviewed`). `from` resumes a walk after such an ask.
+ */
+export function planNextUnreviewed(
+  segments: readonly NextSegment[],
+  selectedKey: string | null,
+  eligible: (entry: NavEntry) => boolean,
+  from = 0,
+): NextUnreviewedStep {
+  let s0 = -1;
+  let i0 = -1;
+  if (selectedKey !== null) {
+    for (let s = 0; s < segments.length && s0 === -1; s++) {
+      const index = (segments[s] as NextSegment).entries.findIndex((e) => e.key === selectedKey);
+      if (index !== -1) {
+        s0 = s;
+        i0 = index;
+      }
+    }
+  }
+  const legs: Leg[] = [];
+  const n = segments.length;
+  const whole = (s: number): Leg => ({
+    segment: s,
+    from: 0,
+    to: (segments[s] as NextSegment).entries.length,
+    tail: true,
+  });
+  if (s0 === -1) {
+    for (let s = 0; s < n; s++) legs.push(whole(s));
+  } else {
+    const len = (segments[s0] as NextSegment).entries.length;
+    legs.push({ segment: s0, from: i0 + 1, to: len, tail: true });
+    for (let k = 1; k < n; k++) legs.push(whole((s0 + k) % n));
+    legs.push({ segment: s0, from: 0, to: i0, tail: false });
+  }
+  for (let l = from; l < legs.length; l++) {
+    const leg = legs[l] as Leg;
+    const seg = segments[leg.segment] as NextSegment;
+    if (seg.skip) continue;
+    for (let i = leg.from; i < leg.to; i++) {
+      const e = seg.entries[i] as NavEntry;
+      if (!e.file.reviewed && e.key !== selectedKey && eligible(e))
+        return { kind: 'local', entry: e };
+    }
+    if (!leg.tail || seg.complete) continue;
+    let loaded = 0;
+    for (const e of seg.entries) if (!e.file.reviewed && eligible(e)) loaded++;
+    if (seg.eligibleTotal !== null && seg.eligibleTotal <= loaded) continue;
+    const last = seg.entries[seg.entries.length - 1];
+    return { kind: 'ask', segment: leg.segment, after: last ? last.file : null, resume: l + 1 };
+  }
+  return { kind: 'none' };
+}
+
 /**
  * Selection repair after a refresh: keep the selection if it still exists; otherwise pick the
  * visible entry closest to its previous index (so a reverted file hands over to its neighbor).

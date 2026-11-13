@@ -1,6 +1,6 @@
 import './zod-config.ts';
 import { type ApiClient, TEST_IDS } from '@octopus-diff/contracts';
-import { type QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { type QueryClient, QueryClientProvider, useQueryClient } from '@tanstack/react-query';
 import {
   lazy,
   Suspense,
@@ -11,6 +11,7 @@ import {
   useRef,
   useState,
 } from 'react';
+import { ensureFiles, loadMoreFiles, locateFile } from './api/files.ts';
 import { useForgeIndex } from './api/forges.ts';
 import {
   type EventSourceFactory,
@@ -23,6 +24,7 @@ import {
   createBrowserApiClient,
   createQueryClient,
   describeError,
+  useApi,
 } from './api/queries.ts';
 import { AddJobToast, useAddJobWatcher } from './components/AddJobStatus.tsx';
 import { AddProjectForm } from './components/AddProjectForm.tsx';
@@ -31,7 +33,7 @@ import { ContextBar } from './components/ContextBar.tsx';
 import { CopyToastHost } from './components/CopyButton.tsx';
 import { Dialog } from './components/Dialog.tsx';
 import { DiffPane } from './components/diff/DiffPane.tsx';
-import { FileList } from './components/FileList.tsx';
+import { FileList, type FileListMore } from './components/FileList.tsx';
 import { FilePaneHeader } from './components/FilePaneHeader.tsx';
 import { HelpDialog } from './components/HelpDialog.tsx';
 import { Mark } from './components/Mark.tsx';
@@ -115,8 +117,13 @@ function useApplyTheme() {
 function useSelectionRepair() {
   const model = useAppModel();
   const store = useUiStore();
+  const queryClient = useQueryClient();
+  const api = useApi();
   const lastIndex = useRef(0);
-  const { entries, visible, viewReady, selectedKey, view } = model;
+  /** The selection and list state a partly loaded list was loaded through (#42). */
+  const located = useRef<string | null>(null);
+  const { entries, visible, viewReady, selectedKey, view, openList, scope } = model;
+  const listState = model.files.data?.stateHash ?? null;
   const viewKey =
     view.kind === 'worktree'
       ? view.worktreeId
@@ -139,9 +146,46 @@ function useSelectionRepair() {
       if (visibleIndex !== -1) lastIndex.current = visibleIndex;
       return;
     }
+    // A partly loaded list (#42) may hold the selection further down (a refresh moved it past the
+    // loaded files, or a jump selected it first): load through it once per state, then repair.
+    const selected = store.getState().selected;
+    if (
+      selected &&
+      openList &&
+      !openList.complete &&
+      view.kind === 'worktree' &&
+      selected.worktreeId === view.worktreeId
+    ) {
+      const key = `${selectedKey}\u0000${listState}`;
+      if (located.current !== key) {
+        located.current = key;
+        const worktreeId = view.worktreeId;
+        void locateFile(api, worktreeId, scope, selected)
+          .then((index) =>
+            index === null
+              ? undefined
+              : ensureFiles(queryClient, api, worktreeId, scope, index + 1),
+          )
+          .catch(() => undefined);
+        return;
+      }
+    }
     const next = repairSelection(entries, selectedKey, lastIndex.current, visible);
     actions.select(store, next ? toFileRef(next.worktreeId, next.file) : null);
-  }, [entries, visible, viewReady, selectedKey, viewKey, store]);
+  }, [
+    entries,
+    visible,
+    viewReady,
+    selectedKey,
+    viewKey,
+    store,
+    openList,
+    view,
+    listState,
+    api,
+    queryClient,
+    scope,
+  ]);
 }
 
 /**
@@ -393,6 +437,57 @@ function TreeOriginBar() {
   );
 }
 
+/**
+ * The open list's next pages (#42): the footer of a partly loaded list, loaded on demand (near
+ * its end, or the footer's button). Undefined when the list is all loaded.
+ */
+function useMoreFiles(): FileListMore | undefined {
+  const model = useAppModel();
+  const queryClient = useQueryClient();
+  const api = useApi();
+  const [loading, setLoading] = useState(false);
+  const worktreeId = model.view.kind === 'worktree' ? model.view.worktreeId : null;
+  const scope = model.scope;
+  const onLoadMore = useCallback(() => {
+    if (worktreeId === null) return;
+    setLoading(true);
+    void loadMoreFiles(queryClient, api, worktreeId, scope)
+      .catch(() => undefined)
+      .finally(() => setLoading(false));
+  }, [queryClient, api, worktreeId, scope]);
+  const { openList, openMore } = model;
+  if (!openList || !openMore) return undefined;
+  return {
+    loaded: openList.loaded,
+    total: openList.total,
+    visibleMore: openMore.visibleMore,
+    ownComplete: openMore.ownComplete,
+    loading,
+    onLoadMore,
+  };
+}
+
+/** The tree layout's way to the next pages (#42): it has no virtualised footer. */
+function TreeMore({ more }: { more: FileListMore | undefined }) {
+  if (!more?.visibleMore) return null;
+  return (
+    <div
+      data-testid="file-tree-more"
+      className="flex items-center gap-2 border-t border-line px-3 py-1 text-xs text-muted"
+    >
+      <span aria-live="polite">
+        {more.loading ? 'Loading more files… ' : ''}
+        {more.loaded.toLocaleString()} of {more.total.toLocaleString()} files loaded
+      </span>
+      {!more.loading && (
+        <button type="button" className="text-accent hover:underline" onClick={more.onLoadMore}>
+          Load more
+        </button>
+      )}
+    </div>
+  );
+}
+
 function AppShell({ eventSourceFactory }: { eventSourceFactory?: EventSourceFactory | null }) {
   const model = useAppModel();
   const store = useUiStore();
@@ -438,6 +533,7 @@ function AppShell({ eventSourceFactory }: { eventSourceFactory?: EventSourceFact
   useKeyboardShortcuts(commands, ready && hasProjects);
 
   const onSelectEntry = useCallback((entry: NavEntry) => commands.selectEntry(entry), [commands]);
+  const more = useMoreFiles();
   const forgeIndex = useForgeIndex();
   const viewWorktreeId = model.view.kind === 'worktree' ? model.view.worktreeId : null;
   const hasRequest =
@@ -560,6 +656,7 @@ function AppShell({ eventSourceFactory }: { eventSourceFactory?: EventSourceFact
                     />
                   </Suspense>
                 </div>
+                <TreeMore more={more} />
                 <TreeOriginBar />
               </div>
             ) : (
@@ -570,6 +667,7 @@ function AppShell({ eventSourceFactory }: { eventSourceFactory?: EventSourceFact
                 selectedKey={model.selectedKey}
                 onSelect={onSelectEntry}
                 origin={origin}
+                more={more}
                 emptyMessage="No changes in this scope."
               />
             )}

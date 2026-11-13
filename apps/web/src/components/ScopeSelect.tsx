@@ -1,5 +1,6 @@
 import {
   type DiffScope,
+  type FileListCounts,
   type ScopeKind,
   scopeKey,
   TEST_IDS,
@@ -36,10 +37,23 @@ function countFiles(all: readonly CountedFile[]): ScopeCount {
  * counts only what is left (it never lists reviewed files), All on branch everything; the current
  * scope's loaded list also carries its unreviewed count, for the eye.
  */
+/** A loaded list's count: its whole list's (`counts`, #42) when it has them, else its files. */
+export interface CountedList {
+  files: readonly CountedFile[];
+  counts?: FileListCounts | undefined;
+}
+
+function countList(list: CountedList): ScopeCount {
+  const c = list.counts;
+  if (!c) return countFiles(list.files);
+  const total = c.total - c.base;
+  return { total, unreviewed: total - (c.reviewed - c.baseReviewed) };
+}
+
 function scopeCounts(
   summary: WorktreeSummary | null | undefined,
-  branchFiles: readonly CountedFile[] | undefined,
-  current: { kind: ScopeKind; files: readonly CountedFile[] } | undefined,
+  branchFiles: CountedList | undefined,
+  current: ({ kind: ScopeKind } & CountedList) | undefined,
 ): Partial<Record<ScopeKind, ScopeCount>> {
   if (!summary) return {};
   const c = summary.counts;
@@ -50,10 +64,10 @@ function scopeCounts(
     working: { total: summary.changedFiles },
     staged: { total: c.staged + c.conflicted },
     unstaged: { total: c.unstaged + c.untracked + c.conflicted },
-    ...(branchFiles !== undefined ? { branch: { total: countFiles(branchFiles).total } } : {}),
+    ...(branchFiles !== undefined ? { branch: { total: countList(branchFiles).total } } : {}),
   };
   if (current && current.kind !== 'review' && current.kind !== 'commit') {
-    out[current.kind] = countFiles(current.files);
+    out[current.kind] = countList(current);
   }
   return out;
 }
@@ -82,12 +96,12 @@ export function ScopeSelect() {
 
   // "All on branch" has no count in the summary: list it for the open worktree only.
   const branchFiles = useFilesQuery(worktreeId, ALL_ON_BRANCH);
-  const currentFiles = model.files.data?.files;
+  const current = model.files.data;
   const counts = scopeCounts(
     row?.summary,
-    branchFiles.data?.files,
-    currentFiles && !model.files.isPlaceholderData
-      ? { kind: scope.kind, files: currentFiles }
+    branchFiles.data,
+    current && !model.files.isPlaceholderData
+      ? { kind: scope.kind, files: current.files, counts: current.counts }
       : undefined,
   );
   // To review is always available: the daemon that serves this app computes review states on

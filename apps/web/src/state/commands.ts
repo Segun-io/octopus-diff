@@ -1,12 +1,25 @@
-import type { BulkReviewTarget, DiffResponse } from '@octopus-diff/contracts';
+import type {
+  BulkReviewTarget,
+  ChangedFile,
+  DiffResponse,
+  FileListCounts,
+} from '@octopus-diff/contracts';
 import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useMemo, useRef } from 'react';
+import { ensureFiles, loadMoreFiles, locateFile, unreviewedIn, wantFiles } from '../api/files.ts';
 import { useReviewMutation } from '../api/hooks.ts';
 import { type DiffQueryData, queryKeys, useApi } from '../api/queries.ts';
 import { type BulkPlan, planBulk, planBulkForTarget } from '../lib/bulk.ts';
 import { branchCopyText, fileCopyTexts } from '../lib/copyFormat.ts';
 import { fileRefKey, toFileRef } from '../lib/fileRef.ts';
-import { eyeApplies, type NavEntry, nextUnreviewed, stepFile, stepWorktree } from '../lib/model.ts';
+import {
+  eyeApplies,
+  type NavEntry,
+  type NextSegment,
+  planNextUnreviewed,
+  stepFile,
+  stepWorktree,
+} from '../lib/model.ts';
 import { escapeSuspicious, hasSuspicious } from '../lib/unicode.ts';
 import type { SettingsSectionId } from '../settings/registry.ts';
 import { type BulkActions, hasUndoableToast, useBulkActions } from './bulk.ts';
@@ -69,6 +82,11 @@ export interface Commands {
   /** Scrolls the diff by a fraction of its height (negative = up). */
   scrollDiff(fraction: number): void;
   selectEntry(entry: NavEntry): void;
+  /**
+   * Selects a file of a worktree's list that may not be loaded yet (the palette's file search,
+   * #42): the list is loaded through it first.
+   */
+  openFile(worktreeId: string, file: ChangedFile): void;
   /** The plan `markAll` (or `markEvery`) would run right now (for button and palette counts). */
   currentPlan(reviewed: boolean, every?: boolean): BulkPlan;
 }
@@ -99,15 +117,9 @@ export function useCommands(model: AppModel, resolvedTheme: 'light' | 'dark'): C
       const view = latest.current.model.view;
       return view.kind === 'worktree' ? view.worktreeId : null;
     };
-    const goNextUnreviewed = (): boolean => {
+    /** Opens `target` (in its worktree), the way `n` moves. */
+    const goTo = (target: NavEntry) => {
       const m = latest.current.model;
-      // `n` skips the files of a collapsed "from main" group, like `j`/`k`.
-      const eligible = (e: NavEntry) =>
-        !m.disabledWorktrees.has(e.worktreeId) && m.originVisible(e);
-      // Only worktrees of the list the sidebar shows: the pane cannot show any other one.
-      const listed = m.globalEntries.filter((e) => m.listedIds.has(e.worktreeId));
-      const target = nextUnreviewed(listed, m.selectedKey, eligible);
-      if (!target) return false;
       const ref = toFileRef(target.worktreeId, target.file);
       if (m.view.kind === 'worktree' && m.view.worktreeId !== target.worktreeId) {
         store.setState({
@@ -123,7 +135,120 @@ export function useCommands(model: AppModel, resolvedTheme: 'light' | 'dark'): C
       } else {
         actions.select(store, ref);
       }
-      return true;
+    };
+    /**
+     * `n` (#42: over paged lists). The loaded files decide where they can; a worktree whose list
+     * is not all loaded and may hold unreviewed files beyond is asked (`after` + `unreviewed`,
+     * one file), and the list is loaded through the answer before it is selected.
+     */
+    /**
+     * `n` (#42: over paged lists). The loaded files decide where they can (at once, as before);
+     * a worktree whose list is not all loaded and may hold unreviewed files beyond is asked
+     * (`after` + `unreviewed`, one file), and the list is loaded through the answer before it is
+     * selected. Returns whether it moved, or a promise of that when it had to ask.
+     */
+    const goNextUnreviewed = (): boolean | Promise<boolean> => {
+      const m = latest.current.model;
+      const fromMainOnly = store.getState().fromMainOnly;
+      // `n` skips the files of a collapsed "from main" group, like `j`/`k`.
+      const eligible = (e: NavEntry) =>
+        !m.disabledWorktrees.has(e.worktreeId) && m.originVisible(e);
+      const originOf = (worktreeId: string): 'own' | 'base' | undefined =>
+        fromMainOnly ? 'base' : m.originView.expanded.has(worktreeId) ? undefined : 'own';
+      // Only worktrees of the list the sidebar shows: the pane cannot show any other one.
+      const segments: NextSegment[] = m.globalGroups
+        .filter((g) => m.listedIds.has(g.worktree.id))
+        .map((g) => {
+          const id = g.worktree.id;
+          const info = m.lists.get(id);
+          return {
+            worktreeId: id,
+            projectId: g.project.id,
+            entries: m.globalEntries.filter((e) => e.worktreeId === id),
+            complete: info?.complete ?? true,
+            eligibleTotal: info?.counts ? unreviewedIn(info.counts, originOf(id)) : null,
+            skip: m.disabledWorktrees.has(id),
+          };
+        });
+      // The inbox rows are in the view's scope (commit scope: only the open list is walked).
+      const scope = m.scope;
+      const first = planNextUnreviewed(segments, m.selectedKey, eligible);
+      if (first.kind === 'none') return false;
+      if (first.kind === 'local') {
+        goTo(first.entry);
+        return true;
+      }
+      const ask = async (): Promise<boolean> => {
+        let step: ReturnType<typeof planNextUnreviewed> = first;
+        for (let asks = 0; asks <= segments.length; asks++) {
+          if (step.kind === 'none') return false;
+          if (step.kind === 'local') {
+            goTo(step.entry);
+            return true;
+          }
+          const seg = segments[step.segment] as NextSegment;
+          const origin = originOf(seg.worktreeId);
+          const after = step.after;
+          const res = await api.listFiles(seg.worktreeId, {
+            scope,
+            unreviewed: true,
+            limit: 1,
+            ...(origin ? { origin } : {}),
+            ...(after
+              ? {
+                  after:
+                    after.rawPath === undefined
+                      ? { path: after.path }
+                      : { path: after.path, rawPath: after.rawPath },
+                }
+              : {}),
+          });
+          const file = res.files[0];
+          if (!file || res.position === null || res.position === undefined) {
+            step = planNextUnreviewed(segments, m.selectedKey, eligible, step.resume);
+            continue;
+          }
+          const target: NavEntry = {
+            key: fileRefKey(toFileRef(seg.worktreeId, file)),
+            worktreeId: seg.worktreeId,
+            projectId: seg.projectId,
+            file,
+          };
+          // Load the list through it, so it is a row of the list (and the selection holds).
+          const now = latest.current.model;
+          if (now.view.kind === 'worktree' && now.view.worktreeId === seg.worktreeId) {
+            await ensureFiles(queryClient, api, seg.worktreeId, scope, res.position + 1);
+          } else {
+            wantFiles(queryClient, seg.worktreeId, scope, res.position + 1);
+          }
+          goTo(target);
+          return true;
+        }
+        return false;
+      };
+      return ask();
+    };
+    /** `n` presses run one after the other while one waits for the daemon. */
+    let nextChain: Promise<unknown> = Promise.resolve();
+    let nextPending = 0;
+    const track = (run: Promise<boolean>, notFound: () => void): Promise<unknown> => {
+      nextPending++;
+      return run
+        .then((found) => {
+          if (!found) notFound();
+        })
+        .catch(() => {
+          actions.notice(store, 'Could not ask the daemon for the next unreviewed file.');
+        })
+        .finally(() => {
+          nextPending--;
+        });
+    };
+    const nextUnreviewedAsync = (notFound: () => void): Promise<unknown> => {
+      const moved = goNextUnreviewed();
+      if (moved === false) notFound();
+      if (typeof moved === 'boolean') return Promise.resolve();
+      return track(moved, notFound);
     };
     /**
      * The open worktree's list is behind its row (it would send an older state's hash and the
@@ -151,15 +276,34 @@ export function useCommands(model: AppModel, resolvedTheme: 'light' | 'dark'): C
       // every worktree (its file query refreshes on its own and may be newer), the open file
       // list's own state for the open worktree. A worktree the list does not show is not marked.
       const shown = every || m.viewListed;
+      // Paged lists (#42): worktrees whose loaded files are not all of them; for the open one its
+      // own list says, for the others (every worktree) their inbox row.
+      const partial = new Map<string, FileListCounts | null>();
+      const groups = every ? m.allGroups : shown ? m.groups : [];
+      for (const g of groups) {
+        const id = g.worktree.id;
+        if (every) {
+          const row = m.inboxEntries.find((e) => e.worktree.id === id);
+          if (row && row.files.length < (row.filesTotal ?? row.files.length)) {
+            partial.set(id, row.fileCounts ?? null);
+          }
+        } else {
+          const info = m.lists.get(id);
+          if (info && !info.complete) partial.set(id, info.counts);
+        }
+      }
       return planBulk({
         scope: m.scope,
         reviewed,
-        groups: every ? m.allGroups : shown ? m.groups : [],
+        groups,
         entries: every ? m.allEntries : shown ? m.entries : [],
         visible: m.visible,
         stateHashes: every ? m.inboxStateHashes : m.stateHashes,
         disabled: m.disabledWorktrees,
         allUnfiltered: every && m.allUnfiltered,
+        partial,
+        showsReviewed: m.showsReviewed,
+        fromMainOnly: store.getState().fromMainOnly,
       });
     };
     const runPlan = (p: BulkPlan, reviewed: boolean) => {
@@ -204,7 +348,16 @@ export function useCommands(model: AppModel, resolvedTheme: 'light' | 'dark'): C
       nextFile() {
         const m = latest.current.model;
         if (!m.viewListed) return;
-        select(stepFile(m.entries, m.selectedKey, 1, m.visible));
+        const next = stepFile(m.entries, m.selectedKey, 1, m.visible);
+        if (next || !m.openMore?.visibleMore || m.view.kind !== 'worktree') {
+          select(next);
+          return;
+        }
+        // The end of a partly loaded list (#42): the next page, then the step.
+        void loadMoreFiles(queryClient, api, m.view.worktreeId, m.scope).then(() => {
+          const now = latest.current.model;
+          select(stepFile(now.entries, now.selectedKey, 1, now.visible));
+        });
       },
       prevFile() {
         const m = latest.current.model;
@@ -224,7 +377,7 @@ export function useCommands(model: AppModel, resolvedTheme: 'light' | 'dark'): C
         }
       },
       nextUnreviewed() {
-        if (!goNextUnreviewed()) {
+        const notFound = () => {
           const m = latest.current.model;
           actions.notice(
             store,
@@ -232,7 +385,15 @@ export function useCommands(model: AppModel, resolvedTheme: 'light' | 'dark'): C
               ? 'No more unreviewed files in the listed worktrees.'
               : 'No unreviewed files left in this scope.',
           );
+        };
+        // While an earlier `n` waits for the daemon, this one runs after it.
+        if (nextPending > 0) {
+          nextChain = nextChain.then(() => nextUnreviewedAsync(notFound));
+          return;
         }
+        const moved = goNextUnreviewed();
+        if (moved === false) notFound();
+        else if (moved !== true) nextChain = track(moved, notFound);
       },
       toggleReviewed() {
         const m = latest.current.model;
@@ -418,6 +579,28 @@ export function useCommands(model: AppModel, resolvedTheme: 'light' | 'dark'): C
       },
       selectEntry(entry) {
         select(entry);
+      },
+      openFile(worktreeId, file) {
+        const m = latest.current.model;
+        const ref = toFileRef(worktreeId, file);
+        if (m.view.kind !== 'worktree' || m.view.worktreeId !== worktreeId) {
+          store.setState({ view: { kind: 'worktree', worktreeId }, selected: ref });
+          return;
+        }
+        if (m.entries.some((e) => e.key === fileRefKey(ref))) {
+          actions.select(store, ref);
+          return;
+        }
+        // Not loaded yet (#42): where it is in the daemon's list, the list loaded through it.
+        const scope = m.scope;
+        void locateFile(api, worktreeId, scope, file)
+          .then((index) =>
+            index === null
+              ? undefined
+              : ensureFiles(queryClient, api, worktreeId, scope, index + 1),
+          )
+          .catch(() => undefined)
+          .finally(() => actions.select(store, ref));
       },
       currentPlan(reviewed, every) {
         return plan(reviewed, every);

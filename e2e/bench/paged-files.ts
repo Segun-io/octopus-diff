@@ -327,7 +327,9 @@ async function main() {
         await context.clearCookies().catch(() => {});
         await page.reload();
         await page
-          .locator(`[data-testid="${TEST_IDS.fileItem}"][data-worktree-id="${otherRow.worktree.id}"]`)
+          .locator(
+            `[data-testid="${TEST_IDS.fileItem}"][data-worktree-id="${otherRow.worktree.id}"]`,
+          )
           .first()
           .waitFor({ timeout: 300_000 });
         const sidebarRow = page.locator(
@@ -437,7 +439,13 @@ function markdown(r: any): string {
       `| ${f.scope} | ${f.total} | ${u.rows}${u.truncated ? ' (truncated)' : ''}, ${kib(u.rawBytes)} / ${kib(u.wireBytes)} | ${fmt(u.coldMs)} (${u.coldCpuMs} ms) / ${fmt(u.warmMs)} (${u.warmCpuMs} ms) | ${p ? `${p.pages}, ${fmt(p.firstMs)}, ${kib(p.firstRawBytes)} (${kib(p.firstWireBytes)} gzip)` : 'no paging'} | ${p ? kib(p.maxRawBytes) : 'n/a'} | ${p ? fmt(p.allMs) : 'n/a'} | ${p ? `${p.complete} (${p.rows} rows, ${p.duplicates} duplicates)` : 'n/a'} |`,
     );
   }
-  lines.push('', '## `GET /api/inbox`', '', '| Scope | Rows sent / files | Raw / gzip | First / warm |', '|---|---|---|---|');
+  lines.push(
+    '',
+    '## `GET /api/inbox`',
+    '',
+    '| Scope | Rows sent / files | Raw / gzip | First / warm |',
+    '|---|---|---|---|',
+  );
   for (const i of r.inbox) {
     lines.push(
       `| ${i.scope} | ${i.rows} / ${i.total} | ${kib(i.rawBytes)} / ${kib(i.wireBytes)} | ${fmt(i.ms)} / ${fmt(i.warmMs)} |`,

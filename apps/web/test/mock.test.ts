@@ -4,6 +4,7 @@ import {
   createApiClient,
   DiffResponseSchema,
   FILE_STATUSES,
+  INBOX_FILES_MAX,
   type ServerEvent,
   ServerEventSchema,
 } from '@octopus-diff/contracts';
@@ -107,7 +108,20 @@ describe('mock backend implements the contract', () => {
     expect(projects.flatMap((p) => p.worktrees)).toHaveLength(30);
     const inbox = await api.inbox();
     expect(inbox.entries).toHaveLength(30);
-    expect(inbox.entries.every((e) => e.files.length === 200)).toBe(true);
+    // Every row counts its 200 files; the response carries at most `INBOX_FILES_MAX` (#42).
+    expect(inbox.entries.every((e) => e.filesTotal === 200)).toBe(true);
+    const sent = inbox.entries.reduce((n, e) => n + e.files.length, 0);
+    // Row and byte budgets: the first rows are whole, later ones get less (or nothing).
+    expect(sent).toBeLessThanOrEqual(INBOX_FILES_MAX);
+    expect(sent).toBeGreaterThan(2000);
+    expect(JSON.stringify(inbox).length).toBeLessThan(1_000_000);
+    expect(inbox.entries[0]?.files).toHaveLength(200);
+    // The rest pages on through `/files`.
+    const last = inbox.entries[29];
+    const rest = await api.listFiles(last?.worktree.id as string, {
+      cursor: last?.filesNextCursor as string,
+    });
+    expect(rest.files).toHaveLength(200 - (last?.files.length ?? 0));
   });
 
   it('emits contract-valid events for mutations, reviews, projects and scans', async () => {
