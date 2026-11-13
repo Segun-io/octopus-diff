@@ -123,3 +123,159 @@ jobs:
           ./node_modules/.bin/octopus-diff doctor --json --state-dir "$dir/state" --config-dir "$dir/config" | node -e 'const c = JSON.parse(require("node:fs").readFileSync(0, "utf8")).checks.find((c) => c.id === "git-helper"); if (c?.status !== "ok") { console.error("doctor: the git helper is not on", c); process.exit(1); }'
           # A diff through the installed daemon and its spawn helper; then SIGKILL: no orphans (#45).
           node "$GITHUB_WORKSPACE/apps/cli/scripts/smoke-tarball.mjs" "$dir"
+
+  # The desktop app (docs/DESKTOP.md §7, roadmap #19): UNSIGNED installers for every platform and
+  # arch, uploaded as workflow artifacts (not published, no release), then the packaged app's smoke
+  # suite (e2e/desktop) against the installed native-arch build. The only job that downloads
+  # Electron (electron-builder's per-arch zips; cached). The other jobs never need it: Electron 45
+  # has no install script, so `pnpm install` does not download its binary (DECISIONS #487).
+  desktop:
+    name: desktop (${{ matrix.os }}, unsigned installers + packaged-app smoke)
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: linux
+            runner: ubuntu-latest
+          - os: mac
+            runner: macos-latest # arm64
+          - os: win
+            runner: windows-latest # x64
+    defaults:
+      run:
+        shell: bash
+    env:
+      # Never sign (phase E); no keychain / certificate lookups.
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24 # Electron 45 runs Node 24.22 (DESKTOP.md §7)
+          cache: pnpm
+      - run: git --version
+      - name: Electron download caches (this job only)
+        run: |
+          echo "ELECTRON_CACHE=$RUNNER_TEMP/electron-cache" >> "$GITHUB_ENV"
+          echo "electron_config_cache=$RUNNER_TEMP/electron-cache" >> "$GITHUB_ENV"
+          echo "ELECTRON_BUILDER_CACHE=$RUNNER_TEMP/electron-builder-cache" >> "$GITHUB_ENV"
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ${{ runner.temp }}/electron-cache
+            ${{ runner.temp }}/electron-builder-cache
+          key: electron-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: electron-${{ runner.os }}-
+      - run: pnpm install $PNPM_INSTALL_FLAGS
+      - run: pnpm build
+      - name: Package (unsigned; x64 and arm64)
+        run: pnpm --filter @octopus-diff/desktop run package -- --arch x64,arm64
+      - name: Installers built (sizes)
+        run: ls -l apps/desktop/release
+
+      # --- fuses: both arches of this platform (reading the fuse wire does not run the binary) ---
+      - name: Check fuses (Linux)
+        if: matrix.os == 'linux'
+        run: |
+          node apps/desktop/scripts/check-fuses.mjs apps/desktop/release/linux-unpacked
+          node apps/desktop/scripts/check-fuses.mjs apps/desktop/release/linux-arm64-unpacked
+      - name: Check fuses and the ad-hoc signature (macOS)
+        if: matrix.os == 'mac'
+        run: |
+          node apps/desktop/scripts/check-fuses.mjs apps/desktop/release/mac-arm64/octopus-diff.app
+          node apps/desktop/scripts/check-fuses.mjs apps/desktop/release/mac/octopus-diff.app
+          codesign --verify --deep --strict --verbose=2 apps/desktop/release/mac-arm64/octopus-diff.app
+          codesign --verify --deep --strict --verbose=2 apps/desktop/release/mac/octopus-diff.app
+      - name: Check fuses (Windows)
+        if: matrix.os == 'win'
+        run: |
+          node apps/desktop/scripts/check-fuses.mjs apps/desktop/release/win-unpacked
+          node apps/desktop/scripts/check-fuses.mjs apps/desktop/release/win-arm64-unpacked
+
+      # --- install the native-arch build the way a user does (Linux: in the smoke steps below) ---
+      - name: Install (macOS, the app copied out of the dmg)
+        if: matrix.os == 'mac'
+        run: |
+          dmg=$(ls apps/desktop/release/octopus-diff-*-mac-arm64.dmg)
+          hdiutil attach "$dmg" -nobrowse -readonly -mountpoint "$RUNNER_TEMP/dmg"
+          mkdir -p "$RUNNER_TEMP/Applications"
+          cp -R "$RUNNER_TEMP/dmg/octopus-diff.app" "$RUNNER_TEMP/Applications/"
+          hdiutil detach "$RUNNER_TEMP/dmg"
+          codesign --verify --deep --strict "$RUNNER_TEMP/Applications/octopus-diff.app"
+          echo "OCTOPUS_DESKTOP_APP=$RUNNER_TEMP/Applications/octopus-diff.app" >> "$GITHUB_ENV"
+      - name: Install (Windows, the NSIS installer, silent, per user)
+        if: matrix.os == 'win'
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem apps/desktop/release/octopus-diff-*-win-x64.exe | Select-Object -First 1
+          if (-not $installer) { throw 'no x64 NSIS installer in apps/desktop/release' }
+          $dir = Join-Path $env:RUNNER_TEMP 'od-install'
+          $p = Start-Process -FilePath $installer.FullName -ArgumentList '/S', "/D=$dir" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "the installer exited with $($p.ExitCode)" }
+          if (-not (Test-Path (Join-Path $dir 'octopus-diff.exe'))) { throw "octopus-diff.exe not installed in $dir" }
+          "OCTOPUS_DESKTOP_APP=$dir" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      # --- the packaged-app smoke suite (e2e/desktop/packaged-app.spec.ts) ---
+      - name: Packaged-app smoke (Linux, the deb installed with apt)
+        if: matrix.os == 'linux'
+        run: |
+          # With Ubuntu 24.04's default AppArmor restriction on user namespaces: the deb installs
+          # an AppArmor profile for the app, which is what lets Chromium's sandbox run there.
+          sudo apt-get install -y --no-install-recommends "./$(ls apps/desktop/release/octopus-diff-*-linux-amd64.deb)"
+          test -x /opt/octopus-diff/octopus-diff-desktop
+          OCTOPUS_DESKTOP_APP=/opt/octopus-diff xvfb-run -a pnpm --filter @octopus-diff/e2e test:e2e:desktop
+      - name: Packaged-app smoke (Linux, the AppImage extracted, no FUSE)
+        if: matrix.os == 'linux'
+        run: |
+          # An AppImage gets no AppArmor profile: allow unprivileged user namespaces, as most
+          # desktops do, so the app runs WITH Chromium's sandbox (not --no-sandbox).
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          appimage=$(ls apps/desktop/release/octopus-diff-*-linux-x86_64.AppImage)
+          chmod +x "$appimage"
+          mkdir -p "$RUNNER_TEMP/appimage"
+          (cd "$RUNNER_TEMP/appimage" && "$GITHUB_WORKSPACE/$appimage" --appimage-extract > /dev/null)
+          test -x "$RUNNER_TEMP/appimage/squashfs-root/octopus-diff-desktop"
+          OCTOPUS_DESKTOP_APP="$RUNNER_TEMP/appimage/squashfs-root" xvfb-run -a pnpm --filter @octopus-diff/e2e test:e2e:desktop
+      - name: Packaged-app smoke (macOS)
+        if: matrix.os == 'mac'
+        run: pnpm --filter @octopus-diff/e2e test:e2e:desktop
+      - name: Packaged-app smoke (Windows)
+        if: matrix.os == 'win'
+        run: pnpm --filter @octopus-diff/e2e test:e2e:desktop
+
+      # --- phase A's smokes of the UNPACKAGED app (electron .), Linux only (#501, #502) ---
+      - name: Unpackaged app smokes (Linux)
+        if: matrix.os == 'linux'
+        run: |
+          pnpm --filter @octopus-diff/desktop exec install-electron
+          # The scripts skip when the binary is missing: make that a failure here.
+          node --input-type=module -e "const m = await import('./apps/desktop/scripts/electron-binary.mjs'); if (!m.electronBinary()) { console.error('no Electron binary'); process.exit(1); }"
+          pnpm --filter @octopus-diff/desktop smoke:backend
+          xvfb-run -a pnpm --filter @octopus-diff/desktop smoke:app
+
+      - name: Upload installers (workflow artifacts, not published)
+        uses: actions/upload-artifact@v7
+        with:
+          name: desktop-${{ matrix.os }}
+          path: |
+            apps/desktop/release/*.AppImage
+            apps/desktop/release/*.deb
+            apps/desktop/release/*.dmg
+            apps/desktop/release/*.zip
+            apps/desktop/release/*.exe
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+      - name: Upload the smoke report
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: desktop-smoke-report-${{ matrix.os }}
+          path: |
+            e2e/playwright-report/desktop/
+            e2e/test-results/desktop/
+          retention-days: 7
+          if-no-files-found: ignore
