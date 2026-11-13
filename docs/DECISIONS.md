@@ -5391,3 +5391,91 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      - **Test:** a tab change in both directions with `selected === null` pushes (failed first: it replaced); the
        first-file case still replaces.
      - **Mutant killed:** the exception without the tab and `next.selected` conditions.
+
+## Desktop phase 0: Electron's Node (session, 2026-11-13; roadmap #16)
+
+466. **Electron and Node versions verified.** Electron **45.3.2** (latest 45.x; installed outside the repo with
+     `npm install --prefix ~/.cache/octopus-diff-dev/electron electron @electron/asar @electron/fuses`, not added to any
+     `package.json`) bundles **Node 24.22.2**, V8 15.6, libuv 1.52.1, SQLite 3.53.4 (the dev machine: Node 26.13.0,
+     V8 14.6, libuv 1.52.1). `engines: >=24` holds. On this WSL machine Electron also needs the extracted Chromium
+     libraries, and **`LD_LIBRARY_PATH` is not enough**: the daemon starts its helper and watch host with a scrubbed
+     environment, so they lose it (first run: 30 spurious failures with `libnspr4.so: cannot open shared object file`).
+     Electron's RPATH is `$ORIGIN`, so symlinking the libraries from
+     `~/.cache/octopus-diff-dev/chromium-libs/usr/lib/x86_64-linux-gnu/*` into the directory of the electron binary
+     fixes it for every process. A normal machine needs neither. `docs/DESKTOP.md` §2 says so.
+467. **The four suites under Electron's Node** (`ELECTRON_RUN_AS_NODE=1 electron node_modules/vitest/vitest.mjs run` in each
+     package; vitest's workers are forked with `process.execPath`, so they run as Electron-as-Node too): `apps/cli`
+     141/141, `packages/forge` 101 passed + 5 skipped, `apps/daemon` 610 passed + 4 skipped, `packages/git-core` 556
+     passed + 1 skipped: the same counts as Node 26 (same skips), no suite slower than 10 % (git-core 58 s vs 54 s,
+     daemon 26 s vs 26 s). The Effect backend (#46-#49, `effect@4.1.4`) runs on Node 24 with no change. **One failure
+     class, test-only**: 10 tests of `packages/git-core/test/helper.test.ts` ("helper protocol: strict, never a shell")
+     spawned `process.execPath` with an empty environment; under Electron that starts the Electron app, not Node, so no
+     frame ever arrived. Fixed in the test's `RawHelper` (`ELECTRON_RUN_AS_NODE=1` when `process.versions.electron`, as
+     `helper-client.ts` already does; commit `git-core: the helper test's raw spawns…`; the only non-docs edit of this
+     phase, outside the docs-only ownership, kept to three lines because the task allowed tiny test-only gaps). No
+     production code needed a change. No larger gaps. Nothing was filed on GitHub (outward-facing actions are out of bounds).
+468. **The bundled CLI serves from inside an `app.asar` with nothing unpacked.** Built (`pnpm build`), packed with
+     `pack:tarball`'s staging directory (`dist/index.js`, `dist/git-helper.js`, `dist/web`, `@parcel/watcher` and its
+     platform package installed by `npm install --omit=dev`) and `@electron/asar pack` (57 MB; the unpacked tree the same
+     size). `electron <asar>/dist/index.js serve <repo> --port 0 …` with `ELECTRON_RUN_AS_NODE=1`: `GET /` 200 (1929
+     bytes, `<div id="root">`), the hashed `/assets/index-*.js` (492 369 bytes) and `.css`, `/api/health`, a diff, the git
+     helper, a live `worktree.changed` SSE event after an edit (`watcher.mode: native`), `SIGKILL` of the daemon leaves
+     no helper. `doctor` from the asar: Node 24.22.2 ok, git helper ok, web UI ok. `node:sqlite` in Electron's Node:
+     `DatabaseSync` create/insert/select ok (the review DB is in the state dir, outside the asar). So `asarUnpack` of the
+     CLI directory (the issue's fallback) is **not needed**. The probe is a throwaway script, not committed.
+469. **What to unpack anyway (for #19), and a correction of the roadmap note.** The roadmap said the helper entry "must be
+     unpacked from the asar". It does not have to be for the app: `process.execPath <asar>/dist/git-helper.js` runs,
+     because Electron's asar `fs` patch applies in a `RUN_AS_NODE` child too (tested with nothing unpacked and with
+     `git-helper.js` unpacked: identical; with it unpacked the argv still names the asar path and Electron redirects
+     to `app.asar.unpacked`). The native addon is the thing that matters: with nothing unpacked Electron **extracts
+     `watcher.node` to a `/tmp/.org.chromium.Chromium.*` file** on each load (found by reading `/proc/<watch host>/maps`;
+     unpacked, it is mapped from `app.asar.unpacked/node_modules/@parcel/watcher-linux-x64-glibc/watcher.node`).
+     That works but needs a writable, executable temp dir. Decision for #19: `asarUnpack` `node_modules/@parcel/watcher*/**`
+     and `dist/git-helper.js` (free, and a real file for any runner that is not Electron: a system `node` cannot read an
+     asar); not the whole CLI directory. `docs/DESKTOP.md` §10.
+470. **Fuses do not break the backend.** On a copy of the binary, `@electron/fuses` set `RunAsNode` on,
+     `EnableCookieEncryption` on, `EnableNodeOptionsEnvironmentVariable` off, `EnableNodeCliInspectArguments` off,
+     `OnlyLoadAppFromAsar` on; the whole asar probe (serve, assets, diff, helper, watch host with `node -e`, SSE)
+     passed unchanged. `EnableEmbeddedAsarIntegrityValidation` is macOS/Windows only and could not be tested on Linux:
+     #19 tests it in its CI matrix. `RunAsNode` stays on (DESKTOP §5).
+471. **Spawn cost and RSS under Electron's Node** (Node 26.13.0 vs Electron 45.3.2 = Node 24.22.2, same machine, 12 cores,
+     git 2.53; one-off, not committed to `docs/bench/`). `packages/git-core/test/bench/spawn-helper.bench.ts`, 640 ×
+     `git status` at concurrency 4, main-thread busy time per git process: direct spawn **1.11 ms (Node 26) vs
+     1.69 ms (Electron)** at 0 MiB retained heap, 1.14 vs 1.54 ms at 100 MiB; through the helper **0.24 vs 0.22 ms**
+     (1 helper) and 0.27 vs 0.24 ms (2 helpers), wall 519 vs 603 ms for 2 helpers (direct: 708 vs 1084 ms). So the spawn is
+     about 50 % dearer in Electron's Node and the helper removes it (flat 0.22-0.25 ms): #45 applies, more than on
+     Node 26. Daemon bench `bench --no-ui --idle-seconds 20 --iterations 10` on 30 × 3 under each runtime (driver and
+     daemon both): startup listening / all summaries 644 / 757 ms vs 578 / 745 ms, write → SSE p50 / p95 15 / 28 ms vs
+     16 / 26 ms, burst +7 vs +10 ms, 217 spawns in the burst in both, startup 415 vs 411 spawns, idle CPU ~0 % in both, all
+     enforced budgets pass; daemon RSS end 173 vs 186 MiB. **Base memory is higher**: an empty Node 26 script 42.5 MiB,
+     Electron-as-Node 102.9 MiB (RSS counts the shared pages of the 270 MB binary); a serving daemon with one helper and the
+     watch host, RSS 94 / 55 / 54 MiB (Node) vs 143 / 112 / 112 MiB (Electron), but the **private memory (Pss_Anon)** per process
+     is 39 / 12 / 11 MiB vs 39 / 19 / 18 MiB and PSS 58 / 22 / 22 MiB vs 65 / 38 / 39 MiB. Two helpers (default) and the watch host
+     cost about +50 MiB of real memory in total. Acceptable; not a blocker. Worth remembering for the idle budget D5.
+472. **CI: Node 24 coverage already exists; no change.** `.github/workflows/ci.yml` `check` runs lint, typecheck, build,
+     test and the CLI smoke on a `[24, 26]` matrix, and `package` (tarball install, `doctor`, the helper check and
+     `smoke-tarball.mjs`: a diff through the installed daemon, SIGKILL without orphans) runs on Node 24. `e2e` (Playwright,
+     Chromium) and `test-macos` run on Node 26 only. Not widened: the browser tests do not depend on the Node version
+     (the daemon behaviour is the same code the Node 24 `check` job already tests, including the built CLI bin), and an `e2e`
+     matrix would double a 30-minute job. Phase #19's Electron e2e smoke covers the daemon under Electron's Node for
+     the packaged app. Any future dependency (Effect included) is gated by the Node 24 `check` job.
+473. **Docs.** `docs/DESKTOP.md` is the plan of issue #15 copied faithfully, with the status line (accepted 2026-11-13),
+     the verified versions, §2 rewritten with the phase 0 results (the "still to check" list is done), the phase 0 row
+     marked done and a new §10 (roadmap decisions of 2026-11-11, the asar answers, the environment contract). PLAN: §2
+     Delivery row (the Electron desktop app is in scope; same model as T3 Code), the header status line, §4.4 (desktop shell
+     removed from the backlog) and §6 Phase 3 (the desktop app no longer needs the user; only phase E does: signing,
+     notarization, auto-update, naming, first release). Issue #15's body is not edited (outward-facing).
+474. **Environment contract.** Under Electron `process.execPath` is the Electron binary, which opens the app unless
+     `ELECTRON_RUN_AS_NODE=1`. Today: `git-core`'s helper client sets it for the helper (`process.versions.electron`, a
+     scrubbed env otherwise); the daemon's watch host (`apps/daemon/src/watch-host.ts`) spawns `process.execPath -e` with a
+     copy of `process.env`, so it works only because the CLI process itself was started with the flag. The supervisor
+     (#18) and the shim's launcher (§3.2) must export it; any new spawn of `process.execPath` must set it; the daemon must not
+     run inside Electron's main process. Not changed here (daemon/git-core are not ours; it works). A defensive
+     `ELECTRON_RUN_AS_NODE` in the watch host's env would be a one-line daemon change for the daemon stream.
+475. **Gaps handed to #17-#19** (nothing blocks them): (a) #17: nothing found; the CLI runs unchanged under Electron's
+     Node. (b) #19: unpack `@parcel/watcher*` and `git-helper.js` (#469); test the asar integrity fuse on macOS/Windows
+     (#470); check what electron-builder unpacks by default; the Electron e2e smoke should also assert `watcher.mode: native`
+     and a helper process under the daemon, as the probe did. (c) The memory budget: +50 MiB real memory for the
+     helpers and the watch host (#471). (d) WSL dev machine only: put the Chromium libraries next to the Electron binary;
+     `LD_LIBRARY_PATH` is lost by the scrubbed child environments (#466). (e) The helper-protocol tests need the
+     Electron flag in any new raw spawn of `process.execPath` (#467).
