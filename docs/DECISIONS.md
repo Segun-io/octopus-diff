@@ -5391,3 +5391,12 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      - **Test:** a tab change in both directions with `selected === null` pushes (failed first: it replaced); the
        first-file case still replaces.
      - **Mutant killed:** the exception without the tab and `next.selected` conditions.
+
+## Desktop phase A0: serve hooks (session, 2026-11-13; roadmap #17)
+
+476. **`ServeReadySchema` (contracts, additive).** `packages/contracts/src/daemon.ts` gains `ServeReadySchema` and the
+     `ServeReady` type: `{ mode: 'started' | 'attached', url, authUrl, pid, version }`, the one JSON line
+     `octopus-diff serve --ready-fd <n>` writes (#17; docs/DESKTOP.md §3.1). `url` and `authUrl` are URLs, `pid` a positive
+     integer, `version` a non-empty string; unknown keys are stripped, not rejected (so a later additive field does not
+     break an older reader). `daemon.ts` now imports zod (it was types only); the contracts already depend on it. Nothing
+     renamed or removed. Tests: `packages/contracts/test/serve-ready.test.ts`.
