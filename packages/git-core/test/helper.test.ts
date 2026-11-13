@@ -344,7 +344,9 @@ class RawHelper {
       {
         stdio: pidChannel ? ['pipe', 'pipe', 'pipe', 'pipe'] : ['pipe', 'pipe', 'pipe'],
         cwd: '/',
-        env,
+        // Under Electron `process.execPath` is the Electron binary: it only acts as Node with this
+        // (helper-client.ts sets it the same way; DECISIONS #466).
+        env: process.versions.electron ? { ELECTRON_RUN_AS_NODE: '1', ...env } : env,
       },
     );
     (this.child.stdio[3] as NodeJS.ReadableStream | null)?.on('data', (chunk: Buffer) => {
