@@ -5879,3 +5879,8 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      racing summary is the old state (the same family as the late-write case in #102). The HEAD is now asserted to be
      one of the two, the numstat/commit checks apply only when it saw the new one, and the settled summary after it
      (compared with a full core) still has to be exact. Test-only change in git-core.
+527. **`watch-paths.test.ts` tolerates the native watcher's late report of the test's own write.** The macOS run
+     failed "null when focus, a caller without paths…": the caller without paths fires at once with `null`, and then
+     FSEvents (slow on macOS) reported the same `a.txt` write as its own refresh of that path, so the fired list was
+     `[null, ['a.txt']]`. The first fire must be `null`, any later one must be exactly `['a.txt']`, and the git and
+     focus steps look for their own reason instead of the first fire. Test-only change in the daemon.
