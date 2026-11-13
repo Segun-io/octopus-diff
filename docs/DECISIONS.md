@@ -5108,3 +5108,23 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
        added. "Unref'd sleeps ignoring the test clock" first survived too, because the real 500 ms fired while the test
        waited. The grace test now keeps the process answering through 2 × `ABORT_GRACE_MS` of real time while the test
        clock stands at `ABORT_GRACE_MS - 1`.
+
+### File explorer: Greptile review of PR #99, round 4 (2026-11-13)
+
+435. **An edit during a directory's first fetch is not lost** (Greptile P1). `flushTreeDirs` called
+     `invalidateQueries`. For a query with no data yet, react-query joins the request in flight instead of replacing it
+     (it only cancels a refetch over existing data). That request may answer the listing from before the edit, its
+     success clears the invalidation, and the working view keeps it for good (infinite `staleTime`). Now
+     `invalidateTrees` first cancels every matching query whose first fetch is in flight, then invalidates: the files
+     lists' pattern (`invalidateFileLists`, #42). It is used for the named directories and for `all` (working view,
+     `HEAD` and branch views).
+     - **Tests:** a gated fake daemon answers each request with the listing of the moment it started. The first request
+       is held, the event arrives, and the held request answers the old listing; the cache must end on the new one. Both
+       paths fail first; the refetch-over-data case was already right and is tested too.
+     - **Load more:** a load-more page in flight during an edit never wins over the refresh, in either order (old page
+       first, refresh first). The wanted count is recorded before the page request, so the refresh keeps the loaded
+       length.
+     - **Palette file search:** its key carries the list's `stateHash`, so a new state is a new query and no event
+       joins an old request.
+     - **Mutants killed:** no cancel; the named path joining; the `all` path joining; load-more overwriting a refresh;
+       the wanted count not recorded.
