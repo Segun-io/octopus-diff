@@ -17,8 +17,8 @@ Roadmap #16 (phase 0 of the desktop app, #15). Branch `t3/211e3d26`, 2026-11-13.
 
 Setup (outside the repo, nothing added to any `package.json`): `npm install --prefix ~/.cache/octopus-diff-dev/electron electron@45 @electron/asar @electron/fuses`
 → Electron 45.3.2, `process.version` v24.22.2 under `ELECTRON_RUN_AS_NODE=1`. The extracted Chromium libraries were symlinked
-into the electron directory (Electron's RPATH is `$ORIGIN`; `LD_LIBRARY_PATH` is lost by the daemon's scrubbed child
-environments, DECISIONS #466).
+into the electron directory (Electron's RPATH is `$ORIGIN`; `LD_LIBRARY_PATH` is lost by the git helper's empty
+environment, DECISIONS #466; the watch host inherits `process.env`).
 
 **Vitest under Electron's Node** (`cd <pkg> && ELECTRON_RUN_AS_NODE=1 electron <repo>/node_modules/vitest/vitest.mjs run`, no
 `LD_LIBRARY_PATH`) against Node 26.13.0 (`node …/vitest.mjs run`), after the test fix:
@@ -34,7 +34,7 @@ Failures found along the way, with causes (none left):
 
 1. First run, `LD_LIBRARY_PATH` only: 30 failures in git-core (`helper.test.ts`, `supervisor.test.ts`), 2 in cli
    (`doctor.test.ts` "the real probe runs git --version through a helper process", `integration.test.ts` "serve with the real
-   daemon …"). Cause: the helper starts `process.execPath` with a scrubbed env, so `libnspr4.so` was not found
+   daemon …"). Cause: the helper starts `process.execPath` with an empty env, so `libnspr4.so` was not found
    (`error while loading shared libraries`); the runner then fell back to direct spawns / "failed to start". WSL machine setup,
    not code. Fixed by placing the libraries next to the binary.
 2. Second run: 10 failures in `git-core/test/helper.test.ts` > "helper protocol: strict, never a shell" (frame never reached

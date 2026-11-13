@@ -54,7 +54,8 @@ Electron `45.3.2` (latest 45.x on 2026-11-13; it bundles **Node 24.22.2**, V8 15
   the spawn helper (#45) and the watch host (`@parcel/watcher`) all work with **nothing unpacked**, including with the
   hardening fuses of §5 flipped. What is still worth unpacking, and why, is in §10.
 - On this WSL machine Electron needs the extracted Chromium libraries. `LD_LIBRARY_PATH` is **not enough**: the
-  daemon starts its helper and its watch host with a scrubbed environment, so they lose it. Put the libraries next
+  daemon starts the git helper with an empty environment, so it loses it (the watch host inherits `process.env` minus
+  `NODE_OPTIONS`, so it keeps it). Put the libraries next
   to the binary instead (Electron's RPATH is `$ORIGIN`): `ln -s ~/.cache/octopus-diff-dev/chromium-libs/usr/lib/x86_64-linux-gnu/* <electron dir>/`
   (see AGENTS.md "e2e on this machine"; note the `usr/lib/x86_64-linux-gnu` subpath). A normal machine needs neither.
 
@@ -224,8 +225,9 @@ The daemon (WS2) and git-core (WS1) need **no changes**.
   and loads the daemon URL. For UI work, point the window at the Vite dev server (it already proxies `/api`).
   Main/preload rebuild via esbuild watch.
 - **CI** (committed, not pushed, per PLAN §7): a matrix job builds **unsigned** artifacts on
-  ubuntu/macos/windows and runs the Electron smoke test (`xvfb-run` on Linux). Add a Node 24 job to the existing
-  checks so nothing starts depending on Node 26 APIs.
+  ubuntu/macos/windows and runs the Electron smoke test (`xvfb-run` on Linux). Node 24 coverage already exists
+  (the `check` job runs on Node 24 and 26, `package` on Node 24, DECISIONS #472), so nothing new is needed to stop
+  code depending on Node 26 APIs; the Electron smoke job runs on Node 24.
 - **User-gated (Phase E):** code signing and notarization (Apple Developer ID, a Windows certificate or Azure
   Trusted Signing), auto-update (`electron-updater` from GitHub Releases needs a public repo and published
   releases), app name/branding (PLAN Phase 3).
@@ -249,8 +251,8 @@ tests; (D4) the read-only proof passes with the app; (D5) idle CPU of app + daem
 
 ## 9. Risks
 
-- **Electron's Node lags the dev machine's Node 26.** Mitigation: Phase 0 runs the suites under 24.22; CI
-  adds a Node 24 job so new code can't depend on Node 26 APIs.
+- **Electron's Node lags the dev machine's Node 26.** Mitigation: Phase 0 ran the suites under 24.22; CI
+  already runs `check` on Node 24 (and 26) and `package` on Node 24, so new code can't depend on Node 26 APIs unnoticed.
 - **Version skew between an npm CLI and the app's CLI** on one state dir (shared SQLite). Mitigation: attach shows a
   notice when versions differ; store migrations stay forward-compatible or refuse clearly.
 - **Size and memory** (~100 MB installer, one Chromium per window). Acceptable for a desktop tool; one window only.

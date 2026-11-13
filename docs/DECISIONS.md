@@ -5472,8 +5472,9 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      `npm install --prefix ~/.cache/octopus-diff-dev/electron electron @electron/asar @electron/fuses`, not added to any
      `package.json`) bundles **Node 24.22.2**, V8 15.6, libuv 1.52.1, SQLite 3.53.4 (the dev machine: Node 26.13.0,
      V8 14.6, libuv 1.52.1). `engines: >=24` holds. On this WSL machine Electron also needs the extracted Chromium
-     libraries, and **`LD_LIBRARY_PATH` is not enough**: the daemon starts its helper and watch host with a scrubbed
-     environment, so they lose it (first run: 30 spurious failures with `libnspr4.so: cannot open shared object file`).
+     libraries, and **`LD_LIBRARY_PATH` is not enough**: the daemon starts the git helper with an empty
+     environment, so it loses it (the watch host inherits `process.env` minus `NODE_OPTIONS` and keeps it; first run:
+     30 spurious failures with `libnspr4.so: cannot open shared object file`).
      Electron's RPATH is `$ORIGIN`, so symlinking the libraries from
      `~/.cache/octopus-diff-dev/chromium-libs/usr/lib/x86_64-linux-gnu/*` into the directory of the electron binary
      fixes it for every process. A normal machine needs neither. `docs/DESKTOP.md` §2 says so.
@@ -5551,5 +5552,13 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      (#470); check what electron-builder unpacks by default; the Electron e2e smoke should also assert `watcher.mode: native`
      and a helper process under the daemon, as the probe did. (c) The memory budget: about +50 MiB PSS for the
      helpers and the watch host (#471). (d) WSL dev machine only: put the Chromium libraries next to the Electron binary;
-     `LD_LIBRARY_PATH` is lost by the scrubbed child environments (#466). (e) The helper-protocol tests need the
+     `LD_LIBRARY_PATH` is lost by the git helper's empty environment (#466; the watch host inherits `process.env`). (e) The helper-protocol tests need the
      Electron flag in any new raw spawn of `process.execPath` (#467).
+
+### Desktop phase 0: Greptile review of PR #107 (2026-11-13)
+
+475a. **Documentation corrections only** (Greptile P2 x2). (1) Only the git helper starts with an empty environment
+      (it loses `LD_LIBRARY_PATH`); the watch host copies `process.env` and removes `NODE_OPTIONS`, so it keeps it.
+      `docs/DESKTOP.md` §2, #466, #468 and the report said "helper and watch host"; they now say which. (2) The plan
+      asked to "add a Node 24 job" although `check` already runs on Node 24 and 26 and `package` on Node 24 (#472):
+      `docs/DESKTOP.md` §7 and §9 now describe the existing coverage.
