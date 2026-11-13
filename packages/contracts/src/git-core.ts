@@ -397,7 +397,7 @@ export interface GitCoreOptions {
 export interface GitHelperOptions {
   /** Absolute path of the helper entry file (default: the one shipped next to git-core). */
   entry?: string;
-  /** Number of helper processes (default 1, at most 4). */
+  /** Number of helper processes (default 2, or 1 with `concurrency: 1`; at most 4). */
   processes?: number;
   /** Node executable that runs the helper (default `process.execPath`). */
   execPath?: string;
