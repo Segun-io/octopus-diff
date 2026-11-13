@@ -292,7 +292,7 @@ describe('paged file lists through the daemon (#42)', { timeout: 120_000 }, () =
     );
     await mkdir(path.join(dir, deep), { recursive: true });
     for (let i = 0; i < 1300; i++) await writeFile(path.join(dir, deep, `f${i}.txt`), `${i}\n`);
-    const { daemon, api, id } = await start(fx, dir);
+    const { daemon, id } = await start(fx, dir);
     const sizes: number[] = [];
     const seen: string[] = [];
     let cursor = '';
