@@ -8,7 +8,7 @@
 
 export { compareBstr, decodeRepoPath, selectorToBstr } from './bstr.js';
 export { computeFilterOverrides, EMPTY_TREE } from './context.js';
-export { createGitCore } from './core.js';
+export { createGitCore, treeCacheOf } from './core.js';
 export { PatchCollector, STATUS_ARGS } from './diff.js';
 export { SCAN_MAX_DIRS } from './discovery.js';
 export { hashId, PATCH_HASH_LENGTH, STATE_HASH_LENGTH } from './hash.js';

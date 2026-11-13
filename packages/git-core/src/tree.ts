@@ -55,12 +55,69 @@ interface CachedTree {
   index?: Map<string, number>;
 }
 
-/** The byte-bounded LRU of tree listings and the in-flight `ls-tree` runs. */
+/**
+ * The child directories of a tree with the files below each (`countTreeChildren`), compact: the
+ * names (bstr) sorted and joined by NUL into one string, their offsets and their counts in typed
+ * arrays. No object per child (Greptile, PR #99 round 3: a wide root kept one per directory).
+ */
+export interface CompactChildren {
+  joined: string;
+  /** `offsets[i]` .. `offsets[i + 1] - 1`: the i-th name in `joined`; `n + 1` entries. */
+  offsets: Uint32Array;
+  counts: Uint32Array;
+}
+
+export function compactChildren(counts: ReadonlyMap<string, number>): CompactChildren {
+  const names = [...counts.keys()].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  const offsets = new Uint32Array(names.length + 1);
+  const values = new Uint32Array(names.length);
+  let at = 0;
+  names.forEach((name, i) => {
+    offsets[i] = at;
+    values[i] = counts.get(name) ?? 0;
+    at += name.length + 1;
+  });
+  offsets[names.length] = at;
+  return { joined: names.map((n) => `${n}${NUL}`).join(''), offsets, counts: values };
+}
+
+function childName(c: CompactChildren, i: number): string {
+  return c.joined.slice(c.offsets[i] as number, (c.offsets[i + 1] as number) - 1);
+}
+
+/** The count of `name` (bstr), by binary search; undefined when it is no child directory. */
+export function childCount(c: CompactChildren, name: string): number | undefined {
+  let lo = 0;
+  let hi = c.counts.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    const at = childName(c, mid);
+    if (at === name) return c.counts[mid];
+    if (at < name) lo = mid + 1;
+    else hi = mid;
+  }
+  return undefined;
+}
+
+function* eachChild(c: CompactChildren): Generator<[string, number]> {
+  for (let i = 0; i < c.counts.length; i++) yield [childName(c, i), c.counts[i] as number];
+}
+
+function compactBytes(c: CompactChildren): number {
+  return 2 * c.joined.length + c.offsets.byteLength + c.counts.byteLength + ENTRY_OVERHEAD_BYTES;
+}
+
+type Slot = { bytes: number; tree: CachedTree } | { bytes: number; children: CompactChildren };
+
+/**
+ * One byte-bounded LRU for what git-core keeps of tree objects: their listings (`t` keys) and their
+ * child-directory counts (`c` keys, compact), so neither can grow outside the budget; plus the
+ * in-flight `ls-tree` runs, the file counts (numbers), the failure memo and the no-sizes set.
+ */
 export class TreeCache {
-  readonly #map = new Map<string, CachedTree>();
+  readonly #lru = new Map<string, Slot>();
   readonly #runs = new Map<string, Flight<CachedTree>>();
   readonly #counts = new Map<string, number>();
-  readonly #children = new Map<string, GitTreeChildCount[]>();
   /** Failed counts by key: until when they are not retried (`Infinity`: an output above the cap). */
   readonly #failures = new Map<string, { until: number; error: GitCoreError }>();
   /** Common dirs whose `ls-tree` must not read blob sizes (a partial clone, P2-1). */
@@ -69,39 +126,50 @@ export class TreeCache {
 
   constructor(readonly maxBytes = TREE_CACHE_MAX_BYTES) {}
 
+  /** Estimated bytes held by listings and child counts together. */
   get bytes(): number {
     return this.#bytes;
   }
 
+  /** Listings and child counts held. */
   get size(): number {
-    return this.#map.size;
+    return this.#lru.size;
   }
 
-  get(key: string): CachedTree | undefined {
-    const hit = this.#map.get(key);
+  #touch(key: string): Slot | undefined {
+    const hit = this.#lru.get(key);
     if (hit) {
-      this.#map.delete(key);
-      this.#map.set(key, hit);
+      this.#lru.delete(key);
+      this.#lru.set(key, hit);
     }
     return hit;
   }
 
-  set(key: string, value: CachedTree): void {
-    const old = this.#map.get(key);
+  #put(key: string, slot: Slot): void {
+    const old = this.#lru.get(key);
     if (old) {
       this.#bytes -= old.bytes;
-      this.#map.delete(key);
+      this.#lru.delete(key);
     }
-    // A single listing above the bound is served but not kept.
-    if (value.bytes > this.maxBytes) return;
-    this.#map.set(key, value);
-    this.#bytes += value.bytes;
+    // One item above the bound is served but not kept (and evicts nothing for it).
+    if (slot.bytes > this.maxBytes) return;
+    this.#lru.set(key, slot);
+    this.#bytes += slot.bytes;
     while (this.#bytes > this.maxBytes) {
-      const oldest = this.#map.entries().next();
+      const oldest = this.#lru.entries().next();
       if (oldest.done) break;
-      this.#map.delete(oldest.value[0]);
+      this.#lru.delete(oldest.value[0]);
       this.#bytes -= oldest.value[1].bytes;
     }
+  }
+
+  get(key: string): CachedTree | undefined {
+    const hit = this.#touch(`t${NUL}${key}`);
+    return hit && 'tree' in hit ? hit.tree : undefined;
+  }
+
+  set(key: string, value: CachedTree): void {
+    this.#put(`t${NUL}${key}`, { bytes: value.bytes, tree: value });
   }
 
   run(key: string, compute: () => Promise<CachedTree>): Promise<CachedTree> {
@@ -142,18 +210,13 @@ export class TreeCache {
     }
   }
 
-  children(key: string): GitTreeChildCount[] | undefined {
-    return this.#children.get(key);
+  children(key: string): CompactChildren | undefined {
+    const hit = this.#touch(`c${NUL}${key}`);
+    return hit && 'children' in hit ? hit.children : undefined;
   }
 
-  setChildren(key: string, value: GitTreeChildCount[]): void {
-    this.#children.delete(key);
-    this.#children.set(key, value);
-    while (this.#children.size > 2000) {
-      const oldest = this.#children.keys().next();
-      if (oldest.done) break;
-      this.#children.delete(oldest.value);
-    }
+  setChildren(key: string, value: CompactChildren): void {
+    this.#put(`c${NUL}${key}`, { bytes: compactBytes(value), children: value });
   }
 
   /** A remembered failure of `key` that has not expired. */
@@ -181,9 +244,8 @@ export class TreeCache {
   }
 
   clear(): void {
-    this.#map.clear();
+    this.#lru.clear();
     this.#counts.clear();
-    this.#children.clear();
     this.#failures.clear();
     this.noSizes.clear();
     this.#bytes = 0;
@@ -462,46 +524,69 @@ function validTree(options: { tree: string }): void {
   }
 }
 
-/** Files below each child directory of `tree`, from one `ls-tree -r` (memoized, P3-3). */
+/**
+ * Files below each child directory of `tree`, from one `ls-tree -r` (memoized compactly, P3-3 and
+ * Greptile round 3); with `names`, only those children.
+ */
 export async function countTreeChildren(
   deps: TreeDeps,
   worktree: WorktreeLocator,
-  options: { tree: string },
+  options: { tree: string; names?: ReadonlyArray<{ name: string; rawName?: string }> },
 ): Promise<GitTreeChildCount[]> {
   validTree(options);
+  const wanted = options.names?.map((n) => {
+    if (
+      typeof n?.name !== 'string' ||
+      (n.rawName !== undefined && !RawPathSchema.safeParse(n.rawName).success)
+    ) {
+      throw new GitCoreError('invalid_argument', 'names must be { name, rawName? }');
+    }
+    return n.rawName !== undefined
+      ? bstrFromBuffer(Buffer.from(n.rawName, 'base64'))
+      : bstrFromUtf8(n.name);
+  });
   await deps.ctx.ensureSupported();
   const repo = await deps.ctx.repo(worktree.path);
   const key = `${repo.commonDir}${NUL}${options.tree}`;
-  const known = deps.trees.children(key);
-  if (known) return known;
-  const out = bstrFromBuffer(await lsTreeRecursive(deps, repo, options.tree));
-  const counts = new Map<string, number>();
-  let total = 0;
-  let at = 0;
-  while (at < out.length) {
-    const end = out.indexOf(NUL, at);
-    const record = end === -1 ? out.slice(at) : out.slice(at, end);
-    at = end === -1 ? out.length : end + 1;
-    const tab = record.indexOf('\t');
-    if (tab === -1) continue;
-    total++;
-    const rel = record.slice(tab + 1);
-    const slash = rel.indexOf('/');
-    if (slash === -1) continue; // a file of the tree itself, not of a child directory
-    const name = rel.slice(0, slash);
-    counts.set(name, (counts.get(name) ?? 0) + 1);
+  let compact = deps.trees.children(key);
+  if (!compact) {
+    const out = bstrFromBuffer(await lsTreeRecursive(deps, repo, options.tree));
+    const counts = new Map<string, number>();
+    let total = 0;
+    let at = 0;
+    while (at < out.length) {
+      const end = out.indexOf(NUL, at);
+      const tab = out.indexOf('\t', at);
+      const stop = end === -1 ? out.length : end;
+      at = stop + 1;
+      if (tab === -1 || tab > stop) continue;
+      total++;
+      const slash = out.indexOf('/', tab + 1);
+      if (slash === -1 || slash > stop) continue; // a file of the tree itself
+      const name = out.slice(tab + 1, slash);
+      counts.set(name, (counts.get(name) ?? 0) + 1);
+    }
+    deps.trees.setCount(key, total);
+    compact = compactChildren(counts);
+    deps.trees.setChildren(key, compact);
   }
-  deps.trees.setCount(key, total);
   const result: GitTreeChildCount[] = [];
-  for (const [name, count] of counts) {
+  const add = (name: string, count: number) => {
     const decoded = decodeRepoPath(name);
     result.push({
       name: decoded.path,
       ...(decoded.rawPath !== undefined ? { rawName: decoded.rawPath } : {}),
       count,
     });
+  };
+  if (wanted) {
+    for (const name of new Set(wanted)) {
+      const count = childCount(compact, name);
+      if (count !== undefined) add(name, count);
+    }
+  } else {
+    for (const [name, count] of eachChild(compact)) add(name, count);
   }
-  deps.trees.setChildren(key, result);
   return result;
 }
 

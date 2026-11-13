@@ -131,6 +131,16 @@ async function getWatchTargets(ctx: GitContext, worktree: WorktreeLocator): Prom
   };
 }
 
+/** Each core's tree cache, for tests and memory checks (`treeCacheOf`). */
+const treeCaches = new WeakMap<GitCore, TreeCache>();
+
+/** The tree cache of a core made by `createGitCore` (its size in bytes, for tests). */
+export function treeCacheOf(
+  core: GitCore,
+): Pick<TreeCache, 'bytes' | 'size' | 'maxBytes'> | undefined {
+  return treeCaches.get(core);
+}
+
 /** Creates the git-core implementation of the `GitCore` contract. */
 export const createGitCore: CreateGitCore = (options: GitCoreOptions = {}): GitCore => {
   const settings = {
@@ -206,7 +216,7 @@ export const createGitCore: CreateGitCore = (options: GitCoreOptions = {}): GitC
     };
   };
 
-  return {
+  const gitCore: GitCore = {
     version: guard(() => ctx.version()),
     resolveProject: guard(async (input: string) => {
       await ctx.ensureSupported();
@@ -293,4 +303,6 @@ export const createGitCore: CreateGitCore = (options: GitCoreOptions = {}): GitC
       await runner.dispose();
     },
   };
+  treeCaches.set(gitCore, treeDeps.trees);
+  return gitCore;
 };
