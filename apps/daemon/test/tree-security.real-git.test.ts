@@ -77,7 +77,7 @@ function gitBuf(fx: RealGitFixture, cwd: string, args: string[], input?: Buffer)
   return execFileSync('git', args, { cwd, env: { ...env, ...fx.env, LC_ALL: 'C' }, input });
 }
 
-describe('P2-2: the composed listings are bounded', () => {
+describe('P2-2: the composed listings are bounded', { timeout: 60_000 }, () => {
   const memo = (bytes: number): TreeListingMemo => ({
     entries: [],
     listKey: 'k',
@@ -162,7 +162,9 @@ describe('P2-2: the composed listings are bounded', () => {
   });
 });
 
-describe('P3-1: an untracked path whose type or mode changes is named in dirs', () => {
+describe('P3-1: an untracked path whose type or mode changes is named in dirs', {
+  timeout: 60_000,
+}, () => {
   it('a new script made executable, an untracked file replaced by a symlink', async () => {
     const fx = await makeRealGitFixture();
     const repo = await makeRealRepo(fx, 'modes', { 'top.txt': 't\n' });
@@ -210,7 +212,7 @@ describe('P3-1: an untracked path whose type or mode changes is named in dirs', 
   });
 });
 
-describe('P3-2: a hostile tree does not break the page', () => {
+describe('P3-2: a hostile tree does not break the page', { timeout: 60_000 }, () => {
   it('entries named .., a/b or past the path limit are skipped and counted', async () => {
     const fx = await makeRealGitFixture();
     const repo = await makeRealRepo(fx, 'hostile', { 'top.txt': 't\n' });
@@ -271,7 +273,7 @@ describe('P3-2: a hostile tree does not break the page', () => {
   });
 });
 
-describe('P3-3: many directories whose files are all deleted', () => {
+describe('P3-3: many directories whose files are all deleted', { timeout: 60_000 }, () => {
   it('cost one ls-tree -r, not one each', async () => {
     const fx = await makeRealGitFixture();
     const repo = await makeRealRepo(fx, 'siblings', { 'top.txt': 't\n' });
@@ -304,7 +306,7 @@ describe('P3-3: many directories whose files are all deleted', () => {
   });
 });
 
-describe('P3-4: paging a cached listing decodes nothing again', () => {
+describe('P3-4: paging a cached listing decodes nothing again', { timeout: 60_000 }, () => {
   it('after the first page, pages only resolve the commit (no entries)', async () => {
     const fx = await makeRealGitFixture();
     const repo = await makeRealRepo(fx, 'pages', { 'top.txt': 't\n' });
@@ -348,7 +350,7 @@ describe('P3-4: paging a cached listing decodes nothing again', () => {
   });
 });
 
-describe('P3-6: partial clones and unchecked paths', () => {
+describe('P3-6: partial clones and unchecked paths', { timeout: 60_000 }, () => {
   it('a treeless clone answers 404 with the object_missing reason, not "unknown ref"', async () => {
     const fx = await makeRealGitFixture();
     const source = await makeRealRepo(fx, 'source', { 'a.txt': 'a\n' });

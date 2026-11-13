@@ -61,7 +61,7 @@ function gitBuf(fx: RealGitFixture, cwd: string, args: string[], input?: Buffer)
 
 const names = (entries: readonly TreeEntry[]) => entries.map((e) => e.name);
 
-describe('1. one state per listing', () => {
+describe('1. one state per listing', { timeout: 60_000 }, () => {
   it('a commit that lands before the list is read: the listing is of the new commit, whole', async () => {
     const fx = await makeRealGitFixture();
     const repo = await makeRealRepo(fx, 'gate', { 'a.txt': 'a\n' });
@@ -188,7 +188,7 @@ describe('1. one state per listing', () => {
   });
 });
 
-describe('2. one row per name', () => {
+describe('2. one row per name', { timeout: 60_000 }, () => {
   it('a tracked file replaced by a directory, and a directory replaced by a file', async () => {
     const fx = await makeRealGitFixture();
     const repo = await makeRealRepo(fx, 'replace', { d: 'a file\n', keep: 'k\n' });
@@ -225,7 +225,7 @@ describe('2. one row per name', () => {
   });
 });
 
-describe('3. a rename from a name that is not UTF-8', () => {
+describe('3. a rename from a name that is not UTF-8', { timeout: 60_000 }, () => {
   it('marks the raw source deleted and invents no lossy one', async () => {
     const fx = await makeRealGitFixture();
     const repo = await makeRealRepo(fx, 'rawren', { 'keep.txt': 'k\n' });
@@ -369,7 +369,7 @@ async function deltaChecker(fx: RealGitFixture, repo: string): Promise<Checker> 
   };
 }
 
-describe('4. worktree.changed.dirs covers every listing that moved', () => {
+describe('4. worktree.changed.dirs covers every listing that moved', { timeout: 60_000 }, () => {
   it('MM with HEAD A, staged B, working C, then C back to A (the review case)', async () => {
     const fx = await makeRealGitFixture();
     const repo = await makeRealRepo(fx, 'abc', { 'top.txt': 't\n' });

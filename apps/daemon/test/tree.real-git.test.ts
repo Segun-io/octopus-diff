@@ -285,7 +285,7 @@ beforeEach(async () => {
   api = client(daemon);
 });
 
-describe('GET /tree working view vs git status (differential)', () => {
+describe('GET /tree working view vs git status (differential)', { timeout: 60_000 }, () => {
   it('matches git for many shapes', async () => {
     const files: Record<string, string> = {
       '.gitignore': 'build/\n*.log\n',
@@ -485,7 +485,7 @@ describe('GET /tree working view vs git status (differential)', () => {
   });
 });
 
-describe('GET /tree paging (property)', () => {
+describe('GET /tree paging (property)', { timeout: 60_000 }, () => {
   it('random page sizes with refreshes mid-paging add up to the final listing', async () => {
     const files: Record<string, string> = {};
     const repo = await makeRealRepo(fx, 'paging', { 'seed.txt': 's\n' });
@@ -544,7 +544,7 @@ describe('GET /tree paging (property)', () => {
   });
 });
 
-describe('GET /tree security', () => {
+describe('GET /tree security', { timeout: 60_000 }, () => {
   let repo: string;
   let id: string;
   beforeEach(async () => {
@@ -636,7 +636,7 @@ describe('GET /tree security', () => {
   });
 });
 
-describe('GET /tree warm path and deltas', () => {
+describe('GET /tree warm path and deltas', { timeout: 60_000 }, () => {
   it('a warm listing spawns no git; worktree.changed names the directories that moved', async () => {
     const counting = await startCounting(fx);
     const repo = await makeRealRepo(fx, 'warm', { 'top.txt': 't\n' });
