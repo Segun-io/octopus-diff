@@ -36,9 +36,14 @@ they pull in.
 | `@shikijs/themes` | 4.6.0 | MIT | via `shiki` | https://github.com/shikijs/shiki |
 | `@shikijs/types` | 4.6.0 | MIT | via `shiki` | https://github.com/shikijs/shiki |
 | `@shikijs/vscode-textmate` | 10.1.0 | MIT | via `shiki` | https://github.com/shikijs/vscode-textmate |
+| `@tanstack/history` | 1.162.5 | MIT | via `@tanstack/react-router` | https://github.com/TanStack/router |
 | `@tanstack/query-core` | 5.107.1 | MIT | via `@tanstack/react-query` | https://github.com/TanStack/query |
 | `@tanstack/react-query` | 5.107.1 | MIT | apps/web | https://github.com/TanStack/query |
+| `@tanstack/react-router` | 1.170.46 | MIT | apps/web | https://github.com/TanStack/router |
+| `@tanstack/react-store` | 0.11.2 | MIT | via `@tanstack/react-router` | https://github.com/TanStack/store |
 | `@tanstack/react-virtual` | 3.14.26 | MIT | apps/web | https://github.com/TanStack/virtual |
+| `@tanstack/router-core` | 1.171.39 | MIT | via `@tanstack/react-router` | https://github.com/TanStack/router |
+| `@tanstack/store` | 0.11.2 | MIT | via `@tanstack/react-store` | https://github.com/TanStack/store |
 | `@tanstack/virtual-core` | 3.19.11 | MIT | via `@tanstack/react-virtual` | https://github.com/TanStack/virtual |
 | `@types/debug` | 4.1.13 | MIT | via `micromark` | https://github.com/DefinitelyTyped/DefinitelyTyped |
 | `@types/estree` | 1.0.10 | MIT | via `hast-util-to-jsx-runtime` | https://github.com/DefinitelyTyped/DefinitelyTyped |
@@ -56,6 +61,7 @@ they pull in.
 | `character-entities-legacy` | 3.0.0 | MIT | via `stringify-entities` | https://github.com/wooorm/character-entities-legacy |
 | `character-reference-invalid` | 2.0.1 | MIT | via `parse-entities` | https://github.com/wooorm/character-reference-invalid |
 | `comma-separated-tokens` | 2.0.3 | MIT | via `hast-util-to-html` | https://github.com/wooorm/comma-separated-tokens |
+| `cookie-es` | 3.1.1 | MIT | via `@tanstack/router-core` | https://github.com/unjs/cookie-es |
 | `debug` | 4.4.3 | MIT | via `micromark` | https://github.com/debug-js/debug |
 | `decode-named-character-reference` | 1.3.0 | MIT | via `mdast-util-from-markdown` | https://github.com/wooorm/decode-named-character-reference |
 | `dequal` | 2.0.3 | MIT | via `devlop` | https://github.com/lukeed/dequal |
@@ -81,6 +87,7 @@ they pull in.
 | `is-glob` | 4.0.3 | MIT | via `@parcel/watcher` | https://github.com/micromatch/is-glob |
 | `is-hexadecimal` | 2.0.1 | MIT | via `parse-entities` | https://github.com/wooorm/is-hexadecimal |
 | `is-plain-obj` | 4.1.0 | MIT | via `unified` | https://github.com/sindresorhus/is-plain-obj |
+| `isbot` | 5.2.3 | Unlicense | via `@tanstack/react-router` | https://github.com/omrilotan/isbot |
 | `longest-streak` | 3.1.0 | MIT | via `mdast-util-to-markdown` | https://github.com/wooorm/longest-streak |
 | `lru_map` | 0.4.1 | MIT | via `@pierre/diffs` | https://github.com/rsms/js-lru |
 | `markdown-table` | 3.1.0 | MIT | via `mdast-util-gfm-table` | https://github.com/wooorm/markdown-table |
@@ -148,6 +155,8 @@ they pull in.
 | `remark-rehype` | 11.1.2 | MIT | via `react-markdown` | https://github.com/remarkjs/remark-rehype |
 | `remark-stringify` | 11.0.0 | MIT | via `remark-gfm` | https://github.com/remarkjs/remark/tree/main/packages/remark-stringify |
 | `scheduler` | 0.28.0 | MIT | via `react-dom` | https://github.com/react/react |
+| `seroval` | 1.8.1 | MIT | via `@tanstack/router-core` | https://github.com/lxsmnsyc/seroval |
+| `seroval-plugins` | 1.8.0 | MIT | via `@tanstack/router-core` | https://github.com/lxsmnsyc/seroval |
 | `shiki` | 4.6.0 | MIT | via `@pierre/diffs` | https://github.com/shikijs/shiki |
 | `space-separated-tokens` | 2.0.2 | MIT | via `hast-util-to-html` | https://github.com/wooorm/space-separated-tokens |
 | `stringify-entities` | 4.0.4 | MIT | via `hast-util-to-html` | https://github.com/wooorm/stringify-entities |
@@ -161,6 +170,7 @@ they pull in.
 | `unist-util-stringify-position` | 4.0.0 | MIT | via `mdast-util-mdx-jsx` | https://github.com/syntax-tree/unist-util-stringify-position |
 | `unist-util-visit` | 5.2.0 | MIT | via `react-markdown` | https://github.com/syntax-tree/unist-util-visit |
 | `unist-util-visit-parents` | 6.1.0 | MIT | via `unist-util-visit` | https://github.com/syntax-tree/unist-util-visit-parents |
+| `use-sync-external-store` | 1.7.0 | MIT | via `@tanstack/react-store` | https://github.com/react/react |
 | `vfile` | 6.0.3 | MIT | via `react-markdown` | https://github.com/vfile/vfile |
 | `vfile-message` | 4.0.4 | MIT | via `hast-util-to-jsx-runtime` | https://github.com/vfile/vfile-message |
 | `zod` | 4.6.7 | MIT | apps/cli, apps/web, packages/contracts | https://github.com/colinhacks/zod |
