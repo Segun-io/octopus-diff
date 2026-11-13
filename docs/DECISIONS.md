@@ -4150,3 +4150,97 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      Q" (`q=Q&limit=20`); both are views of the same cached list with the same paging, so one route and one helper
      serve all three. `position` (the page's first file in the whole list) lets the web load the list through a
      file it jumped to. `after` of a file no longer in the list starts where it would sort (as an own file).
+349. **Measured first; two quadratic loops in git-core fixed.** The new `large-paged` layout (#357) on main: the first
+     `GET /files` of the 36k-changed worktree took **12.2 s cold (13.3 s of CPU)**, answered 9.9 MB raw / 1.0 MB gzip;
+     the inbox 10.4 MB; the browser had not painted a file row of it after 5 minutes. A CPU profile put 21 s in
+     `pickEntry` (`diff.ts` `trackedRows` scanned every raw entry for each path: O(n²)); it now groups the run's raw
+     entries by path once (same order, same pick). That took the cold list to 2.1 s. A later profile (edits) found
+     `PatchSplitter.findChunkStart` re-searching the rest of each stdout chunk for every marker on every patch
+     (1.8 s of 23 s); it now keeps each marker's next index for the pass (a found index stays valid until passed, an
+     absent marker stays absent), 111 ms. Both are git-core changes outside the runner (the session on #45 owns the
+     runner). Tests: the existing parser and list suites; a new splitter test (60 copies of the sample patch with every
+     marker kind, written whole, by 5 and by 4096 characters); the mutation "never refresh a passed index" fails it and
+     three older tests. No test for `pickEntry`'s speed (a timing test would be flaky); the bench is the guard.
+350. **`/files` pages are slices of the cached list.** `CoreService.listFiles` gets its list exactly as before
+     (`#listedAt`: the files cache per state, single-flight, cancellation, retries when overtaken), then `#pageable`:
+     the listed array sorted once into the paging order (memoized per array in a `WeakMap`), its list key (memoized per
+     state and scope), and `reviewed` attached over the whole list (as before, so marks the list keeps alive are still
+     touched). `pageFileList` cuts the page. A page request therefore never runs git unless the state's list was not
+     computed yet, and then once for every page of that state (test with a counting git-core: 19 pages, a
+     `next unreviewed`, a search and an inbox row cost no list). **Old clients** (no `limit`) get the first
+     `FILES_UNPAGED_MAX` = 2000 files with `truncated: true`; 2000 is the untracked cap's number and about 550 KiB of
+     typical rows, and the byte bound (900 KB of rows) holds for long paths (real-git test: 1300 files with
+     800-character paths, every page and the unpaged answer under 1 MB). `counts` (`FileListCounts`) are of the whole
+     list, before the filters. Cost on the 36k list: 4-10 ms per page warm (500 rows, 137 KiB, 14.8 KiB gzip),
+     73 pages in 270-300 ms.
+351. **Inbox rows carry a first page.** `filesLimit` per row (default `INBOX_FILES_PER_WORKTREE` = 200, smaller than
+     the web's file page because the inbox holds every dirty worktree), and per response `INBOX_FILES_MAX` = 4000 files
+     and 900 KB of rows, spent in the rows' order: later rows get fewer or none, and every row says `filesTotal`,
+     `fileCounts` and, when cut, `filesNextCursor` (a `GET /files` cursor of the same scope; with `onlyUnreviewed` of
+     the `unreviewed=true` view). Rows are built first and cut once sorted, so the budget does not depend on which
+     worktree answered first. A fair split between rows was weighed and not done: the web reads inbox rows for `n`
+     and the every-worktree bulk plan, both of which now ask the daemon or use the counts when a row is cut, so the
+     simple rule costs nothing. Streaming per worktree (allowed by the issue) was not needed: the web already fetches
+     rows in project batches and by `worktreeIds`. The 36k layout's inbox: 800 rows of 37 901 files, 215 KiB (was
+     10.4 MB).
+352. **The web keeps one `FilesResponse` per list whose `files` is the loaded prefix** (`apps/web/src/api/files.ts`),
+     not `useInfiniteQuery`: every consumer of the files query (review-mark patches, event deltas and the diff verdict,
+     `listBehind`, the bulk state hashes, ScopeSelect, the PR Files tab) reads `data.files` and `data.stateHash` and
+     keeps working, while a page list would have to be flattened everywhere. The query function loads what was wanted
+     (`wantFiles`: every load past the first page goes through `ensureFiles`, which records it), at least
+     `FILES_PAGE_DEFAULT` = 500, in requests of up to 2000; a page answering `restarted` starts the load over (3 times,
+     then the restarted page's state), so the prefix is always one state's. A refresh after an edit therefore asks for
+     the loaded length in one request: the selection and scroll position stay (PLAN §4.2), and per-edit traffic grows
+     with what the user loaded (500 rows: 15.7 KiB gzip; 2000: about 60 KiB). `ensureFiles` appends pages, single
+     flight per list; a refresh that replaced the data meanwhile wins and the load goes on from it. Event deltas keep
+     their path: the event's `paths` list is truncated above 200 files, so a big list is refetched; `currentFile` says
+     "unknown" (not "gone") for a file a partly loaded list or inbox row does not hold, so a diff is not refetched for
+     that alone. `review.changed` patches also adjust `counts`. Counts on screen (ScopeSelect, the "from main" chip)
+     come from `counts`, the sidebar's from the summary as before. An older daemon (no `total`) answers the whole list
+     and nothing pages.
+353. **Loading more in the list.** A partly loaded list gets a footer row (`file-list-more`: "500 of 36,150 files
+     loaded", a Load more button) and the next page loads when the viewport comes within two screens of it, only once
+     the viewport was measured (the first render's 800 px is a guess and loaded a second page of short lists, caught by
+     the web tests). `j` at the last loaded row loads the next page, then steps. What the list would still show is
+     decided from the counts and the view (`openMore`): with the "from main" group collapsed and the own files all
+     loaded, or the eye off and every unreviewed file loaded, nothing more is loaded (a merge that brought 36k files
+     must not load them all to show a collapsed row). The "from main" row is placed only once the own files are all
+     loaded; its count and the chip's come from the counts. The tree layout sorts the loaded prefix as before and has a
+     Load more bar; a tree of a partly loaded list fills in as pages come (known gap, #355).
+354. **`n` across pages.** `planNextUnreviewed` (`lib/model.ts`, pure) walks as `nextUnreviewed` did (after the
+     selection, the following worktrees, around, back to the selection) over the loaded files; where a worktree's list
+     is not all loaded and its counts say unreviewed files `n` may go to are beyond the loaded ones, it stops and the
+     command asks the daemon for one file: `after=<last loaded>&unreviewed=true&origin=own|base` (`own` while the
+     "from main" group is collapsed, `base` with the chip, none when expanded; review-off worktrees are skipped as
+     before). The answer's `position` loads the list through it (`ensureFiles`, or `wantFiles` before switching to
+     another worktree) so the selection is a row of the list; no answer, and the walk goes on. When the loaded files
+     decide, `n` stays synchronous as before; presses during an ask run after it. Tests (mock): past the first page
+     in the open worktree; into the next worktree past its inbox row's 5 files, with exactly one list request
+     through the file and no ask for the open worktree whose counts say nothing is left; e2e: 520 reviewed of 1200.
+355. **Search and the palette's file jump did not exist; the palette got a file search.** The issue asks that "search"
+     and "the palette's file jump" keep working across pages, but the web had neither (the `/` filter is the sidebar's
+     worktree filter). The simplest reading that serves big lists: the palette, with a worktree open and text typed,
+     asks `GET /files?q=<text>&limit=20` and lists the matches ("File" items) after its commands; the daemon ranks with
+     the palette's own matcher (`fuzzyMatch`, moved to the contracts). Picking one loads the list through it: its index
+     comes from one request (`after=<the file>&limit=1`: the page after it starts at its index + 1;
+     `locateFile`), then `ensureFiles`. The same lookup backs the selection repair: a selection a partly loaded list
+     does not hold (a refresh pushed it past the loaded rows, a jump selected it first) is loaded through once per
+     state before the repair moves it (test: a new file sorting before the last loaded row). `order=tree` for the tree
+     layout was not added (the tree shows the loaded prefix in tree order).
+356. **Bulk review on paged lists.** The daemon already marks from its whole list (`ReviewSource.changedFiles` is the
+     daemon's list, not the client's), so nothing changed there; patchHash and the stale checks are as they were.
+     The web plan (`planBulk`, new input `partial`) sends a worktree whose list is not all loaded **without `paths`**
+     (the daemon marks all its own files; base files are skipped there too) and counts what it changes from
+     `FileListCounts`, except where the view hides files the request would change: with the "From main" chip on
+     nothing (own files are hidden), with the eye off and "mark unreviewed" nothing (the hidden reviewed files would
+     be unmarked). The every-worktree plan does the same for inbox rows that are cut. Complete lists keep the old plan
+     (`paths` of the visible files). Tests: mock (Shift+R on a partly loaded list sends no `paths`; every file
+     reviewed after), real daemon (bulk of a 2100-file list marks 2100), e2e (1200 files, 500 loaded).
+357. **Bench and fixture role.** `tools/fixtures` `large.ts` gains `manyChanged` and the `many-changed` worktree (a
+     format run rewriting the first N tracked files, plus new files), and the `large-paged` layout (40k files, 36k
+     rewritten); `e2e/bench/paged-files.ts` (`bench:paged`) measures it (bench README "Paged file lists").
+     **Known gap left as is:** an edit in that worktree reaches SSE after 3.6-4.1 s: git-core does not keep lists with
+     more than `listLimits.maxLateSignatures` (20k) signatures for incremental updates (#40's trade-off: they would be
+     checked after every full summary), so every edit re-lists the 36k files (about 2 s per scope) and re-signs them
+     (`lstat` of every changed file in the summary). Raising that limit or signing lazily is #40's design to revisit,
+     not paging's.

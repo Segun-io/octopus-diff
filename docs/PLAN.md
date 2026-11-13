@@ -276,8 +276,10 @@ POST   /api/projects        { path }           → add repo (path may be a linke
 DELETE /api/projects/:id
 GET    /api/scan-roots   POST /api/scan-roots {path, depth}   DELETE /api/scan-roots/:id
 GET    /api/inbox?scope=...&onlyUnreviewed=    → [{project, worktree, summary, files[]}]  (dirty only;
-                                                &projectIds= / &worktreeIds= narrow it, DECISIONS #257)
-GET    /api/worktrees/:id/files?scope=...      → ChangedFile[]
+                                                &projectIds= / &worktreeIds= narrow it, DECISIONS #257;
+                                                each row: its first page + counts, &filesLimit=, #348)
+GET    /api/worktrees/:id/files?scope=...      → ChangedFile[] (paged: &limit=&cursor=, filters
+                                                &unreviewed= &origin= &after= &q=; DECISIONS #348-#356)
 GET    /api/worktrees/:id/diff?scope=...&path= → { patch: string, truncated, binary, ... } raw unified diff
 GET    /api/worktrees/:id/commits?limit=       → recent commits (for the commit scope picker)
 PUT    /api/review      { projectId, scope, path, patchHash, reviewed }   (app state only)
@@ -358,6 +360,13 @@ All git access goes through **one runner** in `packages/git-core`:
   counted (`counts.untracked`, `changedFiles`), never read, listed or reviewable, and described by
   `WorktreeSummary.untrackedOmitted` / `FilesResponse.untrackedOmitted` with copyable `.gitignore` lines the web
   shows (we never write to a repository). git's untracked cache is used only if the repository already has it.
+- Paged file lists (DECISIONS #348-#356): every list is served in one order (own and mixed files, then the default
+  branch's, each by path) as slices of the list the daemon caches per state, never a git run per page. `GET /files`
+  takes `limit` (at most 2000) and an opaque cursor bound to the list's state (another state answers with its first
+  page and `restarted`); without `limit` it answers the first 2000 with `truncated`. No page carries more than
+  900 KB of rows. Inbox rows carry their first page (200 by default; 4000 files and 900 KB per response) with the
+  whole list's counts and a cursor. The web loads 500 at a time and more on demand; `n`, the palette's file search
+  and bulk review ask the daemon about what is not loaded (`after` + `unreviewed`, `q`, requests without `paths`).
 - Must degrade gracefully on inotify limits (WSL, big trees): log a clear warning and fall back to polling.
 - A subscription that reports an error is dropped (never unsubscribed) and re-made with a backoff; polling covers
   the gap (DECISIONS #131).

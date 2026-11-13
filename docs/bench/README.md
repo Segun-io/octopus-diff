@@ -95,6 +95,19 @@ builds on a fast machine and the number cannot tell the interactive lane from a 
 back to back: 26-28 ms with the lane, 214-221 ms without, 2026-11-12). The proof of the lane is the gated-runner test
 `packages/git-core/test/lanes.test.ts`; this number is the end-to-end check.
 
+## Paged file lists (issue #42, `bench:paged`)
+
+`pnpm --filter @octopus-diff/e2e bench:paged` (`e2e/bench/paged-files.ts`, about 2 minutes) generates the
+`large-paged` layout (40k tracked files; a linked `many-changed` worktree where a format run rewrote 36k of them) and
+runs the built daemon in a child process. It measures that worktree's `GET /files` (an old client without `limit`, and
+every page with `limit=500` following `nextCursor`: the pages must add up to the list, no duplicates), `GET /api/inbox`,
+the daemon's CPU for the first and a repeated list, and in Chromium: the app opened on the worktree (navigation to its
+first file row), opening it from another worktree (click to first row), and the browser's `/api/*` traffic for one
+edit in it (from the edit's `worktree.changed` until no request is in flight for 2 s). Report only; written to
+`results-paged.{json,md}`. `--profile <dir>` writes a CPU profile of the daemon, `--no-ui` skips the browser,
+`--files` / `--changed` resize the layout. The `large-paged` layout also runs under the main bench
+(`bench --layout large-paged`), which adds the summary-by-role table for the new worktree.
+
 ## How the large layout is built
 
 `tools/fixtures/src/large.ts`: `git fast-import` for the history (100k files in seconds), two linked worktrees,
