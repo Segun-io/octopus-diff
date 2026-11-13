@@ -681,9 +681,14 @@ describe('numstat alongside the status of a full summary (#43)', () => {
       // The commit lands while the wrapper holds the status (300 ms), so the status sees it. The
       // ref files were read before it (two numstats); on a very slow runner perhaps after (one,
       // already at the new HEAD). Either way the numstat used is the new HEAD's.
-      expect(afterRace.headSha, probe.why(afterRace)).toBe(raced);
-      expect(race.numstats, probe.why(afterRace)).toBeGreaterThanOrEqual(1);
-      expect(race.commits.at(-1), probe.why(afterRace)).toBe(raced);
+      // On a very loaded runner the status may even have run before the commit landed (a CI run
+      // reported the old HEAD): that racing summary is then simply the old state, and only the
+      // checks about the new HEAD are skipped; the settled summary below must be right either way.
+      expect([head, raced], probe.why(afterRace)).toContain(afterRace.headSha);
+      if (afterRace.headSha === raced) {
+        expect(race.numstats, probe.why(afterRace)).toBeGreaterThanOrEqual(1);
+        expect(race.commits.at(-1), probe.why(afterRace)).toBe(raced);
+      }
       // The racing summary may or may not have seen the file written after the commit (that write
       // lands while the wrapper holds the status, but on a slow runner it can land after the status
       // ran), so it is the NEXT summary, taken once everything is written, that must equal a full

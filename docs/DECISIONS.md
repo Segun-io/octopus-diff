@@ -5874,3 +5874,8 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      record is harmless (`serve` verifies a record before trusting it; the next launch replaces it), so the spec records
      the leftover with the daemon log's tail as an annotation and keeps the no-orphan assertion. To be investigated with
      the first real Windows log (a gap for #22/CI follow-up, not a regression of this PR).
+526. **`untracked-heavy.test.ts` accepts an old HEAD from the racing summary.** The Node 24 CI run reported the HEAD of
+     the commit before "during the status": on a loaded runner the status can run before that commit lands, so the
+     racing summary is the old state (the same family as the late-write case in #102). The HEAD is now asserted to be
+     one of the two, the numstat/commit checks apply only when it saw the new one, and the settled summary after it
+     (compared with a full core) still has to be exact. Test-only change in git-core.
