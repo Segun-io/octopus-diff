@@ -182,7 +182,9 @@ class HelperProcess {
       options.logger.warn('git helper failed to start', { error: String(error) });
       this.die();
     });
-    this.child.once('exit', (code, signal) => {
+    // 'close', not 'exit': every frame the helper wrote has been read by then (a SPAWNED pid
+    // still in the pipe at 'exit' would leave that process group unkilled after a crash).
+    this.child.once('close', (code, signal) => {
       if (!this.closing) {
         options.logger.warn('git helper exited', {
           code,
