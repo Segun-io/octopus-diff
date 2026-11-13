@@ -22,8 +22,8 @@ Run in this worktree (Linux/WSL2, Node 26), after `pnpm install` + `pnpm build`:
 - `pnpm typecheck`: pass, every package.
 - `pnpm build`: pass.
 - `pnpm test`: pass. contracts 138, forge 101 (+5 skipped), fixtures 58, web 512, git-core 556 (+1 skipped),
-  daemon 610 (+4 skipped), e2e package 8, **cli 172** (was 133 before: +39 new: args, unit, 12 process tests), scripts 34.
-  The `serve-ready.test.ts` suite was run 4 times in a row: green each time (about 7 s).
+  daemon 610 (+4 skipped), e2e package 8, **cli 172** (12 of them the new process tests), scripts 34.
+  The CLI suite was run four times in a row after the last test fix: green each time.
 - `pnpm test:e2e --workers=1`: 110 passed (3.1 min), read-only proof 0 violations.
 - Tarball: built with the old `pack.mjs` (from `HEAD` before the split) and the new one; same 1070-file listing and
   `diff -r` of the extracted trees is empty (byte-identical). The CI `package` job's steps pass on it: `npm install` of
