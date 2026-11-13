@@ -282,6 +282,11 @@ describe.skipIf(!GIT_CORE_IMPLEMENTED)('remote layout: git spawns (#74, real git
       return true;
     }, 10_000);
     const startup = configReads(await quietSpawns(c));
-    expect(startup.scan).toBe(1);
+    // One read for the three worktrees when each summary asked before the first read's process
+    // spawned (before #74: one per worktree, 3). A summary that reaches the scan later reads for
+    // itself (its answer must be at least as new as its own ask), and how late depends on the
+    // runner's load, so two is allowed; three would mean no sharing at all.
+    expect(startup.scan).toBeGreaterThanOrEqual(1);
+    expect(startup.scan).toBeLessThanOrEqual(2);
   }, 60_000);
 });
