@@ -840,7 +840,15 @@ describe.skipIf(!helperOn)('runner through the helper', { timeout: 60_000 }, () 
     const runB = runner
       .run(job('wb'), { cwd: fx.root, queueKey: 'b', signal: b.signal })
       .catch((e: unknown) => e);
-    await until(() => starts().length === 2);
+    await until(() => starts().length === 2, 20_000);
+    // Stopped before it wrote a pid, a helper leaves that git unknown, and unkillable (DECISIONS
+    // #385, #388): this test is about the slots, so it stops them once both pids are known.
+    const known = starts().map((s) => s.pid);
+    await until(
+      () => known.every((pid) => runner.helperChildPids().includes(pid)),
+      20_000,
+      'both pids announced',
+    );
     const helpers = runner.helperPids();
     releaseStopped(helpers);
     onTestFinished(() => {
@@ -894,6 +902,8 @@ describe.skipIf(!helperOn)('runner through the helper', { timeout: 60_000 }, () 
       .run(job('wt'), { cwd: fx.root, signal: controller.signal })
       .catch((e: unknown) => e);
     await until(() => starts().length === 1, 20_000);
+    const first = starts()[0]?.pid as number;
+    await until(() => runner.helperChildPids().includes(first), 20_000, 'the pid announced');
     const [helper] = runner.helperPids();
     releaseStopped([helper as number]);
     process.kill(helper as number, 'SIGSTOP');

@@ -4472,3 +4472,37 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      process bindings, and any other mention of `child_process`. Negative tests feed it each bypass the reviewer
      listed, and a few more. Two names were changed so the rule stays simple: the frame key `HelperFrame.spawn` is
      now `startGit`, and the error text `'spawn failed'` is now `'git did not start'`.
+
+### Spawn helper under load (lead repro, PR #98, 2026-11-13)
+
+385. **A crashed helper's request is retried after the bounded group wait, whether or not the group has been reaped
+     yet.** #376 said so, and the code did not: when the SIGKILLed group was still visible after the wait, it reported
+     the request not retryable, and it failed with "the git helper process exited". Under load, init reaps the killed
+     group late (zombies, or processes still on their way out), so CI hit it. A SIGKILLed process runs no more code,
+     so the retry cannot run next to a live first try. The wait (`GROUP_GONE_WAIT_MS`) is now 10 s, a courtesy for
+     the reaper. The case that is not retried stays: a request announced on the pid channel without its pid.
+     Measured under load, that window is not microseconds as #375 implied, but as long as the scheduler keeps the
+     helper off the CPU between starting git and writing the pid. The outcome there is a clear error, by design.
+386. **The watchdog probes before it kills (#380 amended).** On a loaded machine a helper can report a SIGKILLed git's
+     exit later than `HELPER_EXIT_WAIT_MS`, and killing it then would throw away its other requests. Now, past the
+     wait, the client sends PING (a new request frame, 6; strict: no payload) and SIGKILLs the helper only if no PONG
+     (event 27, same id) arrives within `PROBE_WAIT_MS` (3 s). A stopped or wedged helper does not answer; a slow one
+     does. A timeout during an abort's wait probes at once too.
+387. **The helper tests wait on real, scoped conditions.** "Gone" means no process of the pids and groups the test
+     started is running: zombies, which only wait for init, count as gone. It is read with POSIX
+     `ps -A -o pid=,pgid=,stat=`, the same on macOS (no /proc), with 20 s eventually-style waits instead of 3-5 s. No
+     check looks at "every git process" (other tests and sessions run git). The mid-request crash test kills the
+     helper once the parent knows the git pid (`GitRunner.helperChildPids()`), because an earlier kill is the
+     no-retry case of #385. A test no longer asserts that a TERM-ignoring member is still alive at an instant that
+     depends on load; it asserts that the member goes with the post-grace SIGKILL. The internal test knobs
+     (`GitRunnerOptions.helperTest`: the crash hook, delayed exit reports, the wait times) are git-core-only, not in
+     the contracts. The helper reads its hooks only from the environment the parent gives it.
+388. **Residual gap, stated plainly: a git started in the window between `spawn()` returning and the pid record
+     cannot be killed by the parent** if the helper is SIGKILLed or SIGSTOPped exactly there (under load, that is the
+     time the helper stays descheduled). The request is safe (no retry, a clear error; a stopped helper is still
+     probed and SIGKILLed, so the slot comes back), but that git runs until it ends by itself. A real read-only git
+     there dies with SIGPIPE/EPIPE on its first write to the dead helper's pipes, and its stdin, if any, gets EOF;
+     only a process that never writes and never ends survives (none of git's read paths, with the runner's pins).
+     Closing it would take putting git in the helper's own process group (losing the per-request group kill that
+     the abort's grace period needs), or scanning the process table from the daemon. Neither was worth it. Tests that
+     stop or kill a helper do so once the parent knows the pids (`helperChildPids()`).
