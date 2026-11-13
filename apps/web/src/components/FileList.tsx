@@ -65,7 +65,52 @@ export interface FileListMore {
   ownComplete: boolean;
   /** A page is on its way. */
   loading: boolean;
+  /**
+   * The next page failed (PR #97 review): `retrying` while delayed retries remain, `stopped`
+   * once they are spent (only the Retry button tries again). Either way nothing loads on its own.
+   */
+  error?: 'retrying' | 'stopped' | null;
   onLoadMore: () => void;
+  /** Tries the failed page again (resets the delayed retries). */
+  onRetry?: () => void;
+}
+
+/** What the footer (or the tree's bar) says and offers: progress, Load more, or the failure. */
+export function MoreStatus({ more }: { more: FileListMore }) {
+  const counts = `${more.loaded.toLocaleString()} of ${more.total.toLocaleString()} files loaded`;
+  if (more.error) {
+    return (
+      <>
+        <span role="alert" aria-live="assertive" className="text-danger">
+          Could not load more files
+          {more.error === 'retrying' ? '; trying again…' : '.'}
+        </span>
+        <span className="sr-only">{counts}</span>
+        {more.error === 'stopped' && !more.loading && (
+          <button
+            type="button"
+            className="text-accent hover:underline"
+            onClick={more.onRetry ?? more.onLoadMore}
+          >
+            Retry
+          </button>
+        )}
+      </>
+    );
+  }
+  return (
+    <>
+      <span aria-live="polite">
+        {more.loading ? 'Loading more files… ' : ''}
+        {counts}
+      </span>
+      {!more.loading && (
+        <button type="button" className="text-accent hover:underline" onClick={more.onLoadMore}>
+          Load more
+        </button>
+      )}
+    </>
+  );
 }
 
 export interface FileListProps {
@@ -206,9 +251,11 @@ export function FileList({
   const nearEnd =
     viewport.measured && footerTop >= 0 && windowBottom + viewport.height * 2 >= footerTop;
   const loadingMore = more?.loading ?? false;
+  // A failed page is not loaded again on its own from here (its retries are delayed and bounded).
+  const failedMore = Boolean(more?.error);
   useEffect(() => {
-    if (nearEnd && !loadingMore) onLoadMore?.();
-  }, [nearEnd, loadingMore, onLoadMore]);
+    if (nearEnd && !loadingMore && !failedMore) onLoadMore?.();
+  }, [nearEnd, loadingMore, failedMore, onLoadMore]);
   const selectedVisible =
     selectedKey !== null && layout.groups.some((g) => g.rows.some((r) => r.key === selectedKey));
 
@@ -313,19 +360,7 @@ export function FileList({
             className="absolute right-0 left-0 flex items-center gap-2 px-3 text-xs text-muted"
             style={{ top: layout.footerTop, height: ROW_HEIGHT }}
           >
-            <span aria-live="polite">
-              {more.loading ? 'Loading more files… ' : ''}
-              {more.loaded.toLocaleString()} of {more.total.toLocaleString()} files loaded
-            </span>
-            {!more.loading && (
-              <button
-                type="button"
-                className="text-accent hover:underline"
-                onClick={more.onLoadMore}
-              >
-                Load more
-              </button>
-            )}
+            <MoreStatus more={more} />
           </div>
         )}
       </div>

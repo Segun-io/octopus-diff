@@ -34,6 +34,8 @@ export const filesPaging = {
   pageSize: FILES_PAGE_DEFAULT,
   restarts: 3,
   inboxFiles: INBOX_FILES_PER_WORKTREE,
+  /** A page that fails is retried after these delays, then only on request (review of PR #97). */
+  retryDelaysMs: [1000, 3000, 10_000] as readonly number[],
 };
 
 /** The inbox request's `filesLimit`: absent while it is the daemon's default. */

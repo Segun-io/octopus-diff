@@ -1,8 +1,9 @@
-import type {
-  BulkReviewTarget,
-  ChangedFile,
-  DiffResponse,
-  FileListCounts,
+import {
+  type BulkReviewTarget,
+  type ChangedFile,
+  type DiffResponse,
+  type FileListCounts,
+  scopeKey,
 } from '@octopus-diff/contracts';
 import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useMemo, useRef } from 'react';
@@ -110,6 +111,26 @@ export function useCommands(model: AppModel, resolvedTheme: 'light' | 'dark'): C
   const pendingPlan = useRef<BulkPlan | null>(null);
 
   return useMemo<Commands>(() => {
+    /**
+     * Navigations that wait for the daemon (a jump to a file not loaded yet, `j` at the end of the
+     * loaded rows, `n` asking): each takes a token (`beginNav`) and acts only while it is still
+     * the latest navigation and the view, scope and selection are what they were when it began
+     * (PR #97 review). Any other navigation (`j`/`k`, `J`/`K`, a click, a view picked, another
+     * jump) bumps the sequence; a change made anywhere else shows in the snapshot.
+     */
+    let navSeq = 0;
+    const navSnapshot = () => {
+      const s = store.getState();
+      return `${JSON.stringify(s.view)}\u0000${scopeKey(s.scope)}\u0000${s.selected ? fileRefKey(s.selected) : ''}`;
+    };
+    const supersede = () => {
+      navSeq++;
+    };
+    const beginNav = (): (() => boolean) => {
+      const seq = ++navSeq;
+      const at = navSnapshot();
+      return () => seq === navSeq && navSnapshot() === at;
+    };
     const select = (entry: NavEntry | null) => {
       if (entry) actions.select(store, toFileRef(entry.worktreeId, entry.file));
     };
@@ -168,6 +189,7 @@ export function useCommands(model: AppModel, resolvedTheme: 'light' | 'dark'): C
             complete: info?.complete ?? true,
             eligibleTotal: info?.counts ? unreviewedIn(info.counts, originOf(id)) : null,
             skip: m.disabledWorktrees.has(id),
+            boundary: info?.boundary ?? null,
           };
         });
       // The inbox rows are in the view's scope (commit scope: only the open list is walked).
@@ -175,15 +197,17 @@ export function useCommands(model: AppModel, resolvedTheme: 'light' | 'dark'): C
       const first = planNextUnreviewed(segments, m.selectedKey, eligible);
       if (first.kind === 'none') return false;
       if (first.kind === 'local') {
+        supersede();
         goTo(first.entry);
         return true;
       }
+      const current = beginNav();
       const ask = async (): Promise<boolean> => {
         let step: ReturnType<typeof planNextUnreviewed> = first;
         for (let asks = 0; asks <= segments.length; asks++) {
           if (step.kind === 'none') return false;
           if (step.kind === 'local') {
-            goTo(step.entry);
+            if (current()) goTo(step.entry);
             return true;
           }
           const seg = segments[step.segment] as NextSegment;
@@ -203,6 +227,8 @@ export function useCommands(model: AppModel, resolvedTheme: 'light' | 'dark'): C
                 }
               : {}),
           });
+          // The user moved on meanwhile: this `n` is over (and says nothing).
+          if (!current()) return true;
           const file = res.files[0];
           if (!file || res.position === null || res.position === undefined) {
             step = planNextUnreviewed(segments, m.selectedKey, eligible, step.resume);
@@ -221,7 +247,7 @@ export function useCommands(model: AppModel, resolvedTheme: 'light' | 'dark'): C
           } else {
             wantFiles(queryClient, seg.worktreeId, scope, res.position + 1);
           }
-          goTo(target);
+          if (current()) goTo(target);
           return true;
         }
         return false;
@@ -343,6 +369,7 @@ export function useCommands(model: AppModel, resolvedTheme: 'light' | 'dark'): C
           });
           actions.notice(store, 'Filters cleared to show that worktree.');
         }
+        supersede();
         actions.setView(store, view);
       },
       nextFile() {
@@ -350,27 +377,38 @@ export function useCommands(model: AppModel, resolvedTheme: 'light' | 'dark'): C
         if (!m.viewListed) return;
         const next = stepFile(m.entries, m.selectedKey, 1, m.visible);
         if (next || !m.openMore?.visibleMore || m.view.kind !== 'worktree') {
+          supersede();
           select(next);
           return;
         }
-        // The end of a partly loaded list (#42): the next page, then the step.
-        void loadMoreFiles(queryClient, api, m.view.worktreeId, m.scope).then(() => {
-          const now = latest.current.model;
-          select(stepFile(now.entries, now.selectedKey, 1, now.visible));
-        });
+        // The end of a partly loaded list (#42): the next page, then the step, unless the user
+        // moved on meanwhile; a page that failed steps nowhere.
+        const current = beginNav();
+        void loadMoreFiles(queryClient, api, m.view.worktreeId, m.scope)
+          .then(() => {
+            if (!current()) return;
+            const now = latest.current.model;
+            select(stepFile(now.entries, now.selectedKey, 1, now.visible));
+          })
+          .catch(() => {
+            if (current()) actions.notice(store, 'Could not load more files.');
+          });
       },
       prevFile() {
         const m = latest.current.model;
         if (!m.viewListed) return;
+        supersede();
         select(stepFile(m.entries, m.selectedKey, -1, m.visible));
       },
       nextWorktree() {
+        supersede();
         const next = stepWorktree(latest.current.model.sidebar.order, currentWorktreeId(), 1);
         if (next.changed && next.worktreeId) {
           actions.setView(store, { kind: 'worktree', worktreeId: next.worktreeId });
         }
       },
       prevWorktree() {
+        supersede();
         const next = stepWorktree(latest.current.model.sidebar.order, currentWorktreeId(), -1);
         if (next.changed && next.worktreeId) {
           actions.setView(store, { kind: 'worktree', worktreeId: next.worktreeId });
@@ -578,29 +616,38 @@ export function useCommands(model: AppModel, resolvedTheme: 'light' | 'dark'): C
         if (el) el.scrollTop += Math.round(el.clientHeight * fraction);
       },
       selectEntry(entry) {
+        supersede();
         select(entry);
       },
       openFile(worktreeId, file) {
         const m = latest.current.model;
         const ref = toFileRef(worktreeId, file);
         if (m.view.kind !== 'worktree' || m.view.worktreeId !== worktreeId) {
+          supersede();
           store.setState({ view: { kind: 'worktree', worktreeId }, selected: ref });
           return;
         }
         if (m.entries.some((e) => e.key === fileRefKey(ref))) {
+          supersede();
           actions.select(store, ref);
           return;
         }
-        // Not loaded yet (#42): where it is in the daemon's list, the list loaded through it.
+        // Not loaded yet (#42): where it is in the daemon's list, the list loaded through it,
+        // then selected, unless the user moved on meanwhile or the load failed.
         const scope = m.scope;
+        const current = beginNav();
         void locateFile(api, worktreeId, scope, file)
           .then((index) =>
             index === null
               ? undefined
               : ensureFiles(queryClient, api, worktreeId, scope, index + 1),
           )
-          .catch(() => undefined)
-          .finally(() => actions.select(store, ref));
+          .then(() => {
+            if (current()) actions.select(store, ref);
+          })
+          .catch(() => {
+            if (current()) actions.notice(store, 'Could not load the file list to open that file.');
+          });
       },
       currentPlan(reviewed, every) {
         return plan(reviewed, every);

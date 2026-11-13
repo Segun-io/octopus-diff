@@ -986,6 +986,11 @@ export interface NextSegment {
   eligibleTotal: number | null;
   /** `n` never goes there (review off). */
   skip: boolean;
+  /**
+   * The last loaded file in the daemon's paging order: what the daemon is asked after. Not the
+   * last of `entries`, which follow the display order (the tree layout's differs, PR #97 review).
+   */
+  boundary: ChangedFile | null;
 }
 
 /** A leg of the walk: a range of one segment's loaded files, and whether its unloaded rest follows. */
@@ -1000,7 +1005,10 @@ interface Leg {
 export type NextUnreviewedStep =
   /** Found in loaded files. */
   | { kind: 'local'; entry: NavEntry }
-  /** Ask the daemon for the segment's next unreviewed file after `after` (null: from its top); go on at `resume` when it has none. */
+  /**
+   * Ask the daemon for the segment's next unreviewed file after `after` (its paging boundary;
+   * null: from its top); go on at `resume` when it has none.
+   */
   | { kind: 'ask'; segment: number; after: ChangedFile | null; resume: number }
   | { kind: 'none' };
 
@@ -1056,8 +1064,7 @@ export function planNextUnreviewed(
     let loaded = 0;
     for (const e of seg.entries) if (!e.file.reviewed && eligible(e)) loaded++;
     if (seg.eligibleTotal !== null && seg.eligibleTotal <= loaded) continue;
-    const last = seg.entries[seg.entries.length - 1];
-    return { kind: 'ask', segment: leg.segment, after: last ? last.file : null, resume: l + 1 };
+    return { kind: 'ask', segment: leg.segment, after: seg.boundary, resume: l + 1 };
   }
   return { kind: 'none' };
 }

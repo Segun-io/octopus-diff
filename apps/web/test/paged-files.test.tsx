@@ -4,147 +4,27 @@
  * page renders, more load on demand; `n`, the palette's file search, bulk review, the diff pane
  * and the selection keep working on files that are not loaded yet.
  */
-import {
-  createApiClient,
-  fileListEntryKey,
-  orderFiles,
-  type ServerEvent,
-  TEST_IDS,
-} from '@octopus-diff/contracts';
-import type { QueryClient } from '@tanstack/react-query';
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
+import { fileListEntryKey, TEST_IDS } from '@octopus-diff/contracts';
+import { act, cleanup, fireEvent, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { MockBackend } from '../mock/backend.ts';
-import { createMockFetch } from '../mock/router.ts';
-import { App } from '../src/App.tsx';
 import { filesPaging } from '../src/api/files.ts';
-import type { EventSourceLike } from '../src/api/hooks.ts';
-import { createQueryClient, queryKeys } from '../src/api/queries.ts';
-import { FILE_LIST_MORE_TEST_ID } from '../src/components/FileList.tsx';
-import { scopeForPref } from '../src/state/prefs.ts';
-import { createUiStore, type UiState, type UiStore } from '../src/state/ui.tsx';
+import { queryKeys } from '../src/api/queries.ts';
+import {
+  FILES,
+  footer,
+  listOf,
+  loaded,
+  markFirst,
+  PAGE,
+  press,
+  SCOPE,
+  selectedPath,
+  setup,
+} from './paged-harness.tsx';
 
 vi.mock('../src/components/diff/DiffRenderer.tsx', () => ({
   DiffRenderer: ({ patch }: { patch: string }) => <pre data-testid="stub-diff">{patch}</pre>,
 }));
-
-class FakeEventSource implements EventSourceLike {
-  onopen: ((event: Event) => void) | null = null;
-  onerror: ((event: Event) => void) | null = null;
-  readyState = 1;
-  private listeners = new Map<string, ((event: MessageEvent) => void)[]>();
-  addEventListener(type: string, listener: (event: MessageEvent) => void) {
-    this.listeners.set(type, [...(this.listeners.get(type) ?? []), listener]);
-  }
-  dispatch(event: ServerEvent) {
-    for (const l of this.listeners.get(event.type) ?? []) {
-      l(new MessageEvent(event.type, { data: JSON.stringify(event) }));
-    }
-  }
-  close() {
-    this.readyState = 2;
-  }
-}
-
-const SCOPE = { kind: 'working' as const };
-const PAGE = 20;
-const FILES = 120;
-
-interface Harness {
-  backend: MockBackend;
-  store: UiStore;
-  qc: QueryClient;
-  user: ReturnType<typeof userEvent.setup>;
-  requests: string[];
-  bulkBodies: Array<{ target: { kind: string; worktreeId?: string }; paths?: unknown[] }>;
-  /** Worktree ids in sidebar order (the landing one first). */
-  first: string;
-}
-
-async function setup(
-  prepare: (backend: MockBackend) => void = () => {},
-  ui: Partial<UiState> = {},
-): Promise<Harness> {
-  const backend = new MockBackend({
-    dataset: 'large',
-    largeProjects: 2,
-    largeWorktreesPerProject: 2,
-    largeFilesPerWorktree: FILES,
-    statusFlow: true,
-  });
-  prepare(backend);
-  const mockFetch = createMockFetch(backend);
-  const requests: string[] = [];
-  const bulkBodies: Harness['bulkBodies'] = [];
-  const api = createApiClient({
-    baseUrl: 'http://mock.local',
-    fetch: async (input, init) => {
-      requests.push(`${init?.method ?? 'GET'} ${input}`);
-      if (String(input).endsWith('/api/review/bulk') && typeof init?.body === 'string') {
-        bulkBodies.push(JSON.parse(init.body));
-      }
-      return mockFetch(input, init);
-    },
-  });
-  const qc = createQueryClient();
-  const store = createUiStore(
-    { settledOpen: true, scope: scopeForPref('working'), showReviewed: true, ...ui },
-    false,
-  );
-  const factory = () => {
-    const es = new FakeEventSource();
-    backend.subscribe((e) => es.dispatch(e));
-    queueMicrotask(() => es.onopen?.(new Event('open')));
-    return es;
-  };
-  render(<App api={api} queryClient={qc} uiStore={store} eventSourceFactory={factory} />);
-  await waitFor(() =>
-    expect(screen.getByTestId(TEST_IDS.app).getAttribute('data-ready')).toBe('true'),
-  );
-  const view = store.getState().view;
-  if (view.kind !== 'worktree') throw new Error('did not land on a worktree');
-  return {
-    backend,
-    store,
-    qc,
-    user: userEvent.setup(),
-    requests,
-    bulkBodies,
-    first: view.worktreeId,
-  };
-}
-
-/** The mock's list of a worktree in the paging order (what the daemon pages). */
-function listOf(backend: MockBackend, worktreeId: string) {
-  return orderFiles(backend.listFiles(worktreeId, SCOPE, { limit: 2000 }).files);
-}
-
-function markFirst(backend: MockBackend, worktreeId: string, count: number) {
-  const projectId = backend
-    .listProjects()
-    .projects.find((p) => p.worktrees.some((w) => w.worktree.id === worktreeId))?.project.id;
-  for (const f of listOf(backend, worktreeId).slice(0, count)) {
-    backend.setReview({
-      projectId: projectId as string,
-      scopeKind: 'working',
-      path: f.path,
-      ...(f.rawPath ? { rawPath: f.rawPath } : {}),
-      patchHash: f.patchHash,
-      reviewed: true,
-    });
-  }
-}
-
-const footer = () => screen.queryByTestId(FILE_LIST_MORE_TEST_ID);
-const loaded = () => Number(footer()?.getAttribute('data-loaded') ?? Number.NaN);
-const selectedPath = (store: UiStore) => store.getState().selected?.path;
-
-async function press(user: Harness['user'], keys: string) {
-  await act(async () => {
-    await user.keyboard(keys);
-  });
-}
 
 beforeEach(() => {
   localStorage.clear();

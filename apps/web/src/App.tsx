@@ -11,7 +11,7 @@ import {
   useRef,
   useState,
 } from 'react';
-import { ensureFiles, loadMoreFiles, locateFile } from './api/files.ts';
+import { ensureFiles, filesPaging, loadMoreFiles, locateFile } from './api/files.ts';
 import { useForgeIndex } from './api/forges.ts';
 import {
   type EventSourceFactory,
@@ -33,7 +33,7 @@ import { ContextBar } from './components/ContextBar.tsx';
 import { CopyToastHost } from './components/CopyButton.tsx';
 import { Dialog } from './components/Dialog.tsx';
 import { DiffPane } from './components/diff/DiffPane.tsx';
-import { FileList, type FileListMore } from './components/FileList.tsx';
+import { FileList, type FileListMore, MoreStatus } from './components/FileList.tsx';
 import { FilePaneHeader } from './components/FilePaneHeader.tsx';
 import { HelpDialog } from './components/HelpDialog.tsx';
 import { Mark } from './components/Mark.tsx';
@@ -42,7 +42,7 @@ import { Sidebar } from './components/Sidebar.tsx';
 import { UntrackedOmittedNotice } from './components/UntrackedOmittedNotice.tsx';
 import { SkeletonLines, StaleNote, WaitNote } from './components/WaitNote.tsx';
 import { useFaviconDot } from './lib/favicon.ts';
-import { toFileRef } from './lib/fileRef.ts';
+import { fileRefKey, toFileRef } from './lib/fileRef.ts';
 import {
   hasSidebarFilters,
   type NavEntry,
@@ -120,8 +120,14 @@ function useSelectionRepair() {
   const queryClient = useQueryClient();
   const api = useApi();
   const lastIndex = useRef(0);
-  /** The selection and list state a partly loaded list was loaded through (#42). */
-  const located = useRef<string | null>(null);
+  /**
+   * The lookup of a selection a partly loaded list does not hold (#42): which selection and list
+   * state it is for, and whether it is still running. While it runs nothing repairs the selection
+   * (its pages may be on their way); once it is done the effect runs again (`lookupsDone`) and a
+   * selection still missing is handed over (PR #97 review).
+   */
+  const lookup = useRef<{ key: string; pending: boolean; found: boolean } | null>(null);
+  const [lookupsDone, setLookupsDone] = useState(0);
   const { entries, visible, viewReady, selectedKey, view, openList, scope } = model;
   const listState = model.files.data?.stateHash ?? null;
   const viewKey =
@@ -134,6 +140,7 @@ function useSelectionRepair() {
           : 'none';
   const lastView = useRef(viewKey);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `lookupsDone` re-runs the effect when a lookup ends (PR #97 review)
   useEffect(() => {
     if (!viewReady) return;
     if (lastView.current !== viewKey) {
@@ -157,18 +164,37 @@ function useSelectionRepair() {
       selected.worktreeId === view.worktreeId
     ) {
       const key = `${selectedKey}\u0000${listState}`;
-      if (located.current !== key) {
-        located.current = key;
+      const running = lookup.current;
+      if (running?.key !== key) {
+        const mine: { key: string; pending: boolean; found: boolean } = {
+          key,
+          pending: true,
+          found: false,
+        };
+        lookup.current = mine;
         const worktreeId = view.worktreeId;
+        const wanted = fileRefKey(selected);
         void locateFile(api, worktreeId, scope, selected)
           .then((index) =>
             index === null
               ? undefined
               : ensureFiles(queryClient, api, worktreeId, scope, index + 1),
           )
-          .catch(() => undefined);
+          .then((data) => {
+            mine.found =
+              data?.files.some((f) => fileRefKey(toFileRef(worktreeId, f)) === wanted) ?? false;
+          })
+          .catch(() => undefined)
+          .finally(() => {
+            mine.pending = false;
+            // Not there: look again, which repairs it (unless a newer lookup took over). There:
+            // its rows reach this effect with the list's next render.
+            if (lookup.current === mine && !mine.found) setLookupsDone((n) => n + 1);
+          });
         return;
       }
+      // Still on its way, or loaded and about to render: nothing to repair yet.
+      if (running.pending || running.found) return;
     }
     const next = repairSelection(entries, selectedKey, lastIndex.current, visible);
     actions.select(store, next ? toFileRef(next.worktreeId, next.file) : null);
@@ -185,6 +211,7 @@ function useSelectionRepair() {
     api,
     queryClient,
     scope,
+    lookupsDone,
   ]);
 }
 
@@ -446,15 +473,43 @@ function useMoreFiles(): FileListMore | undefined {
   const queryClient = useQueryClient();
   const api = useApi();
   const [loading, setLoading] = useState(false);
+  /**
+   * The last failed load (PR #97 review): of which page (the cursor it continued from) and how
+   * many tries in a row. It stops the automatic loading of that page; the retries are delayed
+   * (`filesPaging.retryDelaysMs`), then only the Retry button tries again. A new cursor (a
+   * refresh, a page that did load) is a new page: nothing failed for it.
+   */
+  const [failure, setFailure] = useState<{ cursor: string | null; tries: number } | null>(null);
   const worktreeId = model.view.kind === 'worktree' ? model.view.worktreeId : null;
   const scope = model.scope;
-  const onLoadMore = useCallback(() => {
-    if (worktreeId === null) return;
-    setLoading(true);
-    void loadMoreFiles(queryClient, api, worktreeId, scope)
-      .catch(() => undefined)
-      .finally(() => setLoading(false));
-  }, [queryClient, api, worktreeId, scope]);
+  const cursor = model.files.data?.nextCursor ?? null;
+  const failed = failure !== null && failure.cursor === cursor ? failure : null;
+  const load = useCallback(
+    (manual: boolean) => {
+      if (worktreeId === null) return;
+      const from = cursor;
+      setLoading(true);
+      void loadMoreFiles(queryClient, api, worktreeId, scope)
+        .then(() => setFailure(null))
+        .catch(() =>
+          setFailure((f) => ({
+            cursor: from,
+            tries: !manual && f?.cursor === from ? f.tries + 1 : 1,
+          })),
+        )
+        .finally(() => setLoading(false));
+    },
+    [queryClient, api, worktreeId, scope, cursor],
+  );
+  const onLoadMore = useCallback(() => load(false), [load]);
+  const onRetry = useCallback(() => load(true), [load]);
+  const retrying = failed !== null && failed.tries <= filesPaging.retryDelaysMs.length;
+  useEffect(() => {
+    const delays = filesPaging.retryDelaysMs;
+    if (!failed || loading || failed.tries > delays.length) return;
+    const timer = setTimeout(() => load(false), delays[failed.tries - 1]);
+    return () => clearTimeout(timer);
+  }, [failed, loading, load]);
   const { openList, openMore } = model;
   if (!openList || !openMore) return undefined;
   return {
@@ -463,7 +518,9 @@ function useMoreFiles(): FileListMore | undefined {
     visibleMore: openMore.visibleMore,
     ownComplete: openMore.ownComplete,
     loading,
+    error: failed === null ? null : retrying ? 'retrying' : 'stopped',
     onLoadMore,
+    onRetry,
   };
 }
 
@@ -473,17 +530,11 @@ function TreeMore({ more }: { more: FileListMore | undefined }) {
   return (
     <div
       data-testid="file-tree-more"
+      data-loaded={more.loaded}
+      data-total={more.total}
       className="flex items-center gap-2 border-t border-line px-3 py-1 text-xs text-muted"
     >
-      <span aria-live="polite">
-        {more.loading ? 'Loading more files… ' : ''}
-        {more.loaded.toLocaleString()} of {more.total.toLocaleString()} files loaded
-      </span>
-      {!more.loading && (
-        <button type="button" className="text-accent hover:underline" onClick={more.onLoadMore}>
-          Load more
-        </button>
-      )}
+      <MoreStatus more={more} />
     </div>
   );
 }

@@ -1,4 +1,5 @@
 import type {
+  ChangedFile,
   DiffScope,
   EffectiveReviewPolicy,
   FileListCounts,
@@ -48,6 +49,12 @@ export interface ListInfo {
   loaded: number;
   total: number;
   counts: FileListCounts | null;
+  /**
+   * The last loaded file in the daemon's paging order (where the next page starts), whatever
+   * order the list is shown in (the tree layout sorts the loaded files its own way, PR #97
+   * review). Null when nothing is loaded.
+   */
+  boundary: ChangedFile | null;
 }
 
 export interface AppModel {
@@ -351,6 +358,7 @@ function useBuildAppModel(): AppModel {
         loaded: entry.files.length,
         total,
         counts: entry.fileCounts ?? null,
+        boundary: entry.files.at(-1) ?? null,
       });
     }
     if (filesData) {
@@ -359,6 +367,8 @@ function useBuildAppModel(): AppModel {
         loaded: filesData.files.length,
         total: filesTotal(filesData),
         counts: filesData.counts ?? null,
+        // The query's files are the daemon's pages in its order (`api/files.ts`).
+        boundary: filesData.files.at(-1) ?? null,
       });
     }
     return out;
