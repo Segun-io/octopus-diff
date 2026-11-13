@@ -1,6 +1,7 @@
 import { type Dirent, readFileSync } from 'node:fs';
 import { readdir } from 'node:fs/promises';
 import path from 'node:path';
+import { type Cancel, TimerSlot, Timers } from './timers.js';
 
 /**
  * New directories under a watched tree (issue #36, DECISIONS #213).
@@ -38,6 +39,13 @@ export const MIN_RESUBSCRIBE_GAP_MS = 2000;
 const GAP_PER_CRAWL = 10;
 
 const DEFAULT_MAX_QUEUED_EVENTS = 16_384;
+
+/** Live-clock timers for instances made without the watcher's (tests of the classes alone). */
+let liveTimers: Timers | null = null;
+const live = (): Timers => {
+  liveTimers ??= new Timers();
+  return liveTimers;
+};
 
 /**
  * Creation events in one burst that suggest the kernel queue may have overflowed
@@ -111,6 +119,8 @@ export interface NewSubtreeWatchOptions {
   onUnwatched: (check: SubtreeCheck) => void;
   /** Every finished pass (diagnostics and tests). */
   onCheck?: (check: SubtreeCheck) => void;
+  /** The clock of the burst timer (#48); default: the live clock. */
+  timers?: Timers;
 }
 
 /** Collects the creations of a burst; one pass per quiet period. */
@@ -120,12 +130,16 @@ export class NewSubtreeWatch {
   /** The previous pass's creations (minus what was deleted since, see `noteRemoved`). */
   #recent = new Set<string>();
   #count = 0;
-  #timer: NodeJS.Timeout | undefined;
+  readonly #timers: Timers;
+  readonly #timer: TimerSlot;
   #burstStart = 0;
+  #passes = 0;
   #disposed = false;
 
   constructor(options: NewSubtreeWatchOptions) {
     this.#opts = options;
+    this.#timers = options.timers ?? live();
+    this.#timer = new TimerSlot(this.#timers);
   }
 
   /** Feeds the `create` events of one delivery (other event types are not passed in). */
@@ -135,18 +149,21 @@ export class NewSubtreeWatch {
       if (this.#created.size <= MAX_INSPECTED_PATHS) this.#created.add(p);
     }
     this.#count += createdPaths.length;
-    const now = Date.now();
-    if (this.#timer === undefined) this.#burstStart = now;
-    clearTimeout(this.#timer);
+    const now = this.#timers.now();
+    if (!this.#timer.pending) this.#burstStart = now;
     const wait = Math.max(
       0,
       Math.min(this.#opts.debounceMs, this.#burstStart + this.#opts.maxWaitMs - now),
     );
-    this.#timer = setTimeout(() => {
-      this.#timer = undefined;
-      void this.#pass();
-    }, wait);
-    this.#timer.unref();
+    this.#timer.set(wait, () => {
+      this.#passes++;
+      void this.#pass().finally(() => this.#passes--);
+    });
+  }
+
+  /** A pass (its `readdir`s) is in flight (tests step a TestClock only when it is not). */
+  get busy(): boolean {
+    return this.#passes > 0;
   }
 
   /**
@@ -185,8 +202,7 @@ export class NewSubtreeWatch {
 
   dispose(): void {
     this.#disposed = true;
-    clearTimeout(this.#timer);
-    this.#timer = undefined;
+    this.#timer.clear();
     this.#created.clear();
   }
 }
@@ -197,41 +213,43 @@ export class NewSubtreeWatch {
  */
 export class ResubscribeGate {
   readonly #minGapMs: number;
-  #lastAt = 0;
+  readonly #timers: Timers;
+  #lastAt = Number.NEGATIVE_INFINITY;
   #lastDurationMs = 0;
-  #timer: NodeJS.Timeout | undefined;
+  #timer: Cancel | null = null;
   #running = false;
   #again = false;
   #disposed = false;
 
-  constructor(minGapMs: number = MIN_RESUBSCRIBE_GAP_MS) {
+  /** `timers`: the clock of the gap (#48); default: the live clock. */
+  constructor(minGapMs: number = MIN_RESUBSCRIBE_GAP_MS, timers?: Timers) {
     this.#minGapMs = minGapMs;
+    this.#timers = timers ?? live();
   }
 
   request(run: () => Promise<void>): void {
-    if (this.#disposed || this.#timer !== undefined) return;
+    if (this.#disposed || this.#timer !== null) return;
     if (this.#running) {
       this.#again = true;
       return;
     }
     const gap = Math.max(this.#minGapMs, GAP_PER_CRAWL * this.#lastDurationMs);
-    const wait = Math.max(0, this.#lastAt + gap - Date.now());
-    this.#timer = setTimeout(() => {
-      this.#timer = undefined;
+    const wait = Math.max(0, this.#lastAt + gap - this.#timers.now());
+    this.#timer = this.#timers.after(wait, () => {
+      this.#timer = null;
       void this.#run(run);
-    }, wait);
-    this.#timer.unref();
+    });
   }
 
   async #run(run: () => Promise<void>): Promise<void> {
     this.#running = true;
-    const start = Date.now();
+    const start = this.#timers.now();
     try {
       await run();
     } finally {
       this.#running = false;
-      this.#lastDurationMs = Date.now() - start;
-      this.#lastAt = Date.now();
+      this.#lastDurationMs = this.#timers.now() - start;
+      this.#lastAt = this.#timers.now();
       if (this.#again && !this.#disposed) {
         this.#again = false;
         this.request(run);
@@ -241,8 +259,8 @@ export class ResubscribeGate {
 
   dispose(): void {
     this.#disposed = true;
-    clearTimeout(this.#timer);
-    this.#timer = undefined;
+    this.#timer?.();
+    this.#timer = null;
   }
 }
 

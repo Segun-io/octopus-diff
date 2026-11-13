@@ -221,8 +221,13 @@ multiple machines, fetch-on-demand (opt-in write-ish). (PR/CI status via `gh`/`g
   (`GitCore`, `DaemonCore`, the HTTP API) stay Promise-based. The runner's scheduling is an Effect partitioned
   semaphore with the two lanes of #44 (`LaneSemaphore`): every git run is a fiber, an AbortSignal interrupts it, and
   the runner's timers (timeout, abort grace, helper exit watchdog) read Effect's `Clock` (#47, DECISIONS #440-#444).
-  Next: the watch pipeline as Streams (#48), caches (#49). Not in `packages/contracts` (zod stays), not in the web app (React Query stays); Hono
-  and `node:sqlite` stay.
+  The watch pipeline (#48, DECISIONS #445-#452) runs on one Effect clock: every watcher timer (the per-worktree
+  coalescing window `DirtyWindow`, polls, the relist `Schedule`, backoffs, new-subtree checks) is a fiber owned by a
+  `Timers` that `close()` interrupts, unref'd on the live clock and on `TestClock` in tests; the summary refresh's
+  `Coalescer` is a serial consumer fiber; the SSE fan-out is a `PubSub` with one scoped subscription per connection
+  (released on disconnect, abort, slow client or close) and a heartbeat fiber. Event contracts, ids, replay and
+  coalescing rules are unchanged. Next: caches (#49). Not in `packages/contracts` (zod stays), not in the web app
+  (React Query stays); Hono and `node:sqlite` stay.
 - Web: Vite + React + TypeScript, TanStack Query (data + SSE-driven invalidation), Tailwind CSS,
   `@pierre/diffs` (+ worker pool for highlighting, as in T3 Code), `@pierre/trees`.
 - Distribution: `npx octopus-diff` / `octopus-diff serve`, serving the built web assets from the daemon.

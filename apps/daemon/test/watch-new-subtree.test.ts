@@ -1,10 +1,14 @@
 import { mkdirSync, rmSync } from 'node:fs';
 import { mkdir, symlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { assert, it as effectIt } from '@effect/vitest';
 import type { WatchTargets } from '@octopus-diff/contracts';
 import { noopLogger } from '@octopus-diff/contracts';
 import parcelWatcher from '@parcel/watcher';
+import * as Clock from 'effect/Clock';
+import * as Effect from 'effect/Effect';
 import { describe, expect, it } from 'vitest';
+import { Timers } from '../src/timers.js';
 import {
   burstThreshold,
   findUnwatchedSubdir,
@@ -15,6 +19,7 @@ import {
 } from '../src/watch-subtree.js';
 import { type DirtyReason, type SubscribeFn, WatcherService } from '../src/watcher.js';
 import { eventually, onCleanup, sleep, tempDir } from './helpers.js';
+import { advance, advanceUntil } from './test-clock.js';
 
 /**
  * Issue #36 (DECISIONS #213): `@parcel/watcher`'s inotify backend watches a directory that appears,
@@ -394,61 +399,99 @@ describe('findUnwatchedSubdir', () => {
   });
 });
 
+// On Effect's TestClock (#48): the burst timer runs on the test clock; `advanceUntil` stands for
+// the real-time `eventually` (same bounds, in virtual ms), the readdirs are real.
 describe('NewSubtreeWatch: a replaced directory is not trusted from before (PR #75 review)', () => {
-  it('forgets creations under a deleted path, so a directory recreated in one go is found', async () => {
-    const base = await tempDir();
-    const a = path.join(base, 'a');
-    const b = path.join(a, 'b');
-    const checks: SubtreeCheck[] = [];
-    const unwatched: SubtreeCheck[] = [];
-    const watch = new NewSubtreeWatch({
-      debounceMs: 20,
-      maxWaitMs: 100,
-      burstThreshold: 100_000,
-      isIgnored: () => false,
-      onCheck: (c) => checks.push(c),
-      onUnwatched: (c) => unwatched.push(c),
-    });
-    onCleanup(() => watch.dispose());
-    // `a` and `a/b` were reported one by one: both are watched, nothing to do.
-    await mkdir(b, { recursive: true });
-    watch.note([a, b]);
-    await eventually(() => checks.length === 1, 5000);
-    expect(unwatched).toHaveLength(0);
-    // `a` is deleted (its deletion arrives) and recreated with `a/b/deep` in one go: only `create a`
-    // is reported, and `a/b` is a new, unwatched directory although its old path was reported.
-    rmSync(a, { recursive: true });
-    watch.noteRemoved([a]);
-    await mkdir(path.join(b, 'deep'), { recursive: true });
-    watch.note([a]);
-    await eventually(() => checks.length === 2, 5000);
-    expect(unwatched).toHaveLength(1);
-    expect(unwatched[0]?.reason).toBe('unwatched-subdir');
-  });
+  effectIt.effect(
+    'forgets creations under a deleted path, so a directory recreated in one go is found',
+    () =>
+      Effect.gen(function* () {
+        const timers = new Timers(yield* Effect.context<never>());
+        const base = yield* Effect.promise(() => tempDir());
+        const a = path.join(base, 'a');
+        const b = path.join(a, 'b');
+        const checks: SubtreeCheck[] = [];
+        const unwatched: SubtreeCheck[] = [];
+        const watch = new NewSubtreeWatch({
+          timers,
+          debounceMs: 20,
+          maxWaitMs: 100,
+          burstThreshold: 100_000,
+          isIgnored: () => false,
+          onCheck: (c) => checks.push(c),
+          onUnwatched: (c) => unwatched.push(c),
+        });
+        onCleanup(() => watch.dispose());
+        // `a` and `a/b` were reported one by one: both are watched, nothing to do.
+        yield* Effect.promise(() => mkdir(b, { recursive: true }));
+        watch.note([a, b]);
+        yield* advanceUntil(watch, 'the first pass', () => checks.length === 1, 5000);
+        expect(unwatched).toHaveLength(0);
+        // `a` is deleted (its deletion arrives) and recreated with `a/b/deep` in one go: only
+        // `create a` is reported, and `a/b` is a new, unwatched directory although its old path was
+        // reported.
+        rmSync(a, { recursive: true });
+        watch.noteRemoved([a]);
+        yield* Effect.promise(() => mkdir(path.join(b, 'deep'), { recursive: true }));
+        watch.note([a]);
+        yield* advanceUntil(watch, 'the second pass', () => checks.length === 2, 5000);
+        expect(unwatched).toHaveLength(1);
+        expect(unwatched[0]?.reason).toBe('unwatched-subdir');
+      }),
+  );
 
-  it('keeps trusting what was not deleted', async () => {
-    const base = await tempDir();
-    const a = path.join(base, 'a');
-    const b = path.join(a, 'b');
-    const unwatched: SubtreeCheck[] = [];
-    const checks: SubtreeCheck[] = [];
-    const watch = new NewSubtreeWatch({
-      debounceMs: 20,
-      maxWaitMs: 100,
-      burstThreshold: 100_000,
-      isIgnored: () => false,
-      onCheck: (c) => checks.push(c),
-      onUnwatched: (c) => unwatched.push(c),
-    });
-    onCleanup(() => watch.dispose());
-    await mkdir(b, { recursive: true });
-    watch.note([a, b]);
-    await eventually(() => checks.length === 1, 5000);
-    watch.noteRemoved([path.join(base, 'elsewhere')]);
-    watch.note([a]); // the subdirectory's own event came in an earlier delivery: still known
-    await eventually(() => checks.length === 2, 5000);
-    expect(unwatched).toHaveLength(0);
-  });
+  effectIt.effect('a continuous burst is inspected maxWaitMs after it began, not later', () =>
+    Effect.gen(function* () {
+      const timers = new Timers(yield* Effect.context<never>());
+      const base = yield* Effect.promise(() => tempDir());
+      const checkedAt: number[] = [];
+      const watch = new NewSubtreeWatch({
+        timers,
+        debounceMs: 20,
+        maxWaitMs: 100,
+        burstThreshold: 100_000,
+        isIgnored: () => false,
+        onCheck: () => checkedAt.push(timers.now()),
+        onUnwatched: () => {},
+      });
+      onCleanup(() => watch.dispose());
+      for (let t = 0; t < 150; t += 15) {
+        watch.note([path.join(base, `d${t}`)]);
+        yield* advance(watch, 15, 5);
+      }
+      yield* advanceUntil(watch, 'two passes', () => checkedAt.length === 2, 1000, 5);
+      // The first pass at 100 (maxWait), the rest of the burst 20 ms after its last note (135).
+      assert.deepStrictEqual(checkedAt, [100, 155]);
+    }),
+  );
+
+  effectIt.effect('keeps trusting what was not deleted', () =>
+    Effect.gen(function* () {
+      const timers = new Timers(yield* Effect.context<never>());
+      const base = yield* Effect.promise(() => tempDir());
+      const a = path.join(base, 'a');
+      const b = path.join(a, 'b');
+      const unwatched: SubtreeCheck[] = [];
+      const checks: SubtreeCheck[] = [];
+      const watch = new NewSubtreeWatch({
+        timers,
+        debounceMs: 20,
+        maxWaitMs: 100,
+        burstThreshold: 100_000,
+        isIgnored: () => false,
+        onCheck: (c) => checks.push(c),
+        onUnwatched: (c) => unwatched.push(c),
+      });
+      onCleanup(() => watch.dispose());
+      yield* Effect.promise(() => mkdir(b, { recursive: true }));
+      watch.note([a, b]);
+      yield* advanceUntil(watch, 'the first pass', () => checks.length === 1, 5000);
+      watch.noteRemoved([path.join(base, 'elsewhere')]);
+      watch.note([a]); // the subdirectory's own event came in an earlier delivery: still known
+      yield* advanceUntil(watch, 'the second pass', () => checks.length === 2, 5000);
+      expect(unwatched).toHaveLength(0);
+    }),
+  );
 });
 
 describe('isIgnoredGitDirChild', () => {
@@ -476,27 +519,34 @@ describe('isIgnoredGitDirChild', () => {
 });
 
 describe('ResubscribeGate', () => {
-  it('runs one at a time, a gap apart, and coalesces requests made meanwhile', async () => {
-    const gate = new ResubscribeGate(150);
-    const starts: number[] = [];
-    const release: Array<() => void> = [];
-    const run = () => {
-      starts.push(Date.now());
-      return new Promise<void>((resolve) => {
-        release.push(resolve);
-      });
-    };
-    gate.request(run);
-    gate.request(run); // coalesced with the pending run
-    await eventually(() => starts.length === 1, 5000);
-    gate.request(run);
-    gate.request(run); // both while running: one more run, after the gap
-    release[0]?.();
-    await eventually(() => starts.length === 2, 5000);
-    expect((starts[1] ?? 0) - (starts[0] ?? 0)).toBeGreaterThanOrEqual(140);
-    release[1]?.();
-    await sleep(300); // negative check: a third run would start within the gap
-    expect(starts).toHaveLength(2);
-    gate.dispose();
-  });
+  // On Effect's TestClock (#48): the gap runs on the test clock; the assertions are unchanged.
+  effectIt.effect('runs one at a time, a gap apart, and coalesces requests made meanwhile', () =>
+    Effect.gen(function* () {
+      const context = yield* Effect.context<never>();
+      const gate = new ResubscribeGate(150, new Timers(context));
+      const idle = { busy: false };
+      const starts: number[] = [];
+      const release: Array<() => void> = [];
+      const run = () => {
+        starts.push(Effect.runSyncWith(context)(Clock.currentTimeMillis));
+        return new Promise<void>((resolve) => {
+          release.push(resolve);
+        });
+      };
+      gate.request(run);
+      gate.request(run); // coalesced with the pending run
+      yield* advanceUntil(idle, 'the first run', () => starts.length === 1, 5000);
+      gate.request(run);
+      gate.request(run); // both while running: one more run, after the gap
+      release[0]?.();
+      yield* advanceUntil(idle, 'the second run', () => starts.length === 2, 5000);
+      expect((starts[1] ?? 0) - (starts[0] ?? 0)).toBeGreaterThanOrEqual(140);
+      // On the test clock the gap is exact: 150 ms after the first run ended.
+      expect((starts[1] ?? 0) - (starts[0] ?? 0)).toBe(150);
+      release[1]?.();
+      yield* advance(idle, 300); // negative check: a third run would start within the gap
+      expect(starts).toHaveLength(2);
+      gate.dispose();
+    }),
+  );
 });
