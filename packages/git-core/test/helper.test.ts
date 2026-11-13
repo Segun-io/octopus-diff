@@ -13,7 +13,7 @@ import { chmodSync, existsSync, readFileSync, rmSync, writeFileSync } from 'node
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isGitCoreError } from '@octopus-diff/contracts';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, onTestFinished } from 'vitest';
 import {
   ABORT_GRACE_MS,
   defaultHelperEntry,
@@ -133,6 +133,24 @@ function alive(target: number): boolean {
 }
 
 const sha = (data: Buffer): string => createHash('sha256').update(data).digest('hex');
+
+/**
+ * SIGCONT + SIGKILL for helpers a test stops, also when the test fails or times out: vitest
+ * abandons a timed-out test without running its `finally`, and a stopped helper never sees its
+ * stdin close.
+ */
+function releaseStopped(pids: number[]): void {
+  onTestFinished(() => {
+    for (const pid of pids) {
+      try {
+        process.kill(pid, 'SIGCONT');
+        process.kill(pid, 'SIGKILL');
+      } catch {
+        // gone
+      }
+    }
+  });
+}
 
 // ---------------------------------------------------------------------------------------------
 // The raw protocol, against the helper process itself.
@@ -758,6 +776,11 @@ describe.skipIf(!helperOn)('runner through the helper', () => {
       .catch((e: unknown) => e);
     await until(() => starts().length === 2);
     const helpers = runner.helperPids();
+    releaseStopped(helpers);
+    onTestFinished(() => {
+      releaseA();
+      releaseB();
+    });
     expect(helpers).toHaveLength(2);
     const gits = starts().map((s) => s.pid);
     try {
@@ -804,6 +827,8 @@ describe.skipIf(!helperOn)('runner through the helper', () => {
       .catch((e: unknown) => e);
     await until(() => starts().length === 1);
     const [helper] = runner.helperPids();
+    releaseStopped([helper as number]);
+    onTestFinished(release);
     try {
       process.kill(helper as number, 'SIGSTOP');
       controller.abort();
