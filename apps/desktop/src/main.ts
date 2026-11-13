@@ -33,7 +33,7 @@ import {
   tokenFromAuthUrl,
   windowUrl,
 } from './daemon-api.js';
-import { openLogFile } from './log-file.js';
+import { noLogFile, openLogFile } from './log-file.js';
 import { buildMenuTemplate } from './menu.js';
 import { refreshScript, settingsScript, undoScript } from './page-actions.js';
 import {
@@ -97,13 +97,16 @@ let showing: { kind: 'none' } | { kind: 'screen'; url: string } | { kind: 'ui'; 
   { kind: 'none' };
 let backendStopped = false;
 let quitting = false;
+/** Set by any quit request, also one before the backend exists (main() checks it). */
+let quitRequested = false;
 
-const log = openLogFile(app.getPath('logs'));
+// Another instance runs for this userData: the lock request told it to focus its window
+// (`second-instance`); this one leaves before it opens (or rotates) the shared log.
+const primary = app.requestSingleInstanceLock();
+if (!primary) app.exit(0);
 
-if (!app.requestSingleInstanceLock()) {
-  // Another instance runs for this userData: it focuses its window (`second-instance`).
-  app.quit();
-} else {
+const log = primary ? openLogFile(app.getPath('logs')) : noLogFile();
+if (primary) {
   app.on('second-instance', () => focusWindow());
   void app.whenReady().then(main);
 }
@@ -401,6 +404,8 @@ async function main(): Promise<void> {
       ? `PATH from the login shell (${resolved.shell})`
       : `PATH inherited (${resolved.reason})`,
   );
+  // Quit while the shell was answering: start nothing.
+  if (quitRequested) return;
 
   let tsxEsm: string | undefined;
   if (args.backend === 'source') {
@@ -448,6 +453,7 @@ app.on('activate', () => {
 });
 
 app.on('before-quit', (event) => {
+  quitRequested = true;
   if (backendStopped || !backend) return;
   event.preventDefault();
   if (quitting) return;

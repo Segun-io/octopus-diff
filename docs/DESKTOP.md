@@ -3,7 +3,8 @@
 > Status: accepted 2026-11-13 (phase 0 done, roadmap #16; `docs/reports/desktop-phase0.md`). Aligned with T3 Code's
 > model (user-confirmed 2026-11-08). PLAN §2 lists the Electron desktop app as in scope (DECISIONS #466-#475).
 > Verified on **Electron 45.3.2, which bundles Node 24.22.2** (the spike of 2026-11-08 used 45.2.3). Roadmap decisions
-> (2026-11-11, #24) are at the end of this file (§10).
+> (2026-11-11, #24) are at the end of this file (§10). Phase A (#18, the shell MVP in `apps/desktop`) is done
+> (2026-11-13; `docs/reports/desktop-phase-a.md`, DECISIONS #486-#504).
 
 ## 1. Goal and model
 
@@ -74,8 +75,10 @@ Electron main (apps/desktop)                        child: Electron binary, ELEC
 ### 3.1 The backend is the bundled CLI, run as Node
 
 - The main process spawns `process.execPath` with `ELECTRON_RUN_AS_NODE=1` and the bundled CLI entry:
-  `serve --ready-fd 3 --exit-with-stdin`. stdio is `['pipe', 'pipe', 'pipe', 'pipe']`: stdin is the lifeline,
-  stdout/stderr go to `app.getPath('logs')/daemon.log`, and fd 3 carries one JSON ready line.
+  `serve --ready-fd 3 --exit-with-stdin`. stdio is `['pipe', <log fd>, <log fd>, 'pipe']`: stdin is the lifeline,
+  stdout/stderr are the descriptor of `app.getPath('logs')/daemon.log` (the daemon writes there itself, so its
+  shutdown still completes after Electron dies; pipes made the CLI exit halfway on EPIPE, DECISIONS #490), and fd 3
+  carries one JSON ready line.
 - Ready line (zod schema `ServeReadySchema` in `packages/contracts/src/daemon.ts`, additive):
   `{ mode: 'started' | 'attached', url, authUrl, pid, version }`. The main process validates it and never logs `authUrl`
   (it holds the token).
@@ -149,6 +152,8 @@ apps/desktop/
   src/preload.cts        contextBridge (bundled to CJS; sandboxed preloads can't be ESM)
   src/ipc.ts             handlers: sender-origin check, zod validation, path check
   src/shell-env.ts       login-shell PATH resolution (macOS/Linux GUI launches)
+  src/policy.ts, menu.ts, window-state.ts, screens.ts, page-actions.ts, daemon-api.ts
+                         (phase A: the Electron-free policies main.ts wires up; no preload/ipc until #20, DECISIONS #486)
   scripts/build.mjs      esbuild main + preload; copies the CLI bundle (with dist/web) into the app
   electron-builder.yml   targets, asar/asarUnpack, fuses, icons
   test/                  vitest (supervisor, ready-line parsing, shim rendering, nav policy, IPC validation)
@@ -238,7 +243,7 @@ The daemon (WS2) and git-core (WS1) need **no changes**.
 |---|---|---|
 | **0. Spike + docs** (½ session; **done 2026-11-13**) | Run cli + git-core + daemon vitest under Electron's Node (`ELECTRON_RUN_AS_NODE=1`); serve web assets from inside an asar; PLAN §2 + DECISIONS entry; WS5/contracts requests filed | Suites green under Node 24.22 (or gaps listed); decision logged |
 | **A0. CLI hooks** (WS5 + lead, small) | `--ready-fd`, `--exit-with-stdin`, reusable bundle step, `ServeReadySchema` | CLI tests cover started/attached ready lines and stdin-EOF shutdown on all OSes in CI |
-| **A. Shell MVP** (1–2 sessions) | `apps/desktop` scaffold, backend supervisor (spawn, ready line, attach/start, restart, shutdown), window loads `authUrl`, the §5 security baseline, single instance (a second launch focuses the window), window-state persistence, menus, shell-env PATH, git-missing screen, logs | `pnpm --filter @octopus-diff/desktop start` opens the app with the user's projects; with `octopus-diff serve` already running it attaches and quitting leaves that daemon up; otherwise `octopus-diff status` sees the app's daemon and quitting stops it; killing Electron leaves no orphan daemon; unit tests for the supervisor, nav policy, IPC validation |
+| **A. Shell MVP** (1–2 sessions; **done 2026-11-13**) | `apps/desktop` scaffold, backend supervisor (spawn, ready line, attach/start, restart, shutdown), window loads `authUrl`, the §5 security baseline, single instance (a second launch focuses the window), window-state persistence, menus, shell-env PATH, git-missing screen, logs | `pnpm --filter @octopus-diff/desktop start` opens the app with the user's projects; with `octopus-diff serve` already running it attaches and quitting leaves that daemon up; otherwise `octopus-diff status` sees the app's daemon and quitting stops it; killing Electron leaves no orphan daemon; unit tests for the supervisor, nav policy, IPC validation |
 | **B. Packaging** (1 session) | Shared CLI bundle in the app, electron-builder config, fuses, asarUnpack, icons, CI matrix, Playwright Electron smoke in `e2e/` | The AppImage runs on a clean Linux VM and the dmg on macOS (unsigned, with the right-click → Open workaround); smoke test green; the read-only proof harness passes against the packaged app |
 | **C. Native integration + CLI shim** (1 session, WS3 + WS6) | Native folder dialog, drag-to-add, reveal/open/open-in-editor with the path check, macOS title bar, unreviewed badge, external links; install the `octopus-diff` command (§3.2) | Every bridge method is covered by tests; the shim works from deb, dmg, NSIS and AppImage installs and never overwrites an npm install; the browser build is unchanged (existing e2e green) |
 | **D. Windows + WSL** (1–2 sessions) | Windows app with a WSL-distro backend (§6); distro picker in Settings | From Windows, the app shows repos inside WSL with live updates |

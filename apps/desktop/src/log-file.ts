@@ -76,3 +76,14 @@ export function openLogFile(dir: string, now: () => Date = () => new Date()): Lo
     },
   };
 }
+
+/** A log that writes nothing (a second instance, which exits right away). */
+export function noLogFile(): LogFile {
+  return {
+    path: '',
+    fd: null,
+    output: () => undefined,
+    note: () => undefined,
+    close: () => undefined,
+  };
+}

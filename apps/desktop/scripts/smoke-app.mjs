@@ -328,6 +328,7 @@ await scenario('started: the window shows the projects; quit stops the daemon', 
   page.close();
 
   // A second launch with the same app data exits and leaves the first one running.
+  const logBefore = daemonLog(d);
   const second = await launchApp(d);
   const result = await Promise.race([second.exited, sleep(15_000).then(() => 'timeout')]);
   check(
@@ -335,6 +336,7 @@ await scenario('started: the window shows the projects; quit stops the daemon', 
     `a second instance exits (${JSON.stringify(result)})`,
   );
   check(alive(app.child.pid), 'the first instance keeps running');
+  check(daemonLog(d) === logBefore, "the second instance did not touch the first one's log");
 
   app.child.kill('SIGTERM');
   const exit = await Promise.race([app.exited, sleep(20_000).then(() => 'timeout')]);
