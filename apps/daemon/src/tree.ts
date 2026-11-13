@@ -22,7 +22,8 @@ import {
   type WorktreeChangedDirs,
 } from '@octopus-diff/contracts';
 
-const ASCII = /^[\u0000-\u007f]*$/;
+const NON_ASCII = /[\u0080-\uffff]/;
+const ASCII = { test: (value: string): boolean => !NON_ASCII.test(value) };
 const utf8Fatal = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
 const utf8Lossy = new TextDecoder('utf-8', { ignoreBOM: true });
 
