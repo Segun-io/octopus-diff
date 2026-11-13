@@ -5846,3 +5846,12 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      seen here (1 of 5 runs: the click on the failed screen's link threw while the screen was still swapping in) would
      redden the job. The click is retried until the link is there (10 s); 6 of 6 runs green after the change. No
      change to the app.
+
+### Desktop phase B: first CI runs (2026-11-13)
+
+522. **CI findings fixed.** (1) Linux: the tampered-asar test left a daemon writing into the temp dir while the cleanup
+     removed it (`ENOTEMPTY`); the smoke's `afterAll` now waits for every launched process and retries the removal.
+     (2) Windows: the fixture generator wrote `excludesFile = C:\Users\…` into its isolated git config; git reads the
+     backslashes as escape sequences (`bad config line 15`), so `git init` failed. The fixtures had never run on
+     Windows. `configPathValue` writes such paths with forward slashes (`tools/fixtures/src/git.ts`, a one-line
+     change outside the desktop paths, needed by this PR's Windows job).
