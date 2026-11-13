@@ -116,10 +116,15 @@ export interface WatchHost {
   ): Promise<parcelWatcher.AsyncSubscription>;
   /** Starts the host process now, so the first subscribe does not wait for it to boot. */
   warm(): void;
-  /** Kills the host process (never waits for it). Later subscribes start a new one. */
+  /**
+   * Kills the host process (never waits for it) and rejects every subscribe still waiting for a
+   * host ("watch host closed: stopped"). Later subscribes start a new one, with no backoff.
+   */
   close(): void;
   /** The current host's pid, if one is running (tests). */
   readonly pid: number | undefined;
+  /** How many host processes this watch host has started (diagnostics, tests). */
+  readonly started: number;
 }
 
 interface Host {
@@ -170,6 +175,7 @@ export const makeWatchHost = (
     const context = yield* Effect.context<never>();
     const runPromise = Effect.runPromiseWith(context);
     let nextId = 1;
+    let started = 0;
 
     const stop = (h: Host, reason: string, notify: boolean): void => {
       if (h.stopped) return;
@@ -227,6 +233,7 @@ export const makeWatchHost = (
           windowsHide: true,
         },
       );
+      started += 1;
       const h: Host = {
         child,
         callbacks: new Map(),
@@ -342,10 +349,16 @@ export const makeWatchHost = (
         if (supervisor.running.length === 0) supervisor.startNow();
       },
       close() {
-        for (const h of supervisor.running) supervisor.stopNow(h);
+        // Stops the host and fails every subscribe still waiting for one (a restart backoff
+        // included) at once, so the watcher's close never waits for a backoff or for a host
+        // started after it (PR #100 review, P1). Later subscribes start a host again.
+        supervisor.stopAllNow();
       },
       get pid() {
         return supervisor.running[0]?.child.pid;
+      },
+      get started() {
+        return started;
       },
     };
     return host;

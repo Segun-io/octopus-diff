@@ -275,6 +275,192 @@ describe('makeSupervisor', () => {
   );
 });
 
+/**
+ * Instances whose acquisition takes `acquireMs` on the clock (a TestClock gate), counting acquires
+ * and releases. `asyncFor(n)`: only the n first acquisitions wait, later ones are synchronous.
+ */
+function slowFakes(acquireMs: number, asyncFor = Number.POSITIVE_INFINITY) {
+  const acquired: number[] = [];
+  const released: number[] = [];
+  let next = 1;
+  const acquire = (died: (death: Death) => void) =>
+    Effect.acquireRelease(
+      Effect.suspend(() => {
+        const id = next++;
+        const make = Effect.sync((): Fake => {
+          acquired.push(id);
+          return { id, die: (death = {}) => died({ reason: 'crashed', ...death }) };
+        });
+        return id <= asyncFor ? Effect.andThen(Effect.sleep(acquireMs), make) : make;
+      }),
+      (fake) => Effect.sync(() => released.push(fake.id)),
+    );
+  return { acquired, released, acquire };
+}
+
+describe('makeSupervisor: starts in flight (PR #100 review, Greptile P2)', () => {
+  const policy = restartPolicy({ window: '1 minute' });
+
+  it.effect('two concurrent gets during an asynchronous acquire share one start', () =>
+    Effect.gen(function* () {
+      const f = slowFakes(1_000);
+      const sup = yield* makeSupervisor({ name: 'fake', slots: 2, acquire: f.acquire, policy });
+      const a = yield* Effect.forkChild(sup.get);
+      const b = yield* Effect.forkChild(sup.get);
+      yield* settle;
+      // The start is reserved: no second slot is taken, nothing is running yet.
+      assert.deepStrictEqual(sup.running, []);
+      yield* TestClock.adjust('1 second');
+      const [x, y] = [yield* Fiber.join(a), yield* Fiber.join(b)];
+      assert.strictEqual(x.id, 1);
+      assert.strictEqual(y.id, 1);
+      assert.deepStrictEqual(f.acquired, [1]);
+      assert.deepStrictEqual(
+        sup.running.map((i) => i.id),
+        [1],
+      );
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect(
+    'a start in flight reserves its slot: another start takes the next slot, none is lost',
+    () =>
+      Effect.gen(function* () {
+        const f = slowFakes(1_000, 1);
+        const scope = yield* Scope.make();
+        const sup = yield* Scope.provide(scope)(
+          makeSupervisor({ name: 'fake', slots: 2, acquire: f.acquire, policy }),
+        );
+        const first = yield* Effect.forkChild(sup.get);
+        yield* settle;
+        const second = sup.startNow(); // synchronous acquisition, while the first is in flight
+        assert.strictEqual(second?.id, 2);
+        assert.deepStrictEqual(sup.slots, [null, second]);
+        assert.isNull(sup.startNow()); // both slots are taken (one reserved)
+        yield* TestClock.adjust('1 second');
+        assert.strictEqual((yield* Fiber.join(first)).id, 1);
+        assert.deepStrictEqual(
+          sup.slots.map((i) => i?.id),
+          [1, 2],
+        );
+        yield* Scope.close(scope, Exit.void);
+        assert.deepStrictEqual([...f.released].sort(), [1, 2]);
+      }),
+  );
+
+  it.effect('closing the owner during an acquisition releases what it acquired; nothing runs', () =>
+    Effect.gen(function* () {
+      const f = slowFakes(1_000);
+      const scope = yield* Scope.make();
+      const sup = yield* Scope.provide(scope)(
+        makeSupervisor({ name: 'fake', acquire: f.acquire, policy }),
+      );
+      const getting = yield* Effect.forkChild(Effect.flip(sup.get));
+      yield* settle;
+      // The close waits for the acquisition, so when it returns, what it acquired is released.
+      const closing = yield* Effect.forkChild(
+        Scope.close(scope, Exit.void).pipe(Effect.andThen(Effect.sync(() => f.released.length))),
+      );
+      yield* settle;
+      yield* TestClock.adjust('1 second');
+      assert.strictEqual(yield* Fiber.join(closing), 1);
+      const error = yield* Fiber.join(getting);
+      assert.instanceOf(error, SupervisorUnavailable);
+      assert.strictEqual(error.state, 'closed');
+      assert.deepStrictEqual(f.acquired, [1]);
+      assert.deepStrictEqual(f.released, [1]);
+      assert.deepStrictEqual(sup.running, []);
+    }),
+  );
+
+  it.effect(
+    'a caller that stops waiting does not lose the start: it is installed, then released on close',
+    () =>
+      Effect.gen(function* () {
+        const f = slowFakes(1_000, 1);
+        const scope = yield* Scope.make();
+        const sup = yield* Scope.provide(scope)(
+          makeSupervisor({ name: 'fake', acquire: f.acquire, policy }),
+        );
+        const getting = yield* Effect.forkChild(sup.get);
+        yield* settle;
+        yield* Fiber.interrupt(getting); // returns at once: the wait is interruptible
+        assert.isFalse(sup.canStartNow); // the slot stays reserved for the start in flight
+        assert.isNull(sup.startNow());
+        yield* TestClock.adjust('1 second');
+        yield* settle;
+        assert.deepStrictEqual(
+          sup.running.map((i) => i.id),
+          [1],
+        );
+        yield* Scope.close(scope, Exit.void);
+        assert.deepStrictEqual(f.acquired, [1]);
+        assert.deepStrictEqual(f.released, [1]);
+      }),
+  );
+});
+
+describe('makeSupervisor: stopAll (PR #100 review, Greptile P1)', () => {
+  it.effect(
+    'fails a get sleeping out a backoff at once, starts nothing, and later gets start again',
+    () =>
+      Effect.gen(function* () {
+        const f = fakes();
+        const sup = yield* makeSupervisor({
+          name: 'fake',
+          acquire: f.acquire,
+          policy: restartPolicy({
+            window: '1 minute',
+            backoff: { base: '30 seconds', max: '30 seconds' },
+          }),
+        });
+        (yield* sup.get).die();
+        (yield* sup.get).die(); // a 30 s backoff now
+        const waiting = yield* Effect.forkChild(Effect.flip(sup.get));
+        yield* settle;
+        sup.stopAllNow();
+        // No clock advance: stopAll alone ends the wait.
+        const error = yield* Fiber.join(waiting);
+        assert.instanceOf(error, SupervisorUnavailable);
+        assert.strictEqual(error.state, 'closed');
+        assert.strictEqual(error.reason, 'stopped');
+        assert.deepStrictEqual(f.started, [1, 2]);
+        assert.isFalse(sup.closed);
+        // A deliberate stop ends the backoff: the next get starts one at once.
+        assert.strictEqual((yield* sup.get).id, 3);
+      }).pipe(Effect.scoped),
+  );
+
+  it.effect(
+    'stops every running instance (not a death) and fails gets joined to a start in flight',
+    () =>
+      Effect.gen(function* () {
+        const f = slowFakes(1_000, 1);
+        const sup = yield* makeSupervisor({
+          name: 'fake',
+          slots: 2,
+          acquire: f.acquire,
+          policy: restartPolicy({ window: '1 minute', maxDeaths: 1 }),
+        });
+        const joining = yield* Effect.forkChild(Effect.flip(sup.get));
+        yield* settle;
+        const running = sup.startNow();
+        assert.strictEqual(running?.id, 2);
+        sup.stopAllNow();
+        assert.deepStrictEqual(f.released, [2]);
+        const error = yield* Fiber.join(joining);
+        assert.strictEqual(error.reason, 'stopped');
+        // The cancelled acquisition, once it ends, is released, not installed.
+        yield* TestClock.adjust('1 second');
+        yield* settle;
+        assert.deepStrictEqual([...f.released].sort(), [1, 2]);
+        assert.deepStrictEqual(sup.running, []);
+        assert.isNull(sup.gaveUp); // with maxDeaths 1, a counted death would have given up
+        assert.strictEqual((yield* sup.get).id, 3);
+      }).pipe(Effect.scoped),
+  );
+});
+
 // --- real git helper processes, supervised on the TestClock ---------------------------------
 
 const helperEntry = defaultHelperEntry();

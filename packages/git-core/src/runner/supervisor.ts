@@ -23,6 +23,7 @@ import * as Cause from 'effect/Cause';
 import * as Clock from 'effect/Clock';
 import type * as Context from 'effect/Context';
 import * as Data from 'effect/Data';
+import * as Deferred from 'effect/Deferred';
 import * as Duration from 'effect/Duration';
 import * as Effect from 'effect/Effect';
 import * as Exit from 'effect/Exit';
@@ -42,7 +43,10 @@ export interface Death {
 /** Why `get` cannot return an instance. */
 export class SupervisorUnavailable extends Data.TaggedError('SupervisorUnavailable')<{
   readonly name: string;
-  /** `closed`: its scope was closed. `gave-up`: the restart policy ran out. */
+  /**
+   * `closed`: its scope was closed (reason `closed`), or `stopAll` ended the wait (reason
+   * `stopped`). `gave-up`: the restart policy ran out.
+   */
   readonly state: 'closed' | 'gave-up';
   readonly reason: string;
 }> {
@@ -167,16 +171,44 @@ export interface Supervisor<A> {
   stop(instance: A): Effect.Effect<void>;
   /** `stop` from synchronous code: runs the release at once (it must be synchronous then). */
   stopNow(instance: A): void;
+  /**
+   * Stops every running instance (not deaths) and fails every pending `get` at once with
+   * `SupervisorUnavailable` (`closed`, reason `stopped`), including gets sleeping out a backoff
+   * or joined to a start in flight; such a start releases what it acquires. The supervisor stays
+   * open: later calls start again, with no backoff (PR #100 review, P1).
+   */
+  readonly stopAll: Effect.Effect<void>;
+  /** `stopAll` from synchronous code (the releases must be synchronous then). */
+  stopAllNow(): void;
 }
 
+/** A running instance in its slot. */
 interface Slot<A> {
+  readonly kind: 'running';
   readonly value: A;
   readonly scope: Scope.Closeable;
 }
 
 /**
+ * A start in flight (PR #100 review, P2): the slot is reserved and the instance's scope exists
+ * before `acquire` runs, so a concurrent start picks another slot, a concurrent `get` joins this
+ * one, and a close or `stopAll` meanwhile is seen when the acquisition ends (what it acquired is
+ * released then, never installed).
+ */
+interface Starting<A> {
+  readonly kind: 'starting';
+  readonly scope: Scope.Closeable;
+  /** The generation it was started in (`stopAll` begins a new one). */
+  readonly generation: number;
+  /** Completes with the instance, or fails when it was cancelled or its acquisition failed. */
+  readonly done: Deferred.Deferred<A, SupervisorUnavailable>;
+}
+
+type Entry<A> = Slot<A> | Starting<A>;
+
+/**
  * Makes a supervisor in the current scope: when that scope closes, the supervisor closes and
- * releases every instance (in parallel, waiting for each release).
+ * releases every instance (in parallel, waiting for each release, and for starts in flight).
  */
 export const makeSupervisor = <A>(
   spec: SupervisorSpec<A>,
@@ -186,7 +218,7 @@ export const makeSupervisor = <A>(
     const runSync = Effect.runSyncWith(context);
     const runFork = Effect.runForkWith(context);
     const step = yield* Schedule.toStep(spec.policy);
-    const slots: Array<Slot<A> | null> = Array.from(
+    const slots: Array<Entry<A> | null> = Array.from(
       { length: Math.max(1, Math.floor(spec.slots ?? 1)) },
       () => null,
     );
@@ -195,9 +227,29 @@ export const makeSupervisor = <A>(
     let gaveUpReason = '';
     /** `Clock` millis before which no instance starts (a backoff). */
     let retryAt = 0;
+    /**
+     * The current generation and its gate: every wait in `get` races the gate, which fails when
+     * `stopAll` or the close ends the generation (PR #100 review, P1).
+     */
+    let generation = 0;
+    let gate = Deferred.makeUnsafe<never, SupervisorUnavailable>();
 
-    const release = (slot: Slot<A>): Effect.Effect<void> => Scope.close(slot.scope, Exit.void);
-    const indexOf = (value: A): number => slots.findIndex((s) => s !== null && s.value === value);
+    const closedError = (reason: string) =>
+      new SupervisorUnavailable({ name: spec.name, state: 'closed', reason });
+    const release = (slot: Entry<A>): Effect.Effect<void> => Scope.close(slot.scope, Exit.void);
+    const indexOf = (value: A): number =>
+      slots.findIndex((s) => s !== null && s.kind === 'running' && s.value === value);
+    const isRunning = (s: Entry<A> | null): s is Slot<A> => s !== null && s.kind === 'running';
+    const isStarting = (s: Entry<A> | null): s is Starting<A> =>
+      s !== null && s.kind === 'starting';
+
+    /** Ends the current generation: its waiters fail with `error`, later calls get a new gate. */
+    const endGeneration = (error: SupervisorUnavailable): void => {
+      const ended = gate;
+      generation += 1;
+      gate = Deferred.makeUnsafe<never, SupervisorUnavailable>();
+      Deferred.doneUnsafe(ended, Effect.fail(error));
+    };
 
     /** An instance's own death: free its slot, consult the policy, release what is left of it. */
     const onDeath = (slot: Slot<A>, death: Death): void => {
@@ -221,26 +273,61 @@ export const makeSupervisor = <A>(
       runFork(release(slot));
     };
 
-    const startIn = (at: number): Effect.Effect<A> =>
-      Effect.gen(function* () {
-        const scope = yield* Scope.make();
-        let slot: Slot<A> | null = null;
-        let pending: Death | null = null;
-        const died = (death: Death): void => {
-          if (slot) onDeath(slot, death);
-          else pending ??= death; // died while starting
-        };
-        const value = yield* Scope.provide(scope)(spec.acquire(died));
-        slot = { value, scope };
-        slots[at] = slot;
-        if (pending) onDeath(slot, pending);
-        return value;
-      });
+    /** Reserves slot `at` for a start, with the instance's scope, before anything is acquired. */
+    const reserve = (at: number): Starting<A> => {
+      const reservation: Starting<A> = {
+        kind: 'starting',
+        scope: Scope.makeUnsafe(),
+        generation,
+        done: Deferred.makeUnsafe<A, SupervisorUnavailable>(),
+      };
+      slots[at] = reservation;
+      return reservation;
+    };
+
+    /**
+     * Acquires into a reservation: installs the instance if the reservation is still current, else
+     * (a failure, an interruption, a close or `stopAll` meanwhile) releases what was acquired, so
+     * nothing it started outlives the reservation. `done` tells every waiter.
+     */
+    const acquireInto = (
+      at: number,
+      reservation: Starting<A>,
+    ): Effect.Effect<A, SupervisorUnavailable> =>
+      Effect.uninterruptibleMask((restore) =>
+        Effect.gen(function* () {
+          let slot: Slot<A> | null = null;
+          let pending: Death | null = null;
+          const died = (death: Death): void => {
+            if (slot) onDeath(slot, death);
+            else pending ??= death; // died while starting
+          };
+          const acquired = yield* Effect.exit(
+            restore(Scope.provide(reservation.scope)(spec.acquire(died))),
+          );
+          if (slots[at] === reservation) slots[at] = null;
+          if (Exit.isSuccess(acquired) && !closed && reservation.generation === generation) {
+            slot = { kind: 'running', value: acquired.value, scope: reservation.scope };
+            slots[at] = slot;
+            Deferred.doneUnsafe(reservation.done, Effect.succeed(acquired.value));
+            if (pending) onDeath(slot, pending);
+            return acquired.value;
+          }
+          yield* Scope.close(reservation.scope, acquired);
+          const error = closedError(closed ? 'closed' : 'stopped');
+          Deferred.doneUnsafe(reservation.done, Effect.fail(error));
+          if (Exit.isFailure(acquired) && !Exit.hasInterrupts(acquired)) {
+            return yield* Effect.failCause(acquired.cause as Cause.Cause<never>);
+          }
+          if (Exit.isFailure(acquired)) return yield* Effect.interrupt;
+          return yield* Effect.fail(error);
+        }),
+      );
 
     const freeSlot = (): number => slots.indexOf(null);
     const unavailable = (): SupervisorUnavailable | null =>
       closed
-        ? new SupervisorUnavailable({ name: spec.name, state: 'closed', reason: 'closed' })
+        ? closedError('closed')
         : gaveUp
           ? new SupervisorUnavailable({ name: spec.name, state: 'gave-up', reason: gaveUpReason })
           : null;
@@ -248,18 +335,37 @@ export const makeSupervisor = <A>(
     const canStartNow = (): boolean =>
       !closed && !gaveUp && freeSlot() >= 0 && runSync(Clock.currentTimeMillis) >= retryAt;
 
+    /** `effect`, or the failure of the current generation's gate if that comes first. */
+    const gated = <X>(effect: Effect.Effect<X, SupervisorUnavailable>) =>
+      Effect.raceFirst(effect, Deferred.await(gate));
+
     const get: Effect.Effect<A, SupervisorUnavailable> = Effect.gen(function* () {
       for (;;) {
         const error = unavailable();
         if (error) return yield* Effect.fail(error);
-        const live = slots.find((s) => s !== null);
+        const live = slots.find(isRunning);
         if (live) return live.value;
+        const starting = slots.filter(isStarting);
+        const current = starting.find((s) => s.generation === generation);
+        // A start in flight in this generation: share it.
+        if (current) return yield* gated(Deferred.await(current.done));
         const now = yield* Clock.currentTimeMillis;
         if (now < retryAt) {
-          yield* Effect.sleep(Duration.millis(retryAt - now));
+          yield* gated(Effect.sleep(Duration.millis(retryAt - now)));
           continue;
         }
-        return yield* startIn(freeSlot());
+        const at = freeSlot();
+        if (at < 0) {
+          // Every slot holds a cancelled start still acquiring: wait for one to end.
+          yield* gated(Effect.raceAll(starting.map((s) => Effect.ignore(Deferred.await(s.done)))));
+          continue;
+        }
+        // Reserved now, acquired in a fiber of its own: every caller, this one included, waits
+        // through the gate, so `stopAll` or a close ends the wait even while an (uninterruptible)
+        // acquisition runs; the start itself is shared and finishes or is released either way.
+        const reservation = reserve(at);
+        runFork(acquireInto(at, reservation));
+        return yield* gated(Deferred.await(reservation.done));
       }
     });
 
@@ -272,21 +378,41 @@ export const makeSupervisor = <A>(
         return release(slot);
       });
 
+    const stopAll: Effect.Effect<void> = Effect.suspend(() => {
+      if (closed) return Effect.void;
+      // A deliberate stop: no backoff for the next start (the crash window is kept).
+      retryAt = 0;
+      endGeneration(closedError('stopped'));
+      const live = slots.filter(isRunning);
+      for (const slot of live) slots[slots.indexOf(slot)] = null;
+      return Effect.forEach(live, release, { concurrency: 'unbounded', discard: true });
+    });
+
     yield* Effect.addFinalizer(() =>
       Effect.suspend(() => {
         closed = true;
-        const live = slots.filter((s): s is Slot<A> => s !== null);
-        slots.fill(null);
-        return Effect.forEach(live, release, { concurrency: 'unbounded', discard: true });
+        endGeneration(closedError('closed'));
+        const live = slots.filter(isRunning);
+        const starting = slots.filter(isStarting);
+        for (const slot of live) slots[slots.indexOf(slot)] = null;
+        return Effect.forEach(live, release, { concurrency: 'unbounded', discard: true }).pipe(
+          // Starts in flight release what they acquired themselves once their acquisition ends.
+          Effect.andThen(
+            Effect.forEach(starting, (s) => Effect.ignore(Deferred.await(s.done)), {
+              concurrency: 'unbounded',
+              discard: true,
+            }),
+          ),
+        );
       }),
     );
 
     const supervisor: Supervisor<A> = {
       get running() {
-        return slots.flatMap((s) => (s ? [s.value] : []));
+        return slots.flatMap((s) => (isRunning(s) ? [s.value] : []));
       },
       get slots() {
-        return slots.map((s) => s?.value ?? null);
+        return slots.map((s) => (isRunning(s) ? s.value : null));
       },
       get canStartNow() {
         return canStartNow();
@@ -299,12 +425,18 @@ export const makeSupervisor = <A>(
       },
       startNow() {
         if (!canStartNow()) return null;
-        return runSync(startIn(freeSlot()));
+        const at = freeSlot();
+        const exit = runSync(Effect.exit(acquireInto(at, reserve(at))));
+        return Exit.isSuccess(exit) ? exit.value : null;
       },
       get,
       stop,
       stopNow(instance) {
         runSync(stop(instance));
+      },
+      stopAll,
+      stopAllNow() {
+        runSync(stopAll);
       },
     };
     return supervisor;

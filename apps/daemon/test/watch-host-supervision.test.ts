@@ -10,11 +10,12 @@ import path from 'node:path';
 import { assert, describe, it } from '@effect/vitest';
 import { noopLogger } from '@octopus-diff/contracts';
 import type parcelWatcher from '@parcel/watcher';
+import * as Duration from 'effect/Duration';
 import * as Effect from 'effect/Effect';
 import * as Exit from 'effect/Exit';
 import * as Scope from 'effect/Scope';
 import * as TestClock from 'effect/testing/TestClock';
-import { makeWatchHost, type WatchHost } from '../src/watch-host.js';
+import { makeWatchHost, WATCH_HOST_RESTART_POLICY, type WatchHost } from '../src/watch-host.js';
 import { tempDir } from './helpers.js';
 
 const alive = (pid: number | undefined): boolean => {
@@ -187,5 +188,61 @@ describe('watch host supervision (TestClock)', () => {
       );
       assert.match(refused?.message ?? '', /watch host gave up/);
     }).pipe(Effect.scoped),
+  );
+
+  /*
+   * PR #100 review (Greptile P1): a subscribe sleeping out a restart backoff when `close()` runs
+   * must reject at once (the watcher's close waits for its subscribes), start no host, and leave
+   * the watch host usable: a later subscribe starts one normally.
+   */
+  it.effect(
+    'close() rejects a subscribe sleeping out a long backoff at once, starts no host, and later subscribes work',
+    () =>
+      Effect.gen(function* () {
+        assert.deepStrictEqual(WATCH_HOST_RESTART_POLICY.backoff?.max, Duration.seconds(30));
+        const dir = yield* Effect.promise(() => tempDir());
+        const h = yield* makeWatchHost({ logger: noopLogger });
+        // Crash until the backoff is at its 30 s cap: each wait is the backoff the previous crash
+        // left (0, 0, 1, 2, 4, 8, 16 s); the 7th crash leaves 30 s, all within the 1 min window.
+        const waits = [0, 0, 1, 2, 4, 8, 16];
+        for (const seconds of waits) {
+          if (seconds > 0) yield* TestClock.adjust(Duration.seconds(seconds));
+          yield* subscribe(h, dir);
+          yield* crash(h);
+        }
+        const startedBefore = h.started;
+        assert.strictEqual(startedBefore, waits.length);
+        let outcome: Error | null = null;
+        let settled = false;
+        h.subscribe(dir, () => {}).then(
+          () => {
+            settled = true;
+          },
+          (error: unknown) => {
+            outcome = error as Error;
+            settled = true;
+          },
+        );
+        yield* settle;
+        yield* TestClock.adjust('29 seconds');
+        yield* settle;
+        assert.isFalse(settled); // still sleeping: 1 s of the backoff is left
+        assert.strictEqual(h.started, startedBefore);
+        h.close();
+        // No clock advance: the close alone settles it (a real deadline only reports a failure).
+        yield* until('the sleeping subscribe to reject', () => settled, 5_000);
+        assert.match((outcome as Error | null)?.message ?? '', /watch host closed/);
+        assert.strictEqual(h.started, startedBefore);
+        assert.isUndefined(h.pid);
+        // Past the rest of the backoff, nothing starts by itself either.
+        yield* TestClock.adjust('1 second');
+        yield* settle;
+        assert.strictEqual(h.started, startedBefore);
+        // A later subscribe starts a host normally, at once.
+        yield* subscribe(h, dir);
+        assert.strictEqual(h.started, startedBefore + 1);
+        assert.isTrue(alive(h.pid));
+      }).pipe(Effect.scoped),
+    30_000,
   );
 });
