@@ -180,6 +180,6 @@ shared harness `test/paged-harness.tsx` can hold and fail requests). DECISIONS #
 - **P2, old navigations overrode new ones** (#361, `state/commands.ts`): a navigation token for the palette jump, for
   `j` at the end and for `n`. A failed load selects nothing.
 
-Mutation checks: see #358-#361. Killed: 13 mutants. Survived: three single layers whose twin catches the same case
+Mutation checks: see #358-#361. Killed: 12 mutants (the two "found" guards of #358 counted once, removed together). Survived: three single layers whose twin catches the same case
 (each "found" guard of #358; the sequence bump in `k`/`J`, also caught by the snapshot), and one equivalent mutant
 (stepping after a failed page at the list's end selects nothing either way).
