@@ -98,6 +98,9 @@ describe('P2-2: the composed listings are bounded', () => {
     expect(cache.get('t\u0000p\u0000a')).toBeDefined();
     cache.set('t\u0000p\u0000huge', memo(5000));
     expect(cache.get('t\u0000p\u0000huge')).toBeUndefined();
+    // ...and evicts nothing else for it.
+    expect(cache.get('t\u0000p\u0000a')).toBeDefined();
+    expect(cache.get('t\u0000p\u0000c')).toBeDefined();
     expect(cache.bytes).toBeLessThanOrEqual(1000);
   });
 
@@ -124,17 +127,33 @@ describe('P2-2: the composed listings are bounded', () => {
     for (let i = 0; i < 3000; i++) writeFileSync(path.join(repo, `big/file-${i}.txt`), `${i}\n`);
     fx.git(repo, 'add', '-A');
     fx.git(repo, 'commit', '-q', '-m', 'big');
-    const { daemon, api } = await start(fx);
+    // The watcher brings the new states in (an explicit refresh would drop every listing anyway).
+    const daemon: Daemon = await startDaemon({
+      host: '127.0.0.1',
+      port: 0,
+      token: TEST_TOKEN,
+      stateDir: await tempDir(),
+      logLevel: 'silent',
+      gitCore: createGitCore({ env: fx.env }),
+      watch: { enabled: true, debounceMs: 50 },
+    });
+    onCleanup(() => daemon.close());
+    const api = client(daemon);
     await api.addProject({ path: repo });
     const id = hashId(repo);
-    await api.refreshWorktree(id);
+    const stateOf = async () =>
+      (await api.listProjects()).projects
+        .flatMap((p) => p.worktrees)
+        .find((w) => w.worktree.id === id)?.summary?.stateHash;
+    await eventually(stateOf, 10_000);
     await api.getTree(id, { path: 'big', limit: 10 });
     await api.getTree(id, {});
     const one = daemon.core.treeListingStats();
     expect(one.listings).toBe(2);
-    for (let i = 0; i < 20; i++) {
+    for (let i = 0; i < 12; i++) {
+      const was = await stateOf();
       writeFileSync(path.join(repo, `big/file-${i}.txt`), `edited ${i}\n`);
-      await api.refreshWorktree(id);
+      await eventually(async () => (await stateOf()) !== was, 10_000);
       await api.getTree(id, { path: 'big', limit: 10 });
       await api.getTree(id, {});
       expect(daemon.core.treeListingStats().listings).toBe(2);
