@@ -4559,3 +4559,40 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
        would then have passed vacuously.
      - A test hook, `helperTest.startDelayMs` (`OCTOPUS_DIFF_TEST_HELPER_START_DELAY_MS` for the whole file),
        rehearses a slow runner: the file passes with 1.5 s and 3 s start delays.
+
+### Spawn helper: a group SIGKILL that missed a member (macOS CI run 43400303908, 2026-11-13)
+
+393. **A process group is SIGKILLed until it is gone, not once.**
+     - **Evidence** (the #392 diagnostics, macOS): after the test SIGKILLed the helper, the fake git's leader `sh`
+       (52029) was gone, but its child `sleep 30` (52043, pgid 52029, ppid 1) was alive 20 s later. No "could not kill"
+       warning was logged, so the parent's one `process.kill(-52029, 'SIGKILL')` returned success and did not reach the
+       child.
+     - **Why the timing fits:** the test kills the helper as soon as the fake has logged its start and the parent
+       knows its pid. That is when the fake forks `sleep`, so the one `killpg` raced a `fork()`.
+     - **Root cause:** Linux makes a group signal reach a child being forked; the evidence says macOS did not here.
+       Without a second SIGKILL nothing ever ends the child. Job control is off in the non-interactive fake, so
+       `sleep` stays in the group, and `detached: true` makes git a session and group leader. The new helper's
+       `S<s` stat is a session leader, as expected.
+     - **Fix:** `reapGroup(pgid)` (`helper-client.ts`) SIGKILLs, checks with `kill(-pgid, 0)`, and SIGKILLs again
+       every 25 ms while the group is there, for at most 10 s, then warns "a git process group survived SIGKILL" with
+       the pgid and the last errno. An ESRCH from a SIGKILL counts as gone only when the check agrees. It is used by
+       the crash cleanup (the retry goes when the group is gone or after the bounded wait, #385, and the reaping
+       continues regardless, so the test knob that skips the wait never skips the kill), by a SIGKILL sent after the
+       helper died, and by the direct path's group SIGKILL (`killTree`; the same race exists there). The helper
+       repeats its own group SIGKILLs while the group is there (5 s), and `shutdown()` makes up to five rounds, 20 ms
+       apart, before exiting.
+     - **Tests:**
+       - a test knob drops the first group SIGKILL after a crash (the macOS miss); the group must still end. Failing
+         first: the child lived;
+       - the CI pattern itself (the leader killed alone, its child alive in the group, then the helper crash): the
+         parent kills the group;
+       - the survival warning, with a zombie whose parent never reaps it (Linux).
+
+       The fake's long sleeps in these tests are 120 s. With 30 s, a survivor could end by itself within the test's
+       deadline, and the old version of the knob test passed for that reason.
+     - **Mutants:** killed: one SIGKILL only, no warning, no reaping after a crash, any check error taken as gone.
+       Survived: "an ESRCH from the SIGKILL is enough". Linux cannot make a group answer ESRCH while it still has
+       members.
+394. **Warm-ups are quick (Greptile P2 on PR #98).** A warm-up in a `FAKE_MODE: 'hang'` runner ran `sleep 30`. The fake
+     now runs every `warm` job in its fast default mode, whatever `FAKE_MODE` says. `helper.test.ts` went from 58 s to
+     29 s.
