@@ -211,7 +211,7 @@ describe('paged file lists in the web (#42)', () => {
     const ids = h.backend
       .listProjects()
       .projects.flatMap((p) => p.worktrees.map((w) => w.worktree.id));
-    for (const id of ids) markFirst(h.backend, id, id === h.first ? FILES : 8);
+    for (const id of ids) markFirst(h.backend, id, id === h.first ? FILES : PAGE + 5);
     await act(async () => {
       await h.qc.invalidateQueries();
     });
@@ -224,13 +224,54 @@ describe('paged file lists in the web (#42)', () => {
     });
     const view = h.store.getState().view;
     if (view.kind !== 'worktree') throw new Error('no worktree');
-    next = { id: view.worktreeId, path: listOf(h.backend, view.worktreeId)[8]?.path as string };
+    next = {
+      id: view.worktreeId,
+      path: listOf(h.backend, view.worktreeId)[PAGE + 5]?.path as string,
+    };
     await waitFor(() => expect(selectedPath(h.store)).toBe(next?.path));
     // Its list was loaded through the file, so the selection holds (no repair to the top).
     await waitFor(() =>
       expect(screen.getByTestId(TEST_IDS.diffViewer).getAttribute('data-path')).toBe(next?.path),
     );
     expect(selectedPath(h.store)).toBe(next.path);
+    // Its list was asked for through the file at once (not a page, then a lookup).
+    const id = next.id;
+    const firstList = h.requests.find(
+      (r) =>
+        r.includes(`/worktrees/${id}/files?scope=working&`) &&
+        !r.includes('unreviewed') &&
+        !r.includes('after='),
+    );
+    expect(
+      firstList,
+      h.requests.filter((r) => r.includes(`/worktrees/${id}/files`)).join('\n'),
+    ).toContain(`limit=${PAGE + 6}`);
+    // The open worktree's counts said nothing was left there: it was not asked.
+    expect(
+      h.requests.some((r) => r.includes(`/worktrees/${h.first}/files`) && r.includes('unreviewed')),
+    ).toBe(false);
+  });
+
+  it('a refresh that moves the selection past the loaded files loads through it', async () => {
+    const h = await setup();
+    await waitFor(() => expect(loaded()).toBe(PAGE));
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Load more' }));
+    });
+    await waitFor(() => expect(loaded()).toBe(2 * PAGE));
+    // The last loaded row; the new file (src/agent/…) sorts before it and pushes it out.
+    const pick = listOf(h.backend, h.first)[2 * PAGE - 1];
+    if (!pick) throw new Error('no file');
+    await act(async () => {
+      h.store.setState({ selected: { worktreeId: h.first, path: pick.path } });
+    });
+    await act(async () => {
+      h.backend.mutate(h.first, 'add');
+    });
+    const now = listOf(h.backend, h.first);
+    expect(now.findIndex((f) => f.path === pick.path)).toBe(2 * PAGE);
+    await waitFor(() => expect(loaded()).toBeGreaterThan(2 * PAGE));
+    expect(selectedPath(h.store)).toBe(pick.path);
   });
 
   it("the palette's file search asks the daemon and jumps to a file that is not loaded", async () => {

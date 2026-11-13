@@ -6,8 +6,8 @@
  * keeps working on the prefix; what must see the whole list asks the daemon (`n`: `nextOnServer`,
  * the palette: `q`, bulk review: no `paths`).
  *
- * - The query function fetches as many files as the cache had (or were asked for, `wantFiles`),
- *   at least one page: a refresh after an edit keeps what the user scrolled to and the selection.
+ * - The query function fetches as many files as were loaded or asked for (`wantFiles`), at
+ *   least one page: a refresh after an edit keeps what the user scrolled to and the selection.
  *   Pages after the first follow `nextCursor`; a `restarted` page (the state moved in between)
  *   starts over, so the prefix is always one state's.
  * - `ensureFiles` loads more pages into the cached prefix (scrolling, a jump to a file further
@@ -133,7 +133,10 @@ export async function fetchFileList(
   }
 }
 
-/** The files query function: the cached count, what was wanted, at least a page (see the module comment). */
+/**
+ * The files query function: as many files as were wanted (every load past the first page goes
+ * through `ensureFiles`, which records it), at least a page (see the module comment).
+ */
 export function filesQueryFn(
   api: ApiClient,
   queryClient: QueryClient | undefined,
@@ -141,16 +144,16 @@ export function filesQueryFn(
   scope: DiffScope,
 ) {
   return ({ signal }: { signal: AbortSignal }): Promise<FilesResponse> => {
-    let want = filesPaging.pageSize;
-    if (queryClient) {
-      const cached = queryClient.getQueryData<FilesResponse>(queryKeys.files(worktreeId, scope));
-      want = Math.max(
-        want,
-        cached?.files.length ?? 0,
-        wantedMap(queryClient).get(keyOf(worktreeId, scope)) ?? 0,
-      );
-    }
-    return fetchFileList(api, worktreeId, scope, want, signal);
+    const wantedCount = queryClient
+      ? (wantedMap(queryClient).get(keyOf(worktreeId, scope)) ?? 0)
+      : 0;
+    return fetchFileList(
+      api,
+      worktreeId,
+      scope,
+      Math.max(filesPaging.pageSize, wantedCount),
+      signal,
+    );
   };
 }
 
