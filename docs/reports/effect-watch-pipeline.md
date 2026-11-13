@@ -133,7 +133,8 @@ subscribe path is unchanged.
   - the re-subscribe gate without its gap.
 
 **Bench.** Default (`pnpm --filter @octopus-diff/e2e bench`, 30 × 3 with the UI), alternating `main` (`9bf3e6d`, its
-own worktree and build) and this branch, two runs each:
+own worktree and build) and this branch, two runs each. The branch build was `6da222d`; `5fde9cc` only removes an abort
+listener when a client is dropped. Every other row of the table above ran on `5fde9cc` or later:
 
 | Metric | main 1 | branch 1 | main 2 | branch 2 | budget |
 |---|---|---|---|---|---|
