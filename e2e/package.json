@@ -11,6 +11,7 @@
     "test": "vitest run --passWithNoTests",
     "test:e2e": "playwright test",
     "bench": "tsx bench/bench.ts",
+    "bench:paged": "tsx bench/paged-files.ts",
     "profile:real": "tsx --conditions=@octopus-diff/source bench/real-repos.ts",
     "screenshots": "tsx scripts/screenshots.ts",
     "lint": "biome check ."

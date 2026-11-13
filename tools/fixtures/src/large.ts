@@ -14,7 +14,10 @@ import { cleanGitEnv, createIsolatedGitEnv, type IsolatedGitEnv, runGit } from '
  * - `stale-index`: a linked worktree whose index no longer matches the files' stat data (every
  *   file looks changed to git until the index is refreshed, which `--no-optional-locks` never
  *   does), so every `git status` re-hashes all tracked files;
- * - `untracked-heavy`: a linked worktree with tens of thousands of untracked files.
+ * - `untracked-heavy`: a linked worktree with tens of thousands of untracked files;
+ * - `many-changed` (only with `manyChanged` > 0, issue #42): a linked worktree where a format run
+ *   rewrote tens of thousands of tracked files, so its file list is that long (no cap applies to
+ *   tracked changes).
  *
  * Every worktree also carries its own dirty tracked and untracked files. The history is built with
  * `git fast-import`, so 100k files take seconds. Fixture setup is the one place outside git-core
@@ -31,6 +34,11 @@ export interface LargeLayoutOptions {
   manyUntracked: number;
   /** Lines of the tracked file the main worktree rewrites completely. */
   rewriteLines: number;
+  /**
+   * Tracked files a format run rewrote in the `many-changed` worktree (#42); 0 or absent: no such
+   * worktree. At most `files`.
+   */
+  manyChanged?: number;
 }
 
 /** `large` is the issue's layout; `large-ci` keeps the same shape at ~20k files for CI. */
@@ -49,10 +57,22 @@ export const LARGE_LAYOUTS = {
     manyUntracked: 5_000,
     rewriteLines: 30_000,
   },
+  /**
+   * Paged file lists (#42): 40k tracked files, and a linked worktree with 36k of them rewritten
+   * (the issue's "36k-file worktree"); the other worktrees stay small.
+   */
+  'large-paged': {
+    files: 40_000,
+    dirtyTracked: 100,
+    untracked: 150,
+    manyUntracked: 1_000,
+    rewriteLines: 30_000,
+    manyChanged: 36_000,
+  },
 } as const satisfies Record<string, LargeLayoutOptions>;
 export type LargeLayoutName = keyof typeof LARGE_LAYOUTS;
 
-export type LargeWorktreeRole = 'main' | 'stale-index' | 'untracked-heavy';
+export type LargeWorktreeRole = 'main' | 'stale-index' | 'untracked-heavy' | 'many-changed';
 
 export interface LargeWorktree {
   role: LargeWorktreeRole;
@@ -186,6 +206,20 @@ async function makeIndexStale(worktreePath: string, files: number): Promise<void
   );
 }
 
+/** The `many-changed` worktree: the first `count` tracked files rewritten (a format run), plus new files. */
+async function formatRun(worktreePath: string, options: LargeLayoutOptions, count: number) {
+  await forEachLimit(range(count), 64, (i) =>
+    writeFile(
+      join(worktreePath, largeFilePath(i)),
+      `export const v${i} = ${i};\n// line\n`.repeat(3).replaceAll(' = ', '='),
+    ),
+  );
+  await mkdir(join(worktreePath, 'scratch', 'gen'), { recursive: true });
+  await forEachLimit(range(options.untracked), 64, (u) =>
+    writeFile(join(worktreePath, 'scratch', 'gen', `new_${u}.ts`), `export const u${u} = 1;\n`),
+  );
+}
+
 async function dirtyWorktree(
   worktreePath: string,
   options: LargeLayoutOptions,
@@ -257,6 +291,12 @@ export async function generateLargeFixtures(
     await dirtyWorktree(heavy, options, 'untracked-heavy', {
       manyUntracked: options.manyUntracked,
     });
+    const manyChanged = Math.min(options.manyChanged ?? 0, options.files);
+    const many = join(root, 'mono-many-changed');
+    if (manyChanged > 0) {
+      await git(mono, ['worktree', 'add', '-q', '-b', 'feat-many-changed', many, 'main']);
+      await formatRun(many, options, manyChanged);
+    }
 
     const worktrees: LargeWorktree[] = [
       {
@@ -283,6 +323,18 @@ export async function generateLargeFixtures(
         expectedModified: options.dirtyTracked,
         expectedUntracked: options.untracked + options.manyUntracked,
       },
+      ...(manyChanged > 0
+        ? [
+            {
+              role: 'many-changed' as const,
+              name: 'mono-many-changed',
+              path: many,
+              branch: 'feat-many-changed',
+              expectedModified: manyChanged,
+              expectedUntracked: options.untracked,
+            },
+          ]
+        : []),
     ];
     let cleaned = false;
     return {
