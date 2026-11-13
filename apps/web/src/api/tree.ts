@@ -255,8 +255,8 @@ export function collectTreeDirs(
 
 /**
  * Refetches the working-view directories the batch named (only those someone observes refetch
- * now; the rest are marked stale). Tree views (`ref`) are left alone: a commit does not change,
- * and a branch's view has its own staleness.
+ * now; the rest are marked stale). On `all` (HEAD moved, or no `dirs`) the tree views of a ref
+ * name (`HEAD`, a branch) refetch too; a full commit id's view never changes.
  */
 export async function flushTreeDirs(
   queryClient: QueryClient,
@@ -265,7 +265,21 @@ export async function flushTreeDirs(
   const tasks: Promise<unknown>[] = [];
   for (const [worktreeId, dirs] of effects) {
     if (dirs === 'all') {
-      tasks.push(queryClient.invalidateQueries({ queryKey: treeKeys.working(worktreeId) }));
+      // Everything of the working view, and the tree views that follow a ref (`HEAD`, a branch):
+      // `all` is what HEAD moving sends (security review P3-5). A full commit id's view never moves.
+      tasks.push(
+        queryClient.invalidateQueries({
+          predicate: (query) => {
+            const [kind, id, ref] = query.queryKey as readonly unknown[];
+            return (
+              kind === 'tree' &&
+              id === worktreeId &&
+              typeof ref === 'string' &&
+              (ref === '' || !FULL_OID.test(ref))
+            );
+          },
+        }),
+      );
       continue;
     }
     for (const dir of dirs) {

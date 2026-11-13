@@ -329,4 +329,35 @@ describe('tree deltas', () => {
     expect(treeRetry(0, new ApiClientError('conflict', 'other', 409, {}))).toBe(false);
     expect(treeRetry(0, new Error('network'))).toBe(true);
   });
+
+  it('on all, the views of HEAD and of a branch refetch too; a commit id view does not (P3-5)', async () => {
+    const fake = fakeApi(dirsOf({ '': [entry('', 'a')] }));
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper = wrapperFor(fake.api, queryClient);
+    const hooks = [
+      renderHook(() => useTree(W, { path: '' }), { wrapper }),
+      renderHook(() => useTree(W, { path: '' }, { ref: 'HEAD' }), { wrapper }),
+      renderHook(() => useTree(W, { path: '' }, { ref: 'main' }), { wrapper }),
+      renderHook(() => useTree(W, { path: '' }, { ref: 'b'.repeat(40) }), { wrapper }),
+      renderHook(() => useTree('fedcba9876543210', { path: '' }, { ref: 'HEAD' }), { wrapper }),
+    ];
+    for (const h of hooks) await waitFor(() => expect(h.result.current.data).toBeDefined());
+    fake.calls.length = 0;
+    const effects = emptyEffects();
+    collectEventEffects(queryClient, changed({ all: true, dirs: [] }), effects, {
+      reconnect: false,
+    });
+    await flushEffects(queryClient, effects);
+    await waitFor(() => expect(fake.calls).toHaveLength(3));
+    expect(fake.calls.map((c) => c.ref ?? 'working').sort()).toEqual(['HEAD', 'main', 'working']);
+    // A named-directories event leaves the ref views alone.
+    fake.calls.length = 0;
+    const named = emptyEffects();
+    collectEventEffects(queryClient, changed({ all: false, dirs: [{ path: '' }] }), named, {
+      reconnect: false,
+    });
+    await flushEffects(queryClient, named);
+    await waitFor(() => expect(fake.calls).toHaveLength(1));
+    expect(fake.calls[0]?.ref).toBeUndefined();
+  });
 });
