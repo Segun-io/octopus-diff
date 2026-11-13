@@ -142,4 +142,29 @@ describe.skipIf(!GIT_CORE_IMPLEMENTED)('review range cache (#49)', () => {
     );
     expect(changed).toBeDefined();
   });
+
+  it('keeps one range per worktree', async () => {
+    const s = await setup();
+    const linked = path.join(s.fx.root, 'app-linked');
+    s.fx.git(s.repo, 'worktree', 'add', '-q', '-b', 'linked', linked);
+    await appendFile(path.join(linked, 'a.txt'), 'linked edit\n');
+    await s.api.setFocus({ worktreeId: s.worktreeId });
+    await eventually(async () => {
+      const { projects } = await s.api.listProjects();
+      const rows = projects.flatMap((p) => p.worktrees);
+      return rows.length === 2 && rows.every((w) => w.summary?.review !== undefined);
+    }, 10_000);
+    await s.settle();
+    // A second edit of the linked worktree: its first range (no bookmark yet) was not kept, this one is.
+    const hashes = async () =>
+      (await s.api.listProjects()).projects
+        .flatMap((p) => p.worktrees)
+        .map((w) => w.summary?.stateHash);
+    const before = await hashes();
+    await appendFile(path.join(linked, 'a.txt'), 'linked edit 2\n');
+    await eventually(async () => (await hashes()).some((h, i) => h !== before[i]), 10_000);
+    await s.api.listProjects();
+    await s.settle();
+    expect(s.daemon.core.cacheStats().ranges.entries).toBe(2);
+  });
 });
