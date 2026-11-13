@@ -32,6 +32,20 @@ function bearer(token: string): Record<string, string> {
   return { authorization: `Bearer ${token}` };
 }
 
+/**
+ * The address after sign-in: the token fragment is gone and no token is in the URL. Since #50 the
+ * app writes the selected worktree into the query (`?worktree=…`), so the path is checked, not the
+ * whole URL.
+ */
+function expectNoTokenInAddress(url: string, daemon: { url: string; token: string }): void {
+  const parsed = new URL(url);
+  expect(parsed.origin).toBe(daemon.url);
+  expect(parsed.pathname).toBe('/');
+  expect(parsed.hash).toBe('');
+  expect(url).not.toContain(daemon.token);
+  expect(parsed.searchParams.has('token')).toBe(false);
+}
+
 function proof(token: string, challenge: string): string {
   return createHmac('sha256', token).update(healthProofMessage(challenge)).digest('hex');
 }
@@ -266,8 +280,7 @@ test.describe('§8.9 auth v2 in the browser', () => {
   }) => {
     expect(daemon.authUrl).toBe(`${daemon.url}/#token=${daemon.token}`);
     await app.open(daemon.authUrl);
-    expect(page.url()).toBe(`${daemon.url}/`);
-    expect(page.url()).not.toContain(daemon.token);
+    expectNoTokenInAddress(page.url(), daemon);
     expect(await page.evaluate((key) => localStorage.getItem(key), TOKEN_STORAGE_KEY)).toBe(
       daemon.token,
     );
@@ -301,7 +314,7 @@ test.describe('§8.9 auth v2 in the browser', () => {
     context,
   }) => {
     await app.open(`${daemon.url}/?token=${daemon.token}`);
-    expect(page.url()).toBe(`${daemon.url}/`);
+    expectNoTokenInAddress(page.url(), daemon);
     expect(await context.cookies()).toEqual([]);
   });
 
@@ -332,7 +345,8 @@ test.describe('§8.9 auth v2 in the browser', () => {
     // Same document, fragment-only navigation: the app picks up the token and reloads.
     await page.goto(daemon.authUrl);
     await app.waitReady();
-    await expect.poll(() => page.url()).toBe(`${daemon.url}/`);
+    await expect.poll(() => new URL(page.url()).hash).toBe('');
+    expectNoTokenInAddress(page.url(), daemon);
   });
 
   test('a wrong #token= is stripped and leads to the sign-in hint', async ({ daemon, page }) => {
