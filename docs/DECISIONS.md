@@ -5758,7 +5758,7 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      the log. `--renderer-url` takes loopback hosts only (`localhost`, 127.0.0.0/8, `[::1]`), packaged or not.
      `--remote-debugging-pipe` is **not** refused: it is a channel to the launching process only, which (with
      `RunAsNode` on) can already run any code as the user; the packaged smoke needs it (#510). Verified on the
-     packaged binary: no "DevTools listening" line before the exit. 17 unit tests (`test/args.test.ts`), 12 new
+     packaged binary: no "DevTools listening" line before the exit. 14 unit tests (`test/args.test.ts`), 12 new
      mutants in `scripts/mutation-check.mjs`.
 510. **The packaged-app smoke drives the window over `--remote-debugging-pipe`, not Playwright's `_electron.launch`.**
      `_electron.launch` starts Electron with `-r loader.js --inspect=0 --remote-debugging-port=0` (read in
