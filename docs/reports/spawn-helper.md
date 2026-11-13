@@ -331,3 +331,35 @@ processes behind, which the first mutation run did (11 stopped helpers and their
   | Idle CPU | 0.23 % | 0.40 % |
 
   Every budget passes in both runs.
+
+## Stability under load (lead repro, 2026-11-13)
+
+**Repro recipe.**
+1. Start busy loops, recording their PIDs to a file: `node -e 'for (;;) {}' & printf '%s\n' "$!" >> pids`, 8 or 14
+   of them on this 12-core machine.
+2. Run `pnpm test`, every package in parallel as CI does.
+3. Stop the loops by PID from the file (never `pkill -f`).
+
+CPU load alone (`helper.test.ts` under 14 loops) passed 5 of 5. `pnpm test` under 8 loops failed 2 of 3 with the
+lead's errors.
+
+| Failure | Product or test | Fix |
+|---|---|---|
+| "a helper killed with SIGKILL mid-request": `git status failed: the git helper process exited` | **Product** (DECISIONS #385). Two parts: (1) after the group wait, a group the reaper had not taken yet made the request non-retryable, contradicting #376; (2) an external SIGKILL that lands between starting git and the pid record (a real window under load) correctly gives no retry, and the test raced into it | Retry after the bounded wait whatever the reaper did (the wait is 10 s); failing-first test with `groupGoneWaitMs: 0`. The test now kills once `helperChildPids()` knows the pid |
+| "parent death": helpers and git "not reached" in 5 s | **Test**: `kill(pid, 0)` counts zombies that init had not reaped, a 5 s wait | Zombie-aware, scoped `untilGone` through POSIX `ps -A -o pid=,pgid=,stat=` (macOS too, no /proc), 20 s, only the test's own pids and groups |
+| "a stopped helper does not wedge the runner": `group … gone` | **Test**, plus the residual gap of #388: stopped before it wrote the pid, a helper leaves that git unknown and unkillable (the run still settles); 3 s waits counted zombies | The test stops the helpers once both pids are known; zombie-aware 20 s waits |
+| (found while analysing) the watchdog SIGKILLed a helper that was only slow to report an exit | **Product** (DECISIONS #386) | PING/PONG probe before the SIGKILL; failing-first test with exits reported 4 s late (it killed the healthy helper and restarted the other request) |
+
+Mutation check of the new code: 4 of 4 killed (retry only when the group is gone; no probe; PONG ignored; the helper
+not answering PING). The tests use only POSIX process semantics: `kill(-pgid, 0)`, `ps` with POSIX columns,
+`$PPID`, BSD-compatible `head -c`, `wc -c`, `cksum`, `sleep 0.01`; nothing reads /proc.
+
+**Results** (head `33b2f7b`, plus this doc):
+- `helper.test.ts` under 14 busy loops: **10 of 10 green with the helper on** (38 passed each) and **10 of 10 with it
+  off** (12 passed, 26 skipped each).
+- `pnpm test` under 8 busy loops: **10 of 10 green** (git-core 480 passed, 1 skipped; daemon 420 passed, 4 skipped,
+  each run). Before the fixes the same recipe failed 4 of 10 on the stopped-helper test and 1 of 3 on the
+  mid-request one.
+- Folding mode: git-core 465 passed, 16 skipped; daemon 418 passed, 6 skipped. Helper off: git-core 454 passed,
+  27 skipped; daemon 419 passed, 5 skipped.
+- `pnpm lint` exit 0, `pnpm typecheck` exit 0. No helper process and none of my git processes left after the runs.
