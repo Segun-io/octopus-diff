@@ -4286,3 +4286,48 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      `J`; `n` while it asks, then `k` (and no page loaded for it); `n` while it loads through its answer, then `k`.
      Mutations killed: select after a failure; no token in the jump, in `j` at the end, after `n`'s ask, before `n`'s
      move. The sequence bumps in `k`/`J` alone survive: the snapshot catches those changes too.
+
+### Paged lists: the PR #97 review, second round (Greptile, 2026-11-13)
+
+362. **The selection lookup's record belongs to its worktree, scope and state (P1).** Its key was the selection and the
+     list's `stateHash`, but every scope of a worktree has the same `stateHash`: after a lookup that found its file, a
+     switch to a partly loaded scope without that file matched the old `found` record, which skipped both a new lookup
+     and the repair, so the file stayed selected. The key is now worktree, `scopeKey(scope)`, `stateHash` and selection,
+     and a `found` record also checks that the cached list of this worktree and scope still holds the file before
+     it waits. The repair's place in the list (`lastIndex`) also starts over in another scope (another list), so the
+     selection goes to the first file there. Test (web, mock, real controls): a lookup records `found` in working
+     scope, then the scope control switches to a partly loaded unstaged scope without the file; the selection goes to
+     its first file (failed before: stuck). Mutations: the key without the scope, or the record not re-checked,
+     each survive alone (one covers the other); both removed fail (2 of 2); the place not reset per scope fails.
+363. **The other keys of the paging code were checked for the same gap** (omitting the worktree, the scope, the
+     layout or filters, or the state). Fixed:
+     - *Cursors* (daemon `#pageable`, mock): the list key had the state and scope but not the worktree; two worktrees
+       with the same state and files accepted each other's cursors (harmless for identical lists, but not what the
+       contract says). The worktree id is now part of it. Daemon test with a fake git-core whose two repositories
+       share a `stateHash`: the other worktree's cursor restarts (failed before); mutation killed.
+     - *The navigation token* (`useCommands`): its snapshot was view, scope and selection. It now also holds the
+       layout, the eye, the "from main" chip and open groups, and the sidebar's filters (what decides where `j`/`n`
+       land, and which worktrees `n` may open). Test: `j` at the end, then the Tree view button; the pending step is
+       dropped. Mutation (layout left out) killed.
+     - *The palette's file search*: its query key had no state, so results stayed for 5 s after an edit (a removed
+       file was still offered). The key now holds the open list's `stateHash`. Test: the palette open on a file that
+       a refresh removes; its result goes. Mutation killed.
+     - *The load-more failure record*: it was keyed by the cursor only. Since the cursor now covers worktree, scope and
+       state it could not collide any more, but the record now says all four explicitly (no test of its own: no case
+       makes two pages share a cursor).
+     Checked and right as they were: `ensureFiles` single-flight and the wanted counts (keyed by the files query key:
+     worktree and scope; a count, not data, so not by state); the appended page (applied only while the cached data's
+     `nextCursor` is still the one the page continued from, so never onto another state); the paging boundary (from
+     the files query of the open worktree and scope, else the inbox row of the inbox scope; the tree layout's order
+     never enters it, #359); `ensureFiles`'s data (the files query has no placeholder data, so another scope never
+     shows the previous scope's rows); the inbox rows' cursors (built with the same list key as `/files`, so a row's
+     `filesNextCursor` pages on there); the `unreviewed` view's fingerprint (it covers the review marks); the daemon's
+     `#ordered` memo (per listed array, so per state); `currentFile` (looks up the files query of the event's
+     worktree and the diff's scope). The web never queries an `unreviewed`-filtered list (the eye filters loaded rows),
+     so no cached key depends on that filter.
+364. **`j` at the end of the loaded rows steps once the new rows are rendered.** Found while writing the layout test:
+     right after its page loaded, `j` stepped through the model of the render before (the rows without the page), so
+     at the last loaded row it often did not step at all. The step is now kept (`pendingStep`, with its token and the
+     row count it saw) and taken by an effect once the model has more rows, or dropped when the token is no longer
+     current. Test: `j` at the 20th of 20 loaded rows goes to the 21st (failed before). Mutation (step through the
+     stale render) killed.

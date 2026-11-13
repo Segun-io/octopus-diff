@@ -183,3 +183,37 @@ shared harness `test/paged-harness.tsx` can hold and fail requests). DECISIONS #
 Mutation checks: see #358-#361. Killed: 12 mutants (the two "found" guards of #358 counted once, removed together). Survived: three single layers whose twin catches the same case
 (each "found" guard of #358; the sequence bump in `k`/`J`, also caught by the snapshot), and one equivalent mutant
 (stepping after a failed page at the list's end selects nothing either way).
+
+## PR #97 review, second round (Greptile: one P1)
+
+- **P1, a scope switch left the selection stuck** (DECISIONS #362, `App.tsx` `useSelectionRepair`): the lookup
+  record is keyed by worktree, scope, state and selection. A `found` record re-checks that this worktree's and scope's
+  cached list holds the file. The hand-over place starts over in another scope. The test (failing first) selects through a
+  lookup in the working scope, then switches to a partly loaded unstaged scope without the file with the scope control;
+  the selection goes to its first file.
+- **Every other key of the paging code was checked** (#363). The table says what each key had, what it lacked, and
+  what was done:
+
+  | Key | Had | Lacked | Done |
+  |---|---|---|---|
+  | Selection lookup record | selection, state | worktree (in the selection), **scope** | key + re-check of the cached list (#362) |
+  | Cursor / list key (daemon, mock) | state, scope, files | **worktree** | added; daemon test with two worktrees of one state |
+  | Navigation token snapshot | view, scope, selection | **layout, eye, from-main view, sidebar filters** | added; test with the Tree view button |
+  | Palette file-search query key | worktree, scope, text | **state** | added; test: a removed file's result goes |
+  | Load-more failure record | cursor (now covers the rest) | explicit worktree, scope, state | added (no case to test) |
+  | `ensureFiles` single-flight, wanted counts | files query key (worktree, scope) | nothing (a count, not data) | unchanged |
+  | Appended pages | the cursor they continued from | nothing | unchanged |
+  | Paging boundary | the open files query / the inbox row of the inbox scope | nothing (never the tree order) | unchanged |
+  | Inbox row cursors | the `/files` list key | nothing | unchanged (now with the worktree too) |
+  | `unreviewed` view fingerprint | marks | nothing | unchanged; the web never caches an unreviewed-filtered list |
+  | Daemon `#ordered` memo, `currentFile` | listed array; event worktree and diff scope | nothing | unchanged |
+
+- **Found on the way** (#364): `j` at the end of the loaded rows stepped through the previous render's rows and often did
+  not step at all. The step now waits for the render with the new rows. A test that failed first and a killed mutation
+  cover it.
+
+Tests added: `apps/web/test/paged-review.test.tsx` +4 (scope switch, `j` steps into the next page, layout switch drops
+a pending step, palette results follow the state), `apps/daemon/test/paged-cursor-keys.test.ts` (1). Mutations killed:
+the scope switch with both of its layers removed (each alone survives: one covers the other), the place not reset per
+scope, the daemon key without the worktree, the snapshot without the layout, the stale step, the palette key without the
+state.
