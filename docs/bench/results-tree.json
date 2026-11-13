@@ -1,5 +1,5 @@
 {
-  "date": "2026-11-13T12:22:21.660Z",
+  "date": "2026-11-13T13:13:03.306Z",
   "machine": {
     "platform": "linux",
     "release": "6.18.58.1-microsoft-standard-WSL2",
@@ -13,45 +13,45 @@
     "manyUntracked": 30000,
     "rewriteLines": 300000
   },
-  "generationMs": 13432,
+  "generationMs": 9585,
   "gitCore": {
     "recursiveFiles": 100002,
     "lsTreeRootColdMs": {
       "n": 5,
-      "p50": 9.56,
-      "p95": 12.68,
-      "max": 12.68
+      "p50": 6.18,
+      "p95": 7.03,
+      "max": 7.03
     },
     "lsTreeRecursiveRootMs": {
       "n": 5,
-      "p50": 67.57,
-      "p95": 88.37,
-      "max": 88.37
+      "p50": 39.91,
+      "p95": 42.65,
+      "max": 42.65
     },
     "fullPathListJsonBytes": 5312001
   },
   "worktrees": {
     "main": {
-      "firstMs": 1215,
+      "firstMs": 527,
       "root": {
         "path": "",
         "entries": 4,
         "changed": 3,
         "bytes": 821,
-        "coldMs": 5.13,
+        "coldMs": 1.6,
         "warm": {
           "n": 30,
-          "p50": 1.52,
-          "p95": 4.4,
-          "max": 10.02
+          "p50": 0.89,
+          "p95": 1.19,
+          "max": 1.2
         },
-        "warmCpuMsPerRequest": 1,
-        "treeViewFirstMs": 1.86,
+        "warmCpuMsPerRequest": 0.67,
+        "treeViewFirstMs": 1.36,
         "treeViewWarm": {
           "n": 10,
-          "p50": 1.46,
-          "p95": 5.78,
-          "max": 5.78
+          "p50": 1.25,
+          "p95": 1.42,
+          "max": 1.42
         }
       },
       "middle": {
@@ -59,20 +59,20 @@
         "entries": 10,
         "changed": 10,
         "bytes": 1836,
-        "coldMs": 15.91,
+        "coldMs": 8.58,
         "warm": {
           "n": 30,
-          "p50": 1.36,
-          "p95": 2.92,
-          "max": 6.36
+          "p50": 0.81,
+          "p95": 1.1,
+          "max": 1.24
         },
         "warmCpuMsPerRequest": 0.67,
-        "treeViewFirstMs": 1.8,
+        "treeViewFirstMs": 1.32,
         "treeViewWarm": {
           "n": 10,
-          "p50": 1.29,
-          "p95": 4.05,
-          "max": 4.05
+          "p50": 1.22,
+          "p95": 1.34,
+          "max": 1.34
         }
       },
       "leaf": {
@@ -80,44 +80,44 @@
         "entries": 25,
         "changed": 0,
         "bytes": 4745,
-        "coldMs": 22.92,
+        "coldMs": 14.42,
         "warm": {
           "n": 30,
-          "p50": 1.37,
-          "p95": 3.94,
-          "max": 5.07
+          "p50": 0.85,
+          "p95": 1.05,
+          "max": 1.07
         },
         "warmCpuMsPerRequest": 0.67,
-        "treeViewFirstMs": 1.22,
+        "treeViewFirstMs": 1.3,
         "treeViewWarm": {
           "n": 10,
-          "p50": 1.79,
-          "p95": 8.35,
-          "max": 8.35
+          "p50": 1.31,
+          "p95": 1.44,
+          "max": 1.44
         }
       }
     },
     "stale-index": {
-      "firstMs": 387,
+      "firstMs": 206,
       "root": {
         "path": "",
         "entries": 4,
         "changed": 2,
         "bytes": 809,
-        "coldMs": 7.26,
+        "coldMs": 1.12,
         "warm": {
           "n": 30,
-          "p50": 1.31,
-          "p95": 3.06,
-          "max": 5.12
+          "p50": 0.78,
+          "p95": 1.01,
+          "max": 1.14
         },
-        "warmCpuMsPerRequest": 0.67,
-        "treeViewFirstMs": 1.4,
+        "warmCpuMsPerRequest": 0.33,
+        "treeViewFirstMs": 1.42,
         "treeViewWarm": {
           "n": 10,
-          "p50": 2.1,
-          "p95": 2.78,
-          "max": 2.78
+          "p50": 1.34,
+          "p95": 1.43,
+          "max": 1.43
         }
       },
       "middle": {
@@ -125,20 +125,20 @@
         "entries": 10,
         "changed": 10,
         "bytes": 1836,
-        "coldMs": 4.1,
+        "coldMs": 1.53,
         "warm": {
           "n": 30,
-          "p50": 1.11,
-          "p95": 3.85,
-          "max": 4.32
+          "p50": 0.79,
+          "p95": 1.06,
+          "max": 1.66
         },
-        "warmCpuMsPerRequest": 0.33,
-        "treeViewFirstMs": 1.52,
+        "warmCpuMsPerRequest": 0.67,
+        "treeViewFirstMs": 1.1,
         "treeViewWarm": {
           "n": 10,
-          "p50": 1.14,
-          "p95": 2.66,
-          "max": 2.66
+          "p50": 1.11,
+          "p95": 1.46,
+          "max": 1.46
         }
       },
       "leaf": {
@@ -146,44 +146,44 @@
         "entries": 25,
         "changed": 0,
         "bytes": 4745,
-        "coldMs": 1.27,
+        "coldMs": 1.4,
         "warm": {
           "n": 30,
-          "p50": 1.21,
-          "p95": 2.93,
-          "max": 3.02
+          "p50": 0.79,
+          "p95": 0.89,
+          "max": 1.02
         },
         "warmCpuMsPerRequest": 0.67,
-        "treeViewFirstMs": 1.67,
+        "treeViewFirstMs": 1.12,
         "treeViewWarm": {
           "n": 10,
-          "p50": 1.6,
-          "p95": 3.84,
-          "max": 3.84
+          "p50": 1.3,
+          "p95": 1.58,
+          "max": 1.58
         }
       }
     },
     "untracked-heavy": {
-      "firstMs": 406,
+      "firstMs": 206,
       "root": {
         "path": "",
         "entries": 4,
         "changed": 2,
         "bytes": 836,
-        "coldMs": 4.47,
+        "coldMs": 1.01,
         "warm": {
           "n": 30,
-          "p50": 1.09,
-          "p95": 2.83,
-          "max": 5.55
+          "p50": 0.73,
+          "p95": 0.82,
+          "max": 0.91
         },
         "warmCpuMsPerRequest": 0.67,
-        "treeViewFirstMs": 4.46,
+        "treeViewFirstMs": 1.26,
         "treeViewWarm": {
           "n": 10,
-          "p50": 1.94,
-          "p95": 2.72,
-          "max": 2.72
+          "p50": 1.13,
+          "p95": 1.32,
+          "max": 1.32
         }
       },
       "middle": {
@@ -191,20 +191,20 @@
         "entries": 10,
         "changed": 10,
         "bytes": 1836,
-        "coldMs": 4.11,
+        "coldMs": 1.36,
         "warm": {
           "n": 30,
-          "p50": 1.07,
-          "p95": 1.88,
-          "max": 2.1
+          "p50": 0.74,
+          "p95": 0.82,
+          "max": 0.82
         },
-        "warmCpuMsPerRequest": 0.67,
-        "treeViewFirstMs": 1.65,
+        "warmCpuMsPerRequest": 0.33,
+        "treeViewFirstMs": 1.03,
         "treeViewWarm": {
           "n": 10,
-          "p50": 1.43,
-          "p95": 2.38,
-          "max": 2.38
+          "p50": 1.15,
+          "p95": 1.41,
+          "max": 1.41
         }
       },
       "leaf": {
@@ -212,20 +212,20 @@
         "entries": 25,
         "changed": 0,
         "bytes": 4745,
-        "coldMs": 2.3,
+        "coldMs": 1.36,
         "warm": {
           "n": 30,
-          "p50": 1.1,
-          "p95": 2.37,
-          "max": 2.49
+          "p50": 0.82,
+          "p95": 0.98,
+          "max": 1.61
         },
-        "warmCpuMsPerRequest": 1,
-        "treeViewFirstMs": 1.82,
+        "warmCpuMsPerRequest": 0.67,
+        "treeViewFirstMs": 1.24,
         "treeViewWarm": {
           "n": 10,
-          "p50": 1.52,
-          "p95": 1.99,
-          "max": 1.99
+          "p50": 1.07,
+          "p95": 1.16,
+          "max": 1.16
         }
       }
     }
@@ -234,7 +234,7 @@
     "requests": 4980,
     "entries": 104981,
     "bytes": 19735042,
-    "ms": 21325,
-    "daemonCpuMs": 6880
+    "ms": 16403,
+    "daemonCpuMs": 5630
   }
 }

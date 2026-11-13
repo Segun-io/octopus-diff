@@ -339,11 +339,96 @@ Every fix has a test that failed first, real git where the comment describes a g
     scroll position, so the virtualised list never mounts the last row. Suggested fix for its owner: scroll to the end
     once more after the footer is gone, or assert the row after `scrollIntoView` (e2e tests are not this stream's).
 - `perf:smoke`: exit 0, no failed check.
-- Default bench (`bench`, before the warm-path change): all 9 budgets PASS. The rerun on the final head is in the
-  addendum below.
+- Default bench (`bench`), before the warm-path change and again on the Greptile-round head: all 9 budgets PASS both
+  times (cold paint 181 ms, warm 83 ms, 4.7 spawns per worktree, edit to SSE p95 28 ms).
 - **Warm listing re-measured** (`bench:tree`, final head, `docs/bench/results-tree.md`):
   - warm p50 1.1-1.5 ms, p95 1.9-4.4 ms, under load average 11-13;
   - in the same run git-core's own `ls-tree` timings were 35-45 % slower than the first run's, which had warm 0.8-0.9 /
     0.9-1.3 ms;
   - a cold leaf (6 new trees) took 22.9 ms;
   - reading HEAD from files costs about 0.5 ms (measured in process), which is why a warm hit skips it.
+
+## PR #99 security review (no P1; two P2, six P3), 2026-11-13
+
+Every fix has a test that failed first except where noted, real git where the finding describes a git state;
+DECISIONS #412-#420 (#397 and #412 amended).
+
+- **P2-1, blobless partial clones** (#413). `ls-tree` drops `-l` below git 2.44 in a repository with a promisor
+  remote, and falls back to no `-l` (remembered per repository) when a lazy fetch was blocked; sizes are then null.
+  Tests use a real `--filter=blob:none` clone, a wrapper that unsets `GIT_NO_LAZY_FETCH`, and one that also reports git
+  2.40.
+- **P2-2, unbounded composed listings** (#414). `TreeListingCache`: LRU bounded by 64 MiB of estimated bytes; a
+  listing above the bound is served, not kept, and evicts nothing. A new summary drops the worktree's listings of
+  older states. Tests: unit tests of the cache, and a 3000-entry directory under 12 watcher-driven state changes keeps
+  2 listings.
+- **P3-1, untracked type and mode changes** (#415). Already covered by Greptile fix 4 (#409): the basis holds the
+  untracked lstat signature, mode included. Now tested (`chmod +x`, file to symlink), and the rule is written down:
+  the basis covers every field a row renders.
+- **P3-2, hostile tree entries** (#416). Entries flagged by `treeEntryProblem` (`..`, `a/b`, over the path limits) are
+  skipped and counted in `skipped`. Tested with a `hash-object -t tree --literally` tree and a 21-level chain.
+- **P3-3, one `ls-tree -r` per deleted-only directory** (#417). Up to 4 such directories are counted one by one;
+  more, with one `countTreeChildren` run of the listed tree. Failures are memoized in git-core (an output above the
+  cap for good, others for a minute). Tests: 30 siblings cost one `ls-tree -r`; a capped and a missing tree are not
+  retried.
+- **P3-4, per-page O(N) work** (#418). The tree view resolves the commit with `listTree({ withEntries: false })`
+  before the cache lookup. Test: 8 pages make one decoding call in each view.
+- **P3-5, ref views not refreshed** (#419). On `dirs.all` the web also refetches `HEAD` and branch views; views of a
+  full commit id are not refetched.
+- **P3-6, treeless clones and unchecked paths** (#420). A missing tree is `not_found` with
+  `details.reason: 'object_missing'` and a message that says so, in git-core and in the route; nothing is fetched.
+  The route checks the directory before anything else. The unborn case already answered 400 since Greptile fix 1
+  (the HEAD read goes through git-core), so that part of the test did not fail first; the explicit check removes
+  the dependency.
+
+**Mutation checks: 18 mutants, 18 killed.** Two survived the first pass and the tests were strengthened:
+
+- S2b, an oversized listing kept: the test now also checks that nothing else is evicted.
+- S2c, older states kept: the churn now goes through the watcher, because an explicit refresh already drops
+  everything.
+
+The killed mutants, by finding:
+
+- **P2-1:** no promisor fallback; no old-git skip; the fallback not remembered.
+- **P2-2:** no byte bound; an oversized listing kept; older states kept.
+- **P3-2:** hostile entries not filtered; a `/` in a name accepted; the length check removed.
+- **P3-3:** always per child; never per child; no failure memo.
+- **P3-4:** pages decode again; `withEntries` ignored.
+- **P3-5:** ref views not refetched; commit views refetched.
+- **P3-6:** a missing tree reported as "commit not found"; the daemon says "unknown ref".
+
+One equivalent mutant was not counted: removing the daemon's up-front path check, since git-core checks the path
+too.
+
+**A timeout found on the way.** One loaded daemon run failed: the two real-git property tests ran past vitest's 5 s
+default while git-core's suite ran alongside. They got a 60 s suite timeout, as the other real-git suites in the
+repository have. After that: 3 loaded runs and 10 runs of the explorer suites, all clean.
+
+**Verification** (final head; load average 0.5-2 for the e2e and bench runs):
+
+- `pnpm lint` exit 0 (the same 4 warnings and 1 info in untouched files; credits up to date); `pnpm typecheck` exit 0;
+  `pnpm build` exit 0.
+- `pnpm test` exit 0 in 1 min 33 s:
+
+  | Package | Passed | Skipped |
+  |---|---|---|
+  | contracts | 135 | 0 |
+  | forge | 101 | 5 |
+  | fixtures | 58 | 0 |
+  | web | 491 | 0 |
+  | git-core | 512 | 1 |
+  | daemon | 461 | 4 |
+  | e2e unit | 8 | 0 |
+  | cli | 141 | 0 |
+  | scripts | 34 | 0 |
+
+- Repeat runs:
+  - git-core and web twice more: the same counts.
+  - daemon: 5 more clean runs (2 alone, 3 under load after the timeout fix); the one loaded failure is the timeout
+    described above.
+  - The daemon's skip count varies between 3 and 4 run to run (an existing conditional skip).
+- Folding mode: git-core 497 passed, 16 skipped; daemon 459 passed, 6 skipped.
+- `pnpm test:e2e -- --workers=1`: **106 passed (3.0 min)**; read-only proof 4379 lock polls, 0 violations.
+- `perf:smoke`: exit 0, no failed check.
+- Default bench: all 9 budgets PASS (cold paint 158 ms, warm 80 ms, 4.7 spawns per worktree, edit to SSE p95 23 ms).
+- **Warm listing** (`bench:tree`, `docs/bench/results-tree.md`): p50 0.73-0.89 ms, p95 0.82-1.19 ms; cold leaf
+  (6 new trees) 14.4 ms. These are the original numbers again; the load is gone.
