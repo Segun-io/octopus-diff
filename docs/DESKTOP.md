@@ -4,7 +4,9 @@
 > model (user-confirmed 2026-11-08). PLAN §2 lists the Electron desktop app as in scope (DECISIONS #466-#475).
 > Verified on **Electron 45.3.2, which bundles Node 24.22.2** (the spike of 2026-11-08 used 45.2.3). Roadmap decisions
 > (2026-11-11, #24) are at the end of this file (§10). Phase A (#18, the shell MVP in `apps/desktop`) is done
-> (2026-11-13; `docs/reports/desktop-phase-a.md`, DECISIONS #486-#504).
+> (2026-11-13; `docs/reports/desktop-phase-a.md`, DECISIONS #486-#504). Phase B (#19, packaging) is implemented
+> (2026-11-13; `docs/reports/desktop-phase-b.md`, DECISIONS #508-#520): verified end to end on Linux x64 here; macOS and
+> Windows are verified by the CI `desktop` job.
 
 ## 1. Goal and model
 
@@ -155,7 +157,10 @@ apps/desktop/
   src/policy.ts, menu.ts, window-state.ts, screens.ts, page-actions.ts, daemon-api.ts
                          (phase A: the Electron-free policies main.ts wires up; no preload/ipc until #20, DECISIONS #486)
   scripts/build.mjs      esbuild main + preload; copies the CLI bundle (with dist/web) into the app
+  scripts/package.mjs    stages the app per platform/arch and runs electron-builder (phase B, DECISIONS #511)
+  scripts/check-fuses.mjs  asserts a packaged binary's fuses and embedded asar integrity data
   electron-builder.yml   targets, asar/asarUnpack, fuses, icons
+  resources/             icon.png (1024), icon.icns, icon.ico (from apps/web/scripts/icons.ts)
   test/                  vitest (supervisor, ready-line parsing, shim rendering, nav policy, IPC validation)
 ```
 
@@ -186,10 +191,17 @@ The daemon (WS2) and git-core (WS1) need **no changes**.
 - The daemon keeps its token, loopback bind, Host/Origin checks and CSP (`apps/web/scripts/csp-check.ts`). The
   app adds no API surface.
 - Electron fuses (`@electron/fuses`, set by electron-builder): **`RunAsNode` stays on**, because the backend and the
-  CLI shim need it (same as T3 Code and VS Code). That means anyone who can run the app binary can run Node with it,
-  which is no more than having Node installed. Everything else is hardened: `EnableNodeOptionsEnvironmentVariable` off,
+  CLI shim need it (same as T3 Code and VS Code). That means anyone who can run the app binary can run Node with it. On Linux and Windows
+  that is no more than having Node installed; **on macOS it is more**: such a process runs as the app and inherits
+  any privacy permission the user granted it (Documents, removable volumes, Full Disk Access). Phase E decides
+  whether to keep it (accept) or move the backend to a `utilityProcess` or a helper binary so the fuse can go off
+  there (PR #109 review, DECISIONS #528). Everything else is hardened: `EnableNodeOptionsEnvironmentVariable` off,
   `EnableNodeCliInspectArguments` off, `EnableCookieEncryption` on, `OnlyLoadAppFromAsar` on,
   `EnableEmbeddedAsarIntegrityValidation` on.
+- **The AppImage and Chromium's OS sandbox.** The AppImage's menu entry has no `--no-sandbox` (CI checks it). Its
+  `AppRun` launcher still adds the flag itself when unprivileged user namespaces are unavailable (Ubuntu 23.10+ by
+  default); the renderer is still sandboxed from Node (`sandbox: true`), the app logs a warning, and the `.deb`
+  (a setuid `chrome-sandbox` and an AppArmor profile) is the recommended install there.
 - The ready line and the shim never put the token on a command line or in a log (tokens on argv show up in `ps`).
 - No remote content, no auto-download of anything except (later) signed updates.
 
@@ -218,19 +230,25 @@ The daemon (WS2) and git-core (WS1) need **no changes**.
 ## 7. Build, packaging, distribution
 
 - **Bundling:** the CLI bundle (from WS5's refactored `pack.mjs` step: one ESM file with contracts, git-core and
-  daemon inlined, plus `dist/web`) is copied to `app.asar/cli/`. `webRootCandidates` already finds `<pkg>/dist/web`
+  daemon inlined, plus `dist/web`) is copied to `app.asar/dist/cli/` (next to `dist/main.js`, the layout phase A's
+  supervisor runs; DECISIONS #508). `webRootCandidates` already finds `<pkg>/dist/web`
   next to the bundle. esbuild builds the main process (ESM) and the preload (CJS). The npm tarball and the app ship
   the **same** CLI bundle.
 - **Packaging:** electron-builder (T3 Code uses it; the most mature cross-platform targets):
   Linux AppImage + deb (x64, arm64); macOS dmg + zip (arm64, x64, or universal); Windows NSIS (x64, arm64).
   Icons come from the existing set (`apps/web/scripts/icons.ts` gets a 1024 px PNG, `.icns` and `.ico` output).
-  Expect an installer of about 100 MB.
+  Expect an installer of about 100 MB (measured in phase B on Linux x64: AppImage 130 MB, deb 104 MB).
+  `pnpm --filter @octopus-diff/desktop run package [-- --arch x64,arm64 --dir]` stages the app per platform and arch
+  (only that target's `@parcel/watcher` prebuilt) and writes the installers to `apps/desktop/release/` (#511).
 - **Dev loop:** `pnpm --filter @octopus-diff/desktop dev` spawns the CLI from sources (`tsx --conditions=@octopus-diff/source
   apps/cli/src/index.ts serve --ready-fd 3 --exit-with-stdin`, run with Electron's Node too, so dev matches prod)
   and loads the daemon URL. For UI work, point the window at the Vite dev server (it already proxies `/api`).
   Main/preload rebuild via esbuild watch.
-- **CI** (committed, not pushed, per PLAN §7): a matrix job builds **unsigned** artifacts on
-  ubuntu/macos/windows and runs the Electron smoke test (`xvfb-run` on Linux). Node 24 coverage already exists
+- **CI** (the `desktop` job, DECISIONS #518): builds **unsigned** artifacts (x64 and arm64) on
+  ubuntu/macos/windows, checks the fuses, installs the native-arch build (deb, extracted AppImage, the app out of the
+  dmg, the NSIS installer) and runs the packaged-app smoke (`e2e/desktop`, `xvfb-run` on Linux) against it. The smoke
+  drives the window over `--remote-debugging-pipe`, not Playwright's `_electron.launch`, which needs the inspector and
+  TCP debugging switches an installed app refuses (#509, #510). Node 24 coverage already exists
   (the `check` job runs on Node 24 and 26, `package` on Node 24, DECISIONS #472), so nothing new is needed to stop
   code depending on Node 26 APIs; the Electron smoke job runs on Node 24.
 - **User-gated (Phase E):** code signing and notarization (Apple Developer ID, a Windows certificate or Azure
@@ -244,7 +262,7 @@ The daemon (WS2) and git-core (WS1) need **no changes**.
 | **0. Spike + docs** (½ session; **done 2026-11-13**) | Run cli + git-core + daemon vitest under Electron's Node (`ELECTRON_RUN_AS_NODE=1`); serve web assets from inside an asar; PLAN §2 + DECISIONS entry; WS5/contracts requests filed | Suites green under Node 24.22 (or gaps listed); decision logged |
 | **A0. CLI hooks** (WS5 + lead, small) | `--ready-fd`, `--exit-with-stdin`, reusable bundle step, `ServeReadySchema` | CLI tests cover started/attached ready lines and stdin-EOF shutdown on all OSes in CI |
 | **A. Shell MVP** (1–2 sessions; **done 2026-11-13**) | `apps/desktop` scaffold, backend supervisor (spawn, ready line, attach/start, restart, shutdown), window loads `authUrl`, the §5 security baseline, single instance (a second launch focuses the window), window-state persistence, menus, shell-env PATH, git-missing screen, logs | `pnpm --filter @octopus-diff/desktop start` opens the app with the user's projects; with `octopus-diff serve` already running it attaches and quitting leaves that daemon up; otherwise `octopus-diff status` sees the app's daemon and quitting stops it; killing Electron leaves no orphan daemon; unit tests for the supervisor, nav policy, IPC validation |
-| **B. Packaging** (1 session) | Shared CLI bundle in the app, electron-builder config, fuses, asarUnpack, icons, CI matrix, Playwright Electron smoke in `e2e/` | The AppImage runs on a clean Linux VM and the dmg on macOS (unsigned, with the right-click → Open workaround); smoke test green; the read-only proof harness passes against the packaged app |
+| **B. Packaging** (1 session; **implemented 2026-11-13**, Linux verified here, macOS/Windows in CI) | Shared CLI bundle in the app, electron-builder config, fuses, asarUnpack, icons, CI matrix, Playwright Electron smoke in `e2e/` | The AppImage runs on a clean Linux VM and the dmg on macOS (unsigned, with the right-click → Open workaround); smoke test green; the read-only proof harness passes against the packaged app |
 | **C. Native integration + CLI shim** (1 session, WS3 + WS6) | Native folder dialog, drag-to-add, reveal/open/open-in-editor with the path check, macOS title bar, unreviewed badge, external links; install the `octopus-diff` command (§3.2) | Every bridge method is covered by tests; the shim works from deb, dmg, NSIS and AppImage installs and never overwrites an npm install; the browser build is unchanged (existing e2e green) |
 | **D. Windows + WSL** (1–2 sessions) | Windows app with a WSL-distro backend (§6); distro picker in Settings | From Windows, the app shows repos inside WSL with live updates |
 | **E. Release** (needs the user) | Signing, notarization, auto-update, name, first public release | The user signs off |
@@ -302,7 +320,9 @@ unpacked binaries. Even when unpacked, the path the supervisor and the runner us
 (`<app>/app.asar/dist/git-helper.js`); Electron redirects it to `app.asar.unpacked`. A plain system `node` cannot read an asar, so any
 future code that runs a bundled file with something other than Electron must use the `.unpacked` path. Do **not**
 unpack the whole CLI directory: it is not needed. `EnableEmbeddedAsarIntegrityValidation` could not be tested here
-(macOS and Windows only): do that in #19's CI matrix.
+(macOS and Windows only): do that in #19's CI matrix. **Done in #19** (DECISIONS #512, #513): exactly that list is
+unpacked (the watch host maps `watcher.node` from `app.asar.unpacked`, no temp copy); the integrity fuse is exercised
+by the packaged smoke's tamper test on macOS and Windows (on Linux Electron does not validate the asar).
 
 **Environment contract for the app (#17, #18, #19, the CLI shim).** Under Electron `process.execPath` is the Electron
 binary, which starts the full app unless `ELECTRON_RUN_AS_NODE=1` is set. `git-core`'s helper client sets it itself

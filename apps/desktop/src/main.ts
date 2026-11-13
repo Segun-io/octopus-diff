@@ -22,7 +22,12 @@ import {
   session,
   shell,
 } from 'electron';
-import { parseDesktopArgs, serveExtraArgs } from './args.js';
+import {
+  DesktopArgsError,
+  parseDesktopArgs,
+  REFUSED_PACKAGED_SWITCHES,
+  serveExtraArgs,
+} from './args.js';
 import {
   type BackendState,
   BackendSupervisor,
@@ -84,7 +89,13 @@ const cliVersion = typeof __OCTOPUS_CLI_VERSION__ === 'string' ? __OCTOPUS_CLI_V
 
 let args: ReturnType<typeof parseDesktopArgs>;
 try {
-  args = parseDesktopArgs(process.argv.slice(1), process.cwd());
+  // An installed build refuses the dev options and the debugger switches (args.ts). Chromium's
+  // own parser is asked too, in case it reads a spelling `parseDesktopArgs` does not.
+  args = parseDesktopArgs(process.argv.slice(1), process.cwd(), { isPackaged: app.isPackaged });
+  const refused = app.isPackaged
+    ? REFUSED_PACKAGED_SWITCHES.find((name) => app.commandLine.hasSwitch(name))
+    : undefined;
+  if (refused) throw new DesktopArgsError(`--${refused} is not available in an installed build`);
 } catch (error) {
   process.stderr.write(`${APP_NAME}: ${error instanceof Error ? error.message : String(error)}\n`);
   process.exit(2);
@@ -115,6 +126,14 @@ const primary = app.requestSingleInstanceLock();
 if (!primary) app.exit(0);
 
 const log = primary ? openLogFile(app.getPath('logs')) : noLogFile();
+if (primary && app.isPackaged && app.commandLine.hasSwitch('no-sandbox')) {
+  // The AppImage's AppRun adds this itself when unprivileged user namespaces are unavailable
+  // (Ubuntu 23.10+ by default); say so, once, where a bug report will have it (PR #109 review).
+  log.note(
+    "WARNING: running without Chromium's OS sandbox (--no-sandbox); the renderer is still " +
+      'sandboxed from Node. Prefer the .deb on systems that restrict user namespaces.',
+  );
+}
 if (primary) {
   app.on('second-instance', () => focusWindow());
   void app.whenReady().then(main);

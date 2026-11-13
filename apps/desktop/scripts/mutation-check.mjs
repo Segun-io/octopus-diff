@@ -1,6 +1,6 @@
 // biome-ignore-all lint/suspicious/noTemplateCurlyInString: the mutations are source text that contains `${…}`.
 // Mutation check for the rules that must not regress silently: the security policy (DESKTOP §5),
-// the menu accelerator rule, and the supervisor's lifecycle (stdin lifeline, RUN_AS_NODE,
+// the packaged-build argument rules, the menu accelerator rule, and the supervisor's lifecycle (stdin lifeline, RUN_AS_NODE,
 // restart/backoff, attach, shutdown escalation, token never logged).
 //
 //   node apps/desktop/scripts/mutation-check.mjs
@@ -79,6 +79,73 @@ const MUTATIONS = [
     'screens: action from any URL',
     'if (!url.startsWith(SCREEN_ACTION_SCHEME)) return null;',
     '',
+  ],
+  // --- packaged-build arguments (DECISIONS #502, #507, #509) ---
+  [
+    'args.ts',
+    'args',
+    'packaged: debugger switches allowed',
+    'if (name !== null && isRefusedPackagedSwitch(name)) {',
+    'if (false) {',
+  ],
+  [
+    'args.ts',
+    'args',
+    'packaged: --dev allowed',
+    "if (options.isPackaged) {\n        throw new DesktopArgsError('--dev",
+    "if (false) {\n        throw new DesktopArgsError('--dev",
+  ],
+  [
+    'args.ts',
+    'args',
+    'packaged: --backend source allowed',
+    "if (value === 'source' && options.isPackaged) {",
+    'if (false) {',
+  ],
+  [
+    'args.ts',
+    'args',
+    'packaged: --renderer-url allowed',
+    "if (options.isPackaged) {\n          throw new DesktopArgsError('--renderer-url",
+    "if (false) {\n          throw new DesktopArgsError('--renderer-url",
+  ],
+  [
+    'args.ts',
+    'args',
+    '--renderer-url: any host',
+    'if (!isLoopbackHost(new URL(origin).hostname)) {',
+    'if (false) {',
+  ],
+  ['args.ts', 'args', 'loopback: any first octet', "parts[0] === '127' &&", ''],
+  ['args.ts', 'args', 'loopback: octets over 255', 'Number(p) <= 255', 'true'],
+  [
+    'args.ts',
+    'args',
+    'switches: inspect* prefix not refused',
+    " || name.startsWith('inspect')",
+    '',
+  ],
+  ['args.ts', 'args', 'switches: single dash not read', '/^--?/.exec(arg)', '/^--/.exec(arg)'],
+  [
+    'args.ts',
+    'args',
+    'switches: Windows /switch not read',
+    "(platform === 'win32' ? /^\\//.exec(arg) : null)",
+    'null',
+  ],
+  [
+    'args.ts',
+    'args',
+    'switches: Windows letter case',
+    "return platform === 'win32' ? name.toLowerCase() : name;",
+    'return name;',
+  ],
+  [
+    'args.ts',
+    'args',
+    'switches: only the parsed options checked, not every argv element',
+    'for (const arg of argv) {\n      const name = switchName(arg, platform);',
+    "for (const arg of argv.filter((a) => a.startsWith('--'))) {\n      const name = switchName(arg, platform);",
   ],
   // --- menus ---
   [

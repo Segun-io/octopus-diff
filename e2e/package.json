@@ -15,7 +15,8 @@
     "bench:tree": "tsx bench/tree.ts",
     "profile:real": "tsx --conditions=@octopus-diff/source bench/real-repos.ts",
     "screenshots": "tsx scripts/screenshots.ts",
-    "lint": "biome check ."
+    "lint": "biome check .",
+    "test:e2e:desktop": "playwright test -c playwright.desktop.config.ts"
   },
   "devDependencies": {
     "@octopus-diff/contracts": "workspace:*",

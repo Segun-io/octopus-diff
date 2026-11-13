@@ -262,7 +262,7 @@ await scenario('started: the window shows the projects; quit stops the daemon', 
   const page = await cdp(app.debugPort, (u) => u.startsWith(origin));
   check(page.url.startsWith(origin), `the window loaded the daemon origin ${origin}`);
   await until(
-    () => page.evaluate('document.body.innerText.includes("smoke-project")'),
+    () => page.evaluate('document.body.innerText.includes("smoke-project")').catch(() => false),
     20_000,
     'the project in the UI',
   );
@@ -417,7 +417,8 @@ await scenario('git missing: a screen with install instructions, not an empty wi
   const page = await cdp(app.debugPort, (u) => u.startsWith('data:'));
   const text = await until(
     async () => {
-      const t = await page.evaluate('document.body.innerText');
+      // The page may still be loading (no body yet: the evaluation throws); look again.
+      const t = await page.evaluate('document.body.innerText').catch(() => '');
       return t.includes('git is missing') ? t : undefined;
     },
     10_000,
@@ -438,7 +439,7 @@ await scenario('repeated failures: the error screen with the log path', async ()
   const page = await cdp(app.debugPort, (u) => u.startsWith('data:'));
   const text = await until(
     async () => {
-      const t = await page.evaluate('document.body.innerText');
+      const t = await page.evaluate('document.body.innerText').catch(() => '');
       return t.includes('could not start') ? t : undefined;
     },
     10_000,
@@ -450,8 +451,17 @@ await scenario('repeated failures: the error screen with the log path', async ()
   );
   // "Try again" (an octopus-diff-desktop: link): the app starts a new series of attempts.
   const before = (daemonLog(d).match(/started the backend/g) ?? []).length;
-  await page.evaluate(
-    'document.querySelector(\'a[href="octopus-diff-desktop:retry"]\').click(); true',
+  // The failed screen can still be swapping in when its text first matches: retry the click
+  // until the link is there (a click on a page being replaced throws; seen once in 5 runs).
+  await until(
+    () =>
+      page
+        .evaluate(
+          '(() => { const a = document.querySelector(\'a[href="octopus-diff-desktop:retry"]\'); if (!a) return false; a.click(); return true; })()',
+        )
+        .catch(() => false),
+    10_000,
+    'the Try again link',
   );
   await until(
     () => (daemonLog(d).match(/started the backend/g) ?? []).length > before,

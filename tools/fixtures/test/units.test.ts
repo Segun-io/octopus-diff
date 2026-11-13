@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  configPathValue,
   countsFromStatus,
   createRng,
   decodePath,
@@ -185,5 +186,16 @@ describe('perf helpers', () => {
     } finally {
       clearInterval(busy);
     }
+  });
+});
+
+describe('configPathValue (Windows paths in the isolated git config)', () => {
+  it('turns backslashes into forward slashes, which git config accepts', () => {
+    expect(
+      configPathValue('C:\\Users\\runneradmin\\AppData\\Local\\Temp\\x\\.gitignore-isolated'),
+    ).toBe('C:/Users/runneradmin/AppData/Local/Temp/x/.gitignore-isolated');
+    expect(configPathValue('/tmp/octopus-diff-abc/.gitignore-isolated')).toBe(
+      '/tmp/octopus-diff-abc/.gitignore-isolated',
+    );
   });
 });

@@ -27,9 +27,11 @@ import {
 } from '../src/screens.js';
 import { TOKEN } from './fakes.js';
 
+const DEV = { isPackaged: false, platform: 'linux' } as const;
+
 describe('parseDesktopArgs', () => {
   it('defaults', () => {
-    expect(parseDesktopArgs(['/app'], '/cwd')).toEqual({
+    expect(parseDesktopArgs(['/app'], '/cwd', DEV)).toEqual({
       dev: false,
       backend: 'bundle',
       rendererUrl: null,
@@ -59,6 +61,7 @@ describe('parseDesktopArgs', () => {
         '--enable-logging',
       ],
       '/cwd',
+      DEV,
     );
     expect(args).toEqual({
       dev: true,
@@ -91,7 +94,7 @@ describe('parseDesktopArgs', () => {
       ['--state-dir', '--dev'],
       ['--port='],
     ]) {
-      expect(() => parseDesktopArgs(argv, '/'), argv.join(' ')).toThrow(DesktopArgsError);
+      expect(() => parseDesktopArgs(argv, '/', DEV), argv.join(' ')).toThrow(DesktopArgsError);
     }
   });
 });

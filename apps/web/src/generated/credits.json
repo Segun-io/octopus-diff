@@ -22,7 +22,8 @@
       "author": null,
       "url": "https://github.com/parcel-bundler/watcher",
       "usedBy": [
-        "apps/daemon"
+        "apps/daemon",
+        "apps/desktop"
       ],
       "via": null,
       "note": "Also installs a prebuilt native binary for your platform (@parcel/watcher-<platform>, MIT).",
@@ -604,6 +605,20 @@
       "via": null,
       "note": null,
       "licenseText": "MIT License\n\nCopyright (c) 2023 Effectful Technologies Inc\n\nPermission is hereby granted, free of charge, to any person obtaining a copy\nof this software and associated documentation files (the \"Software\"), to deal\nin the Software without restriction, including without limitation the rights\nto use, copy, modify, merge, publish, distribute, sublicense, and/or sell\ncopies of the Software, and to permit persons to whom the Software is\nfurnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in all\ncopies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\nIMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\nFITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\nAUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\nLIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\nOUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\nSOFTWARE.\n",
+      "noticeText": null
+    },
+    {
+      "name": "electron",
+      "version": "45.3.2",
+      "license": "MIT",
+      "author": "Electron Community",
+      "url": "https://github.com/electron/electron",
+      "usedBy": [
+        "apps/desktop"
+      ],
+      "via": null,
+      "note": "The desktop app is the Electron binary with octopus-diff's code in an asar archive, so Electron's runtime ships with it, including Chromium (BSD-3-Clause, plus the licenses of its third-party components) and Node.js (MIT). Their full license texts are installed next to the app's executable: LICENSES.chromium.html and LICENSE.electron.txt. (Electron's npm dependencies only download the binary and do not ship.)",
+      "licenseText": "Copyright (c) Electron contributors\nCopyright (c) 2013-2020 GitHub Inc.\n\nPermission is hereby granted, free of charge, to any person obtaining\na copy of this software and associated documentation files (the\n\"Software\"), to deal in the Software without restriction, including\nwithout limitation the rights to use, copy, modify, merge, publish,\ndistribute, sublicense, and/or sell copies of the Software, and to\npermit persons to whom the Software is furnished to do so, subject to\nthe following conditions:\n\nThe above copyright notice and this permission notice shall be\nincluded in all copies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND,\nEXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF\nMERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND\nNONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE\nLIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION\nOF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION\nWITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.\n",
       "noticeText": null
     },
     {
@@ -1874,6 +1889,7 @@
       "url": "https://github.com/colinhacks/zod",
       "usedBy": [
         "apps/cli",
+        "apps/desktop",
         "apps/web",
         "packages/contracts"
       ],
@@ -1919,6 +1935,20 @@
       "usedBy": [
         "apps/daemon",
         "packages/git-core"
+      ],
+      "via": null,
+      "note": null,
+      "licenseText": null,
+      "noticeText": null
+    },
+    {
+      "name": "@electron/fuses",
+      "version": "1.8.0",
+      "license": "MIT",
+      "author": "Electron Community",
+      "url": "https://github.com/electron/fuses",
+      "usedBy": [
+        "apps/desktop"
       ],
       "via": null,
       "note": null,
@@ -2053,11 +2083,11 @@
       "noticeText": null
     },
     {
-      "name": "electron",
-      "version": "45.3.2",
+      "name": "electron-builder",
+      "version": "26.18.0",
       "license": "MIT",
-      "author": "Electron Community",
-      "url": "https://github.com/electron/electron",
+      "author": "Vladimir Krivosheev",
+      "url": "https://github.com/electron-userland/electron-builder",
       "usedBy": [
         "apps/desktop"
       ],

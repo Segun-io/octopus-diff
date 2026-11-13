@@ -5,6 +5,8 @@ packages:
   - e2e
 allowBuilds:
   '@parcel/watcher': false
+  # Pulled in by electron-builder for Squirrel.Windows, which the desktop app does not build (NSIS only).
+  electron-winstaller: false
   esbuild: false
 minimumReleaseAgeExclude:
   - electron@45.3.2

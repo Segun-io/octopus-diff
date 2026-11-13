@@ -21,6 +21,14 @@ export interface IsolatedGitEnv {
 export const FIXTURE_USER_NAME = 'Octopus Fixture';
 export const FIXTURE_USER_EMAIL = 'fixtures@octopus-diff.invalid';
 
+/**
+ * A path as a git config value. A Windows path has backslashes, which git config reads as escape
+ * sequences (`C:\Users` is a "bad config line"); git accepts forward slashes there.
+ */
+export function configPathValue(p: string): string {
+  return p.replaceAll('\\', '/');
+}
+
 /** Writes the isolated config files into `dir` and returns the env to use with them. */
 export async function createIsolatedGitEnv(dir: string): Promise<IsolatedGitEnv> {
   const configPath = join(dir, '.gitconfig-isolated');
@@ -43,8 +51,8 @@ export async function createIsolatedGitEnv(dir: string): Promise<IsolatedGitEnv>
     '\tsafecrlf = false',
     '\tpager = cat',
     '\tfsmonitor = false',
-    `\texcludesFile = ${excludesPath}`,
-    `\tattributesFile = ${attributesPath}`,
+    `\texcludesFile = ${configPathValue(excludesPath)}`,
+    `\tattributesFile = ${configPathValue(attributesPath)}`,
     '[gc]',
     '\tauto = 0',
     '[maintenance]',

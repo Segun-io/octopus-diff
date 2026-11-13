@@ -7,6 +7,10 @@
  * Outputs (committed): public/favicon.ico (16/32/48), public/apple-touch-icon.png (180),
  * public/icon-192.png, public/icon-512.png, public/icon-maskable-192.png,
  * public/icon-maskable-512.png, and docs/design/assets/contact-sheet.png.
+ *
+ * Desktop app icons (electron-builder, roadmap #19), in apps/desktop/resources/: icon.png (1024),
+ * icon.icns (macOS, PNG entries 16-1024) and icon.ico (Windows, 16-256). The same tile, with the
+ * rounded corners and margin desktop icons have (macOS's 824/1024 grid).
  */
 import { existsSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
@@ -23,6 +27,7 @@ if (existsSync(LIBS)) {
 const webRoot = fileURLToPath(new URL('..', import.meta.url));
 const publicDir = path.join(webRoot, 'public');
 const designAssets = path.join(webRoot, '../../docs/design/assets');
+const desktopResources = path.join(webRoot, '../../apps/desktop/resources');
 
 /** Brand colours (keep in sync with src/theme/themes/octopus-{dark,light}.ts). */
 const INK = '#0b0d14';
@@ -89,6 +94,59 @@ function buildIco(images: { size: number; png: Buffer }[]): Buffer {
   return Buffer.concat([header, ...entries, ...blobs]);
 }
 
+/** Desktop icon: the app tile on a transparent canvas, 824/1024 of it, rounded (macOS grid). */
+function desktopTile(size: number): string {
+  const inner = Math.round((size * 824) / 1024);
+  const offset = Math.round((size - inner) / 2);
+  const radius = Math.round((inner * 185) / 824);
+  return `<div style="width:${size}px;height:${size}px;position:relative">
+    <div style="position:absolute;left:${offset}px;top:${offset}px;border-radius:${radius}px;overflow:hidden">${tile(inner, INK, INK_DARK, 0.62)}</div>
+  </div>`;
+}
+
+/** ICNS container with PNG entries (macOS 10.7+); type codes by pixel size. */
+function buildIcns(images: { type: string; png: Buffer }[]): Buffer {
+  const chunks = images.map(({ type, png }) => {
+    const head = Buffer.alloc(8);
+    head.write(type, 0, 'latin1');
+    head.writeUInt32BE(png.length + 8, 4);
+    return Buffer.concat([head, png]);
+  });
+  const header = Buffer.alloc(8);
+  header.write('icns', 0, 'latin1');
+  header.writeUInt32BE(8 + chunks.reduce((n, c) => n + c.length, 0), 4);
+  return Buffer.concat([header, ...chunks]);
+}
+
+async function desktopIcons(page: Page) {
+  await mkdir(desktopResources, { recursive: true });
+  const png = new Map<number, Buffer>();
+  for (const size of [16, 24, 32, 48, 64, 128, 256, 512, 1024]) {
+    png.set(size, await shot(page, desktopTile(size), size, true));
+  }
+  const at = (size: number) => png.get(size) as Buffer;
+  await writeFile(path.join(desktopResources, 'icon.png'), at(1024));
+  // ic11/ic12/ic13/ic14 are the @2x variants of 16/32/128/256.
+  const icns: [string, number][] = [
+    ['ic11', 32],
+    ['ic12', 64],
+    ['ic07', 128],
+    ['ic13', 256],
+    ['ic08', 256],
+    ['ic14', 512],
+    ['ic09', 512],
+    ['ic10', 1024],
+  ];
+  await writeFile(
+    path.join(desktopResources, 'icon.icns'),
+    buildIcns(icns.map(([type, size]) => ({ type, png: at(size) }))),
+  );
+  await writeFile(
+    path.join(desktopResources, 'icon.ico'),
+    buildIco([16, 24, 32, 48, 64, 128, 256].map((size) => ({ size, png: at(size) }))),
+  );
+}
+
 async function main() {
   svgSource = await readFile(path.join(publicDir, 'favicon.svg'), 'utf8');
   await mkdir(designAssets, { recursive: true });
@@ -128,8 +186,10 @@ async function main() {
   const body = page.locator('body');
   await body.screenshot({ path: path.join(designAssets, 'contact-sheet.png'), type: 'png' });
 
+  await desktopIcons(page);
+
   await browser.close();
-  console.log('icons written to', publicDir, 'and', designAssets);
+  console.log('icons written to', publicDir, designAssets, 'and', desktopResources);
 }
 
 await main();

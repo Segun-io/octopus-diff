@@ -107,18 +107,30 @@ describe('watcher paths (#40)', () => {
     watcher.markDirty('main', 'fs');
     await eventually(() => fired.find((f) => f.id === 'main'), 3000);
     await settle();
-    expect(fired.filter((f) => f.id === 'main').map((f) => f.paths)).toEqual([null]);
+    // The caller without paths fires at once with null. The real write may also be reported by the
+    // native watcher afterwards, as its own refresh of that path (late on macOS: FSEvents): that
+    // one is fine, and a second null or any other path is not.
+    const firstFires = fired.filter((f) => f.id === 'main').map((f) => f.paths);
+    expect(firstFires[0]).toBeNull();
+    for (const paths of firstFires.slice(1)) expect(paths).toEqual(['a.txt']);
 
     fired.length = 0;
     await writeFile(path.join(l.common, 'HEAD'), 'ref: refs/heads/other\n');
-    await eventually(() => fired.find((f) => f.id === 'main'), 3000);
-    expect(fired.find((f) => f.id === 'main')).toMatchObject({ reason: 'git', paths: null });
+    // (a late native event of the earlier a.txt write may come first: look for the git refresh)
+    await eventually(() => fired.find((f) => f.id === 'main' && f.reason === 'git'), 3000);
+    expect(fired.find((f) => f.id === 'main' && f.reason === 'git')).toMatchObject({
+      reason: 'git',
+      paths: null,
+    });
 
     await settle();
     fired.length = 0;
     watcher.setFocus('main');
-    await eventually(() => fired.find((f) => f.id === 'main'), 3000);
-    expect(fired.find((f) => f.id === 'main')).toMatchObject({ reason: 'focus', paths: null });
+    await eventually(() => fired.find((f) => f.id === 'main' && f.reason === 'focus'), 3000);
+    expect(fired.find((f) => f.id === 'main' && f.reason === 'focus')).toMatchObject({
+      reason: 'focus',
+      paths: null,
+    });
   });
 
   it('null after more than MAX_PENDING_PATHS paths in one refresh', async () => {
