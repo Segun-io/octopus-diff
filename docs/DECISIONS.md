@@ -5451,7 +5451,7 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      Electron-as-Node 102.9 MiB (RSS counts the shared pages of the 270 MB binary); a serving daemon with one helper and the
      watch host, RSS 94 / 55 / 54 MiB (Node) vs 143 / 112 / 112 MiB (Electron), but the **private memory (Pss_Anon)** per process
      is 39 / 12 / 11 MiB vs 39 / 19 / 18 MiB and PSS 58 / 22 / 22 MiB vs 65 / 38 / 39 MiB. Two helpers (default) and the watch host
-     cost about +50 MiB of real memory in total. Acceptable; not a blocker. Worth remembering for the idle budget D5.
+     cost about +50 MiB of PSS in total (about +15 MiB of private memory). Acceptable; not a blocker. Worth remembering for the idle budget D5.
 472. **CI: Node 24 coverage already exists; no change.** `.github/workflows/ci.yml` `check` runs lint, typecheck, build,
      test and the CLI smoke on a `[24, 26]` matrix, and `package` (tarball install, `doctor`, the helper check and
      `smoke-tarball.mjs`: a diff through the installed daemon, SIGKILL without orphans) runs on Node 24. `e2e` (Playwright,
@@ -5475,7 +5475,7 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
 475. **Gaps handed to #17-#19** (nothing blocks them): (a) #17: nothing found; the CLI runs unchanged under Electron's
      Node. (b) #19: unpack `@parcel/watcher*` and `git-helper.js` (#469); test the asar integrity fuse on macOS/Windows
      (#470); check what electron-builder unpacks by default; the Electron e2e smoke should also assert `watcher.mode: native`
-     and a helper process under the daemon, as the probe did. (c) The memory budget: +50 MiB real memory for the
+     and a helper process under the daemon, as the probe did. (c) The memory budget: about +50 MiB PSS for the
      helpers and the watch host (#471). (d) WSL dev machine only: put the Chromium libraries next to the Electron binary;
      `LD_LIBRARY_PATH` is lost by the scrubbed child environments (#466). (e) The helper-protocol tests need the
      Electron flag in any new raw spawn of `process.execPath` (#467).
