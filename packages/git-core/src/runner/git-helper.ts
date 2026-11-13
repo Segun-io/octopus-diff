@@ -160,15 +160,26 @@ let shuttingDown = false;
 /**
  * Test hook (#45 review): `<before-spawn|after-spawn>:<file>` in this process's environment makes
  * the helper SIGKILL itself once (when `<file>` exists, which it deletes) right before or right
- * after spawning git, with no event-loop turn in between. `after-spawn` first waits (synchronously,
+ * after spawning git, with no event-loop turn in between; `throw-after-spawn:<file>` throws an
+ * uncaught exception on the next turn instead. `after-spawn` first waits (synchronously,
  * at most 3 s) for `<file>.ready`, which the test's git creates. Only the runner's
  * `helperTestCrash` option sets it; the helper's environment is otherwise empty.
  */
-const TEST_CRASH = /^(before-spawn|after-spawn):(.+)$/.exec(
+const TEST_CRASH = /^(before-spawn|after-spawn|throw-after-spawn):(.+)$/.exec(
   process.env.OCTOPUS_DIFF_GIT_HELPER_TEST_CRASH ?? '',
 );
 
 function testCrash(at: 'before-spawn' | 'after-spawn'): void {
+  if (TEST_CRASH?.[1] === 'throw-after-spawn' && at === 'after-spawn') {
+    const file = TEST_CRASH[2] as string;
+    if (!existsSync(file)) return;
+    unlinkSync(file);
+    // An uncaught exception on the next turn (a bug, an OOM-like failure).
+    setImmediate(() => {
+      throw new Error('octopus-diff git helper: test crash');
+    });
+    return;
+  }
   if (!TEST_CRASH || TEST_CRASH[1] !== at) return;
   const file = TEST_CRASH[2] as string;
   if (!existsSync(file)) return;
@@ -289,7 +300,8 @@ function parseSpawn(payload: Buffer): SpawnRequest | string {
   }
   if (message.binary !== GIT) return 'binary is not the git binary this helper runs';
   const { argv, cwd, env, stdin, maxOutputBytes } = message;
-  if (!Array.isArray(argv) || argv.length > MAX_ARGV) return 'argv must be an array';
+  if (!Array.isArray(argv)) return 'argv must be an array';
+  if (argv.length > MAX_ARGV) return `argv has more than ${MAX_ARGV} entries`;
   for (const arg of argv) {
     if (typeof arg !== 'string' || !isNulFree(arg)) return 'argv must hold strings only';
   }
@@ -495,5 +507,16 @@ process.on('SIGTERM', () => shutdown(0));
 process.on('SIGHUP', () => shutdown(0));
 // Terminal Ctrl-C belongs to the parent, which disposes git-core (and so this helper) itself.
 process.on('SIGINT', () => {});
+// Never die silently with git processes alive: a bug here still kills every group started.
+const crashed = (error: unknown): void => {
+  try {
+    process.stderr.write(`octopus-diff git helper: ${String((error as Error)?.stack ?? error)}\n`);
+  } catch {
+    // stderr may be gone too.
+  }
+  shutdown(1);
+};
+process.on('uncaughtException', crashed);
+process.on('unhandledRejection', crashed);
 
 sendJson(EV_READY, 0, { protocol: Number(PROTOCOL), pid: process.pid });

@@ -14,6 +14,8 @@ import { CONFIG_PIN_ARGS } from './config-pins.js';
 import { buildGitEnv, withConfigEnv } from './env.js';
 import {
   defaultHelperEntry,
+  HELPER_MAX_ARGV,
+  HELPER_MAX_ENV,
   HELPER_MAX_REQUEST_FRAME,
   HelperPool,
   type HelperSpawnRequest,
@@ -139,6 +141,11 @@ const DEFAULT_MAX_OUTPUT = 64 * 1024 * 1024;
 export const INTERACTIVE_BURST = 4;
 /** After an abort, SIGTERM; SIGKILL if the process group is still there after this long. */
 export const ABORT_GRACE_MS = 500;
+/**
+ * A SIGKILLed process that has not exited this long after is given up on: its helper (stopped or
+ * wedged) is SIGKILLed, which settles the run and frees its slot (review #1).
+ */
+export const HELPER_EXIT_WAIT_MS = ABORT_GRACE_MS + 1_000;
 
 interface Job {
   start: () => Promise<GitRunResult>;
@@ -470,6 +477,7 @@ export class GitRunner {
     args: string[],
     options: GitRunOptions & { okExitCodes: readonly number[] },
     attempt = 0,
+    direct = false,
   ): Promise<GitRunResult> {
     if (this.disposed) return Promise.reject(disposedError());
     const { cwd } = options;
@@ -548,11 +556,23 @@ export class GitRunner {
         tooLarge: () => {
           if (!failure) fail(tooLargeError(args, cwd, maxOutputBytes));
         },
-        lost: (reason, retryable) => {
+        lost: (reason, retryable, refused) => {
           // The helper died (or refused the request): the process is gone, its group killed.
           exited = true;
           if (failure) {
             finish(failure);
+            return;
+          }
+          if (refused && attempt === 0) {
+            // The helper would refuse it again (a limit or a shape it does not take): directly.
+            this.logger.warn('git helper refused a request; running it directly', {
+              args,
+              cwd,
+              reason,
+            });
+            retrying = true;
+            finish(null);
+            this.execute(argv, args, options, attempt + 1, true).then(resolve, reject);
             return;
           }
           // Once (#45): a read-only command can run again, unless streamed output already went out.
@@ -590,7 +610,7 @@ export class GitRunner {
 
       try {
         options.onSpawn?.();
-        proc = this.spawnProcess(binary, argv, {
+        proc = this.spawnProcess(binary, argv, direct, {
           cwd,
           env,
           input: options.input,
@@ -602,14 +622,28 @@ export class GitRunner {
         return;
       }
 
+      let watchdog: NodeJS.Timeout | undefined;
+      /** SIGKILL, and give up on the helper if even that brings no exit (review #1). */
+      const kill = (): void => {
+        proc.kill();
+        if (watchdog || !proc.abandon) return;
+        watchdog = setTimeout(() => {
+          if (!exited) proc.abandon?.();
+        }, HELPER_EXIT_WAIT_MS);
+        watchdog.unref();
+      };
       const fail = (error: GitCoreError): void => {
         if (failure) {
-          // Already stopping (an abort's grace period): a timeout or dispose escalates.
-          if (!exited) proc.kill();
+          // Already stopping (an abort's grace period): a timeout or dispose escalates, and an
+          // aborted run whose process still has not exited gives up on its helper now.
+          if (!exited) {
+            proc.kill();
+            proc.abandon?.();
+          }
           return;
         }
         failure = error;
-        proc.kill();
+        kill();
         // Settle now: a grandchild may keep the pipes (and so 'close') open.
         proc.detach();
         finish(error);
@@ -629,7 +663,7 @@ export class GitRunner {
         // SIGTERM: helpers that ignore it (a trusted filter) must not outlive the request. Not
         // cleared by `finish` or the exit; unref'd so it never holds the process open. A group that
         // is already gone makes the kill a no-op.
-        const forced = setTimeout(() => proc.kill(), ABORT_GRACE_MS);
+        const forced = setTimeout(kill, ABORT_GRACE_MS);
         forced.unref();
       };
       signal?.addEventListener('abort', onAbort, { once: true });
@@ -666,6 +700,7 @@ export class GitRunner {
   private spawnProcess(
     binary: string,
     argv: string[],
+    direct: boolean,
     request: {
       cwd: string;
       env: Record<string, string>;
@@ -674,7 +709,7 @@ export class GitRunner {
       handlers: ProcHandlers;
     },
   ): ProcHandle {
-    const pool = this.helperPool(binary);
+    const pool = direct ? null : this.helperPool(binary);
     if (pool) {
       const message: HelperSpawnRequest = {
         binary,
@@ -731,6 +766,9 @@ function tooLargeError(args: string[], cwd: string, maxOutputBytes: number): Git
 
 /** A SPAWN frame the helper accepts (else the call spawns directly, as before #45). */
 function helperRequestFits(request: HelperSpawnRequest): boolean {
+  // The helper's own limits (review #2): above them it refuses, and spawn would not.
+  if (request.argv.length > HELPER_MAX_ARGV) return false;
+  if (Object.keys(request.env).length > HELPER_MAX_ENV) return false;
   let bytes = 256;
   for (const arg of request.argv) bytes += Buffer.byteLength(arg) * 2 + 8;
   for (const [key, value] of Object.entries(request.env)) {

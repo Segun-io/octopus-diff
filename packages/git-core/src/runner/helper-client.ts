@@ -13,6 +13,7 @@
  * a start failure; after `MAX_START_FAILURES` in a row, or `MAX_CRASHES` within `CRASH_WINDOW_MS`,
  * the pool turns itself off and the runner spawns git directly (logged once).
  */
+import { AsyncLocalStorage, AsyncResource } from 'node:async_hooks';
 import { type ChildProcess, spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -21,6 +22,16 @@ import type { Logger } from '@octopus-diff/contracts';
 const HEADER_BYTES = 9;
 /** Largest request frame the helper accepts (`MAX_REQUEST_FRAME` there). */
 export const HELPER_MAX_REQUEST_FRAME = 8 * 1024 * 1024;
+/** Most argv entries and env entries the helper accepts (`MAX_ARGV`, `MAX_ENV` there). */
+export const HELPER_MAX_ARGV = 65_536;
+export const HELPER_MAX_ENV = 4_096;
+
+/**
+ * Runs a function in the context this module was loaded in (no call's context): a helper's pipes
+ * and timers must not belong to whichever request happened to start it (review #4). Each request's
+ * callbacks are bound to its own context in `startGit` instead.
+ */
+const inRootContext = AsyncLocalStorage.snapshot();
 /** stdin is sent in frames of at most this size, within the credit the helper grants. */
 const STDIN_CHUNK = 64 * 1024;
 /** How long a retry waits for the SIGKILLed groups of a crashed helper to disappear. */
@@ -34,7 +45,7 @@ const CRASH_WINDOW_MS = 60_000;
 const CLOSE_WAIT_MS = 2_000;
 
 export const HelperFrame = {
-  spawn: 1,
+  startGit: 1,
   stdin: 2,
   stdinEnd: 3,
   kill: 4,
@@ -66,9 +77,10 @@ export interface ProcHandlers {
   tooLarge(): void;
   /**
    * The helper died or refused the request. `retryable`: no process of the request can still be
-   * running (it never started, or its group is gone).
+   * running (it never started, or its group is gone). `refused`: the helper turned the request
+   * down (nothing ran); it would refuse it again, so it is for the direct path.
    */
-  lost(reason: string, retryable: boolean): void;
+  lost(reason: string, retryable: boolean, refused?: boolean): void;
 }
 
 export interface ProcHandle {
@@ -76,6 +88,12 @@ export interface ProcHandle {
   kill(signal?: 'SIGTERM' | 'SIGKILL'): void;
   /** Stops reading the process's output and closes its pipes. */
   detach(): void;
+  /**
+   * Gives up on whatever runs the process when a SIGKILL brought no exit (review #1): for a
+   * helper, SIGKILLs the helper, whose death reports its requests lost and frees their slots.
+   * Absent for a direct child (the kernel always delivers its exit).
+   */
+  abandon?(): void;
 }
 
 export interface HelperSpawnRequest {
@@ -253,8 +271,24 @@ class HelperProcess {
 
   startGit(request: HelperSpawnRequest, handlers: ProcHandlers): ProcHandle {
     const id = this.nextId++;
+    // The request's own async context for every callback (not the helper's pipes' context).
+    const resource = new AsyncResource('OctopusDiffGitHelperRequest');
+    const inScope =
+      <A extends unknown[]>(fn: (...args: A) => void) =>
+      (...args: A): void => {
+        resource.runInAsyncScope(fn, null, ...args);
+      };
+    const bound: ProcHandlers = {
+      stdout: inScope(handlers.stdout),
+      stderr: inScope(handlers.stderr),
+      exit: inScope(handlers.exit),
+      close: inScope(handlers.close),
+      error: inScope(handlers.error),
+      tooLarge: inScope(handlers.tooLarge),
+      lost: inScope(handlers.lost),
+    };
     const state: Request = {
-      handlers,
+      handlers: bound,
       pid: undefined,
       started: false,
       input: request.input,
@@ -273,7 +307,7 @@ class HelperProcess {
       }),
       'utf8',
     );
-    this.write(frame(HelperFrame.spawn, id, message));
+    this.write(frame(HelperFrame.startGit, id, message));
     // stdin follows as the helper grants credit (STDIN_CREDIT), git's pace.
     this.updateRef();
     return {
@@ -289,6 +323,13 @@ class HelperProcess {
         // A cancelled or timed-out request sends no more stdin.
         state.input = undefined;
         if (!this.dead && this.requests.has(id)) this.write(frame(HelperFrame.detach, id));
+      },
+      abandon: () => {
+        if (!this.dead) {
+          this.lastError =
+            'a SIGKILLed git process never reported its exit (helper stopped or wedged)';
+          this.kill();
+        }
       },
     };
   }
@@ -495,7 +536,7 @@ class HelperProcess {
       case HelperFrame.error: {
         const event = parseJson(payload);
         const error = new Error(
-          typeof event.message === 'string' ? event.message : 'spawn failed',
+          typeof event.message === 'string' ? event.message : 'git did not start',
         ) as NodeJS.ErrnoException;
         if (typeof event.code === 'string') error.code = event.code;
         handlers.error(error);
@@ -508,7 +549,7 @@ class HelperProcess {
         const event = parseJson(payload);
         this.requests.delete(id);
         this.updateRef();
-        handlers.lost(`the git helper refused the request: ${String(event.reason)}`, true);
+        handlers.lost(`the git helper refused the request: ${String(event.reason)}`, true, true);
         return;
       }
       default:
@@ -556,7 +597,10 @@ export class HelperPool {
     }
     if (!best || (best.load > 0 && free >= 0)) {
       const at = free;
-      best = new HelperProcess(this.options, (dead, beforeReady) => this.onDead(dead, beforeReady));
+      best = inRootContext(
+        () =>
+          new HelperProcess(this.options, (dead, beforeReady) => this.onDead(dead, beforeReady)),
+      );
       this.helpers[at] = best;
     }
     return best.startGit(request, handlers);

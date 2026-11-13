@@ -20,6 +20,7 @@ import {
   GitRunner,
   gitHelperDisabledByEnv,
 } from '../src/index.js';
+import { currentCall, withCall } from '../src/runner/call-context.js';
 import { createFixture, type Fixture } from './helpers/fixture.js';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
@@ -64,6 +65,7 @@ beforeAll(() => {
       `  once) if [ ! -e "${gates}/once.done" ]; then : > "${gates}/once.done"; sleep 30; fi; printf 'second run' ;;`,
       "  stream) printf 'first chunk'; sleep 30 ;;",
       '  count) wc -c | tr -d " " ;;',
+      '  argc) printf \'%s\' "$#" ;;',
       '  cksum) cksum ;;',
       // The first run records its pid, tells the helper's crash hook it is running and sleeps; the
       // retry says whether the first one is still alive (it must not be).
@@ -173,14 +175,18 @@ class RawHelper {
   private buffer = Buffer.alloc(0);
   private pidBuffer = Buffer.alloc(0);
 
-  constructor(args: string[] = ['--octopus-diff-git-helper', '1', fakeGit], pidChannel = true) {
+  constructor(
+    args: string[] = ['--octopus-diff-git-helper', '1', fakeGit],
+    pidChannel = true,
+    env: Record<string, string> = {},
+  ) {
     this.child = spawn(
       process.execPath,
       ['--disable-warning=ExperimentalWarning', ENTRY, ...args],
       {
         stdio: pidChannel ? ['pipe', 'pipe', 'pipe', 'pipe'] : ['pipe', 'pipe', 'pipe'],
         cwd: '/',
-        env: {},
+        env,
       },
     );
     (this.child.stdio[3] as NodeJS.ReadableStream | null)?.on('data', (chunk: Buffer) => {
@@ -393,6 +399,51 @@ describe.skipIf(process.platform === 'win32')('helper protocol: strict, never a 
     expect(sent).toBeGreaterThanOrEqual(256 * 1024);
     expect(sent).toBeLessThan(4 * 1024 * 1024);
     expect(await helper.close()).toBe(0);
+  });
+
+  it('the pid reaches the parent even while its frames are stuck behind a flood (review #3)', async () => {
+    writeFileSync(log, '');
+    const helper = new RawHelper();
+    // The parent stops reading: request 1 fills every buffer, request 2's frames queue behind it.
+    helper.child.stdout?.pause();
+    helper.spawnRaw(1, {
+      ...request(),
+      env: {
+        PATH: process.env.PATH ?? '/usr/bin:/bin',
+        FAKE_MODE: 'zeros',
+        FAKE_BYTES: '50000000',
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    helper.spawnRaw(2, {
+      ...request(),
+      env: { PATH: process.env.PATH ?? '/usr/bin:/bin', FAKE_MODE: 'hang' },
+    });
+    await until(() => helper.pids.some(([id, pid]) => id === 2 && pid > 0), 5_000, 'pid of 2');
+    const pid = helper.pids.find(([id, p]) => id === 2 && p > 0)?.[1] as number;
+    expect(helper.of(2, E.spawned)).toEqual([]);
+    helper.child.kill('SIGKILL');
+    await helper.exited;
+    // What the parent does with it (helper-client die()): the group is killable.
+    expect(alive(-pid)).toBe(true);
+    process.kill(-pid, 'SIGKILL');
+    await until(() => !alive(-pid), 3_000, 'the group to die');
+  });
+
+  it('an uncaught exception in the helper still kills every group it started (review #3)', async () => {
+    const crash = path.join(fx.root, 'crash-throw');
+    writeFileSync(crash, '');
+    const helper = new RawHelper(undefined, true, {
+      OCTOPUS_DIFF_GIT_HELPER_TEST_CRASH: `throw-after-spawn:${crash}`,
+    });
+    helper.spawnRaw(1, {
+      ...request(),
+      env: { PATH: process.env.PATH ?? '/usr/bin:/bin', FAKE_MODE: 'hang' },
+    });
+    expect(await helper.exited).not.toBe(0);
+    const pid = helper.pids.find(([id, p]) => id === 1 && p > 0)?.[1] as number;
+    expect(pid).toBeGreaterThan(0);
+    await until(() => !alive(-pid), 3_000, 'the group of a helper that threw to die');
   });
 
   it('refuses to start without exactly its startup arguments', async () => {
@@ -612,6 +663,163 @@ describe.skipIf(!helperOn)('runner through the helper', () => {
         .trim(),
     ).toBe('3');
     await Promise.all([runner.dispose(), counted.dispose()]);
+  });
+
+  it('70,000 pathspecs: the helper path answers as the direct path does (review #2)', async () => {
+    const paths = Array.from({ length: 70_000 }, (_, i) => `p${i}`);
+    const warnings: string[] = [];
+    const viaHelper = new GitRunner({
+      gitBinary: fakeGit,
+      env: { FAKE_MODE: 'argc' },
+      helper: { processes: 1 },
+      logger: {
+        debug: () => {},
+        info: () => {},
+        warn: (message: string) => warnings.push(message),
+        error: () => {},
+      },
+    });
+    const direct = new GitRunner({ gitBinary: fakeGit, env: { FAKE_MODE: 'argc' }, helper: false });
+    const [a, b] = await Promise.all([
+      viaHelper.run(['diff', '--', ...paths], { cwd: fx.root }),
+      direct.run(['diff', '--', ...paths], { cwd: fx.root }),
+    ]);
+    expect(a.stdout.toString()).toBe(b.stdout.toString());
+    expect(Number(a.stdout.toString())).toBeGreaterThan(70_000);
+    expect(viaHelper.usesHelper).toBe(true);
+    // Sent directly up front: the helper never had to refuse it.
+    expect(warnings).toEqual([]);
+    await Promise.all([viaHelper.dispose(), direct.dispose()]);
+  });
+
+  it('a request the helper refuses runs directly instead of failing (review #2)', async () => {
+    writeFileSync(log, '');
+    const warnings: string[] = [];
+    const logger = {
+      debug: () => {},
+      info: () => {},
+      warn: (message: string) => warnings.push(message),
+      error: () => {},
+    };
+    // The helper refuses an env key with '='; spawn takes it.
+    const runner = new GitRunner({
+      gitBinary: fakeGit,
+      env: { 'ODD=KEY': 'x' },
+      helper: { processes: 1 },
+      logger,
+    });
+    const result = await runner.run(job('refused'), { cwd: fx.root });
+    expect(result.stdout.toString()).toBe('out:refused');
+    expect(starts()).toHaveLength(1);
+    expect(starts()[0]?.ppid).toBe(process.pid);
+    expect(warnings.some((w) => w.includes('refused'))).toBe(true);
+    // The helper itself still serves the next request.
+    expect(runner.usesHelper).toBe(true);
+    await runner.dispose();
+  });
+
+  it('each request sees its own call context in its callbacks (review #4)', async () => {
+    const runner = runnerWith();
+    const seen: string[] = [];
+    const call = (name: string, signal: AbortSignal) =>
+      withCall({ lane: 'interactive', signal }, () =>
+        runner.run(job(name), {
+          cwd: fx.root,
+          queueKey: name,
+          onStdout: () => {
+            seen.push(`${name}:${currentCall()?.signal === signal ? 'own' : 'other'}`);
+          },
+        }),
+      );
+    await call('A', new AbortController().signal);
+    await call('B', new AbortController().signal);
+    expect(seen).toEqual(['A:own', 'B:own']);
+    await runner.dispose();
+  });
+
+  it('a stopped helper does not wedge the runner: aborted runs settle, their slots come back (review #1)', async () => {
+    writeFileSync(log, '');
+    const releaseA = gate('wa');
+    const releaseB = gate('wb');
+    // A timeout far away: only the watchdog after the forced SIGKILL can settle them.
+    const runner = new GitRunner({
+      gitBinary: fakeGit,
+      concurrency: 2,
+      timeoutMs: 60_000,
+      helper: { processes: 2 },
+    });
+    const a = new AbortController();
+    const b = new AbortController();
+    const runA = runner
+      .run(job('wa'), { cwd: fx.root, queueKey: 'a', signal: a.signal })
+      .catch((e: unknown) => e);
+    const runB = runner
+      .run(job('wb'), { cwd: fx.root, queueKey: 'b', signal: b.signal })
+      .catch((e: unknown) => e);
+    await until(() => starts().length === 2);
+    const helpers = runner.helperPids();
+    expect(helpers).toHaveLength(2);
+    const gits = starts().map((s) => s.pid);
+    try {
+      for (const pid of helpers) process.kill(pid, 'SIGSTOP');
+      const abortedAt = Date.now();
+      a.abort();
+      b.abort();
+      const third = runner.run(job('c'), { cwd: fx.root, queueKey: 'c' });
+      expect(isGitCoreError(await runA, 'aborted')).toBe(true);
+      expect(isGitCoreError(await runB, 'aborted')).toBe(true);
+      expect((await third).stdout.toString()).toBe('out:c');
+      expect(Date.now() - abortedAt).toBeLessThan(5_000);
+      // The stopped helpers were given up on, and their git processes killed.
+      for (const pid of helpers) await until(() => !alive(pid), 3_000, `helper ${pid} gone`);
+      for (const pid of gits) await until(() => !alive(-pid), 3_000, `group ${pid} gone`);
+    } finally {
+      for (const pid of helpers) {
+        try {
+          process.kill(pid, 'SIGCONT');
+          process.kill(pid, 'SIGKILL');
+        } catch {
+          // gone
+        }
+      }
+      releaseA();
+      releaseB();
+    }
+    await runner.dispose();
+  });
+
+  it('a timeout that fires while an abort waits on a stopped helper gives up on it at once (review #1)', async () => {
+    writeFileSync(log, '');
+    const release = gate('wt');
+    const runner = new GitRunner({
+      gitBinary: fakeGit,
+      concurrency: 1,
+      timeoutMs: 1_000,
+      helper: { processes: 1 },
+    });
+    const controller = new AbortController();
+    const startedAt = Date.now();
+    const run = runner
+      .run(job('wt'), { cwd: fx.root, signal: controller.signal })
+      .catch((e: unknown) => e);
+    await until(() => starts().length === 1);
+    const [helper] = runner.helperPids();
+    try {
+      process.kill(helper as number, 'SIGSTOP');
+      controller.abort();
+      expect(isGitCoreError(await run, 'aborted')).toBe(true);
+      // At the timeout (1 s after the start), well before the watchdog (2 s after the abort).
+      expect(Date.now() - startedAt).toBeLessThan(1_000 + 700);
+    } finally {
+      try {
+        process.kill(helper as number, 'SIGCONT');
+        process.kill(helper as number, 'SIGKILL');
+      } catch {
+        // gone
+      }
+      release();
+    }
+    await runner.dispose();
   });
 
   it('keeps the concurrency limit', async () => {
