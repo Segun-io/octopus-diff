@@ -119,6 +119,7 @@ export interface HelperPoolOptions {
   test?: {
     crash?: string;
     delayExitMs?: number;
+    startDelayMs?: number;
     groupGoneWaitMs?: number;
     probeWaitMs?: number;
   };
@@ -157,12 +158,14 @@ function parseJson(payload: Buffer): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-function killGroupDirect(pid: number): void {
+function killGroupDirect(pid: number, logger?: Logger): void {
   if (process.platform === 'win32') return;
   try {
     process.kill(-pid, 'SIGKILL');
-  } catch {
-    // Already gone.
+  } catch (error) {
+    // ESRCH: already gone. Anything else would leave git running: say so.
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code !== 'ESRCH') logger?.warn('could not kill a git process group', { pid, code });
   }
 }
 
@@ -224,6 +227,9 @@ class HelperProcess {
     const env: Record<string, string> = {};
     if (process.versions.electron) env.ELECTRON_RUN_AS_NODE = '1';
     if (options.test?.crash) env.OCTOPUS_DIFF_GIT_HELPER_TEST_CRASH = options.test.crash;
+    if (options.test?.startDelayMs) {
+      env.OCTOPUS_DIFF_GIT_HELPER_TEST_START_DELAY_MS = String(options.test.startDelayMs);
+    }
     if (options.test?.delayExitMs) {
       env.OCTOPUS_DIFF_GIT_HELPER_TEST_DELAY_EXIT_MS = String(options.test.delayExitMs);
     }
@@ -339,7 +345,9 @@ class HelperProcess {
       kill: (signal = 'SIGKILL') => {
         if (this.dead) {
           // The helper is gone; the group may still be (a crash between CLOSE and this kill).
-          if (state.pid !== undefined && signal === 'SIGKILL') killGroupDirect(state.pid);
+          if (state.pid !== undefined && signal === 'SIGKILL') {
+            killGroupDirect(state.pid, this.options.logger);
+          }
           return;
         }
         this.write(frame(HelperFrame.kill, id, Buffer.from([signal === 'SIGTERM' ? 1 : 2])));
@@ -475,7 +483,7 @@ class HelperProcess {
       if (request.pid !== undefined) {
         // A crashed helper cannot clean up: kill what it started, and retry only once it is gone.
         const pid = request.pid;
-        killGroupDirect(pid);
+        killGroupDirect(pid, this.options.logger);
         void groupsGone([pid], this.options.test?.groupGoneWaitMs ?? GROUP_GONE_WAIT_MS).then(() =>
           request.handlers.lost(reason, true),
         );

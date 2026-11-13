@@ -4,8 +4,10 @@
  * direct spawn (output bytes, caps, timeouts, stdin, cancellation, concurrency), and no process
  * outlives a crashed helper or a killed parent.
  *
- * The fake binary logs every start with ONE printf (macOS CI: one line per spawn), fields
- * separated by \x1f: pid, parent pid, argument count, then the arguments.
+ * The fake binary logs events, one line each, written with ONE `printf '%s\n'` of a string it
+ * built first (a format applied once per argument is several writes in macOS's /bin/sh, and
+ * concurrent fakes then interleave their fields): `start␟pid␟ppid␟argc␟args…` (every argument up to
+ * 32 of them, else only the last) and `end␟pid` when it exits normally. Fields separated by \x1f.
  */
 import { type ChildProcess, spawn, spawnSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
@@ -13,7 +15,7 @@ import { chmodSync, existsSync, readFileSync, rmSync, writeFileSync } from 'node
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { type GitCoreError, isGitCoreError } from '@octopus-diff/contracts';
-import { afterAll, beforeAll, describe, expect, it, onTestFinished } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, onTestFinished } from 'vitest';
 import {
   ABORT_GRACE_MS,
   defaultHelperEntry,
@@ -54,8 +56,11 @@ beforeAll(() => {
     fakeGit,
     [
       '#!/bin/sh',
-      `printf '%s${SEP}' "$$" "$PPID" "$#" "$@" >> "${log}"`,
       'for last in "$@"; do :; done',
+      `rec="start${SEP}$$${SEP}$PPID${SEP}$#"`,
+      `if [ "$#" -le 32 ]; then for a in "$@"; do rec="$rec${SEP}$a"; done; else rec="$rec${SEP}$last"; fi`,
+      `printf '%s\\n' "$rec" >> "${log}"`,
+      `trap 'printf "%s\\n" "end${SEP}$$" >> "${log}"' EXIT`,
       'case "$FAKE_MODE" in',
       '  blob) cat "$FAKE_FILE"; cat "$FAKE_FILE" >&2 ;;',
       '  stdin) cat ;;',
@@ -83,29 +88,39 @@ beforeAll(() => {
 
 afterAll(() => fx.dispose());
 
+beforeEach(() => {
+  tracked.clear();
+  logged.length = 0;
+});
+
 interface Start {
   pid: number;
   ppid: number;
   args: string[];
 }
 
-function starts(): Start[] {
+/** The fake's event lines, in the order they were written. */
+function events(): string[][] {
   if (!existsSync(log)) return [];
-  const fields = readFileSync(log, 'utf8').split(SEP);
-  const out: Start[] = [];
-  let at = 0;
-  while (at + 3 <= fields.length) {
-    const count = Number(fields[at + 2]);
-    if (!Number.isInteger(count)) break;
-    out.push({
-      pid: Number(fields[at]),
-      ppid: Number(fields[at + 1]),
-      args: fields.slice(at + 3, at + 3 + count),
-    });
-    at += 3 + count;
-  }
-  return out;
+  return readFileSync(log, 'utf8')
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => line.split(SEP));
 }
+
+function starts(): Start[] {
+  return events().flatMap((fields) => {
+    if (fields[0] !== 'start') return [];
+    const count = Number(fields[3]);
+    const args = fields.slice(4);
+    // A record cut short (still being written) is not a start yet.
+    if (!Number.isInteger(count) || (count <= 32 && args.length !== count)) return [];
+    return [{ pid: Number(fields[1]), ppid: Number(fields[2]), args }];
+  });
+}
+
+const ends = (): number[] =>
+  events().flatMap((fields) => (fields[0] === 'end' ? [Number(fields[1])] : []));
 
 const last = (s: Start): string => s.args[s.args.length - 1] ?? '';
 const job = (name: string): string[] => ['status', '--', name];
@@ -118,15 +133,85 @@ function gate(name: string): () => void {
 
 async function until(
   check: () => boolean,
-  ms = 5_000,
+  ms = 20_000,
   what = 'condition',
   every = 10,
 ): Promise<void> {
   const deadline = Date.now() + ms;
   while (!check()) {
-    if (Date.now() > deadline) throw new Error(`${what} not reached`);
+    if (Date.now() > deadline) {
+      throw new Error(`${what} not reached within ${ms} ms\n${diagnostics()}`);
+    }
     await new Promise((resolve) => setTimeout(resolve, every));
   }
+}
+
+/** Runners and log lines of the running test, for `diagnostics()`. */
+const tracked = new Set<GitRunner>();
+const logged: string[] = [];
+const testLogger = {
+  debug: () => {},
+  info: () => {},
+  warn: (message: string, fields?: Record<string, unknown>) => {
+    logged.push(`warn ${message} ${JSON.stringify(fields ?? {})}`);
+  },
+  error: (message: string, fields?: Record<string, unknown>) => {
+    logged.push(`error ${message} ${JSON.stringify(fields ?? {})}`);
+  },
+};
+
+/** A runner whose state goes into the diagnostics of a failed wait (and logs to `logged`). */
+function newRunner(options: ConstructorParameters<typeof GitRunner>[0]): GitRunner {
+  // OCTOPUS_DIFF_TEST_HELPER_START_DELAY_MS: every helper starts that late (macOS CI rehearsal).
+  const startDelayMs = Number(process.env.OCTOPUS_DIFF_TEST_HELPER_START_DELAY_MS ?? 0) || 0;
+  const helperTest =
+    startDelayMs > 0 ? { startDelayMs, ...options?.helperTest } : options?.helperTest;
+  const runner = new GitRunner({
+    logger: testLogger,
+    ...options,
+    ...(helperTest ? { helperTest } : {}),
+  });
+  tracked.add(runner);
+  return runner;
+}
+
+/**
+ * What a failed wait prints: the fake's events, the processes the test knows (the fakes, their
+ * parents, the helpers, their groups) as `ps` shows them, the helpers' state, and the warnings.
+ */
+function diagnostics(): string {
+  const known = new Set<number>();
+  for (const s of starts()) {
+    known.add(s.pid);
+    known.add(s.ppid);
+  }
+  for (const runner of tracked) {
+    for (const pid of [...runner.helperPids(), ...runner.helperChildPids()]) known.add(pid);
+  }
+  const ps =
+    spawnSync('ps', ['-A', '-o', 'pid=,ppid=,pgid=,stat=,command='], { encoding: 'utf8' }).stdout ??
+    '';
+  const processes = ps
+    .split('\n')
+    .filter((line) => {
+      const ids = /^\s*(\d+)\s+(\d+)\s+(\d+)/.exec(line);
+      return ids?.slice(1, 4).some((id) => known.has(Number(id))) ?? false;
+    })
+    .map((line) => line.trim().slice(0, 200));
+  const text = existsSync(log) ? readFileSync(log, 'utf8') : '(no log)';
+  return [
+    '--- fake git events (last 4 KB) ---',
+    text.slice(-4096).replaceAll(SEP, ' | ').slice(0, 4096),
+    '--- processes the test knows (pid ppid pgid stat command) ---',
+    ...(processes.length ? processes : ['(none)']),
+    '--- helpers ---',
+    ...[...tracked].map(
+      (r) =>
+        `helpers ${JSON.stringify(r.helperPids())} children ${JSON.stringify(r.helperChildPids())} usesHelper ${r.usesHelper}`,
+    ),
+    '--- warnings ---',
+    ...(logged.length ? logged.slice(-20) : ['(none)']),
+  ].join('\n');
 }
 
 /**
@@ -135,17 +220,14 @@ async function until(
  * can take seconds on a loaded machine.
  */
 function processTable(): Array<{ pid: number; pgid: number; zombie: boolean }> {
+  // Dead: a zombie (Z), dead (X, Linux), or exiting (an E flag, BSD/macOS `ps`: killed, on its way
+  // out). Anything else may still run code.
   const out = spawnSync('ps', ['-A', '-o', 'pid=,pgid=,stat='], { encoding: 'utf8' }).stdout ?? '';
   return out.split('\n').flatMap((line) => {
     const match = /^\s*(\d+)\s+(\d+)\s+(\S+)/.exec(line);
     if (!match) return [];
-    return [
-      {
-        pid: Number(match[1]),
-        pgid: Number(match[2]),
-        zombie: (match[3] as string).startsWith('Z'),
-      },
-    ];
+    const stat = match[3] as string;
+    return [{ pid: Number(match[1]), pgid: Number(match[2]), zombie: /^[ZX]|E/.test(stat) }];
   });
 }
 
@@ -284,7 +366,7 @@ class RawHelper {
     return this.frames.filter((f) => f.id === id && (type === undefined || f.type === type));
   }
 
-  async next(id: number, type: number, ms = 5_000): Promise<Frame> {
+  async next(id: number, type: number, ms = 20_000): Promise<Frame> {
     await until(() => this.of(id, type).length > 0, ms, `frame ${type} for ${id}`);
     return this.of(id, type)[0] as Frame;
   }
@@ -499,7 +581,7 @@ describe.skipIf(process.platform === 'win32')(
         ...request(),
         env: { PATH: process.env.PATH ?? '/usr/bin:/bin', FAKE_MODE: 'hang' },
       });
-      await until(() => helper.pids.some(([id, pid]) => id === 2 && pid > 0), 5_000, 'pid of 2');
+      await until(() => helper.pids.some(([id, pid]) => id === 2 && pid > 0), 20_000, 'pid of 2');
       const pid = helper.pids.find(([id, p]) => id === 2 && p > 0)?.[1] as number;
       expect(helper.of(2, E.spawned)).toEqual([]);
       helper.child.kill('SIGKILL');
@@ -592,14 +674,14 @@ const ARG_MAX = ((): number => {
 const FITTING_PATHSPECS = Math.min(70_000, Math.floor((0.6 * ARG_MAX) / 15));
 
 function runnerWith(env: Record<string, string> = {}, extra: Record<string, unknown> = {}) {
-  return new GitRunner({ gitBinary: fakeGit, env, helper: { processes: 1 }, ...extra });
+  return newRunner({ gitBinary: fakeGit, env, helper: { processes: 1 }, ...extra });
 }
 
 describe.skipIf(!helperOn)('runner through the helper', { timeout: 60_000 }, () => {
   it('is the default: git is a child of a helper process, not of this one', async () => {
     writeFileSync(log, '');
     // Constructed exactly as lanes.test.ts and runner.test.ts construct theirs.
-    const runner = new GitRunner({ gitBinary: fakeGit, concurrency: 1 });
+    const runner = newRunner({ gitBinary: fakeGit, concurrency: 1 });
     const result = await runner.run(job('who'), { cwd: fx.root });
     expect(result.stdout.toString()).toBe('out:who');
     expect(runner.usesHelper).toBe(true);
@@ -637,7 +719,7 @@ describe.skipIf(!helperOn)('runner through the helper', { timeout: 60_000 }, () 
   it('matches the direct path exactly on the same output', async () => {
     const env = { FAKE_MODE: 'blob', FAKE_FILE: blobFile };
     const viaHelper = runnerWith(env);
-    const direct = new GitRunner({ gitBinary: fakeGit, env, helper: false });
+    const direct = newRunner({ gitBinary: fakeGit, env, helper: false });
     expect(direct.usesHelper).toBe(false);
     const [a, b] = await Promise.all([
       viaHelper.run(job('same'), { cwd: fx.root }),
@@ -664,10 +746,18 @@ describe.skipIf(!helperOn)('runner through the helper', { timeout: 60_000 }, () 
 
   it('times out with the same error and kills the group', async () => {
     writeFileSync(log, '');
-    const runner = runnerWith({ FAKE_MODE: 'hang' }, { timeoutMs: 300 });
-    const error = await runner.run(job('slow'), { cwd: fx.root }).catch((e: unknown) => e);
+    const runner = runnerWith({ FAKE_MODE: 'hang' });
+    // A started helper: the timeout below must find git running, not a helper still starting
+    // (the timeout counts from the request, as a direct spawn's does).
+    await runner.run(job('warm'), { cwd: fx.root, timeoutMs: 60_000 }).catch(() => {});
+    writeFileSync(log, '');
+    const error = await runner
+      .run(job('slow'), { cwd: fx.root, timeoutMs: 1_500 })
+      .catch((e: unknown) => e);
     expect(isGitCoreError(error, 'timeout')).toBe(true);
-    expect((error as Error).message).toBe('git status timed out after 300 ms');
+    expect((error as Error).message).toBe('git status timed out after 1500 ms');
+    // git did run (else this test would prove nothing), and its group is gone.
+    expect(starts()).toHaveLength(1);
     const pid = starts()[0]?.pid as number;
     await untilGone('the group to be gone', [], [pid]);
     await runner.dispose();
@@ -683,7 +773,7 @@ describe.skipIf(!helperOn)('runner through the helper', { timeout: 60_000 }, () 
   it('streams a large stdin as the pipes drain: two 64 MiB inputs at once, little extra memory', async () => {
     const size = 64 * 1024 * 1024;
     const inputs = [Buffer.alloc(size, 0x61), Buffer.alloc(size, 0x62)];
-    const runner = new GitRunner({
+    const runner = newRunner({
       gitBinary: fakeGit,
       env: { FAKE_MODE: 'count' },
       timeoutMs: 60_000,
@@ -711,13 +801,13 @@ describe.skipIf(!helperOn)('runner through the helper', { timeout: 60_000 }, () 
   it('a 64 MiB random stdin reaches git byte for byte (cksum equal to the direct path)', async () => {
     const input = randomBytes(64 * 1024 * 1024);
     const env = { FAKE_MODE: 'cksum' };
-    const viaHelper = new GitRunner({
+    const viaHelper = newRunner({
       gitBinary: fakeGit,
       env,
       timeoutMs: 60_000,
       helper: { processes: 1 },
     });
-    const direct = new GitRunner({ gitBinary: fakeGit, env, timeoutMs: 60_000, helper: false });
+    const direct = newRunner({ gitBinary: fakeGit, env, timeoutMs: 60_000, helper: false });
     const [a, b] = await Promise.all([
       viaHelper.run(['patch-id', '--stable'], { cwd: fx.root, input }),
       direct.run(['patch-id', '--stable'], { cwd: fx.root, input }),
@@ -729,7 +819,7 @@ describe.skipIf(!helperOn)('runner through the helper', { timeout: 60_000 }, () 
 
   it('a request aborted while its stdin is being sent stops sending, and the next request works', async () => {
     writeFileSync(log, '');
-    const runner = new GitRunner({
+    const runner = newRunner({
       gitBinary: fakeGit,
       env: { FAKE_MODE: 'hang' },
       timeoutMs: 60_000,
@@ -746,7 +836,7 @@ describe.skipIf(!helperOn)('runner through the helper', { timeout: 60_000 }, () 
     await until(() => starts().length === 1);
     controller.abort();
     expect(isGitCoreError(await run, 'aborted')).toBe(true);
-    const counted = new GitRunner({
+    const counted = newRunner({
       gitBinary: fakeGit,
       env: { FAKE_MODE: 'count' },
       helper: { processes: 1 },
@@ -774,13 +864,13 @@ describe.skipIf(!helperOn)('runner through the helper', { timeout: 60_000 }, () 
     // At most the helper's own limit: this one goes through the helper.
     const count = Math.min(FITTING_PATHSPECS, HELPER_MAX_ARGV - 200);
     const warnings: string[] = [];
-    const viaHelper = new GitRunner({
+    const viaHelper = newRunner({
       gitBinary: fakeGit,
       env: { FAKE_MODE: 'argc' },
       helper: { processes: 1 },
       logger: quietLogger(warnings),
     });
-    const direct = new GitRunner({ gitBinary: fakeGit, env: { FAKE_MODE: 'argc' }, helper: false });
+    const direct = newRunner({ gitBinary: fakeGit, env: { FAKE_MODE: 'argc' }, helper: false });
     const a = await viaHelper.run(['diff', '--', ...pathspecs(count)], { cwd: fx.root });
     const b = await direct.run(['diff', '--', ...pathspecs(count)], { cwd: fx.root });
     expect(a.stdout.toString()).toBe(b.stdout.toString());
@@ -797,13 +887,13 @@ describe.skipIf(!helperOn)('runner through the helper', { timeout: 60_000 }, () 
     async () => {
       const count = FITTING_PATHSPECS;
       const warnings: string[] = [];
-      const viaHelper = new GitRunner({
+      const viaHelper = newRunner({
         gitBinary: fakeGit,
         env: { FAKE_MODE: 'argc' },
         helper: { processes: 1 },
         logger: quietLogger(warnings),
       });
-      const direct = new GitRunner({
+      const direct = newRunner({
         gitBinary: fakeGit,
         env: { FAKE_MODE: 'argc' },
         helper: false,
@@ -832,12 +922,12 @@ describe.skipIf(!helperOn)('runner through the helper', { timeout: 60_000 }, () 
         `${i}`.padEnd(100_000, 'x'),
       );
       const warnings: string[] = [];
-      const viaHelper = new GitRunner({
+      const viaHelper = newRunner({
         gitBinary: fakeGit,
         helper: { processes: 1 },
         logger: quietLogger(warnings),
       });
-      const direct = new GitRunner({ gitBinary: fakeGit, helper: false });
+      const direct = newRunner({ gitBinary: fakeGit, helper: false });
       await viaHelper.run(job('warm'), { cwd: fx.root });
       const [helper] = viaHelper.helperPids();
       const errorOf = (runner: GitRunner) =>
@@ -869,7 +959,7 @@ describe.skipIf(!helperOn)('runner through the helper', { timeout: 60_000 }, () 
       error: () => {},
     };
     // The helper refuses an env key with '='; spawn takes it.
-    const runner = new GitRunner({
+    const runner = newRunner({
       gitBinary: fakeGit,
       env: { 'ODD=KEY': 'x' },
       helper: { processes: 1 },
@@ -909,7 +999,7 @@ describe.skipIf(!helperOn)('runner through the helper', { timeout: 60_000 }, () 
     const releaseA = gate('wa');
     const releaseB = gate('wb');
     // A timeout far away: only the watchdog after the forced SIGKILL can settle them.
-    const runner = new GitRunner({
+    const runner = newRunner({
       gitBinary: fakeGit,
       concurrency: 2,
       timeoutMs: 60_000,
@@ -973,18 +1063,22 @@ describe.skipIf(!helperOn)('runner through the helper', { timeout: 60_000 }, () 
     const release = gate('wt');
     onTestFinished(release);
     // The watchdog far away: only the timeout can start giving up on the helper.
-    const runner = new GitRunner({
+    const runner = newRunner({
       gitBinary: fakeGit,
       concurrency: 1,
-      timeoutMs: 1_000,
+      // Long enough for the abort below to come first on a loaded machine, far below the watchdog.
+      timeoutMs: 3_000,
       helper: { processes: 1 },
       helperTest: { exitWaitMs: 50_000 },
     });
+    // A started helper first: the timeout counts from the request, and must find git running.
+    await runner.run(job('warm'), { cwd: fx.root, timeoutMs: 60_000 });
+    writeFileSync(log, '');
     const controller = new AbortController();
     const run = runner
       .run(job('wt'), { cwd: fx.root, signal: controller.signal })
       .catch((e: unknown) => e);
-    await until(() => starts().length === 1, 20_000);
+    await until(() => starts().length === 1, 20_000, 'the git of the aborted run started');
     const first = starts()[0]?.pid as number;
     await until(() => runner.helperChildPids().includes(first), 20_000, 'the pid announced');
     const [helper] = runner.helperPids();
@@ -993,7 +1087,7 @@ describe.skipIf(!helperOn)('runner through the helper', { timeout: 60_000 }, () 
     const abortedAt = Date.now();
     controller.abort();
     expect(isGitCoreError(await run, 'aborted')).toBe(true);
-    // The timeout (1 s) and the probe (3 s), long before the 50 s watchdog.
+    // The timeout (3 s) and the probe (3 s), long before the 50 s watchdog.
     expect(Date.now() - abortedAt).toBeLessThan(25_000);
     await untilGone('the stopped helper', [helper as number]);
     await runner.dispose();
@@ -1007,7 +1101,7 @@ describe.skipIf(!helperOn)('runner through the helper', { timeout: 60_000 }, () 
       releaseSlow();
       releaseOther();
     });
-    const runner = new GitRunner({
+    const runner = newRunner({
       gitBinary: fakeGit,
       concurrency: 2,
       timeoutMs: 60_000,
@@ -1018,8 +1112,10 @@ describe.skipIf(!helperOn)('runner through the helper', { timeout: 60_000 }, () 
     const other = runner.run(job('other'), { cwd: fx.root, queueKey: 'o' });
     await until(() => starts().length === 1, 20_000);
     const slow = runner
-      .run(job('slow'), { cwd: fx.root, queueKey: 's', timeoutMs: 300 })
+      .run(job('slow'), { cwd: fx.root, queueKey: 's', timeoutMs: 1_500 })
       .catch((e: unknown) => e);
+    // It must time out with its git running (the helper is warm: `other` runs on it).
+    await until(() => starts().length === 2, 20_000, 'the slow git started');
     expect(isGitCoreError(await slow, 'timeout')).toBe(true);
     const [helper] = runner.helperPids();
     // Past the watchdog: the helper answered its probe and is still the one serving `other`.
@@ -1035,17 +1131,32 @@ describe.skipIf(!helperOn)('runner through the helper', { timeout: 60_000 }, () 
 
   it('keeps the concurrency limit', async () => {
     writeFileSync(log, '');
-    const runner = new GitRunner({ gitBinary: fakeGit, concurrency: 3, helper: { processes: 2 } });
+    const runner = newRunner({ gitBinary: fakeGit, concurrency: 3, helper: { processes: 2 } });
     const releases = Array.from({ length: 9 }, (_, i) => gate(`c${i}`));
+    onTestFinished(() => {
+      for (const release of releases) release();
+    });
     const runs = releases.map((_, i) =>
       runner.run(job(`c${i}`), { cwd: fx.root, queueKey: `k${i}` }),
     );
-    await until(() => starts().length === 3);
-    await new Promise((resolve) => setTimeout(resolve, 200));
+    // Helpers start slowly on a loaded or macOS runner: wait for the starts themselves.
+    await until(() => starts().length >= 3, 30_000, 'three starts');
+    await new Promise((resolve) => setTimeout(resolve, 300));
     expect(starts()).toHaveLength(3);
     for (const release of releases) release();
     await Promise.all(runs);
-    expect(starts()).toHaveLength(9);
+    await until(() => ends().length === 9, 30_000, 'nine ends');
+    // From the fake's own events, in the order they were written: never more than three running,
+    // and every job started once and ended.
+    let running = 0;
+    let most = 0;
+    for (const fields of events()) {
+      running += fields[0] === 'start' ? 1 : fields[0] === 'end' ? -1 : 0;
+      most = Math.max(most, running);
+    }
+    expect(most).toBe(3);
+    expect(starts().map(last).sort()).toEqual(Array.from({ length: 9 }, (_, i) => `c${i}`).sort());
+    expect(new Set(ends())).toEqual(new Set(starts().map((s) => s.pid)));
     // Spread over both helpers while they were busy.
     expect(new Set(starts().map((s) => s.ppid)).size).toBe(2);
     await runner.dispose();
@@ -1054,7 +1165,7 @@ describe.skipIf(!helperOn)('runner through the helper', { timeout: 60_000 }, () 
   it('cancels as the direct path does: queued never spawns, SIGTERM, SIGKILL after the grace period, slot held until exit', async () => {
     writeFileSync(log, '');
     rmSync(path.join(gates, 'family.pid'), { force: true });
-    const runner = new GitRunner({
+    const runner = newRunner({
       gitBinary: fakeGit,
       env: { FAKE_MODE: 'family' },
       concurrency: 1,
@@ -1094,7 +1205,7 @@ describe.skipIf(!helperOn)('runner through the helper', { timeout: 60_000 }, () 
 
   it('holds the slot while an aborted process ignores SIGTERM, then SIGKILLs it', async () => {
     writeFileSync(log, '');
-    const runner = new GitRunner({
+    const runner = newRunner({
       gitBinary: fakeGit,
       env: { FAKE_MODE: 'stubborn' },
       concurrency: 1,
@@ -1109,7 +1220,7 @@ describe.skipIf(!helperOn)('runner through the helper', { timeout: 60_000 }, () 
     await new Promise((resolve) => setTimeout(resolve, 100));
     const pid = starts()[0]?.pid as number;
     const second = runner
-      .run(job('second'), { cwd: fx.root, queueKey: 'x', signal: AbortSignal.timeout(5_000) })
+      .run(job('second'), { cwd: fx.root, queueKey: 'x', signal: AbortSignal.timeout(30_000) })
       .catch((e: unknown) => e);
     const abortedAt = Date.now();
     controller.abort();
@@ -1124,7 +1235,7 @@ describe.skipIf(!helperOn)('runner through the helper', { timeout: 60_000 }, () 
   });
 
   it('reports a missing binary and a missing cwd as before', async () => {
-    const missing = new GitRunner({
+    const missing = newRunner({
       gitBinary: path.join(fx.root, 'no-such-git'),
       helper: { processes: 1 },
     });
@@ -1172,7 +1283,7 @@ describe.skipIf(!helperOn)('helper crashes', { timeout: 60_000 }, () => {
     const crash = path.join(fx.root, 'crash-after');
     writeFileSync(crash, '');
     rmSync(`${crash}.ready`, { force: true });
-    const runner = new GitRunner({
+    const runner = newRunner({
       gitBinary: fakeGit,
       env: { FAKE_MODE: 'crashonce', CRASH_FILE: crash },
       timeoutMs: 60_000,
@@ -1212,7 +1323,7 @@ describe.skipIf(!helperOn)('helper crashes', { timeout: 60_000 }, () => {
     writeFileSync(log, '');
     const crash = path.join(fx.root, 'crash-before');
     writeFileSync(crash, '');
-    const runner = new GitRunner({
+    const runner = newRunner({
       gitBinary: fakeGit,
       timeoutMs: 60_000,
       helper: { processes: 1 },
@@ -1258,7 +1369,7 @@ describe.skipIf(!helperOn)('helper crashes', { timeout: 60_000 }, () => {
       warn: (message: string) => warnings.push(message),
       error: () => {},
     };
-    const runner = new GitRunner({ gitBinary: fakeGit, helper: { entry: broken }, logger });
+    const runner = newRunner({ gitBinary: fakeGit, helper: { entry: broken }, logger });
     const results = await Promise.all([
       runner.run(job('a'), { cwd: fx.root, queueKey: 'a' }),
       runner.run(job('b'), { cwd: fx.root, queueKey: 'b' }),

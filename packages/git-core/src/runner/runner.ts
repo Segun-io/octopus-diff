@@ -48,6 +48,8 @@ export interface HelperTestOptions {
   crash?: string;
   /** The helpers report each git process's exit this much later (slow reaping under load). */
   delayExitMs?: number;
+  /** The helpers start this much later (a slow CI runner). */
+  startDelayMs?: number;
   /** Replaces `HELPER_EXIT_WAIT_MS`. */
   exitWaitMs?: number;
   /** How long a retry waits for a crashed helper's SIGKILLed groups to disappear. */

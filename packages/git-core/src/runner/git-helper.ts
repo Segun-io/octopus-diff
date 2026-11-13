@@ -121,6 +121,12 @@ function startupBinary(argv: readonly string[]): string {
 }
 
 const GIT = startupBinary(process.argv);
+// Test hook: a slow start (a loaded or macOS CI runner), before this process reads anything.
+const TEST_START_DELAY_MS =
+  Number(process.env.OCTOPUS_DIFF_GIT_HELPER_TEST_START_DELAY_MS ?? 0) || 0;
+if (TEST_START_DELAY_MS > 0) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, TEST_START_DELAY_MS);
+}
 // The parent passes a stdio 'pipe', which libuv creates as a socket pair on every POSIX system.
 // Anything else on fd 3 is not the channel: Node's own descriptors take the number when the parent
 // passed none (an epoll fd on Linux, a wakeup pipe on macOS, hence no FIFOs).
