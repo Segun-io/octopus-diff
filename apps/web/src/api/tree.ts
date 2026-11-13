@@ -2,7 +2,8 @@
  * The file explorer's data layer (#9). No pane uses it yet: this is what a future explorer builds
  * on (docs/reports/file-explorer-foundation.md).
  *
- * - **One query per open directory**: `['tree', worktreeId, ref ?? '', rawPath ?? path]`. A
+ * - **One query per open directory**: `['tree', worktreeId, ref ?? '', treeDirIdentity(dir)]` (`r:<base64>` for a raw
+ *   path, `p:<path>` otherwise: never `rawPath ?? path`, PR #99 review). A
  *   directory's data is one `TreeResponse` whose `entries` is the *loaded prefix* of its listing
  *   (the `files.ts` pattern, #42): a refresh asks for as many entries as were loaded, so a long
  *   directory keeps what the user scrolled to. Pages after the first follow `nextCursor`; a
@@ -21,6 +22,7 @@ import {
   type ServerEventOf,
   TREE_PAGE_MAX,
   type TreeResponse,
+  treeDirIdentity,
 } from '@octopus-diff/contracts';
 import { type QueryClient, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useApi } from './queries.ts';
@@ -48,7 +50,7 @@ export const treeKeys = {
   /** Every directory of a worktree's working view (`ref` absent). */
   working: (worktreeId: string) => ['tree', worktreeId, ''] as const,
   dir: (worktreeId: string, dir: TreeDir, ref?: string) =>
-    ['tree', worktreeId, ref ?? '', dir.rawPath ?? dir.path] as const,
+    ['tree', worktreeId, ref ?? '', treeDirIdentity(dir)] as const,
 };
 
 const wanted = new WeakMap<QueryClient, Map<string, number>>();
@@ -220,7 +222,7 @@ export function collectTreeDirs(
     return;
   }
   const set = held ?? new Set<string>();
-  for (const d of event.dirs.dirs) set.add(d.rawPath ?? d.path);
+  for (const d of event.dirs.dirs) set.add(treeDirIdentity(d));
   effects.set(id, set);
 }
 
