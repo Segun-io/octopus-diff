@@ -5252,3 +5252,67 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
 452. **Cost.** No new dependency (Effect's `PubSub`, `Schedule`, `Scope` are in `effect@4.1.4`, already bundled). Per
      SSE connection: one `Scope`, one subscription, one fiber per pull. Per timer: one fiber instead of one `Timeout`.
      The bench numbers alternating with `main` are in `docs/reports/effect-watch-pipeline.md`.
+
+## Effect caches (session, 2026-11-13; roadmap #49, step 32)
+
+453. **The file-list and review-range caches are an Effect `Cache` behind `StateCache`
+     (`apps/daemon/src/state-cache.ts`).** It replaces `#filesCache` + `#filesInflight` (`FlightMap`) and the
+     per-worktree `rangeCache` field of `core.ts`. Behaviour the plan fixed in #27, #30, #44 is kept:
+     - **Keys.** The group is what an entry is of: `<worktreeId>\0<scopeKey>` for lists (as before), the worktree id for
+       ranges. The state is what it is valid for: `stateHash \0 base commits \0 attributes stamp` for lists (the old
+       `flightKey`), `HEAD \0 bookmark` for ranges. One `Cache` key is group + state.
+     - **One completed entry per group, `capacity` groups.** The `Map` kept one entry per (worktree, scope) and at most
+       `filesCacheSize` (2000). A bare `Cache` keyed by state would keep every state it ever saw (a 706 KB list per
+       edit), so when a lookup completes and is stored, the group's other completed entries are dropped
+       (`#dropOtherStates`; entries in flight are left alone). The byte and entry bounds are the old ones. The range
+       cache has the same bound (per worktree).
+     - **Lookup dedup and cancellation.** `Cache.get` shares the lookup fiber between waiters and counts them; the
+       last waiter leaving interrupts it, which aborts the computation's `AbortSignal` (`Effect.callback`, like
+       `runGit`), and the entry is detached before the interruption runs so nobody joins a cancelled run. A waiter
+       without a signal is never interrupted, so it pins the run (what `SharedFlight` did). A waiter with a signal
+       still rejects with `aborted` at once (`raceSignal`), not after the git process exited.
+     - **What is stored** is the computation's call (`Computed.store`): the old conditions (cacheable scope, a
+       `stateHash`, a base for branch scopes, `summaryState === asked`, the worktree still registered) moved into the
+       lookup unchanged. A failure or an unstored result lives for its waiters only (`timeToLive` zero).
+     - **Hits skip the fiber.** A completed entry is answered synchronously (`Effect.runSync(Cache.get)`, which also
+       moves it to the end of the LRU order); only misses and joins run a fiber. The first waiter's computation reaches
+       the lookup as a service (`Effect.provideService`: the lookup fiber inherits the first waiter's context), and the
+       cache drops its closure once it ran, so a finished entry holds no request.
+     - `SharedFlight` stays for the file-origins runs (#33); `FlightMap` is no longer used by `core.ts` (its tests stay).
+       The inbox single-flight (`#inboxInflight`) and the origins cache are not part of this step.
+454. **Two deliberate differences from the `Map` + `FlightMap` pair.**
+     - *An invalidation while a lookup is in flight keeps its result out of the cache.* Before, the run finished and
+       `set` its list under the `stateHash` it was asked for, after `refreshWorktree` / a project change had just
+       dropped the entries. With `Cache` the invalidation removes the pending entry, and nothing puts it back. A request
+       that starts after the invalidation starts its own run instead of joining the old one. The waiters of the old run
+       still get its answer. Same-state invalidations are rare (an explicit refresh of an unchanged worktree, a changed
+       default branch), and the user asked for fresh data.
+     - *Pending lookups count toward `capacity`* (`Cache` evicts the oldest map entry, in flight or not). Evicting a
+       pending one only loses its dedup. It takes more than 2000 distinct concurrent lookups.
+     - The range cache drops the group's old range only when a new one is stored; the old `rangeCache` also cleared it
+       when the new range was unreachable. An old (HEAD, bookmark) range stays valid, so this only keeps a little more.
+455. **Counters.** `StateCache.stats()`: hits (a completed entry answered), misses (a lookup started), joins (joined one in
+     flight), entries, pending, capacity. `DaemonCore.cacheStats()` returns them for the file lists and the ranges.
+     The bench child (`e2e/bench/daemon-child.mjs`) writes them on `SIGUSR2` and `bench.ts` prints and records them
+     (`caches` in `results.json`, two rows in `results.md`). No route and no contract change. This is the one edit
+     outside `apps/daemon/` and `docs/`: the acceptance asks for the counters in the bench output, which lives in
+     `e2e/bench/`. The `DaemonInternals.filesCacheSize` knob exists for the bounds tests.
+456. **`DaemonCore`'s own timers are on `Timers`** (separate commit, droppable): the GC interval, the missing-project retry
+     interval, the `review.ready` batch and the per-worktree reconcile timer. `Timers.every(ms, fn)` is new (a fiber
+     looping on `Effect.sleep`). `CoreOptions.context` / `DaemonInternals.context` hand a test's context to the core,
+     the watcher and the hub, so a `TestClock` drives all daemon timers. On the live clock nothing changes (unref'd
+     sleeps, same periods). One difference: a throwing callback ends its fiber instead of crashing the process as an
+     uncaught timer error would; `gc` already catches its own errors, and the retry and the reconcile call only
+     promise-returning `void`ed code.
+     - Daemon-level tests that depend on real watcher events or real git (`watch-core.test.ts`,
+       `incremental*.test.ts`, the real-git review tests) stay on the live clock. New: `core-timers.test.ts` (GC at 24 h
+       and again, the retry at exactly `relistMs`, on `TestClock`).
+457. **Tests and mutation check.** `caches.test.ts` (fake git-core, HTTP: shared lookups, abort rules, invalidation in flight,
+     failures, every key piece, the invalidation points, bounds, counters), `state-cache.test.ts` (the same on the helper),
+     `caches.real-git.test.ts` (the range key, the unreachable bookmark, the attributes stamp in the announced paths),
+     `core-timers.test.ts`. No assertion of an existing test changed. 38 mutants of the keys, the invalidation points,
+     the bounds, the abort rules and the store conditions: 34 killed. Four survive on purpose and are not reachable
+     from a test: the invalidation in `#markMissing` (the cache is empty when a stored project is found missing at
+     startup), the `project.worktrees.get(id) === entry` store condition (a removed worktree's pending entries are
+     already dropped by the removal's invalidation), and the `hit ||` in `#gitFilesAt` (a hit's `summaryState` equals
+     the `asked` of any caller with the same `stateHash`; it keeps the old "a hit is always the summary's list").
