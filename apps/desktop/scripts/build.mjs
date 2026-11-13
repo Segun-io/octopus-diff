@@ -1,6 +1,8 @@
 // Builds the desktop app into dist/ (docs/DESKTOP.md §4, §7):
 //
 //   dist/main.js   the main process (ESM; contracts and zod inlined; `electron` external)
+//   dist/preload.cjs  the preload (CommonJS: sandboxed preloads cannot be ESM), built only once
+//                  `src/preload.cts` exists (phase C, #20; phase A and B have none, DECISIONS #486)
 //   dist/cli/      the CLI bundle (index.js, git-helper.js, web/) from apps/cli/scripts/bundle.mjs,
 //                  the same step that builds the npm tarball (reused, not forked). `@parcel/watcher`
 //                  resolves from apps/desktop/node_modules (a dependency of this package).
@@ -9,6 +11,7 @@
 //                                       builds web and cli first, both are devDependencies)
 //   node scripts/build.mjs --main-only  dist/main.js only (the dev loop runs the CLI from sources)
 //   node scripts/build.mjs --watch      --main-only, rebuilt on change (scripts/dev.mjs)
+import { existsSync } from 'node:fs';
 import { readFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -42,8 +45,33 @@ export async function mainBuildOptions() {
   };
 }
 
+export const preloadSource = path.join(desktopRoot, 'src', 'preload.cts');
+
+export function preloadBuildOptions() {
+  return {
+    entryPoints: [preloadSource],
+    outfile: path.join(distDir, 'preload.cjs'),
+    bundle: true,
+    platform: 'node',
+    format: 'cjs',
+    target: 'node24',
+    conditions: ['@octopus-diff/source'],
+    external: ['electron'],
+    sourcemap: true,
+    logLevel: 'warning',
+  };
+}
+
 export async function buildMain() {
   await build(await mainBuildOptions());
+  if (existsSync(preloadSource)) await build(preloadBuildOptions());
+}
+
+/** Everything `pnpm build` produces here: dist/main.js (+ preload) and dist/cli/. */
+export async function buildAll() {
+  await rm(distDir, { recursive: true, force: true });
+  await buildMain();
+  await bundleCli({ outDir: path.join(distDir, 'cli') });
 }
 
 export async function watchMain(onRebuild) {
@@ -68,12 +96,11 @@ export async function watchMain(onRebuild) {
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const mainOnly = process.argv.includes('--main-only') || process.argv.includes('--watch');
   try {
-    if (!mainOnly) await rm(distDir, { recursive: true, force: true });
     if (process.argv.includes('--watch')) {
       await watchMain(() => console.log('desktop: dist/main.js rebuilt'));
     } else {
-      await buildMain();
-      if (!mainOnly) await bundleCli({ outDir: path.join(distDir, 'cli') });
+      if (mainOnly) await buildMain();
+      else await buildAll();
       console.log(
         `desktop: wrote ${path.relative(repoRoot, distDir)}${mainOnly ? '/main.js' : ' (main.js, cli/)'}`,
       );

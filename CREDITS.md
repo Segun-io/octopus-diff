@@ -15,13 +15,13 @@ adapted from another project goes into `acknowledgements.json` (see
 
 ## Shipped with octopus-diff
 
-Packages that run in the daemon or the CLI, or are bundled into the web UI, including the ones
-they pull in.
+Packages that run in the daemon or the CLI, are bundled into the web UI or ship in the desktop
+app, including the ones they pull in.
 
 | Package | Version | License | Used by | Project |
 |---|---|---|---|---|
 | `@hono/node-server` | 2.1.6 | MIT | apps/daemon | https://github.com/honojs/node-server |
-| `@parcel/watcher` | 2.6.0 | MIT | apps/daemon | https://github.com/parcel-bundler/watcher |
+| `@parcel/watcher` | 2.6.0 | MIT | apps/daemon, apps/desktop | https://github.com/parcel-bundler/watcher |
 | `@pierre/diffs` | 1.6.4 | Apache-2.0 | apps/web | https://www.npmjs.com/package/@pierre/diffs |
 | `@pierre/highlights` | 0.4.0 | Apache-2.0 | via `@pierre/diffs` | https://www.npmjs.com/package/@pierre/highlights |
 | `@pierre/theme` | 2.0.0 | Apache-2.0 | via `@pierre/diffs` | https://github.com/pierrecomputer/pierre |
@@ -69,6 +69,7 @@ they pull in.
 | `devlop` | 1.1.0 | MIT | via `react-markdown` | https://github.com/wooorm/devlop |
 | `diff` | 9.0.0 | BSD-3-Clause | via `@pierre/diffs` | https://github.com/kpdecker/jsdiff |
 | `effect` | 4.1.4 | MIT | apps/daemon, packages/git-core | https://github.com/Effect-TS/effect |
+| `electron` | 45.3.2 | MIT | apps/desktop | https://github.com/electron/electron |
 | `escape-string-regexp` | 5.0.0 | MIT | via `mdast-util-find-and-replace` | https://github.com/sindresorhus/escape-string-regexp |
 | `estree-util-is-identifier-name` | 3.0.0 | MIT | via `hast-util-to-jsx-runtime` | https://github.com/syntax-tree/estree-util-is-identifier-name |
 | `extend` | 3.0.2 | MIT | via `unified` | https://github.com/justmoon/node-extend |
@@ -173,10 +174,11 @@ they pull in.
 | `use-sync-external-store` | 1.7.0 | MIT | via `@tanstack/react-store` | https://github.com/react/react |
 | `vfile` | 6.0.3 | MIT | via `react-markdown` | https://github.com/vfile/vfile |
 | `vfile-message` | 4.0.4 | MIT | via `hast-util-to-jsx-runtime` | https://github.com/vfile/vfile-message |
-| `zod` | 4.6.7 | MIT | apps/cli, apps/web, packages/contracts | https://github.com/colinhacks/zod |
+| `zod` | 4.6.7 | MIT | apps/cli, apps/desktop, apps/web, packages/contracts | https://github.com/colinhacks/zod |
 | `zwitch` | 2.0.4 | MIT | via `hast-util-to-html` | https://github.com/wooorm/zwitch |
 
 - `@parcel/watcher`: Also installs a prebuilt native binary for your platform (@parcel/watcher-<platform>, MIT).
+- `electron`: The desktop app is the Electron binary with octopus-diff's code in an asar archive, so Electron's runtime ships with it, including Chromium (BSD-3-Clause, plus the licenses of its third-party components) and Node.js (MIT). Their full license texts are installed next to the app's executable: LICENSES.chromium.html and LICENSE.electron.txt. (Electron's npm dependencies only download the binary and do not ship.)
 - `tailwindcss`: A build tool, but the CSS it generates (including its preflight reset) is part of the web UI.
 
 ## Development tools
@@ -187,6 +189,7 @@ Used to build, lint and test octopus-diff; not shipped.
 |---|---|---|---|---|
 | `@biomejs/biome` | 2.6.6 | MIT OR Apache-2.0 | root | https://github.com/biomejs/biome |
 | `@effect/vitest` | 4.1.4 | MIT | apps/daemon, packages/git-core | https://github.com/Effect-TS/effect |
+| `@electron/fuses` | 1.8.0 | MIT | apps/desktop | https://github.com/electron/fuses |
 | `@playwright/test` | 1.65.0 | Apache-2.0 | apps/web, e2e | https://github.com/microsoft/playwright |
 | `@tailwindcss/vite` | 4.3.5 | MIT | apps/web | https://github.com/tailwindlabs/tailwindcss |
 | `@testing-library/dom` | 10.4.2 | MIT | apps/web | https://github.com/testing-library/dom-testing-library |
@@ -196,7 +199,7 @@ Used to build, lint and test octopus-diff; not shipped.
 | `@types/react` | 19.3.0 | MIT | apps/web | https://github.com/DefinitelyTyped/DefinitelyTyped |
 | `@types/react-dom` | 19.3.0 | MIT | apps/web | https://github.com/DefinitelyTyped/DefinitelyTyped |
 | `@vitejs/plugin-react` | 6.3.0 | MIT | apps/web | https://github.com/vitejs/vite-plugin-react |
-| `electron` | 45.3.2 | MIT | apps/desktop | https://github.com/electron/electron |
+| `electron-builder` | 26.18.0 | MIT | apps/desktop | https://github.com/electron-userland/electron-builder |
 | `esbuild` | 0.28.2 | MIT | apps/cli, apps/desktop | https://github.com/evanw/esbuild |
 | `jsdom` | 31.0.0 | MIT | apps/web | https://github.com/jsdom/jsdom |
 | `tsx` | 4.23.15 | MIT | root | https://github.com/privatenumber/tsx |

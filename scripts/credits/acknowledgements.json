@@ -1,12 +1,13 @@
 {
-  "$comment": "Hand-written input for scripts/credits/generate.mjs (run `pnpm credits` after editing). Packages are read from package.json files and node_modules; this file only holds what cannot be: which workspace packages ship, licenses allowed at runtime, notes, programs we run, code adapted from other projects, and inspiration.",
+  "$comment": "Hand-written input for scripts/credits/generate.mjs (run `pnpm credits` after editing). Packages are read from package.json files and node_modules; this file only holds what cannot be: which workspace packages ship, development dependencies whose runtime ships (shippedRuntimes: credited without their npm dependencies), licenses allowed at runtime, notes, programs we run, code adapted from other projects, and inspiration.",
   "shippedWorkspaces": [
     "octopus-diff",
     "@octopus-diff/daemon",
     "@octopus-diff/git-core",
     "@octopus-diff/contracts",
     "@octopus-diff/web",
-    "@octopus-diff/forge"
+    "@octopus-diff/forge",
+    "@octopus-diff/desktop"
   ],
   "allowedRuntimeLicenses": [
     "MIT",
@@ -20,6 +21,9 @@
   ],
   "alsoShipped": {
     "tailwindcss": "A build tool, but the CSS it generates (including its preflight reset) is part of the web UI."
+  },
+  "shippedRuntimes": {
+    "electron": "The desktop app is the Electron binary with octopus-diff's code in an asar archive, so Electron's runtime ships with it, including Chromium (BSD-3-Clause, plus the licenses of its third-party components) and Node.js (MIT). Their full license texts are installed next to the app's executable: LICENSES.chromium.html and LICENSE.electron.txt. (Electron's npm dependencies only download the binary and do not ship.)"
   },
   "notes": {
     "@parcel/watcher": "Also installs a prebuilt native binary for your platform (@parcel/watcher-<platform>, MIT)."

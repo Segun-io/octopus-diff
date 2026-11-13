@@ -159,8 +159,24 @@ for (const ws of workspaces) {
     }
   }
 }
+// A development dependency whose own runtime ships (Electron's binary in the desktop app): credited
+// as shipped, without its npm dependencies (they only download that runtime).
+for (const ws of workspaces) {
+  for (const name of Object.keys(config.shippedRuntimes ?? {})) {
+    if (thirdParty(ws.pkg.devDependencies).includes(name)) {
+      queue.push({
+        from: ws.dir,
+        name,
+        ws,
+        via: null,
+        note: config.shippedRuntimes[name],
+        leaf: true,
+      });
+    }
+  }
+}
 while (queue.length > 0) {
-  const { from, name, ws, via, note } = queue.shift();
+  const { from, name, ws, via, note, leaf } = queue.shift();
   const dir = await resolvePackage(from, name);
   if (!dir) {
     problems.push(`not installed: ${name} (run pnpm install)`);
@@ -172,7 +188,7 @@ while (queue.length > 0) {
     item = await describe(dir);
     item.entry.via = via;
     runtime.set(key, item);
-    for (const dep of Object.keys(item.pkg.dependencies ?? {}).sort()) {
+    for (const dep of leaf ? [] : Object.keys(item.pkg.dependencies ?? {}).sort()) {
       queue.push({ from: dir, name: dep, ws: null, via: name });
     }
   }
@@ -255,8 +271,8 @@ const md = [
   '',
   '## Shipped with octopus-diff',
   '',
-  'Packages that run in the daemon or the CLI, or are bundled into the web UI, including the ones',
-  'they pull in.',
+  'Packages that run in the daemon or the CLI, are bundled into the web UI or ship in the desktop',
+  'app, including the ones they pull in.',
   '',
   '| Package | Version | License | Used by | Project |',
   '|---|---|---|---|---|',

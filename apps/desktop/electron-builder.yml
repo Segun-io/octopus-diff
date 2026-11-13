@@ -1,0 +1,114 @@
+# electron-builder configuration of the desktop app (docs/DESKTOP.md §5, §7; roadmap #19).
+#
+# Not run directly: `pnpm --filter @octopus-diff/desktop run package` (scripts/package.mjs) stages
+# the app per platform and arch in .stage/<platform>-<arch>/ (this file, package.json, dist/,
+# node_modules/@parcel/watcher for that platform, build/ = resources/) and runs electron-builder
+# there. Paths below are relative to that stage. Installers go to apps/desktop/release/.
+#
+# UNSIGNED builds only. Signing, notarization and auto-update are phase E (#23, needs the user).
+
+appId: io.github.segun-io.octopus-diff
+productName: octopus-diff
+copyright: Copyright (c) octopus-diff contributors (MIT License)
+artifactName: ${productName}-${version}-${os}-${arch}.${ext}
+
+directories:
+  buildResources: build
+  # `output` is set by scripts/package.mjs (an absolute path to apps/desktop/release).
+
+# The app: the generated package.json, dist/main.js (+ preload), dist/cli/ (index.js,
+# git-helper.js, web/), and the production node_modules (@parcel/watcher, its platform package and
+# its small JS dependencies). Source maps, the watcher's C++ sources and build script, and
+# node-addon-api (headers for building from source; never loaded at runtime) stay out.
+files:
+  - package.json
+  - dist/**/*
+  - '!**/*.map'
+  - '!node_modules/@parcel/watcher/{src,scripts}/**'
+  - '!node_modules/@parcel/watcher/{binding.gyp,index.js.flow}'
+  - '!node_modules/node-addon-api/**'
+
+asar: true
+# What phase 0 found worth unpacking (DESKTOP.md §10, DECISIONS #469): the native watcher packages
+# (no temp-file copy of the .node file on every load, no failure on a noexec temp dir) and the git
+# spawn helper (a real file next to the unpacked binaries). The rest of the CLI stays in the asar.
+# Even unpacked, the supervisor and the runner use the asar path; Electron redirects it.
+asarUnpack:
+  - node_modules/@parcel/watcher/**/*
+  - node_modules/@parcel/watcher-*/**/*
+  - dist/cli/git-helper.js
+
+# @parcel/watcher is an N-API prebuilt (ABI-stable): never rebuild native modules.
+npmRebuild: false
+nodeGypRebuild: false
+buildDependenciesFromSource: false
+
+# DESKTOP.md §5. RunAsNode stays ON: the backend (`serve`), the git helper, the watch host and the
+# CLI command all run the app binary as Node (ELECTRON_RUN_AS_NODE=1). The fuse state of a built
+# binary is asserted by scripts/check-fuses.mjs (CI runs it on every OS).
+electronFuses:
+  runAsNode: true
+  enableCookieEncryption: true
+  enableNodeOptionsEnvironmentVariable: false
+  enableNodeCliInspectArguments: false
+  enableEmbeddedAsarIntegrityValidation: true
+  onlyLoadAppFromAsar: true
+  # The app never loads file:// pages (the UI comes from the daemon's http origin, screens are data:).
+  grantFileProtocolExtraPrivileges: false
+  # Flipping fuses invalidates the macOS signature: re-sign the whole .app ad-hoc (an unsigned
+  # arm64 binary does not start at all). No effect on Linux and Windows.
+  resetAdHocDarwinSignature: true
+
+linux:
+  target:
+    - AppImage
+    - deb
+  # Not `octopus-diff`: the deb links /usr/bin/<executableName>, and `octopus-diff` is the CLI's
+  # command (the app installs its own launcher for it in phase C, DESKTOP.md §3.2).
+  executableName: octopus-diff-desktop
+  # Electron takes the window's app_id / WM_CLASS from package.json's desktopName (set by
+  # scripts/package.mjs): the desktop entry and the running window then match.
+  syncDesktopName: true
+  icon: build/icon.png
+  category: Development
+  synopsis: Read-only, diff-first, multi-project git UI
+  description: >-
+    octopus-diff shows what changed across all your git repositories and worktrees, in one window.
+    It never writes to a repository.
+  maintainer: octopus-diff contributors <noreply@octopus-diff.invalid>
+  vendor: octopus-diff
+
+mac:
+  target:
+    - dmg
+    - zip
+  icon: build/icon.icns
+  category: public.app-category.developer-tools
+  # Unsigned (phase E signs and notarizes): electron-builder does not sign, the fuses step re-signs
+  # ad-hoc (above). Hardened runtime is for notarization; without a real signature it only adds
+  # library-validation failures.
+  identity: null
+  hardenedRuntime: false
+  notarize: false
+
+dmg:
+  writeUpdateInfo: false
+
+win:
+  target:
+    - nsis
+  icon: build/icon.ico
+  # No certificate: unsigned (SmartScreen warns until phase E). Editing the executable stays on:
+  # it writes the icon, the version info and the asar integrity resource the fuse checks.
+  signAndEditExecutable: true
+
+nsis:
+  # Per-user install, no admin rights, the classic wizard (the user may pick the folder).
+  oneClick: false
+  perMachine: false
+  allowElevation: false
+  allowToChangeInstallationDirectory: true
+  differentialPackage: false
+
+# Nothing is published from here (no release, no update feed).
+publish: null
