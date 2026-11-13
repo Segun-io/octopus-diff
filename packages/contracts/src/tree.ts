@@ -172,7 +172,13 @@ export function treeEntryProblem(
   entry: Pick<TreeEntry, 'name' | 'rawName' | 'path' | 'rawPath'>,
 ): 'invalid_name' | 'too_long' | null {
   const { name, path } = entry;
-  if (name.length === 0 || name === '.' || name === '..' || /[/\u0000]/.test(name)) {
+  if (
+    name.length === 0 ||
+    name === '.' ||
+    name === '..' ||
+    name.includes('/') ||
+    name.includes('\u0000')
+  ) {
     return 'invalid_name';
   }
   if (path.length === 0 || path.startsWith('/') || path.includes('\u0000')) return 'invalid_name';
