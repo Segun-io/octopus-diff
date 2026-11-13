@@ -5,10 +5,29 @@
 // `-c key=value` pins skipped); `args` the next few arguments, enough to group calls; `argv` every
 // argument after the subcommand (at most 40, each cut at 200 characters), enough to tell two calls
 // apart (object ids come after `--end-of-options`); `cmd` the executable's base name (`git`, `gh`, ...).
-// Used by e2e/bench/profile.ts and bench.ts only; the daemon itself is unchanged.
+// Used by e2e/bench/profile.ts and bench.ts only; the daemon itself is unchanged. With git-core's
+// spawn helper on, the preload follows into the helper processes (`traceHelper`).
 import childProcess from 'node:child_process';
 import { openSync, writeSync } from 'node:fs';
 import { syncBuiltinESMExports } from 'node:module';
+import { fileURLToPath } from 'node:url';
+
+const SELF = fileURLToPath(import.meta.url);
+const TRACE_VARS = ['OCTOPUS_SPAWN_TRACE', 'OCTOPUS_SPAWN_ACTIVE', 'OCTOPUS_MEM_TRACE'];
+
+/**
+ * git-core's spawn helper (#45) starts git in its own process: load this preload there too (same
+ * trace files, appended with one write per line), so every git process is still traced, timed
+ * from the helper that spawns it. Its memory is not traced (the daemon's RSS is the figure).
+ */
+function traceHelper(args, options) {
+  if (!Array.isArray(args) || !args.includes('--octopus-diff-git-helper')) return [args, options];
+  const env = { ...(options?.env ?? {}) };
+  for (const name of TRACE_VARS.slice(0, 2)) {
+    if (process.env[name]) env[name] = process.env[name];
+  }
+  return [['--import', SELF, ...args], { ...options, env }];
+}
 
 const file = process.env.OCTOPUS_SPAWN_TRACE;
 if (file) {
@@ -17,7 +36,8 @@ if (file) {
   const activeFd = activeFile ? openSync(activeFile, 'a') : null;
   const original = childProcess.spawn;
   const now = () => performance.timeOrigin + performance.now();
-  childProcess.spawn = function tracedSpawn(command, args, options) {
+  childProcess.spawn = function tracedSpawn(command, rawArgs, rawOptions) {
+    const [args, options] = traceHelper(rawArgs, rawOptions);
     const t0 = now();
     const child = original.call(this, command, args, options);
     const argv = Array.isArray(args) ? args : [];
