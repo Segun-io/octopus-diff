@@ -25,7 +25,12 @@ import {
   type TreeResponse,
   treeDirIdentity,
 } from '@octopus-diff/contracts';
-import { type QueryClient, useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+  type QueryClient,
+  type QueryFilters,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query';
 import { useApi } from './queries.ts';
 
 export const treePaging = {
@@ -258,6 +263,22 @@ export function collectTreeDirs(
  * now; the rest are marked stale). On `all` (HEAD moved, or no `dirs`) the tree views of a ref
  * name (`HEAD`, a branch) refetch too; a full commit id's view never changes.
  */
+/**
+ * Invalidates the tree queries `filters` match, first cancelling those whose *first* request is
+ * still in flight (Greptile, PR #99 round 4; the files lists' `invalidateFileLists`, #42): with no
+ * data yet, `invalidateQueries` joins that request instead of replacing it (react-query only
+ * cancels a refetch over existing data), and its answer may be the listing from before the edit;
+ * with an infinite `staleTime` the working view would then keep it.
+ */
+async function invalidateTrees(queryClient: QueryClient, filters: QueryFilters): Promise<void> {
+  for (const query of queryClient.getQueryCache().findAll(filters)) {
+    if (query.state.fetchStatus === 'fetching' && query.state.data === undefined) {
+      await queryClient.cancelQueries({ queryKey: query.queryKey, exact: true });
+    }
+  }
+  await queryClient.invalidateQueries(filters);
+}
+
 export async function flushTreeDirs(
   queryClient: QueryClient,
   effects: TreeDirEffects,
@@ -268,7 +289,7 @@ export async function flushTreeDirs(
       // Everything of the working view, and the tree views that follow a ref (`HEAD`, a branch):
       // `all` is what HEAD moving sends (security review P3-5). A full commit id's view never moves.
       tasks.push(
-        queryClient.invalidateQueries({
+        invalidateTrees(queryClient, {
           predicate: (query) => {
             const [kind, id, ref] = query.queryKey as readonly unknown[];
             return (
@@ -284,10 +305,7 @@ export async function flushTreeDirs(
     }
     for (const dir of dirs) {
       tasks.push(
-        queryClient.invalidateQueries({
-          queryKey: ['tree', worktreeId, '', dir],
-          exact: true,
-        }),
+        invalidateTrees(queryClient, { queryKey: ['tree', worktreeId, '', dir], exact: true }),
       );
     }
   }

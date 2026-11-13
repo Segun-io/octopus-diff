@@ -360,4 +360,202 @@ describe('tree deltas', () => {
     await waitFor(() => expect(fake.calls).toHaveLength(1));
     expect(fake.calls[0]?.ref).toBeUndefined();
   });
+
+  describe('an edit during a directory’s first fetch is not lost (Greptile, PR #99 round 4)', () => {
+    /**
+     * A fake daemon whose requests made while `gate.held` is set wait for `gate.release()`, and
+     * answer the listing of the version current when they *started* (as a real request would).
+     */
+    function gated() {
+      const v1 = dirsOf({ '': [entry('', 'old')], src: [entry('src', 'old')] });
+      const v2 = dirsOf({ '': [entry('', 'new')], src: [entry('src', 'new')] });
+      const state = {
+        version: 1,
+        byVersion: new Map([
+          [1, v1],
+          [2, v2],
+        ]),
+      };
+      const fake = fakeApi(new Map(), state);
+      const original = fake.getTree.getMockImplementation();
+      if (!original) throw new Error('no implementation');
+      const gate = { held: true, waiting: [] as Array<() => void> };
+      fake.getTree.mockImplementation(async (id, params) => {
+        const version = state.version;
+        if (gate.held) await new Promise<void>((resolve) => gate.waiting.push(resolve));
+        // Answer as of the start: the fake reads the version synchronously, so swap it back at once
+        // (another request may start while this one is awaited).
+        const now = state.version;
+        state.version = version;
+        const answer = original(id, params);
+        state.version = now;
+        return answer;
+      });
+      const release = () => {
+        gate.held = false;
+        for (const resolve of gate.waiting.splice(0)) resolve();
+      };
+      return { fake, state, gate, release };
+    }
+
+    const names = (data: TreeResponse | undefined) => data?.entries.map((e) => e.name);
+
+    it('named directories: the held first request answers the old listing, the cache ends on the new one', async () => {
+      const { fake, state, gate, release } = gated();
+      const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      const wrapper = wrapperFor(fake.api, queryClient);
+      const hook = renderHook(() => useTree(W, { path: 'src' }), { wrapper });
+      await waitFor(() => expect(gate.waiting).toHaveLength(1));
+      // The edit lands and its event names `src`, while the first fetch is still running.
+      state.version = 2;
+      const flushed = flushTreeDirs(queryClient, new Map([[W, new Set(['p:src'])]]));
+      release();
+      await flushed;
+      await waitFor(() => expect(names(hook.result.current.data)).toEqual(['new']));
+      expect(fake.getTree.mock.calls.length).toBeGreaterThanOrEqual(2);
+    });
+
+    it('all: the working view and the views of HEAD and a branch end on the new listing', async () => {
+      const { fake, state, gate, release } = gated();
+      const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      const wrapper = wrapperFor(fake.api, queryClient);
+      const hooks = [
+        renderHook(() => useTree(W, { path: '' }), { wrapper }),
+        renderHook(() => useTree(W, { path: '' }, { ref: 'HEAD' }), { wrapper }),
+        renderHook(() => useTree(W, { path: '' }, { ref: 'main' }), { wrapper }),
+      ];
+      await waitFor(() => expect(gate.waiting).toHaveLength(3));
+      state.version = 2;
+      const effects = emptyEffects();
+      collectEventEffects(queryClient, changed({ all: true, dirs: [] }), effects, {
+        reconnect: false,
+      });
+      const flushed = flushEffects(queryClient, effects);
+      release();
+      await flushed;
+      for (const [i, h] of hooks.entries()) {
+        await waitFor(() => expect(names(h.result.current.data), `view ${i}`).toEqual(['new']));
+      }
+    });
+
+    it('a refetch over existing data is replaced as before (the old answer never wins)', async () => {
+      const { fake, state, gate, release } = gated();
+      gate.held = false;
+      const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      const hook = renderHook(() => useTree(W, { path: 'src' }), {
+        wrapper: wrapperFor(fake.api, queryClient),
+      });
+      await waitFor(() => expect(names(hook.result.current.data)).toEqual(['old']));
+      gate.held = true;
+      void queryClient.invalidateQueries({ queryKey: treeKeys.dir(W, { path: 'src' }) });
+      await waitFor(() => expect(gate.waiting).toHaveLength(1));
+      state.version = 2;
+      const flushed = flushTreeDirs(queryClient, new Map([[W, new Set(['p:src'])]]));
+      release();
+      await flushed;
+      await waitFor(() => expect(names(hook.result.current.data)).toEqual(['new']));
+    });
+
+    it('load more during an edit: the old page never wins, and the loaded count is kept', async () => {
+      treePaging.pageSize = 10;
+      const many = (tag: string) =>
+        Array.from({ length: 35 }, (_, i) => entry('', `${tag}${String(i).padStart(2, '0')}`));
+      const state = {
+        version: 1,
+        byVersion: new Map([
+          [1, dirsOf({ '': many('old') })],
+          [2, dirsOf({ '': many('new') })],
+        ]),
+      };
+      const fake = fakeApi(new Map(), state);
+      const original = fake.getTree.getMockImplementation();
+      if (!original) throw new Error('no implementation');
+      const gate = { held: false, waiting: [] as Array<() => void> };
+      fake.getTree.mockImplementation(async (id, params) => {
+        const version = state.version;
+        if (gate.held) await new Promise<void>((resolve) => gate.waiting.push(resolve));
+        const now = state.version;
+        state.version = version;
+        const answer = original(id, params);
+        state.version = now;
+        return answer;
+      });
+      const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      const hook = renderHook(() => useTree(W, { path: '' }), {
+        wrapper: wrapperFor(fake.api, queryClient),
+      });
+      await waitFor(() => expect(hook.result.current.data?.entries).toHaveLength(10));
+      gate.held = true;
+      const more = loadMoreTree(queryClient, fake.api, W, { path: '' });
+      await waitFor(() => expect(gate.waiting).toHaveLength(1));
+      state.version = 2;
+      const flushed = flushTreeDirs(queryClient, new Map([[W, new Set(['p:'])]]));
+      await waitFor(() => expect(gate.waiting).toHaveLength(2));
+      gate.held = false;
+      for (const resolve of gate.waiting.splice(0)) resolve();
+      await Promise.all([more, flushed]);
+      await waitFor(() => {
+        const data = hook.result.current.data;
+        expect(data?.entries.map((e) => e.name)).toEqual(
+          many('new')
+            .slice(0, 20)
+            .map((e) => e.name),
+        );
+      });
+    });
+
+    it('load more answered after the refresh: the refresh stays', async () => {
+      treePaging.pageSize = 10;
+      const many = (tag: string) =>
+        Array.from({ length: 35 }, (_, i) => entry('', `${tag}${String(i).padStart(2, '0')}`));
+      const state = {
+        version: 1,
+        byVersion: new Map([
+          [1, dirsOf({ '': many('old') })],
+          [2, dirsOf({ '': many('new') })],
+        ]),
+      };
+      const fake = fakeApi(new Map(), state);
+      const original = fake.getTree.getMockImplementation();
+      if (!original) throw new Error('no implementation');
+      const gate = { held: false, waiting: [] as Array<() => void> };
+      fake.getTree.mockImplementation(async (id, params) => {
+        const version = state.version;
+        if (gate.held) await new Promise<void>((resolve) => gate.waiting.push(resolve));
+        const now = state.version;
+        state.version = version;
+        const answer = original(id, params);
+        state.version = now;
+        return answer;
+      });
+      const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      const hook = renderHook(() => useTree(W, { path: '' }), {
+        wrapper: wrapperFor(fake.api, queryClient),
+      });
+      await waitFor(() => expect(hook.result.current.data?.entries).toHaveLength(10));
+      gate.held = true;
+      const more = loadMoreTree(queryClient, fake.api, W, { path: '' });
+      await waitFor(() => expect(gate.waiting).toHaveLength(1));
+      state.version = 2;
+      const flushed = flushTreeDirs(queryClient, new Map([[W, new Set(['p:'])]]));
+      await waitFor(() => expect(gate.waiting).toHaveLength(2));
+      const [page, refresh] = gate.waiting.splice(0);
+      gate.held = false;
+      refresh?.();
+      const fresh = many('new')
+        .slice(0, 20)
+        .map((e) => e.name);
+      await waitFor(() =>
+        expect(hook.result.current.data?.entries.map((e) => e.name)).toEqual(fresh),
+      );
+      page?.();
+      await Promise.all([more, flushed]);
+      expect(hook.result.current.data?.entries.map((e) => e.name)).toEqual(fresh);
+      expect(
+        queryClient
+          .getQueryData<TreeResponse>(treeKeys.dir(W, { path: '' }))
+          ?.entries.map((e) => e.name),
+      ).toEqual(fresh);
+    });
+  });
 });
