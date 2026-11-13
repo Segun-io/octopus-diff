@@ -40,6 +40,13 @@ export {
   assertStdinAllowed,
 } from './runner/allowlist.js';
 export { CONFIG_PINS } from './runner/config-pins.js';
+export {
+  boundaryError,
+  decodeUnknown,
+  runAtBoundary,
+  runGit,
+  type StandardSchemaV1,
+} from './runner/effect-boundary.js';
 export { buildGitEnv, SAFETY_ENV } from './runner/env.js';
 export { defaultHelperEntry } from './runner/helper-client.js';
 export {
@@ -50,6 +57,18 @@ export {
   INTERACTIVE_BURST,
   resolveExecutable,
 } from './runner/runner.js';
+// The Effect foundation (#46): the supervisor the daemon's watch host uses too.
+export {
+  type Death,
+  makeSupervisor,
+  type RestartDecision,
+  type RestartPolicy,
+  type RestartPolicyOptions,
+  restartPolicy,
+  type Supervisor,
+  type SupervisorSpec,
+  SupervisorUnavailable,
+} from './runner/supervisor.js';
 export { CANONICAL_CONTEXT, DIFF_PINS } from './scope.js';
 export { quotePathName, synthesizeNewFilePatch } from './untracked.js';
 export { MIN_GIT_VERSION, parseGitVersion } from './version.js';

@@ -37,7 +37,7 @@ export const treePaging = {
 
 /**
  * The daemon answers 409 with `details.retryable` when the worktree changed while a directory was
- * listed (DECISIONS #406): retried (unlike other 4xx), at most `TREE_CONFLICT_RETRIES` times; other
+ * listed (DECISIONS #417): retried (unlike other 4xx), at most `TREE_CONFLICT_RETRIES` times; other
  * errors as the app's default (twice, never a 4xx).
  */
 export const TREE_CONFLICT_RETRIES = 3;

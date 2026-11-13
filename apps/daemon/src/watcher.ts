@@ -153,6 +153,11 @@ export interface WatcherServiceOptions {
    * child process (`watch-host.ts`, DECISIONS #130).
    */
   subscribe?: SubscribeFn;
+  /**
+   * The watch host to use instead of one of its own (the daemon's runtime owns it, #46). Ignored
+   * when `subscribe` is given.
+   */
+  host?: WatchHost;
   /** Home and temp directories for the watch guard (tests). Default: the real ones. */
   guardDirs?: GuardDirs;
   /**
@@ -393,6 +398,7 @@ export class WatcherService {
     Omit<
       WatcherServiceOptions,
       | 'subscribe'
+      | 'host'
       | 'ignore'
       | 'logger'
       | 'onWorktreeDirty'
@@ -460,7 +466,7 @@ export class WatcherService {
       this.#host = null;
       this.#subscribe = options.subscribe;
     } else {
-      this.#host = createWatchHost({ logger: this.#log });
+      this.#host = options.host ?? createWatchHost({ logger: this.#log });
       this.#subscribe = this.#host.subscribe;
       // Boot the host now: projects registered right after start are then watched at once.
       if (this.#opts.enabled && !this.#opts.forcePolling) this.#host.warm();

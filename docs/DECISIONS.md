@@ -4597,9 +4597,173 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      now runs every `warm` job in its fast default mode, whatever `FAKE_MODE` says. `helper.test.ts` went from 58 s to
      29 s.
 
+## Effect foundation (session, 2026-11-13; roadmap #46, step 29; decision 1 of #25)
+
+395. **Effect is adopted in the daemon core and in git-core's runner internals, incrementally.** `effect@4.1.4` (MIT, no
+     dependencies of its own) is a dependency of `@octopus-diff/git-core` and `@octopus-diff/daemon`, `@effect/vitest`
+     a dev dependency of both. Not in `packages/contracts` (zod stays), not in `apps/web` (React Query stays), not in
+     `packages/forge`; Hono and `node:sqlite` stay. The CLI gets it through the daemon bundle (`pack.mjs` bundles it;
+     no packaging change). Layering rules:
+     - **Effect stays inside** `packages/git-core/src/runner/` and `apps/daemon/src/`. Every public API stays
+       Promise-based and unchanged: `GitCore`, `createGitCore`, `GitRunner`, `DaemonCore`, `startDaemon`/`DaemonHandle`,
+       `WatchHost`/`createWatchHost`. No Effect type appears in `packages/contracts`.
+     - **One `ManagedRuntime` per owner of long-lived resources**: the daemon (`makeDaemonRuntime`, `runtime.ts`: the
+       watch host's layer and the logger) and each `GitRunner` (the `GitHelperPool` layer, built on the first helper
+       spawn, disposed by `dispose()`). Layers are scoped: disposing a runtime closes their scopes, which kills the
+       processes they own.
+     - **Promise callers enter through `runAtBoundary(runtime, effect, { signal })`** (`DaemonRuntime.run` in the
+       daemon). Effect code calls Promise code with `Effect.callback` / `Effect.promise` and a cancel step.
+     - **Hot paths stay plain.** The per-spawn path of the runner reads the supervisor's state synchronously (`running`,
+       `canStartNow`, `startNow`) and never enters a fiber; only starts, deaths and close run Effects (`runSyncWith` the
+       context captured when the supervisor was built, so a test's `TestClock` applies).
+     - **Per-module imports** (`import * as Effect from 'effect/Effect'`), as T3 Code's server does.
+     - git-core's `index.ts` exports the supervisor and the boundary helpers (the daemon's watch host uses the
+       supervisor). An additive export of git-core, not a contract change.
+396. **Supervision is one generic `Supervisor` (`packages/git-core/src/runner/supervisor.ts`); the processes' own code is
+     untouched.** It owns up to `slots` instances, each in a `Scope` of its own, and only decides lifecycle:
+     - started lazily (`get`, or `startNow` for synchronous callers);
+     - an instance reports its own death (`died`); the supervisor frees its slot, feeds the `Death` to the restart
+       policy, and closes the instance's scope (a no-op release for a dead process);
+     - the restart policy is an Effect `Schedule<RestartDecision, Death>`: its delay is the backoff before the next
+       start (`get` sleeps on the `Clock`, `startNow` returns null meanwhile), its end means giving up (`onGiveUp` once,
+       then `get` fails with `SupervisorUnavailable`);
+     - `stop(instance)` releases one on purpose and is not a death;
+     - closing the supervisor's scope marks it closed first, then releases every instance in parallel and waits for each
+       release; nothing starts afterwards, so nothing is orphaned.
+
+     `restartPolicy({ window, maxDeaths?, maxStartFailures?, backoff? })` is the bounded schedule both owners use: a
+     sliding crash window (deaths older than it are forgotten, so is the backoff), give up at `maxDeaths` within it or at
+     `maxStartFailures` before-ready deaths in a row, and a backoff that is 0 for the first `immediate` deaths within
+     the window and then `base` · 2^k up to `max`. (`Schedule.exponential` alone never forgets old crashes.)
+     - **Git helpers** (`HELPER_RESTART_POLICY`): the limits of #368 exactly (2 start failures in a row, 5 deaths within
+       a minute: the pool gives up and git is spawned directly, with the same warning text). **New:** after the first
+       death within the window, a replacement waits 250 ms, doubling to 2 s; meanwhile `HelperPool.startGit` returns
+       null and the runner spawns git directly (the path it already had for a disabled pool). The first death within a
+       minute is still replaced at once, so a crashed helper's retried request runs on its replacement (#368, the
+       existing crash tests).
+     - **Watch host** (`WATCH_HOST_RESTART_POLICY`): never gives up (the watcher polls meanwhile); the first death within
+       a minute is replaced on the next subscribe at once, later ones after 1 s doubling to 30 s. Before, a host that
+       kept dying was respawned on every re-subscribe. A host that does not answer a subscribe in time counts as a death;
+       `close()` (the watcher's close) does not.
+     - The watch host's request timeout is `Effect.timeoutOrElse` on the `Clock` instead of a `setTimeout` per request.
+       Same 60 s default, same messages, same order (the request is forgotten, the host stopped, its subscribers told).
+397. **Error model.** Effect code fails with typed errors: `GitCoreError` (`runGit`, `decodeUnknown`) or tagged errors
+     of its own (`SupervisorUnavailable`, internal to the supervisor's owners: the watch host turns it into an `Error`,
+     "watch host closed: …" / "watch host gave up: …", at its Promise API). At `runAtBoundary` a failure rejects with
+     the error itself, so a `GitCoreError` stays one and the daemon's `toApiError` maps it to an `ApiErrorBody` as
+     before; an interruption rejects with `GitCoreError('aborted')` (the code the daemon already handles for aborted
+     requests); a defect rejects with the defect (→ `internal`, 500). No `any` (Biome's `noExplicitAny` stays an error).
+     `decodeUnknown(schema, input)` takes any Standard Schema v1 (the contracts' zod 4 schemas implement it), so
+     decoding needs no zod-to-Effect-Schema port; it fails with `GitCoreError('invalid_argument')` and `details.issues`.
+398. **Interruption and AbortSignal are the same thing at the boundary.** `runGit(runner, args, options)` hands the
+     runner `Effect.callback`'s AbortSignal (merged with `options.signal` by `AbortSignal.any`), and its cancel step
+     waits for the run to settle. So interrupting the fiber does what aborting the signal does today (queued: never
+     spawns; running: SIGTERM to the group, SIGKILL after `ABORT_GRACE_MS`, the slot held until exit), and
+     `Fiber.interrupt` returns only once git has exited. The other way, `runAtBoundary`'s `signal` interrupts the fiber
+     (`ManagedRuntime.runPromiseExit(effect, { signal })`). `currentCall()` (AsyncLocalStorage) is not read inside
+     fibers: Effect code passes signals and lanes explicitly (#47 will thread the lane).
+399. **Logging goes through the existing logger.** The daemon's runtime replaces Effect's loggers with
+     `effectLoggerFor(logger)`: the first string of a message is the message, other parts are `data`, the fiber's log
+     annotations are fields, a cause is `error`; `MinimumLogLevel` is `All` because the daemon's logger filters by
+     level and redacts. Supervision messages are still written by their owners with the same text (`git helper
+     disabled (…)`, `watch host stopped; …`), so nothing that reads the logs changes.
+400. **Tests use `TestClock` for time and real conditions for processes.** `@effect/vitest`'s `it.effect` runs on a
+     `TestClock`; everything time-based in the supervision (crash windows, backoffs, the watch host's request timeout)
+     reads Effect's `Clock`, so `TestClock.adjust` advances it deterministically and no test sleeps for it. Real
+     processes are waited on with real-condition polls (`until`: a pid gone, a log line, an event), never with fixed
+     sleeps. Tests of the runner's cancellation use `it.live`, because `ABORT_GRACE_MS` is still a `setTimeout` in the
+     runner (#47 moves it). Before/after of a timer test: watch-host.test.ts "kills a host that stops answering" uses a
+     real 500 ms timeout and asserts `Date.now() - started < 3000` (load-sensitive both ways); its TestClock version
+     (watch-host-supervision.test.ts) keeps the default 60 s, adjusts the clock by 59 s (still pending), then by 1 s
+     (rejected), and measures nothing in real time. The old test stays, unchanged, as the acceptance asks.
+401. **Not migrated yet (on purpose).** The runner's `LaneScheduler`, timeouts and abort grace timers (#47); the
+     watcher's timers, `Coalescer` and the event fan-out (#48); the `DaemonCore` caches (#49); Hono handlers (none calls
+     the runtime yet; the boundary is ready for them); the forge service, the store, settings. The processes' own code
+     is unchanged: `HelperProcess` (frames, pid channel, probes, the crash cleanup and `reapGroup`), `git-helper.ts`,
+     the watch host's child source and protocol, the exit hook that SIGKILLs live hosts on exit.
+402. **Cost** (CLI tarball, `pnpm --filter octopus-diff run pack:tarball`): 9 461 344 → 9 896 452 bytes (+435 108,
+     +4.6 %); the bundled `dist/index.js` 1 895 520 → 2 064 589 bytes (+169 069; Effect's share is 150 912 bytes over 42
+     modules, the core runtime); its source map +2.9 MB (Effect's sources). `tsc` outputs: `apps/daemon/dist` +17 KB,
+     `packages/git-core/dist` +46 KB. CLI cold start (`--version` of the unpacked tarball, median of 15, two rounds):
+     88.8 / 90.6 ms → 97.3 / 95.6 ms, i.e. +5 to +8 ms of module evaluation.
+
+     The default bench runs the **unbundled** `apps/daemon/dist`, where Effect's ESM files load one by one from
+     `node_modules`: alternating runs of `main` and this branch (two each) show "daemon listening" 610 / 575 → 663 /
+     663 ms and RSS 141 / 140 → 176 / 176 MiB, every budget still passing, cold paint 157 / 156 → 165 / 163 ms, and
+     warm reload, edit → SSE and the burst diff within noise. Importing that dist alone costs +45-50 ms and +10 MiB RSS
+     (+5.3 MiB heap); a 30-repository start of it, after GC, +5.6 MiB heap (the import's share; RSS beyond that follows
+     V8's heap sizing). The **bundled** daemon, as the CLI tarball ships it, imports +6 ms slower with +0.8 MiB heap
+     and +3-8 MiB RSS, and starts within noise. So the cost is loading Effect's code, not running it; bundling removes
+     most of it. Recorded as a known gap for dev and bench runs, not fixed here. Details in
+     `docs/reports/effect-foundation.md`.
+
+### Effect foundation: Greptile review (PR #100, 2026-11-13)
+
+403. **`close()` of the watch host cancels every waiting subscribe at once (P1).** After repeated crashes a subscribe
+     can be sleeping out the restart backoff (up to 30 s) in `supervisor.get` when `WatcherService.close()` calls
+     `host.close()`. There was no running host to stop, so the subscribe woke later and started a new host. The watcher
+     awaits its subscribes, and the daemon disposes its runtime only afterwards, so shutdown waited for the backoff,
+     plus the new host's subscribe timeout if that one hung. Now the supervisor has **generations**. Every wait in `get`
+     (a backoff sleep, joining a start in flight) races the current generation's gate, a `Deferred`.
+     `Supervisor.stopAll` (the watch host's `close()` calls `stopAllNow()`) works in four steps:
+     - it ends the generation: every pending `get` fails at once with `SupervisorUnavailable` (`closed`, reason
+       `stopped`), which the watch host reports as "watch host closed: stopped";
+     - it stops every running instance (not a death);
+     - it clears the backoff: a deliberate stop is not a crash, while the crash window stays, so a later crash
+       continues where the window left off;
+     - it leaves the supervisor open: the next subscribe starts a host at once.
+
+     Closing the scope ends the generation too. Nothing is started after a stop, because a start that was in flight is
+     released when its acquisition ends, not installed. Test (TestClock, failing first: the subscribe stayed asleep):
+     seven crashes take the backoff to its 30 s cap, a subscribe sleeps 29 s into it, then `close()`. The subscribe
+     rejects without the clock moving, `started` is unchanged, and a later subscribe starts a host at once.
+404. **A start reserves its slot and its scope before `acquire` runs (P2).** `startIn` used to leave its slot empty and
+     its scope untracked while it awaited `acquire`. With an asynchronous acquisition (allowed for `get`), two
+     concurrent starts could pick the same slot and overwrite an instance, and a close during the acquisition missed
+     the new scope. Now:
+     - `reserve(at)` puts a `Starting` entry in the slot synchronously, holding the instance's scope, its generation
+       and a `done` Deferred;
+     - `acquireInto` runs `acquire` in that scope, under `uninterruptibleMask`, and **installs** the instance only if
+       the reservation is still current (same generation, not closed). Otherwise (a failure, an interruption, a close
+       or `stopAll` meanwhile) it closes the scope, which releases what was acquired, and fails `done`;
+     - `get` shares a start in flight of the current generation. When it starts one itself, it runs the acquisition in
+       a fiber of its own and waits on `done` through the gate, like every other caller. So `stopAll` or a close ends
+       even the starter's wait while an uninterruptible `acquireRelease` acquisition runs, and a caller that is
+       interrupted does not lose the shared start;
+     - concurrent starts take distinct slots (`startNow` during an asynchronous `get` takes the next one);
+     - the close finalizer releases the running instances and then waits for starts in flight, which release
+       themselves: when the owner's scope has closed, nothing it acquired is left;
+     - `startNow` keeps its synchronous inline path.
+
+     Tests (TestClock gates on the acquisition, failing first: 6 of 6 failed before):
+     - two concurrent `get`s share one acquisition;
+     - `startNow` during an asynchronous start takes the other slot and both are released on close;
+     - a close during an acquisition fails the waiter at once with `closed`, returns once what was acquired is released
+       (acquires 1, releases 1), and leaves nothing running;
+     - an interrupted waiter leaves the start reserved, and it is installed and then released on close;
+     - `stopAll` fails a backoff sleeper and a waiter on a start in flight.
+405. **Same class in the git helper pool: not affected, now covered by the same code.** `HelperPool` acquires
+     synchronously (`startNow` inside `startGit`, never `get`), and nothing waits in a backoff: during one `startGit`
+     returns null and the runner spawns directly. So there are no overlapping starts and no sleeping callers. Its close
+     (`runner.dispose()` → runtime dispose → the supervisor's finalizer) releases every helper and waits for each. The
+     reservation and generation code is shared, and the pool's tests (`supervisor.test.ts` "the git helper pool under
+     supervision", `helper.test.ts`) pass unchanged.
+
+     Mutation check: 9 new mutants. Eight were killed:
+     - `stopAll` not ending the generation, or keeping the backoff;
+     - ungated waits;
+     - the watch host's `close()` stopping only running hosts;
+     - no reservation;
+     - `get` not sharing the start in flight;
+     - the close not waiting for starts in flight;
+     - a cancelled start not released.
+
+     One is equivalent: dropping `!closed` from the install check, since a close also ends the generation and the
+     generation check refuses the install. The 14 mutants of #46 are still killed.
+
 ## File explorer foundation (session, 2026-11-13; roadmap #9, step 27)
 
-395. **Contracts for the explorer are additive (`packages/contracts/src/tree.ts`).** A new route
+406. **Contracts for the explorer are additive (`packages/contracts/src/tree.ts`).** A new route
      `GET /api/worktrees/:worktreeId/tree?path=&rawPath=&ref=&limit=&cursor=` (`ROUTES.getTree`,
      `ApiClient.getTree`), `TreeQuerySchema`, `TreeResponseSchema`, `TreeEntrySchema`, the tree order
      (`compareTreeNames`), the paging helper (`pageTreeEntries`, `treeListingKey`, cursors `t1.<16 hex>.<offset>`)
@@ -4611,7 +4775,7 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
        with `ref` the *tree view* (that commit's tree only). An explicit `ref=HEAD` is the committed tree, so a
        client can ask for either without a second flag.
      - Tree cursors are not file cursors (another prefix, `t1`), so a cursor of one route can never page the other.
-396. **A directory is reached by walking tree objects; `ls-tree` is allowlisted for one object id only.** The issue
+407. **A directory is reached by walking tree objects; `ls-tree` is allowlisted for one object id only.** The issue
      suggested `ls-tree <treeish> -- <dir>/`. Instead git-core resolves the commit (`HEAD` from the HEAD file, a full id
      memoized, a branch or tag from the ref files, else `rev-parse --verify --end-of-options <ref>^{commit}`), its root
      tree (`rev-parse <commit>^{tree}`, memoized), then lists one tree per path component with
@@ -4627,8 +4791,8 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
        stdin. Tested in `runner.test.ts`; the read-only proof (`readonly.test.ts`) lists every directory of HEAD.
      - **Cost:** a cold directory at depth d costs d `ls-tree` runs (about 2.4 ms each on the 100k layout); an
        explorer opens parents first, so in practice one run per newly opened directory.
-397. **Two caches: git-core keeps tree listings by (common dir, tree oid), the daemon keeps composed pages by state.**
-     (Amended by #414: the daemon's cache is bounded by bytes and keeps one state per worktree.)
+408. **Two caches: git-core keeps tree listings by (common dir, tree oid), the daemon keeps composed pages by state.**
+     (Amended by #425: the daemon's cache is bounded by bytes and keeps one state per worktree.)
      - git-core (`TreeCache`, `tree.ts`): parsed entries (names as bytes, no paths, so an identical subtree at two paths
        shares one entry), LRU bounded by an estimate of 64 MiB (name bytes + 160 per entry); a listing larger than the
        bound is served, not kept. Single-flight per key (`Flight`: cancelled only when every waiter left, #44). File
@@ -4639,7 +4803,7 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      - daemon (`#treeListings`, 64 entries): the composed listing and its cursor key, by (project, commit, directory)
        for the tree view and (worktree, stateHash, HEAD, directory) for the working view, so a page or a repeat is a
        slice, never a recomposition.
-398. **The working view's rules** (amended by #407 and #408: one row per name, raw rename sources) (`apps/daemon/src/tree.ts`, `packages/contracts/src/tree.ts`; differential test
+409. **The working view's rules** (amended by #418 and #419: one row per name, raw rename sources) (`apps/daemon/src/tree.ts`, `packages/contracts/src/tree.ts`; differential test
      against `git status` in `apps/daemon/test/tree.real-git.test.ts`).
      - The overlay is the `working` file list the daemon already holds for the summary's state (`#gitFilesAt`): warm,
        a listing costs no git process. HEAD is the summary's `headSha` (a full id: no ref lookup).
@@ -4661,31 +4825,31 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      - Case: names are compared as bytes, as git does; `A.txt` and `a.txt` in one tree are two entries. On a
        case-folding file system a case-only rename on disk is whatever git status says (usually nothing).
      - An untracked nested repository appears as an untracked file-like entry (the list has no mode for it).
-399. **Conflicts the working list leaves out come from the summary's snapshot.** git-core's `working` list holds diffs
+410. **Conflicts the working list leaves out come from the summary's snapshot.** git-core's `working` list holds diffs
      against HEAD, so a conflicted path whose working-tree content equals HEAD (`UD`, "deleted by them", kept as ours)
      is not in it. Found by the differential test. git-core's list is unchanged (its consumers and patch hashes depend
      on it); the daemon keeps the unmerged paths of the latest snapshot (`TreeBasis.conflicts`, only when the snapshot
      was not cut) and lays them over as `conflicted` when the listing is of the same `stateHash`.
-400. **Directory deltas come from consecutive summary snapshots, no git process** (`treeBasis` / `treeDelta`).
-     *Superseded in part by #409:* every field of a snapshot entry is compared now, so a content edit names its
+411. **Directory deltas come from consecutive summary snapshots, no git process** (`treeBasis` / `treeDelta`).
+     *Superseded in part by #420:* every field of a snapshot entry is compared now, so a content edit names its
      ancestors too. Originally: per path the status letters, the rename source, and for `A`, `D`, `R`, `C` paths the
-     content signature were compared, and a content edit of a modified file moved nothing (wrong: see #409). `dirs` names every ancestor of a path that moved (the root included) and
+     content signature were compared, and a content edit of a modified file moved nothing (wrong: see #420). `dirs` names every ancestor of a path that moved (the root included) and
      every omitted directory that appeared, went or changed count (itself included). `all: true` when HEAD moved, a
      snapshot was cut by its entry cap (2000 by default), or above 100 directories / 8000 characters. Absent when the
      daemon has no previous snapshot (first summary, after an error): a client refreshes everything then. The list is
      a superset: a named directory may list the same entries again.
-401. **Route errors:** a directory not in HEAD and not in the overlay is 404 `not_found` ("no such directory"); an
+412. **Route errors:** a directory not in HEAD and not in the overlay is 404 `not_found` ("no such directory"); an
      unknown ref is 404; a path that is a file, symlink or submodule is 400 "not a directory (a symlink)"; a malformed
      path or ref is 400 (schema). An unborn branch lists an empty root. A bare repository answers the tree view of
      `HEAD` without `ref`. A git-core without `listTree` answers 501.
-402. **Web data layer (`apps/web/src/api/tree.ts`).** One query per open directory,
-     `['tree', worktreeId, ref ?? '', treeDirIdentity(dir)]` (was `rawPath ?? path`, ambiguous: #410), holding the loaded prefix (the #42 pattern: a refresh asks for
+413. **Web data layer (`apps/web/src/api/tree.ts`).** One query per open directory,
+     `['tree', worktreeId, ref ?? '', treeDirIdentity(dir)]` (was `rawPath ?? path`, ambiguous: #421), holding the loaded prefix (the #42 pattern: a refresh asks for
      the loaded count, a `restarted` page starts over). Working-view queries never go stale by time; tree views of a
      full commit id never do; of a branch or `HEAD`, after 30 s. `worktree.changed.dirs` of *every* event of a batch
      is accumulated (`collectTreeDirs`; the batch's delta map keeps only the latest event per worktree, which would
      lose an earlier event's directories) and invalidates exactly those working-view queries; `all` or no `dirs`
      invalidates the worktree's whole working view. No pane uses it yet (the issue asked for no new pane).
-403. **`@pierre/trees` 1.0.0-beta.6 holds 100k paths; the explorer still loads directories lazily.** Measured with
+414. **`@pierre/trees` 1.0.0-beta.6 holds 100k paths; the explorer still loads directories lazily.** Measured with
      `pnpm --filter @octopus-diff/web perf:tree` (headless Chromium, 5 runs, `docs/bench/results-tree-render.json`):
      all 100k paths open paint in 133 ms (p95 134; 67 ms with `preparePresortedFileTreeInput`), scroll frame p95
      17.2 ms (60 Hz, no long task), 48 rows mounted; the lazy design paints its root in 33 ms (two frames) and adds an
@@ -4693,7 +4857,7 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      stays the design because the cost is elsewhere: the full path list is 5.3 MB of JSON, a `ls-tree -r` of 46 ms and
      a status overlay over 100k rows, against 0.8-4.7 KB and about 1 ms per opened directory. A "find any file" search
      should be a daemon-side query (like `GET /files?q=`), not a client-side 100k list.
-404. **No long-lived `git cat-file --batch`.** The explorer reads no blob content; listings are `ls-tree` runs, about
+415. **No long-lived `git cat-file --batch`.** The explorer reads no blob content; listings are `ls-tree` runs, about
      2.4 ms each cold and none warm (the cache). A batch process would save about 2 ms per *cold* object read (the
      future file preview), would need stdin allowlisted for `cat-file` and its own lifecycle next to the spawn
      helper's supervision (#45, being reworked by the Effect session). Not worth it until a content view shows reads
@@ -4701,14 +4865,14 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
 
 ### File explorer: Greptile review of PR #99 (2026-11-13)
 
-405. **Additive contracts for the review fixes.** `GitChangedFile.oldRawPath` (and so `ChangedFile`, `GitFileDiff`):
+416. **Additive contracts for the review fixes.** `GitChangedFile.oldRawPath` (and so `ChangedFile`, `GitFileDiff`):
      base64 of a rename or copy source that is not UTF-8, which `oldPath` (display form) cannot name. `TreeEntry` gains
-     `oldRawPath`, `renamedToRawPath` and `replaces` (#407). `treeDirIdentity(dir)` gives `r:<base64>` for a raw path and
+     `oldRawPath`, `renamedToRawPath` and `replaces` (#418). `treeDirIdentity(dir)` gives `r:<base64>` for a raw path and
      `p:<path>` otherwise, for cache keys; `treeListingKey` hashes entries by it (and by `replaces`), so an entry named
      `ZP8=` and one whose bytes are `64 ff` (base64 `ZP8=`) no longer hash alike. `worktree.changed.dirs` entries were
      already unambiguous (`rawPath` present or not); clients key them with `treeDirIdentity` too. Nothing renamed or
      removed.
-406. **A working-view listing is of one state: the file list's and its commit's** (Greptile P1 1). Before, after one
+417. **A working-view listing is of one state: the file list's and its commit's** (Greptile P1 1). Before, after one
      retry the route could combine a list git-core made of the worktree *now* (`of: 'now'`) with the HEAD of an older
      summary, or a list made after a commit landed (still labelled with the summary, as git-core's full lists are)
      with the old commit's tree: a newly committed file was in neither and vanished. Now (`DaemonCore.listTree`):
@@ -4724,18 +4888,18 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      Tests (`tree-review.real-git.test.ts`, real git, a gate in a wrapped git-core): a commit lands before the list,
      after the list, on every list (409); git-core lists a newer state than the daemon's summary (never labelled with
      the older summary). All failed first. Warm cost: one HEAD read from files per request (re-measured below).
-407. **One row per name** (Greptile P1 2). A tracked file `d` deleted and a directory `d/` created (or a tracked
+418. **One row per name** (Greptile P1 2). A tracked file `d` deleted and a directory `d/` created (or a tracked
      directory replaced by a file) gave two rows named `d`. Rule: the row that exists in the working copy wins (one
      only in the working copy and not deleted first, then a live HEAD row, then HEAD's row) and carries
      `replaces: <HEAD's kind>`. HEAD's side stays reachable by path: `GET /tree?path=d` of a directory that became a
      file lists its deleted files. Both directions are in the differential test (`repl-f`, `repl-d`), a dedicated
      real-git test and a unit test (also with the file count unknown).
-408. **Rename sources by their bytes** (Greptile P1 3). The working list's `oldPath` is a display string, so the
+419. **Rename sources by their bytes** (Greptile P1 3). The working list's `oldPath` is a display string, so the
      deleted row of a rename from a name that is not UTF-8 was keyed by the lossy text: the real source stayed
-     unchanged and a false deleted row appeared under the U+FFFD name. git-core now sets `oldRawPath` (#405) and the
+     unchanged and a false deleted row appeared under the U+FFFD name. git-core now sets `oldRawPath` (#416) and the
      overlay keys the source by it; rows carry `oldRawPath` / `renamedToRawPath`. Tested in git-core and the daemon
      with a commit built by `git mktree` and a rename made in the index (no such name on disk, so it runs on APFS).
-409. **Directory deltas compare every field of a snapshot entry** (Greptile P1 4): status letters, rename source (as
+420. **Directory deltas compare every field of a snapshot entry** (Greptile P1 4): status letters, rename source (as
      `r:` raw or `p:` display), the worktree signature, and the HEAD and index object ids. Example of what was missed:
      HEAD `A`, staged `B`, working `C`, then working back to `A`: status stays `MM` but the path leaves the working
      list (`git diff HEAD`), so the row's marker and its directories' counts move with no status change. A content
@@ -4745,25 +4909,25 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      40 random operations: after each, every directory's listing is walked through the route before and after, and
      the event's `dirs` must name every directory whose listing moved (or say `all`). Mutants without the signature,
      the index id or any but the status letters are killed.
-410. **Raw and display directory identities are never confused** (Greptile P1 5). The web keyed directories by
+421. **Raw and display directory identities are never confused** (Greptile P1 5). The web keyed directories by
      `rawPath ?? path`, so the bytes `64 ff` (base64 `ZP8=`) and a directory literally named `ZP8=` shared a query,
      a wanted count and event invalidations. Query keys, wanted counts and `dirs` effects use `treeDirIdentity`
      (`r:` / `p:`), as does the contracts' listing key. The daemon's own keys are raw bytes (`bstrOf`), which were
      already unambiguous, and `dirs` entries say raw or display by `rawPath`'s presence.
-411. **The web paging tests page** (Greptile P2 6). The fake daemon caps pages at 20 for a directory of 50; the tests
+422. **The web paging tests page** (Greptile P2 6). The fake daemon caps pages at 20 for a directory of 50; the tests
      assert three requests with the cursors of the previous answers, a restart when the listing moves between page 1
      and page 2 (restarted page, then a fresh first page) and that the result is the new listing. Mutants that drop the
      cursor, ignore `restarted` or keep the restarted pages are killed.
 
 ### File explorer: security review of PR #99 (2026-11-13; no P1, two P2, six P3)
 
-412. **Additive contracts for the security review.** `TreeListOptions.withEntries` (false: resolve commit, tree and
+423. **Additive contracts for the security review.** `TreeListOptions.withEntries` (false: resolve commit, tree and
      kind without decoding entries, P3-4); `GitCore.countTreeChildren` with `GitTreeChildCount` (files below each child
      directory from one `ls-tree -r`, P3-3); `GIT_OBJECT_MISSING` (`'object_missing'`, the `details.reason` of a
      `not_found` for an object a partial clone lacks, P3-6); `TreeResponse.skipped` (`{ invalidName, tooLong }`, entries
      left out, P3-2); `treeEntryProblem(entry)`, which flags what `TreeEntrySchema` would reject (and a name
      with `/`, which the schema accepts but which would collide with a nested path). Nothing renamed or removed.
-413. **Partial clones: listings never need blob sizes** (P2-1). `ls-tree -l` reads every blob's size; in a blobless
+424. **Partial clones: listings never need blob sizes** (P2-1). `ls-tree -l` reads every blob's size; in a blobless
      clone a git before 2.44 (no `GIT_NO_LAZY_FETCH`) starts a lazy fetch for a missing blob, `GIT_ALLOW_PROTOCOL=none`
      blocks it, and the whole listing failed with 128. Now (`git-core/src/tree.ts` `readsSizes`, `lsTree`):
      - below 2.44, in a repository whose config names a promisor (`remote.*.promisor = true` or
@@ -4774,41 +4938,41 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      Sizes are then null; nothing else changes. Tests: a real blobless clone (`--filter=blob:none`), with a wrapper that
      unsets `GIT_NO_LAZY_FETCH` (git before 2.44: the fallback, remembered) and one that also reports 2.40 (no `-l` at
      all); no spawn is a fetch.
-414. **The daemon's composed listings are bounded by bytes, one state per worktree** (P2-2). `TreeListingCache`: an
+425. **The daemon's composed listings are bounded by bytes, one state per worktree** (P2-2). `TreeListingCache`: an
      LRU bounded by an estimate of 64 MiB (UTF-16 strings plus 200 bytes per entry), a listing above it is served
      and not kept (and evicts nothing else); a new summary drops the worktree's working-view listings of other
      states, and an explicit refresh or removal drops all of them. Tree views (keyed by commit) stay in the LRU.
      Before: 64 listings by count, each state change kept another copy of every open directory (the reviewer measured
      0.62 GB with a 100k-entry directory open). Tests: the cache's bound and eviction, and a 3000-entry directory under
      12 watcher-driven state changes keeps 2 listings and less than twice the first size.
-415. **Untracked paths whose type or mode changes are named in `dirs`** (P3-1). Already true since #409 (the basis
+426. **Untracked paths whose type or mode changes are named in `dirs`** (P3-1). Already true since #420 (the basis
      compares the snapshot's `sig`, which for an untracked path is its lstat signature with the mode); now tested
      (`chmod +x` of a new script, an untracked file replaced by a symlink: `dirs` names the directory and the listing
-     shows the new kind and mode). The rule, for #400 and #409: **the basis covers every field a row renders**
+     shows the new kind and mode). The rule, for #411 and #420: **the basis covers every field a row renders**
      (status, staged, unstaged, rename source and target, kind and mode, the counts on its directories).
-416. **Entries no client can take are skipped and counted** (P3-2). A tree written with `hash-object -t tree
+427. **Entries no client can take are skipped and counted** (P3-2). A tree written with `hash-object -t tree
      --literally` can name entries `..` or `a/b`; a deep tree can have paths over 4096 characters. Such an entry
      made `TreeResponseSchema` reject the whole page (`invalid_response`), so the directory could not be shown. The
      daemon drops what `treeEntryProblem` flags (stricter than the schema: a name with `/` would collide with a nested
      path) and says how many in `skipped: { invalidName, tooLong }`; `total` and the pages do not count them.
      Availability only: nothing reads the working copy. Tested with a literally built tree and a 21-level chain.
-417. **One `ls-tree -r` for many deleted-only siblings; failures remembered** (P3-3). Up to 4 directories with only
+428. **One `ls-tree -r` for many deleted-only siblings; failures remembered** (P3-3). Up to 4 directories with only
      deletions below are counted one by one (`countTreeFiles`); more with one `ls-tree -r` of the listed directory
      counting by first component (`countTreeChildren`). Both share a failure memo in git-core per (common dir, tree):
      an output above the cap for good (an immutable tree fails the same way), anything else for a minute,
      cancellation never. Before: 2000 siblings cost 2000 processes (1.33 s in the interactive lane), and a capped
      subtree was retried for every new state. Tests: 30 siblings cost one `ls-tree -r`; a capped and a missing tree
      are not retried.
-418. **A page of a cached listing decodes nothing again** (P3-4). The tree view first resolves the commit and the
+429. **A page of a cached listing decodes nothing again** (P3-4). The tree view first resolves the commit and the
      directory with `listTree({ withEntries: false })` (ref files and memoized tree objects; no entry decoding), then
-     looks the composed listing up; only a miss lists the entries. The working view did so already (#406). Tested: 8
+     looks the composed listing up; only a miss lists the entries. The working view did so already (#417). Tested: 8
      pages of a 200-entry directory make one decoding call in each view.
-419. **Tree views of a ref name follow HEAD** (P3-5). On `dirs.all` (HEAD moved, or no `dirs`) the web refetches the
+430. **Tree views of a ref name follow HEAD** (P3-5). On `dirs.all` (HEAD moved, or no `dirs`) the web refetches the
      worktree's views of `HEAD` and of branches too, not only the working view; views of a full commit id never.
-420. **Partial clones say what is missing; paths are checked up front** (P3-6). In a treeless clone the commit has
+431. **Partial clones say what is missing; paths are checked up front** (P3-6). In a treeless clone the commit has
      no local tree: git-core answers `not_found` with `details.reason = GIT_OBJECT_MISSING` ("the repository does not
      have the tree of commit … locally (a partial clone?)") instead of "commit not found", for the root tree, an
      `ls-tree` of a missing tree and `ls-tree -r`; the daemon answers 404 with the same message and `details.reason`,
      not "unknown ref". Nothing is fetched. The daemon also checks the directory (`dirKeyProblem`: no empty, `.` or
      `..` component, also inside `rawPath`) before anything else, so an unborn HEAD answers 400 like every other
-     worktree (since #406 git-core already saw the path through the HEAD read; the check no longer depends on it).
+     worktree (since #417 git-core already saw the path through the HEAD read; the check no longer depends on it).

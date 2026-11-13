@@ -2,7 +2,7 @@
  * The file explorer's working view (#9): HEAD's directory listing (git-core `listTree`) with the
  * worktree's changes laid over it, from the `working` file list the daemon already holds for the
  * state (no git process per request when warm). The rules are in `packages/contracts/src/tree.ts`
- * and docs/DECISIONS.md (#396).
+ * and docs/DECISIONS.md (#407).
  *
  * Paths are compared as raw bytes ("bstr": one char per byte, latin1), as git compares them: a
  * `rawPath` (base64) wins over `path`, as everywhere in the contracts.

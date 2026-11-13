@@ -124,6 +124,7 @@ import {
   treeEntries,
   workingEntries,
 } from './tree.js';
+import type { WatchHost } from './watch-host.js';
 import { gitDirOf } from './watch-identity.js';
 import { type DirtyReason, type SubscribeFn, WatcherService } from './watcher.js';
 
@@ -245,6 +246,8 @@ export interface CoreOptions {
   leadingEdge?: boolean;
   pollDegradedFocusedMs?: number;
   subscribe?: SubscribeFn;
+  /** The watch host to subscribe through (the daemon's runtime owns it, #46). */
+  watchHost?: WatchHost;
   initialSummaryWaitMs?: number;
   gcIntervalMs?: number;
   now?: () => Date;
@@ -631,6 +634,7 @@ export class DaemonCore {
       watcherOptions.pollDegradedFocusedMs = options.pollDegradedFocusedMs;
     }
     if (options.subscribe) watcherOptions.subscribe = options.subscribe;
+    else if (options.watchHost) watcherOptions.host = options.watchHost;
     this.#watcher = new WatcherService(watcherOptions);
   }
 
@@ -2300,7 +2304,7 @@ export class DaemonCore {
     } else {
       await raceSignal(this.#ensureSummary(entry), signal);
       this.#summaryOrThrow(entry);
-      // The file list and the commit must describe one state (PR #99 review, #406): the list is
+      // The file list and the commit must describe one state (PR #99 review, #417): the list is
       // taken only when git-core says it is of the summary it was asked for, and HEAD read *after*
       // it is still that summary's HEAD. Otherwise a summary refresh runs and it is tried again, up
       // to `LIST_ATTEMPTS` times; then a retryable 409. A listing composed for the same state and
