@@ -3,7 +3,14 @@ import os from 'node:os';
 import path from 'node:path';
 import type { Logger, WatcherMode, WatchTargets } from '@octopus-diff/contracts';
 import type parcelWatcher from '@parcel/watcher';
+import type * as Context from 'effect/Context';
+import * as Duration from 'effect/Duration';
+import * as Effect from 'effect/Effect';
+import type * as Fiber from 'effect/Fiber';
+import * as Schedule from 'effect/Schedule';
+import { DirtyWindow } from './dirty-window.js';
 import { isSameOrInside } from './paths.js';
+import { TimerSlot, Timers } from './timers.js';
 import {
   defaultGuardDirs,
   dirRefusal,
@@ -161,6 +168,12 @@ export interface WatcherServiceOptions {
   /** Home and temp directories for the watch guard (tests). Default: the real ones. */
   guardDirs?: GuardDirs;
   /**
+   * Tests only: the Effect context of the watcher's timers (inside `it.effect`,
+   * `yield* Effect.context<never>()`, whose `TestClock` then drives every debounce, poll, relist
+   * and backoff). Default: the live clock, whose timers never hold the process open.
+   */
+  context?: Context.Context<never>;
+  /**
    * A worktree needs a refresh. `paths` (worktree-relative, `/`-separated) are the files the
    * native watcher reported since the last call, when every trigger in between was such an
    * event; null when anything else asked (a poll, focus, git-dir events, a re-subscribe after
@@ -195,7 +208,7 @@ interface BuildState {
   /** `buildDirIgnoreEntries` used by the current subscription. */
   key: string;
   /** Debounced re-read of the root rules after `.gitignore` / `info/exclude` changed. */
-  recheck: NodeJS.Timeout | undefined;
+  recheck: TimerSlot;
 }
 
 interface WorktreeState {
@@ -211,12 +224,10 @@ interface WorktreeState {
   gitDir: string | null;
   build: BuildState;
   onWindowsMount: boolean;
-  debounce: NodeJS.Timeout | undefined;
-  burstStart: number;
-  pendingReason: DirtyReason;
-  poll: NodeJS.Timeout | undefined;
-  /** When this worktree last fired a refresh (any reason); 0 = never. */
-  lastFireAt: number;
+  /** The debounce of its refreshes (`dirty-window.ts`). */
+  window: DirtyWindow<DirtyReason>;
+  /** The fallback poll, re-armed after every refresh. */
+  poll: TimerSlot;
   /** Paths reported since the last refresh fired; `full` once anything without paths asked. */
   pending: { paths: Set<string>; full: boolean } | null;
   /** Re-subscribe after the subscription reported an error. */
@@ -228,13 +239,17 @@ interface WorktreeState {
 
 /** Backoff state for re-subscribing after a subscription error (DECISIONS #130). */
 interface ErrorRetry {
-  timer: NodeJS.Timeout | undefined;
+  timer: TimerSlot;
   /** Consecutive errors (reset after ERROR_STREAK_RESET_MS without one). */
   count: number;
   lastAt: number;
 }
 
-const newRetry = (): ErrorRetry => ({ timer: undefined, count: 0, lastAt: 0 });
+const newRetry = (timers: Timers): ErrorRetry => ({
+  timer: new TimerSlot(timers),
+  count: 0,
+  lastAt: Number.NEGATIVE_INFINITY,
+});
 
 interface ProjectState {
   projectId: string;
@@ -248,8 +263,9 @@ interface ProjectState {
   /** `info/exclude` text, read once and shared by the worktrees (reset when it changes). */
   exclude: Promise<string | null> | null;
   worktreeIds: Set<string>;
-  relist: NodeJS.Timeout | undefined;
-  listDebounce: NodeJS.Timeout | undefined;
+  /** The periodic relist (a fiber on a jittered `Schedule`). */
+  relist: Fiber.Fiber<unknown> | null;
+  listDebounce: TimerSlot;
   retry: ErrorRetry;
   subtrees: NewSubtreeWatch | null;
   resub: ResubscribeGate;
@@ -345,6 +361,13 @@ function jittered(ms: number): number {
   return Math.max(1, Math.round(ms * (1 + TIMER_JITTER * (2 * Math.random() - 1))));
 }
 
+/** Every `ms` ± `TIMER_JITTER`, a fresh jitter per recurrence. */
+function jitteredSpaced(ms: number): Schedule.Schedule<unknown> {
+  return Schedule.spaced(Duration.millis(ms)).pipe(
+    Schedule.modifyDelay(() => Effect.succeed(Duration.millis(jittered(ms)))),
+  );
+}
+
 // Merges "**/<name>" globs into a single "**/{a,b,...}" glob for @parcel/watcher. Its native
 // matcher tests every crawled path against each glob's regex in turn, so the 24 default names
 // (each also passed as a path) made the initial crawl of a 50k-file worktree take ~1.8 s
@@ -407,6 +430,7 @@ export class WatcherService {
       | 'maxWorktreesPerProject'
       | 'onWorktreeReplaced'
       | 'onSubtreeCheck'
+      | 'context'
     >
   >;
   readonly #log: Logger;
@@ -429,6 +453,9 @@ export class WatcherService {
   readonly #worktrees = new Map<string, WorktreeState>();
   readonly #projects = new Map<string, ProjectState>();
   readonly #loggedFailures = new Set<FailureKind>();
+  /** Every timer of the watcher runs here; `close()` interrupts what is left. */
+  readonly #timers: Timers;
+  #inflight = 0;
   #focus: string | null = null;
   #closed = false;
 
@@ -459,6 +486,7 @@ export class WatcherService {
         options.watchNewSubtrees ?? (process.platform !== 'darwin' && process.platform !== 'win32'),
       newSubtreeGapMs: Math.max(0, options.newSubtreeGapMs ?? MIN_RESUBSCRIBE_GAP_MS),
     };
+    this.#timers = new Timers(options.context);
     this.#burstThreshold = this.#opts.watchNewSubtrees ? burstThreshold() : Infinity;
     this.#onSubtreeCheck = options.onSubtreeCheck ?? (() => {});
     this.#log = options.logger;
@@ -522,11 +550,11 @@ export class WatcherService {
         identity: null,
         exclude: null,
         worktreeIds: new Set(),
-        relist: undefined,
-        listDebounce: undefined,
-        retry: newRetry(),
+        relist: null,
+        listDebounce: new TimerSlot(this.#timers),
+        retry: newRetry(this.#timers),
         subtrees: null,
-        resub: new ResubscribeGate(this.#opts.newSubtreeGapMs),
+        resub: new ResubscribeGate(this.#opts.newSubtreeGapMs, this.#timers),
       };
       created.subtrees = this.#subtreeWatch(
         'git',
@@ -592,9 +620,10 @@ export class WatcherService {
     const project = this.#projects.get(projectId);
     if (!project) return;
     this.#projects.delete(projectId);
-    clearTimeout(project.relist);
-    clearTimeout(project.listDebounce);
-    clearTimeout(project.retry.timer);
+    project.relist?.interruptUnsafe();
+    project.relist = null;
+    project.listDebounce.clear();
+    project.retry.timer.clear();
     project.subtrees?.dispose();
     project.resub.dispose();
     const pending = [...project.worktreeIds].map((id) => this.#unwatchWorktree(id));
@@ -632,33 +661,7 @@ export class WatcherService {
         st.pending.paths.clear();
       }
     }
-    const now = Date.now();
-    if (
-      this.#opts.leadingEdge &&
-      st.debounce === undefined &&
-      now - st.lastFireAt >= this.#opts.debounceMs
-    ) {
-      // Quiet worktree: refresh now. Events in the next debounce window (the rest of the same
-      // save or commit) start the normal trailing debounce below.
-      this.#fire(st, reason);
-      return;
-    }
-    if (st.debounce === undefined) {
-      st.burstStart = now;
-      st.pendingReason = reason;
-    } else if (reason === 'git') {
-      st.pendingReason = 'git';
-    }
-    clearTimeout(st.debounce);
-    const wait = Math.max(
-      0,
-      Math.min(this.#opts.debounceMs, st.burstStart + this.#opts.maxWaitMs - now),
-    );
-    st.debounce = setTimeout(() => {
-      st.debounce = undefined;
-      this.#fire(st, st.pendingReason);
-    }, wait);
-    st.debounce.unref();
+    st.window.trigger(reason);
   }
 
   isWatched(worktreeId: string): boolean {
@@ -795,6 +798,7 @@ export class WatcherService {
   ): NewSubtreeWatch | null {
     if (!this.#opts.watchNewSubtrees) return null;
     return new NewSubtreeWatch({
+      timers: this.#timers,
       debounceMs: this.#opts.debounceMs,
       maxWaitMs: this.#opts.maxWaitMs,
       burstThreshold: this.#burstThreshold,
@@ -872,18 +876,22 @@ export class WatcherService {
         nested: new Map(),
         forced: new Set(),
         key: '',
-        recheck: undefined,
+        recheck: new TimerSlot(this.#timers),
       },
       onWindowsMount: IS_WSL && /^\/mnt\/[a-z](\/|$)/i.test(info.root),
-      debounce: undefined,
-      burstStart: 0,
-      pendingReason: 'fs',
-      poll: undefined,
-      lastFireAt: 0,
+      window: new DirtyWindow<DirtyReason>({
+        debounceMs: this.#opts.debounceMs,
+        maxWaitMs: this.#opts.maxWaitMs,
+        leadingEdge: this.#opts.leadingEdge,
+        timers: this.#timers,
+        dominant: 'git',
+        fire: (reason) => this.#fire(st, reason),
+      }),
+      poll: new TimerSlot(this.#timers),
       pending: null,
-      retry: newRetry(),
+      retry: newRetry(this.#timers),
       subtrees: null,
-      resub: new ResubscribeGate(this.#opts.newSubtreeGapMs),
+      resub: new ResubscribeGate(this.#opts.newSubtreeGapMs, this.#timers),
     };
     st.subtrees = this.#subtreeWatch(
       'worktree',
@@ -1078,7 +1086,7 @@ export class WatcherService {
 
   /** Next delay of a re-subscribe backoff (and records the error). */
   #nextRetryDelay(retry: ErrorRetry): number {
-    const now = Date.now();
+    const now = this.#timers.now();
     retry.count = now - retry.lastAt > ERROR_STREAK_RESET_MS ? 1 : retry.count + 1;
     retry.lastAt = now;
     const delay = this.#opts.resubscribeDelayMs * 2 ** Math.min(retry.count - 1, 20);
@@ -1087,16 +1095,13 @@ export class WatcherService {
 
   #scheduleWorktreeRetry(st: WorktreeState): void {
     if (this.#closed) return;
-    clearTimeout(st.retry.timer);
-    st.retry.timer = setTimeout(() => {
-      st.retry.timer = undefined;
+    st.retry.timer.set(this.#nextRetryDelay(st.retry), () => {
       if (this.#closed || this.#worktrees.get(st.info.worktreeId) !== st || st.sub) return;
       void this.#enqueue(st, () => this.#subscribeWorktree(st)).then(() => {
         // Changes made while nothing was watching were missed.
         if (st.sub) this.markDirty(st.info.worktreeId, 'fs');
       });
-    }, this.#nextRetryDelay(st.retry));
-    st.retry.timer.unref();
+    });
   }
 
   /** The worktree's subscription reported an error: drop it, poll, re-subscribe later. */
@@ -1120,10 +1125,28 @@ export class WatcherService {
       this.#log.debug('watch (re)subscription failed', { error });
     });
     target.subscribing = run;
+    this.#track(run);
     void run.then(() => {
       if (target.subscribing === run) target.subscribing = null;
     });
     return run;
+  }
+
+  /** Counts async work in flight (`busy`), for tests that step a TestClock between steps. */
+  #track(work: Promise<unknown>): void {
+    this.#inflight++;
+    void work.then(
+      () => this.#inflight--,
+      () => this.#inflight--,
+    );
+  }
+
+  /**
+   * Subscribes, unsubscribes, ignore-rule reads or event resolution still in flight (diagnostics;
+   * tests advance a TestClock only once this is false, so real I/O never races virtual time).
+   */
+  get busy(): boolean {
+    return this.#inflight > 0;
   }
 
   /** The project's `info/exclude` text, read once per change (F5, F6). */
@@ -1155,10 +1178,7 @@ export class WatcherService {
     if (!st) return;
     this.#worktrees.delete(worktreeId);
     this.#projects.get(st.info.projectId)?.worktreeIds.delete(worktreeId);
-    clearTimeout(st.debounce);
-    clearTimeout(st.poll);
-    clearTimeout(st.build.recheck);
-    clearTimeout(st.retry.timer);
+    this.#clearTimers(st);
     st.subtrees?.dispose();
     st.resub.dispose();
     if (this.#focus === worktreeId) this.#focus = null;
@@ -1203,7 +1223,7 @@ export class WatcherService {
     for (const [owner, paths] of created) owner.subtrees?.note(paths);
     if (rootDeleted) this.#onRootDeleted(st);
     this.#markOwnersDirty(owners, 'fs');
-    if (deferred.length) void this.#resolveDeferred(deferred);
+    if (deferred.length) this.#track(this.#resolveDeferred(deferred));
   }
 
   /**
@@ -1225,11 +1245,13 @@ export class WatcherService {
   #maybeHeal(st: WorktreeState): void {
     if (!this.#native || st.info.bare || st.policy || st.sub || st.subscribing) return;
     if (st.failure?.kind !== 'missing') return;
-    void (async () => {
-      if ((await dirIdentity(st.info.root)) === null) return;
-      if (this.#worktrees.get(st.info.worktreeId) !== st || st.sub || st.subscribing) return;
-      await this.#enqueue(st, () => this.#subscribeWorktree(st));
-    })();
+    this.#track(
+      (async () => {
+        if ((await dirIdentity(st.info.root)) === null) return;
+        if (this.#worktrees.get(st.info.worktreeId) !== st || st.sub || st.subscribing) return;
+        await this.#enqueue(st, () => this.#subscribeWorktree(st));
+      })(),
+    );
   }
 
   /** Is `p` inside a build directory that git ignores (and that holds no known tracked files)? */
@@ -1268,12 +1290,9 @@ export class WatcherService {
 
   /** Re-reads the root ignore rules (debounced) and re-subscribes if the build ignores changed. */
   #scheduleIgnoreCheck(st: WorktreeState): void {
-    clearTimeout(st.build.recheck);
-    st.build.recheck = setTimeout(() => {
-      st.build.recheck = undefined;
-      void this.#recheckIgnores(st);
-    }, this.#opts.debounceMs);
-    st.build.recheck.unref();
+    st.build.recheck.set(this.#opts.debounceMs, () => {
+      this.#track(this.#recheckIgnores(st));
+    });
   }
 
   async #recheckIgnores(st: WorktreeState): Promise<void> {
@@ -1385,17 +1404,14 @@ export class WatcherService {
 
   #scheduleProjectRetry(project: ProjectState): void {
     if (this.#closed) return;
-    clearTimeout(project.retry.timer);
-    project.retry.timer = setTimeout(() => {
-      project.retry.timer = undefined;
+    project.retry.timer.set(this.#nextRetryDelay(project.retry), () => {
       if (this.#closed || this.#projects.get(project.projectId) !== project || project.sub) {
         return;
       }
       void this.#enqueue(project, () => this.#subscribeProject(project)).then(() => {
         if (project.sub) for (const id of project.worktreeIds) this.markDirty(id, 'git');
       });
-    }, this.#nextRetryDelay(project.retry));
-    project.retry.timer.unref();
+    });
   }
 
   /** The git dir's subscription reported an error: drop it, poll, re-subscribe later. */
@@ -1532,22 +1548,24 @@ export class WatcherService {
   }
 
   #scheduleListDirty(project: ProjectState): void {
-    clearTimeout(project.listDebounce);
-    project.listDebounce = setTimeout(() => {
-      project.listDebounce = undefined;
+    project.listDebounce.set(this.#opts.debounceMs, () => {
       if (!this.#closed) this.#onListDirty(project.projectId, 'git');
-    }, this.#opts.debounceMs);
-    project.listDebounce.unref();
+    });
   }
 
+  /** Relists the project every `relistMs` ± jitter, until it is removed or the watcher closes. */
   #scheduleRelist(project: ProjectState): void {
-    clearTimeout(project.relist);
-    project.relist = setTimeout(() => {
+    project.relist?.interruptUnsafe();
+    const relist = Effect.sync(() => {
       if (this.#closed || this.#projects.get(project.projectId) !== project) return;
       this.#onListDirty(project.projectId, 'timer');
-      this.#scheduleRelist(project);
-    }, jittered(this.#opts.relistMs));
-    project.relist.unref();
+    });
+    project.relist = this.#timers.fork(
+      Effect.andThen(
+        Effect.suspend(() => Effect.sleep(Duration.millis(jittered(this.#opts.relistMs)))),
+        Effect.repeat(relist, jitteredSpaced(this.#opts.relistMs)),
+      ),
+    );
   }
 
   // --- polling ---------------------------------------------------------------------------------
@@ -1577,21 +1595,15 @@ export class WatcherService {
   #schedulePoll(worktreeId: string): void {
     const st = this.#worktrees.get(worktreeId);
     if (!st || this.#closed) return;
-    clearTimeout(st.poll);
-    st.poll = setTimeout(
-      () => {
-        st.poll = undefined;
-        this.#maybeHeal(st);
-        this.#fire(st, 'poll');
-      },
-      jittered(this.pollIntervalFor(worktreeId)),
-    );
-    st.poll.unref();
+    st.poll.set(jittered(this.pollIntervalFor(worktreeId)), () => {
+      this.#maybeHeal(st);
+      this.#fire(st, 'poll');
+    });
   }
 
   #fire(st: WorktreeState, reason: DirtyReason): void {
     if (this.#closed || this.#worktrees.get(st.info.worktreeId) !== st) return;
-    st.lastFireAt = Date.now();
+    st.window.noteFired();
     this.#schedulePoll(st.info.worktreeId);
     const pending = st.pending;
     st.pending = null;
@@ -1620,6 +1632,18 @@ export class WatcherService {
     this.#log.warn(`native watching failed; polling instead${hint}`, fields);
   }
 
+  #clearTimers(st: WorktreeState): void {
+    st.window.clear();
+    st.poll.clear();
+    st.build.recheck.clear();
+    st.retry.timer.clear();
+  }
+
+  /** Watcher timers still pending or running (diagnostics and leak tests). */
+  get pendingTimers(): number {
+    return this.#timers.size;
+  }
+
   async close(): Promise<void> {
     if (this.#closed) return;
     this.#closed = true;
@@ -1627,11 +1651,9 @@ export class WatcherService {
     // (a stuck host cannot delay close) and the unsubscribes below have nothing left to do.
     this.#host?.close();
     const pending: Promise<void>[] = [];
+    // Every timer still pending (debounces, polls, relists, backoffs, new-subtree checks).
+    this.#timers.close();
     for (const st of this.#worktrees.values()) {
-      clearTimeout(st.debounce);
-      clearTimeout(st.poll);
-      clearTimeout(st.build.recheck);
-      clearTimeout(st.retry.timer);
       st.subtrees?.dispose();
       st.resub.dispose();
       pending.push(
@@ -1642,9 +1664,7 @@ export class WatcherService {
       );
     }
     for (const project of this.#projects.values()) {
-      clearTimeout(project.relist);
-      clearTimeout(project.listDebounce);
-      clearTimeout(project.retry.timer);
+      project.relist = null;
       project.subtrees?.dispose();
       project.resub.dispose();
       pending.push(this.#releaseProjectSub(project));

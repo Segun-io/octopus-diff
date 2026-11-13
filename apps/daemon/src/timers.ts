@@ -104,7 +104,10 @@ export class Timers {
   /** Runs `fn` once after `ms` on the pipeline's clock; returns what cancels it. */
   after(ms: number, fn: () => void): Cancel {
     if (this.#closed) return () => {};
-    const fiber = this.fork(Effect.andThen(Effect.sleep(Duration.millis(ms)), Effect.sync(fn)));
+    // `ms <= 0` still runs `fn` later, never inside this call, on every clock (a TestClock
+    // completes a zero sleep at once; the live clock yields).
+    const wait = ms > 0 ? Effect.sleep(Duration.millis(ms)) : Effect.yieldNow;
+    const fiber = this.fork(Effect.andThen(wait, Effect.sync(fn)));
     return () => fiber.interruptUnsafe();
   }
 
