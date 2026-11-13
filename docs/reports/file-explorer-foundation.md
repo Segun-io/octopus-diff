@@ -271,3 +271,79 @@ preview, if reads dominate there.
 - DECISIONS #395-#404 may need renumbering if #395+ is taken meanwhile.
 - `bench:tree` needs `pnpm build` and takes about 1.5 min. `perf:tree` builds its own page and takes about 1 min.
   Neither runs in CI.
+
+## PR #99 review (Greptile: five P1, one P2), 2026-11-13
+
+Every fix has a test that failed first, real git where the comment describes a git state; DECISIONS #405-#411 (and
+#398, #400, #402 amended).
+
+1. **P1, listings mixed two commits** (#406, `DaemonCore.listTree`). The working view now uses a file list only when
+   git-core says it is of the summary it asked for, and HEAD read after the list must be that summary's HEAD (that
+   HEAD read is the listing used). Otherwise a summary refresh runs and it is tried again (3 attempts), then a
+   retryable 409 (`details.retryable`), which the web's tree queries retry (`treeRetry`). A warm hit of a listing
+   composed for the same state and HEAD reads nothing else. Tests (`tree-review.real-git.test.ts`, a gate in a wrapped
+   git-core): a commit lands before the list, after the list, on every list (409); git-core lists a newer state than
+   the daemon's summary (never labelled with the older summary).
+2. **P1, replaced paths appeared twice** (#407). One row per name: the working copy's side wins and says
+   `replaces: 'file' | 'dir' | ...`; HEAD's side stays reachable by path. Both directions in the `git status`
+   differential (`repl-f`, `repl-d`), a dedicated real-git test and a unit test.
+3. **P1, raw rename sources** (#408). git-core sets `GitChangedFile.oldRawPath` (additive); the overlay keys the
+   source by its bytes; rows carry `oldRawPath` / `renamedToRawPath`. Tested in git-core and in the daemon with a raw
+   name made only in a `git mktree` commit and the index, so both run on APFS too.
+4. **P1, stale change markers** (#409). Directory deltas compare every field of a snapshot entry (status letters,
+   rename source, worktree signature, HEAD and index ids), so a content edit names its ancestors. Tests: the A/B/C
+   `MM` case; a table of transitions; a property test of 40 random operations comparing every directory's listing
+   before and after with the event's `dirs`.
+5. **P1, raw and display directory identities** (#410). `treeDirIdentity` (`r:<base64>` / `p:<path>`) for the web's
+   query keys, wanted counts and `dirs` effects, and in the contracts' listing key. Web and contracts tests.
+6. **P2, the paging test never paged** (#411). Pages of 20 for 50 entries: three requests with the previous answers'
+   cursors; a listing that moves between page 1 and page 2: restart, then the new listing.
+
+**Mutation checks: 21 mutants, 21 killed**:
+
+- **#1** (R1a-e): no HEAD check; accepting `now` lists (it survived at first, so the newer-state gate test was added);
+  no 409; no refresh between attempts; a warm key without the state.
+- **#2**: no merge by name; HEAD's row wins; no `replaces`.
+- **#3**: a display source key; no `oldRawPath` in git-core; none on the row.
+- **#4**: status letters only; no signature; no index id.
+- **#5**: the web key, the effects and the listing key by `rawPath ?? path`.
+- **#6**: no cursor; `restarted` ignored; restarted pages kept.
+- **the 409 retry**: not retried; the retry option dropped.
+
+**Verification** (final head; the machine was shared with another session's tests, load average 7-15):
+
+- `pnpm lint` exit 0 (the same 4 warnings and 1 info in untouched files; credits up to date); `pnpm typecheck` exit 0;
+  `pnpm build` exit 0.
+- `pnpm test` exit 0 in 2 min 6 s:
+
+  | Package | Passed | Skipped |
+  |---|---|---|
+  | contracts | 134 | 0 |
+  | forge | 101 | 5 |
+  | fixtures | 58 | 0 |
+  | web | 490 | 0 |
+  | git-core | 504 | 1 |
+  | daemon | 452 | 4 |
+  | e2e unit | 8 | 0 |
+  | cli | 141 | 0 |
+  | scripts | 34 | 0 |
+
+- git-core, daemon and web, each run twice more: the same counts.
+- Folding mode: git-core 489 passed, 16 skipped; daemon 450 passed, 6 skipped.
+- `pnpm test:e2e -- --workers=1`, final head: **106 passed (3.4 min)**; read-only proof 4796 lock polls, 0 violations.
+  - An earlier run (before the warm-path change) had two failures. One was `07-readonly` (an element detached during
+    a re-render), which passed on the rerun.
+  - The other is a **pre-existing flake in `20-paged-files` "first page, then more"**: the same spec failed 2 of 5 on
+    the pre-review head `12c7700` (a temporary worktree, since removed) and 2 of 3 on this branch under the same load.
+  - Cause: the loop stops scrolling when the Load-more footer disappears, but the last page's rows arrive below the
+    scroll position, so the virtualised list never mounts the last row. Suggested fix for its owner: scroll to the end
+    once more after the footer is gone, or assert the row after `scrollIntoView` (e2e tests are not this stream's).
+- `perf:smoke`: exit 0, no failed check.
+- Default bench (`bench`, before the warm-path change): all 9 budgets PASS. The rerun on the final head is in the
+  addendum below.
+- **Warm listing re-measured** (`bench:tree`, final head, `docs/bench/results-tree.md`):
+  - warm p50 1.1-1.5 ms, p95 1.9-4.4 ms, under load average 11-13;
+  - in the same run git-core's own `ls-tree` timings were 35-45 % slower than the first run's, which had warm 0.8-0.9 /
+    0.9-1.3 ms;
+  - a cold leaf (6 new trees) took 22.9 ms;
+  - reading HEAD from files costs about 0.5 ms (measured in process), which is why a warm hit skips it.
