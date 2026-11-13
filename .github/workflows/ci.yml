@@ -148,7 +148,7 @@ jobs:
         shell: bash
     env:
       # Never sign (phase E); no keychain / certificate lookups.
-      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
     steps:
       - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6

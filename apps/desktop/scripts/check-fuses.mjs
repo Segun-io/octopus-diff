@@ -63,7 +63,9 @@ export async function fuseProblems(executable) {
     const actual = state === ENABLE ? true : state === DISABLE ? false : null;
     lines.push(`  ${name}: ${actual === null ? `state ${state}` : actual ? 'on' : 'off'}`);
     if (actual !== enabled) {
-      problems.push(`${name} is ${actual === null ? `in state ${state}` : actual ? 'on' : 'off'}, expected ${enabled ? 'on' : 'off'}`);
+      problems.push(
+        `${name} is ${actual === null ? `in state ${state}` : actual ? 'on' : 'off'}, expected ${enabled ? 'on' : 'off'}`,
+      );
     }
   }
   return { problems, lines };
@@ -72,7 +74,7 @@ export async function fuseProblems(executable) {
 /** Problems with the embedded asar integrity data (macOS, Windows); null where not applicable. */
 export function integrityProblem(executable) {
   if (executable.includes('.app/Contents/MacOS/')) {
-    const plist = path.join(executable.split('.app/')[0] + '.app', 'Contents', 'Info.plist');
+    const plist = path.join(`${executable.split('.app/')[0]}.app`, 'Contents', 'Info.plist');
     const text = readFileSync(plist, 'utf8');
     return text.includes('<key>ElectronAsarIntegrity</key>') && text.includes('Resources/app.asar')
       ? null

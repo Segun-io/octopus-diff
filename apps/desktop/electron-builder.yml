@@ -12,9 +12,9 @@ productName: octopus-diff
 copyright: Copyright (c) octopus-diff contributors (MIT License)
 artifactName: ${productName}-${version}-${os}-${arch}.${ext}
 
+# `directories.output` is set by scripts/package.mjs (an absolute path to apps/desktop/release).
 directories:
   buildResources: build
-  # `output` is set by scripts/package.mjs (an absolute path to apps/desktop/release).
 
 # The app: the generated package.json, dist/main.js (+ preload), dist/cli/ (index.js,
 # git-helper.js, web/), and the production node_modules (@parcel/watcher, its platform package and
@@ -23,10 +23,10 @@ directories:
 files:
   - package.json
   - dist/**/*
-  - '!**/*.map'
-  - '!node_modules/@parcel/watcher/{src,scripts}/**'
-  - '!node_modules/@parcel/watcher/{binding.gyp,index.js.flow}'
-  - '!node_modules/node-addon-api/**'
+  - "!**/*.map"
+  - "!node_modules/@parcel/watcher/{src,scripts}/**"
+  - "!node_modules/@parcel/watcher/{binding.gyp,index.js.flow}"
+  - "!node_modules/node-addon-api/**"
 
 asar: true
 # What phase 0 found worth unpacking (DESKTOP.md §10, DECISIONS #469): the native watcher packages
