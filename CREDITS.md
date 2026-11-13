@@ -196,7 +196,8 @@ Used to build, lint and test octopus-diff; not shipped.
 | `@types/react` | 19.3.0 | MIT | apps/web | https://github.com/DefinitelyTyped/DefinitelyTyped |
 | `@types/react-dom` | 19.3.0 | MIT | apps/web | https://github.com/DefinitelyTyped/DefinitelyTyped |
 | `@vitejs/plugin-react` | 6.3.0 | MIT | apps/web | https://github.com/vitejs/vite-plugin-react |
-| `esbuild` | 0.28.2 | MIT | apps/cli | https://github.com/evanw/esbuild |
+| `electron` | 45.3.2 | MIT | apps/desktop | https://github.com/electron/electron |
+| `esbuild` | 0.28.2 | MIT | apps/cli, apps/desktop | https://github.com/evanw/esbuild |
 | `jsdom` | 31.0.0 | MIT | apps/web | https://github.com/jsdom/jsdom |
 | `tsx` | 4.23.15 | MIT | root | https://github.com/privatenumber/tsx |
 | `typescript` | 7.0.2 | Apache-2.0 | root | https://github.com/microsoft/TypeScript |

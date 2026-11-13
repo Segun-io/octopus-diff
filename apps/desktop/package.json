@@ -1,0 +1,34 @@
+{
+  "name": "@octopus-diff/desktop",
+  "version": "0.0.0",
+  "private": true,
+  "description": "octopus-diff desktop app (Electron shell around the CLI's daemon and the web UI).",
+  "license": "MIT",
+  "type": "module",
+  "main": "dist/main.js",
+  "exports": {
+    ".": {
+      "@octopus-diff/source": "./src/index.ts"
+    }
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run --passWithNoTests",
+    "lint": "biome check .",
+    "start": "electron .",
+    "dev": "node scripts/dev.mjs",
+    "smoke:backend": "node scripts/smoke-backend.mjs"
+  },
+  "dependencies": {
+    "@octopus-diff/contracts": "workspace:*",
+    "@parcel/watcher": "^2.6.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@octopus-diff/web": "workspace:*",
+    "electron": "45.3.2",
+    "esbuild": "^0.28.2",
+    "octopus-diff": "workspace:*"
+  }
+}
