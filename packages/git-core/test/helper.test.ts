@@ -63,6 +63,11 @@ beforeAll(() => {
       `  family) sh -c 'trap "" TERM; echo $$ > "${gates}/family.pid"; exec sleep 30' & sleep 30 ;;`,
       `  once) if [ ! -e "${gates}/once.done" ]; then : > "${gates}/once.done"; sleep 30; fi; printf 'second run' ;;`,
       "  stream) printf 'first chunk'; sleep 30 ;;",
+      '  count) wc -c | tr -d " " ;;',
+      '  cksum) cksum ;;',
+      // The first run records its pid, tells the helper's crash hook it is running and sleeps; the
+      // retry says whether the first one is still alive (it must not be).
+      `  crashonce) if mkdir "${gates}/crash.first" 2>/dev/null; then printf '%s' "$$" > "${gates}/crash.first/pid"; : > "$CRASH_FILE.ready"; sleep 30; elif kill -0 "$(cat "${gates}/crash.first/pid")" 2>/dev/null; then printf 'alongside'; else printf 'retried'; fi ;;`,
       '  *) printf \'out:%s\' "$last" ;;',
       'esac',
       `while [ -e "${gates}/$last" ]; do sleep 0.01; done`,
@@ -148,6 +153,7 @@ const E = {
   tooLarge: 23,
   rejected: 24,
   fatal: 25,
+  stdinCredit: 26,
 } as const;
 
 function encode(type: number, id: number, payload: Buffer = Buffer.alloc(0)): Buffer {
@@ -162,14 +168,28 @@ class RawHelper {
   readonly child: ChildProcess;
   readonly frames: Frame[] = [];
   readonly exited: Promise<number | null>;
+  /** Pid-channel records (fd 3): [id, pid], pid 0 = about to spawn. */
+  readonly pids: Array<[number, number]> = [];
   private buffer = Buffer.alloc(0);
+  private pidBuffer = Buffer.alloc(0);
 
-  constructor(args: string[] = ['--octopus-diff-git-helper', '1', fakeGit]) {
+  constructor(args: string[] = ['--octopus-diff-git-helper', '1', fakeGit], pidChannel = true) {
     this.child = spawn(
       process.execPath,
       ['--disable-warning=ExperimentalWarning', ENTRY, ...args],
-      { stdio: ['pipe', 'pipe', 'pipe'], cwd: '/', env: {} },
+      {
+        stdio: pidChannel ? ['pipe', 'pipe', 'pipe', 'pipe'] : ['pipe', 'pipe', 'pipe'],
+        cwd: '/',
+        env: {},
+      },
     );
+    (this.child.stdio[3] as NodeJS.ReadableStream | null)?.on('data', (chunk: Buffer) => {
+      this.pidBuffer = Buffer.concat([this.pidBuffer, chunk]);
+      while (this.pidBuffer.length >= 8) {
+        this.pids.push([this.pidBuffer.readUInt32BE(0), this.pidBuffer.readUInt32BE(4)]);
+        this.pidBuffer = this.pidBuffer.subarray(8);
+      }
+    });
     this.child.stdin?.on('error', () => {});
     this.child.stdout?.on('data', (chunk: Buffer) => {
       this.buffer = Buffer.concat([this.buffer, chunk]);
@@ -241,6 +261,11 @@ describe.skipIf(process.platform === 'win32')('helper protocol: strict, never a 
       'out:"a b"',
     );
     expect(helper.of(1, E.spawned)[0]?.payload.readUInt32BE(0)).toBe(starts()[0]?.pid);
+    // The pid channel announced the spawn, then its pid.
+    expect(helper.pids).toEqual([
+      [1, 0],
+      [1, starts()[0]?.pid],
+    ]);
     expect(existsSync(marker)).toBe(false);
     expect(await helper.close()).toBe(0);
   });
@@ -313,6 +338,61 @@ describe.skipIf(process.platform === 'win32')('helper protocol: strict, never a 
     tooShort.child.stdin?.write(Buffer.from([0, 0, 0, 1, 1]));
     expect(await tooShort.exited).toBe(2);
     expect(starts()).toEqual([]);
+  });
+
+  it('refuses to start without its pid channel on fd 3', async () => {
+    const helper = new RawHelper(undefined, false);
+    expect(await helper.exited).toBe(2);
+    expect(helper.of(0, E.ready)).toEqual([]);
+  });
+
+  it('grants stdin credit as git reads, and ends on stdin beyond its credit', async () => {
+    const helper = new RawHelper();
+    helper.spawnRaw(1, {
+      ...request({ stdin: true }),
+      env: { PATH: process.env.PATH ?? '/usr/bin:/bin', FAKE_MODE: 'stdin' },
+    });
+    const window = (await helper.next(1, E.stdinCredit)).payload.readUInt32BE(0);
+    expect(window).toBe(256 * 1024);
+    helper.send(T.stdin, 1, Buffer.from('hello'));
+    await until(() => helper.of(1, E.stdinCredit).length === 2);
+    expect(helper.of(1, E.stdinCredit)[1]?.payload.readUInt32BE(0)).toBe(5);
+    helper.send(T.stdinEnd, 1);
+    await helper.next(1, E.close);
+    expect(Buffer.concat(helper.of(1, E.stdout).map((f) => f.payload)).toString()).toBe('hello');
+    // A stdin frame over the credit (a request without stdin has none) is a protocol violation.
+    helper.spawnRaw(2, request());
+    await helper.next(2, E.spawned);
+    helper.send(T.stdin, 2, Buffer.from('x'));
+    expect(await helper.exited).toBe(2);
+  });
+
+  it('holds at most its window of stdin while git does not read', async () => {
+    const helper = new RawHelper();
+    helper.spawnRaw(1, {
+      ...request({ stdin: true }),
+      env: { PATH: process.env.PATH ?? '/usr/bin:/bin', FAKE_MODE: 'hang' },
+    });
+    // Send whatever credit allows, for a while: git never reads its stdin.
+    let sent = 0;
+    let used = 0;
+    const deadline = Date.now() + 1_000;
+    while (Date.now() < deadline) {
+      const granted = helper
+        .of(1, E.stdinCredit)
+        .reduce((n, f) => n + f.payload.readUInt32BE(0), 0);
+      while (used < granted) {
+        const n = Math.min(64 * 1024, granted - used);
+        helper.send(T.stdin, 1, Buffer.alloc(n));
+        used += n;
+        sent += n;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    // The window plus what the kernel buffers for git's stdin, nowhere near unbounded.
+    expect(sent).toBeGreaterThanOrEqual(256 * 1024);
+    expect(sent).toBeLessThan(4 * 1024 * 1024);
+    expect(await helper.close()).toBe(0);
   });
 
   it('refuses to start without exactly its startup arguments', async () => {
@@ -453,6 +533,87 @@ describe.skipIf(!helperOn)('runner through the helper', () => {
     await runner.dispose();
   });
 
+  it('streams a large stdin as the pipes drain: two 64 MiB inputs at once, little extra memory', async () => {
+    const size = 64 * 1024 * 1024;
+    const inputs = [Buffer.alloc(size, 0x61), Buffer.alloc(size, 0x62)];
+    const runner = new GitRunner({
+      gitBinary: fakeGit,
+      env: { FAKE_MODE: 'count' },
+      timeoutMs: 60_000,
+      helper: { processes: 2 },
+    });
+    await runner.run(job('warm'), { cwd: fx.root });
+    const base = process.memoryUsage().arrayBuffers;
+    let peak = base;
+    const sample = setInterval(() => {
+      peak = Math.max(peak, process.memoryUsage().arrayBuffers);
+    }, 1);
+    const results = await Promise.all(
+      inputs.map((input, i) =>
+        runner.run(['patch-id', '--stable'], { cwd: fx.root, queueKey: `in${i}`, input }),
+      ),
+    );
+    clearInterval(sample);
+    peak = Math.max(peak, process.memoryUsage().arrayBuffers);
+    expect(results.map((r) => r.stdout.toString().trim())).toEqual([String(size), String(size)]);
+    // Without streaming, each request copied its whole input into queued frames (+128 MiB).
+    expect(peak - base).toBeLessThan(16 * 1024 * 1024);
+    await runner.dispose();
+  });
+
+  it('a 64 MiB random stdin reaches git byte for byte (cksum equal to the direct path)', async () => {
+    const input = randomBytes(64 * 1024 * 1024);
+    const env = { FAKE_MODE: 'cksum' };
+    const viaHelper = new GitRunner({
+      gitBinary: fakeGit,
+      env,
+      timeoutMs: 60_000,
+      helper: { processes: 1 },
+    });
+    const direct = new GitRunner({ gitBinary: fakeGit, env, timeoutMs: 60_000, helper: false });
+    const [a, b] = await Promise.all([
+      viaHelper.run(['patch-id', '--stable'], { cwd: fx.root, input }),
+      direct.run(['patch-id', '--stable'], { cwd: fx.root, input }),
+    ]);
+    expect(a.stdout.toString()).toBe(b.stdout.toString());
+    expect(a.stdout.toString().trim().split(/\s+/)[1]).toBe(String(input.length));
+    await Promise.all([viaHelper.dispose(), direct.dispose()]);
+  });
+
+  it('a request aborted while its stdin is being sent stops sending, and the next request works', async () => {
+    writeFileSync(log, '');
+    const runner = new GitRunner({
+      gitBinary: fakeGit,
+      env: { FAKE_MODE: 'hang' },
+      timeoutMs: 60_000,
+      helper: { processes: 1 },
+    });
+    const controller = new AbortController();
+    const run = runner
+      .run(['patch-id', '--stable'], {
+        cwd: fx.root,
+        input: Buffer.alloc(64 * 1024 * 1024, 0x63),
+        signal: controller.signal,
+      })
+      .catch((e: unknown) => e);
+    await until(() => starts().length === 1);
+    controller.abort();
+    expect(isGitCoreError(await run, 'aborted')).toBe(true);
+    const counted = new GitRunner({
+      gitBinary: fakeGit,
+      env: { FAKE_MODE: 'count' },
+      helper: { processes: 1 },
+    });
+    expect(
+      (
+        await counted.run(['patch-id', '--stable'], { cwd: fx.root, input: Buffer.from('abc') })
+      ).stdout
+        .toString()
+        .trim(),
+    ).toBe('3');
+    await Promise.all([runner.dispose(), counted.dispose()]);
+  });
+
   it('keeps the concurrency limit', async () => {
     writeFileSync(log, '');
     const runner = new GitRunner({ gitBinary: fakeGit, concurrency: 3, helper: { processes: 2 } });
@@ -577,6 +738,51 @@ describe.skipIf(!helperOn)('helper crashes', () => {
     expect(starts()[1]?.ppid).toBe(replacement);
     const next = await runner.run(job('next'), { cwd: fx.root });
     expect(next.stdout.toString()).toBe('second run');
+    await runner.dispose();
+  });
+
+  it('a helper SIGKILLed right after spawning git: that git is killed, and the retry starts only once it is gone', async () => {
+    writeFileSync(log, '');
+    rmSync(path.join(gates, 'crash.first'), { recursive: true, force: true });
+    const crash = path.join(fx.root, 'crash-after');
+    writeFileSync(crash, '');
+    rmSync(`${crash}.ready`, { force: true });
+    const runner = new GitRunner({
+      gitBinary: fakeGit,
+      env: { FAKE_MODE: 'crashonce', CRASH_FILE: crash },
+      timeoutMs: 60_000,
+      helper: { processes: 1 },
+      helperTestCrash: `after-spawn:${crash}`,
+    });
+    const result = await runner.run(job('crash'), { cwd: fx.root });
+    // The hook fired (it deletes the file) after git had started.
+    expect(existsSync(crash)).toBe(false);
+    expect(result.stdout.toString()).toBe('retried');
+    const first = Number(readFileSync(path.join(gates, 'crash.first', 'pid'), 'utf8'));
+    expect(alive(first)).toBe(false);
+    expect(alive(-first)).toBe(false);
+    expect(starts()).toHaveLength(2);
+    await runner.dispose();
+  });
+
+  it('a helper that dies between announcing a spawn and its pid: no retry (git may be running), a clear error', async () => {
+    writeFileSync(log, '');
+    const crash = path.join(fx.root, 'crash-before');
+    writeFileSync(crash, '');
+    const runner = new GitRunner({
+      gitBinary: fakeGit,
+      timeoutMs: 60_000,
+      helper: { processes: 1 },
+      helperTestCrash: `before-spawn:${crash}`,
+    });
+    const error = await runner.run(job('before'), { cwd: fx.root }).catch((e: unknown) => e);
+    expect(existsSync(crash)).toBe(false);
+    expect(isGitCoreError(error, 'git_failed')).toBe(true);
+    expect((error as { details: Record<string, unknown> }).details.helper).toBe('lost');
+    // The helper died before spawning: nothing ran, and nothing ran twice.
+    expect(starts()).toEqual([]);
+    const next = await runner.run(job('after'), { cwd: fx.root });
+    expect(next.stdout.toString()).toBe('out:after');
     await runner.dispose();
   });
 

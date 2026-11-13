@@ -37,6 +37,8 @@ export interface GitRunnerOptions {
    * whatever this says.
    */
   helper?: boolean | GitHelperOptions;
+  /** Tests only: makes a helper SIGKILL itself around a spawn (see `git-helper.ts`). */
+  helperTestCrash?: string;
 }
 
 /** Off when `OCTOPUS_DIFF_GIT_HELPER` is `0`, `false`, `no` or `off`. */
@@ -376,6 +378,7 @@ export class GitRunner {
   private resolvedBinary: string | null = null;
   private readonly helper: HelperConfig | null;
   private pool: HelperPool | null = null;
+  private readonly helperTestCrash: string | undefined;
 
   constructor(options: GitRunnerOptions = {}) {
     this.gitBinary = options.gitBinary ?? 'git';
@@ -390,6 +393,7 @@ export class GitRunner {
     const threshold = options.bigFileThreshold ?? defaultBigFileThreshold(this.maxOutputBytes);
     this.extraPins = ['-c', `core.bigFileThreshold=${Math.floor(threshold)}`];
     this.helper = helperConfig(options.helper, concurrency, this.logger);
+    this.helperTestCrash = options.helperTestCrash;
   }
 
   private readonly extraPins: readonly string[];
@@ -544,7 +548,7 @@ export class GitRunner {
         tooLarge: () => {
           if (!failure) fail(tooLargeError(args, cwd, maxOutputBytes));
         },
-        lost: (reason) => {
+        lost: (reason, retryable) => {
           // The helper died (or refused the request): the process is gone, its group killed.
           exited = true;
           if (failure) {
@@ -554,7 +558,8 @@ export class GitRunner {
           // Once (#45): a read-only command can run again, unless streamed output already went out.
           // Once more when the pool just gave up (a helper that cannot start): then directly.
           const again = attempt === 0 || (attempt === 1 && !this.usesHelper);
-          if (again && (!options.onStdout || stdoutBytes === 0)) {
+          // Never next to a process of the first try that may still run (`retryable`).
+          if (retryable && again && (!options.onStdout || stdoutBytes === 0)) {
             this.logger.debug('git retried', { args, cwd, reason });
             retrying = true;
             finish(null);
@@ -694,6 +699,7 @@ export class GitRunner {
         processes: this.helper.processes,
         logger: this.logger,
         ...(this.helper.execPath ? { execPath: this.helper.execPath } : {}),
+        ...(this.helperTestCrash ? { testCrash: this.helperTestCrash } : {}),
       });
     }
     return this.pool.available ? this.pool : null;

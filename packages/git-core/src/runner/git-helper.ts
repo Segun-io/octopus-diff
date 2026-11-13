@@ -16,10 +16,11 @@
  *
  *   u32 BE length of the rest | u8 type | u32 BE request id | payload
  *
- * Requests: SPAWN (JSON), STDIN (bytes), STDIN_END, KILL (1 byte: 1 SIGTERM, 2 SIGKILL; the
- * request's process group), DETACH (stop forwarding output, close the pipes). Events: READY,
- * SPAWNED (u32 pid), STDOUT / STDERR (bytes, never decoded), EXIT / CLOSE / ERROR (JSON),
- * TOO_LARGE, REJECTED (JSON reason), FATAL (JSON reason). A frame that is not exactly this shape
+ * Requests: SPAWN (JSON), STDIN (bytes, within the credit granted), STDIN_END, KILL (1 byte:
+ * 1 SIGTERM, 2 SIGKILL; the request's process group), DETACH (stop forwarding output, close the
+ * pipes). Events: READY, SPAWNED (u32 pid), STDOUT / STDERR (bytes, never decoded), EXIT / CLOSE /
+ * ERROR (JSON), TOO_LARGE, REJECTED (JSON reason), FATAL (JSON reason), STDIN_CREDIT (u32). The
+ * pid of every git process also goes, synchronously, to the pid channel on fd 3 (`PID_FD`). A frame that is not exactly this shape
  * is fatal: the helper kills every process it started and exits. A SPAWN whose JSON is not exactly
  * the request shape is refused (REJECTED) and nothing runs.
  *
@@ -29,7 +30,7 @@
  * to the parent only.
  */
 import { type ChildProcess, spawn } from 'node:child_process';
-import { writeSync } from 'node:fs';
+import { existsSync, fstatSync, unlinkSync, writeSync } from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
 
@@ -63,6 +64,18 @@ const EV_ERROR = 22;
 const EV_TOO_LARGE = 23;
 const EV_REJECTED = 24;
 const EV_FATAL = 25;
+/** u32: more stdin bytes the parent may send for this request (flow control). */
+const EV_STDIN_CREDIT = 26;
+
+/** stdin bytes a request may have in flight between the parent and git. */
+const STDIN_WINDOW = 256 * 1024;
+/**
+ * fd 3: the pid channel. 8-byte records `u32 id | u32 pid`, pid 0 meaning "about to spawn",
+ * written synchronously around `spawn()` so they reach the kernel before this process can do
+ * anything else: a helper that dies at any point after spawning git has told the parent which
+ * process group to kill (stdout frames may still be queued in this process when it dies).
+ */
+const PID_FD = 3;
 
 const SPAWN_KEYS = ['argv', 'binary', 'cwd', 'env', 'maxOutputBytes', 'stdin'];
 const USE_PROCESS_GROUP = process.platform !== 'win32';
@@ -75,6 +88,8 @@ interface Entry {
   stderrBytes: number;
   detached: boolean;
   closed: boolean;
+  /** stdin bytes the parent may still send (granted and not yet used). */
+  stdinCredit: number;
 }
 
 interface SpawnRequest {
@@ -103,12 +118,69 @@ function startupBinary(argv: readonly string[]): string {
 }
 
 const GIT = startupBinary(process.argv);
+// The parent passes a stdio 'pipe', which libuv creates as a socket pair on every POSIX system.
+// Anything else on fd 3 is not the channel: Node's own descriptors take the number when the parent
+// passed none (an epoll fd on Linux, a wakeup pipe on macOS, hence no FIFOs).
+if (!isPidChannel()) {
+  process.stderr.write('octopus-diff git helper: no pid channel on fd 3\n');
+  process.exit(2);
+}
+
+function isPidChannel(): boolean {
+  try {
+    const stat = fstatSync(PID_FD);
+    return stat.isSocket();
+  } catch {
+    return false;
+  }
+}
+const pidRecord = Buffer.alloc(8);
+
+/** Writes one pid-channel record before returning (blocking; EAGAIN is retried). */
+function announce(id: number, pid: number): void {
+  pidRecord.writeUInt32BE(id, 0);
+  pidRecord.writeUInt32BE(pid, 4);
+  let written = 0;
+  while (written < pidRecord.length) {
+    try {
+      written += writeSync(PID_FD, pidRecord, written, pidRecord.length - written);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EAGAIN') shutdown(1);
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1);
+    }
+  }
+}
 const entries = new Map<number, Entry>();
 const input = new net.Socket({ fd: 0, readable: true, writable: false });
 const output = new net.Socket({ fd: 1, readable: false, writable: true });
 /** Entries whose process has not closed yet (the others only stay killable for a while). */
 let running = 0;
 let shuttingDown = false;
+
+/**
+ * Test hook (#45 review): `<before-spawn|after-spawn>:<file>` in this process's environment makes
+ * the helper SIGKILL itself once (when `<file>` exists, which it deletes) right before or right
+ * after spawning git, with no event-loop turn in between. `after-spawn` first waits (synchronously,
+ * at most 3 s) for `<file>.ready`, which the test's git creates. Only the runner's
+ * `helperTestCrash` option sets it; the helper's environment is otherwise empty.
+ */
+const TEST_CRASH = /^(before-spawn|after-spawn):(.+)$/.exec(
+  process.env.OCTOPUS_DIFF_GIT_HELPER_TEST_CRASH ?? '',
+);
+
+function testCrash(at: 'before-spawn' | 'after-spawn'): void {
+  if (!TEST_CRASH || TEST_CRASH[1] !== at) return;
+  const file = TEST_CRASH[2] as string;
+  if (!existsSync(file)) return;
+  unlinkSync(file);
+  if (at === 'after-spawn') {
+    const deadline = Date.now() + 3_000;
+    while (!existsSync(`${file}.ready`) && Date.now() < deadline) {
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
+    }
+  }
+  process.kill(process.pid, 'SIGKILL');
+}
 let outputBlocked = false;
 
 function header(type: number, id: number, payloadBytes: number): Buffer {
@@ -175,6 +247,8 @@ function detach(entry: Entry): void {
   entry.detached = true;
   entry.child.stdout?.destroy();
   entry.child.stderr?.destroy();
+  // Drop stdin still queued for git (a cancelled or timed-out request).
+  entry.child.stdin?.destroy();
 }
 
 function shutdown(code: number): never {
@@ -267,6 +341,8 @@ function startGit(id: number, payload: Buffer): void {
     return;
   }
   let child: ChildProcess;
+  announce(id, 0);
+  testCrash('before-spawn');
   try {
     child = spawn(GIT, request.argv, {
       cwd: request.cwd,
@@ -283,6 +359,8 @@ function startGit(id: number, payload: Buffer): void {
     sendJson(EV_CLOSE, id, { code: null, signal: null });
     return;
   }
+  if (child.pid !== undefined) announce(id, child.pid);
+  testCrash('after-spawn');
   const entry: Entry = {
     child,
     pid: child.pid,
@@ -291,6 +369,7 @@ function startGit(id: number, payload: Buffer): void {
     stderrBytes: 0,
     detached: false,
     closed: false,
+    stdinCredit: request.stdin ? STDIN_WINDOW : 0,
   };
   entries.set(id, entry);
   running += 1;
@@ -298,6 +377,11 @@ function startGit(id: number, payload: Buffer): void {
     const pid = Buffer.allocUnsafe(4);
     pid.writeUInt32BE(child.pid, 0);
     send(EV_SPAWNED, id, pid);
+  }
+  if (request.stdin) {
+    const credit = Buffer.allocUnsafe(4);
+    credit.writeUInt32BE(STDIN_WINDOW, 0);
+    send(EV_STDIN_CREDIT, id, credit);
   }
   if (outputBlocked) pauseEntry(entry);
   child.stdin?.on('error', () => {
@@ -340,8 +424,21 @@ function onFrame(type: number, id: number, payload: Buffer): void {
       startGit(id, payload);
       return;
     case REQ_STDIN: {
-      const stdin = entries.get(id)?.child.stdin;
-      if (stdin && !stdin.destroyed && !stdin.writableEnded) stdin.write(payload);
+      const entry = entries.get(id);
+      if (!entry) return;
+      // Never more than the parent was granted: git's pace bounds what this process holds.
+      if (payload.length > entry.stdinCredit) fatal('stdin over its credit');
+      entry.stdinCredit -= payload.length;
+      const length = payload.length;
+      const grant = (): void => {
+        entry.stdinCredit += length;
+        const credit = Buffer.allocUnsafe(4);
+        credit.writeUInt32BE(length, 0);
+        send(EV_STDIN_CREDIT, id, credit);
+      };
+      const stdin = entry.child.stdin;
+      if (stdin && !stdin.destroyed && !stdin.writableEnded) stdin.write(payload, grant);
+      else grant();
       return;
     }
     case REQ_STDIN_END: {

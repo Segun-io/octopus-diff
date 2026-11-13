@@ -4,9 +4,12 @@
  * git process and turns their event frames back into the callbacks `runner.ts` uses for a direct
  * child process. Nothing here decides what runs: the runner validates every command first.
  *
- * Failure model: a helper that exits while git processes are in flight reports them `lost` (the
- * runner retries once or fails with a `GitCoreError`), and the runner SIGKILLs their process
- * groups, so nothing outlives a crashed helper. A helper that exits before it says READY counts as
+ * Failure model: a helper that exits while git processes are in flight reports them `lost`. The
+ * pid of every git process reaches this side through the helper's pid channel (fd 3, written
+ * synchronously around `spawn()`), so the groups of a crashed helper are SIGKILLed here, and a
+ * lost request is retryable only once its group is gone, or when it never started. A request the
+ * helper announced but whose pid never arrived (it died inside `spawn()`) is not retried: git
+ * may be running. A helper that exits before it says READY counts as
  * a start failure; after `MAX_START_FAILURES` in a row, or `MAX_CRASHES` within `CRASH_WINDOW_MS`,
  * the pool turns itself off and the runner spawns git directly (logged once).
  */
@@ -18,8 +21,10 @@ import type { Logger } from '@octopus-diff/contracts';
 const HEADER_BYTES = 9;
 /** Largest request frame the helper accepts (`MAX_REQUEST_FRAME` there). */
 export const HELPER_MAX_REQUEST_FRAME = 8 * 1024 * 1024;
-/** stdin is sent in chunks of at most this size. */
-const STDIN_CHUNK = 1024 * 1024;
+/** stdin is sent in frames of at most this size, within the credit the helper grants. */
+const STDIN_CHUNK = 64 * 1024;
+/** How long a retry waits for the SIGKILLed groups of a crashed helper to disappear. */
+const GROUP_GONE_WAIT_MS = 1_000;
 /** The helper never sends larger frames (it splits output at 256 KiB). */
 const MAX_EVENT_FRAME = 1024 * 1024;
 const MAX_START_FAILURES = 2;
@@ -44,6 +49,7 @@ export const HelperFrame = {
   tooLarge: 23,
   rejected: 24,
   fatal: 25,
+  stdinCredit: 26,
 } as const;
 
 /** The callbacks a running git process reports through (same for direct and helper spawns). */
@@ -58,8 +64,11 @@ export interface ProcHandlers {
   error(error: NodeJS.ErrnoException): void;
   /** stdout went over the request's cap; the process group was killed. */
   tooLarge(): void;
-  /** The helper died or refused the request: the process may never have run. */
-  lost(reason: string): void;
+  /**
+   * The helper died or refused the request. `retryable`: no process of the request can still be
+   * running (it never started, or its group is gone).
+   */
+  lost(reason: string, retryable: boolean): void;
 }
 
 export interface ProcHandle {
@@ -80,6 +89,8 @@ export interface HelperSpawnRequest {
 }
 
 export interface HelperPoolOptions {
+  /** Test hook: `OCTOPUS_DIFF_GIT_HELPER_TEST_CRASH` for the helpers (see `git-helper.ts`). */
+  testCrash?: string;
   gitBinary: string;
   entry: string;
   processes: number;
@@ -127,6 +138,32 @@ function killGroupDirect(pid: number): void {
 interface Request {
   handlers: ProcHandlers;
   pid: number | undefined;
+  /** The helper announced the spawn on the pid channel. */
+  started: boolean;
+  /** stdin not sent yet (a view of the caller's buffer, never copied), from `stdinOffset`. */
+  input: Buffer | undefined;
+  stdinOffset: number;
+  /** stdin bytes the helper lets this request send now. */
+  stdinCredit: number;
+}
+
+function groupExists(pid: number): boolean {
+  try {
+    process.kill(-pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
+
+/** Resolves once none of the groups exists any more, or after `ms`. */
+async function groupsGone(pids: number[], ms: number): Promise<boolean> {
+  const deadline = Date.now() + ms;
+  while (pids.some(groupExists)) {
+    if (Date.now() > deadline) return false;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  return true;
 }
 
 /** One helper process. */
@@ -136,6 +173,7 @@ class HelperProcess {
   private nextId = 1;
   private pending: Buffer[] = [];
   private pendingBytes = 0;
+  private pidPending = Buffer.alloc(0);
   private referenced = true;
   private closing = false;
   ready = false;
@@ -150,6 +188,7 @@ class HelperProcess {
   ) {
     const env: Record<string, string> = {};
     if (process.versions.electron) env.ELECTRON_RUN_AS_NODE = '1';
+    if (options.testCrash) env.OCTOPUS_DIFF_GIT_HELPER_TEST_CRASH = options.testCrash;
     const execArgv = options.entry.endsWith('.ts') ? ['--disable-warning=ExperimentalWarning'] : [];
     this.child = spawn(
       options.execPath ?? process.execPath,
@@ -159,7 +198,8 @@ class HelperProcess {
         // process gets its cwd and env from the request.
         cwd: '/',
         env,
-        stdio: ['pipe', 'pipe', 'pipe'],
+        // fd 3: the pid channel (see git-helper.ts).
+        stdio: ['pipe', 'pipe', 'pipe', 'pipe'],
         windowsHide: true,
         // Own session: terminal signals go to the parent, which disposes the helper itself.
         detached: true,
@@ -174,6 +214,8 @@ class HelperProcess {
       // EPIPE when the helper died; its 'exit' reports the requests.
     });
     this.child.stdout?.on('data', (chunk: Buffer) => this.read(chunk));
+    this.pidChannel?.on('data', (chunk: Buffer) => this.readPids(chunk));
+    this.child.stdin?.on('drain', () => this.pumpAll());
     let stderr = '';
     this.child.stderr?.on('data', (chunk: Buffer) => {
       if (stderr.length < 4096) stderr += chunk.toString('utf8');
@@ -182,8 +224,7 @@ class HelperProcess {
       options.logger.warn('git helper failed to start', { error: String(error) });
       this.die();
     });
-    // 'close', not 'exit': every frame the helper wrote has been read by then (a SPAWNED pid
-    // still in the pipe at 'exit' would leave that process group unkilled after a crash).
+    // 'close', not 'exit': everything the helper wrote, the pid channel included, has been read.
     this.child.once('close', (code, signal) => {
       if (!this.closing) {
         options.logger.warn('git helper exited', {
@@ -202,13 +243,24 @@ class HelperProcess {
     return this.child.pid;
   }
 
+  private get pidChannel(): NodeJS.ReadableStream | null {
+    return (this.child.stdio[3] as NodeJS.ReadableStream | null | undefined) ?? null;
+  }
+
   get load(): number {
     return this.requests.size;
   }
 
   startGit(request: HelperSpawnRequest, handlers: ProcHandlers): ProcHandle {
     const id = this.nextId++;
-    const state: Request = { handlers, pid: undefined };
+    const state: Request = {
+      handlers,
+      pid: undefined,
+      started: false,
+      input: request.input,
+      stdinOffset: 0,
+      stdinCredit: 0,
+    };
     this.requests.set(id, state);
     const message = Buffer.from(
       JSON.stringify({
@@ -222,12 +274,7 @@ class HelperProcess {
       'utf8',
     );
     this.write(frame(HelperFrame.spawn, id, message));
-    if (request.input) {
-      for (let at = 0; at < request.input.length; at += STDIN_CHUNK) {
-        this.write(frame(HelperFrame.stdin, id, request.input.subarray(at, at + STDIN_CHUNK)));
-      }
-      this.write(frame(HelperFrame.stdinEnd, id));
-    }
+    // stdin follows as the helper grants credit (STDIN_CREDIT), git's pace.
     this.updateRef();
     return {
       kill: (signal = 'SIGKILL') => {
@@ -239,6 +286,8 @@ class HelperProcess {
         this.write(frame(HelperFrame.kill, id, Buffer.from([signal === 'SIGTERM' ? 1 : 2])));
       },
       detach: () => {
+        // A cancelled or timed-out request sends no more stdin.
+        state.input = undefined;
         if (!this.dead && this.requests.has(id)) this.write(frame(HelperFrame.detach, id));
       },
     };
@@ -266,14 +315,64 @@ class HelperProcess {
     this.child.stdin?.write(data);
   }
 
+  /** Sends what the request's credit allows, as views of its input; then STDIN_END. */
+  private pump(id: number, state: Request): void {
+    const stdin = this.child.stdin;
+    const input = state.input;
+    if (!stdin || this.dead || !input) return;
+    while (state.stdinCredit > 0 && state.stdinOffset < input.length) {
+      if (stdin.writableNeedDrain) return; // 'drain' pumps again
+      const end = Math.min(
+        input.length,
+        state.stdinOffset + Math.min(STDIN_CHUNK, state.stdinCredit),
+      );
+      const view = input.subarray(state.stdinOffset, end);
+      const head = Buffer.allocUnsafe(HEADER_BYTES);
+      head.writeUInt32BE(view.length + 5, 0);
+      head.writeUInt8(HelperFrame.stdin, 4);
+      head.writeUInt32BE(id, 5);
+      stdin.cork();
+      stdin.write(head);
+      stdin.write(view);
+      stdin.uncork();
+      state.stdinCredit -= view.length;
+      state.stdinOffset = end;
+    }
+    if (state.stdinOffset >= input.length) {
+      state.input = undefined;
+      this.write(frame(HelperFrame.stdinEnd, id));
+    }
+  }
+
+  private pumpAll(): void {
+    for (const [id, state] of this.requests) if (state.input) this.pump(id, state);
+  }
+
+  private readPids(chunk: Buffer): void {
+    let data = this.pidPending.length > 0 ? Buffer.concat([this.pidPending, chunk]) : chunk;
+    while (data.length >= 8) {
+      const request = this.requests.get(data.readUInt32BE(0));
+      const pid = data.readUInt32BE(4);
+      if (request) {
+        if (pid === 0) request.started = true;
+        else request.pid = pid;
+      }
+      data = data.subarray(8);
+    }
+    this.pidPending = Buffer.from(data);
+  }
+
   private updateRef(): void {
     // Idle helpers must not keep the parent alive; busy ones do, as running git processes would.
     const want = (this.requests.size > 0 || this.closing) && !this.dead;
     if (want === this.referenced) return;
     this.referenced = want;
-    const streams = [this.child.stdin, this.child.stdout, this.child.stderr] as Array<
-      { ref?: () => void; unref?: () => void } | null | undefined
-    >;
+    const streams = [
+      this.child.stdin,
+      this.child.stdout,
+      this.child.stderr,
+      this.pidChannel,
+    ] as Array<{ ref?: () => void; unref?: () => void } | null | undefined>;
     if (want) {
       this.child.ref();
       for (const stream of streams) stream?.ref?.();
@@ -291,10 +390,20 @@ class HelperProcess {
     this.updateRef();
     // The pool first (it may give up on helpers), so a retry below already knows.
     this.onDead(this, !this.ready);
+    const reason = 'the git helper process exited';
     for (const request of requests) {
-      // A crashed helper cannot clean up: kill what it started.
-      if (request.pid !== undefined) killGroupDirect(request.pid);
-      request.handlers.lost('the git helper process exited');
+      request.input = undefined;
+      if (request.pid !== undefined) {
+        // A crashed helper cannot clean up: kill what it started, and retry only once it is gone.
+        const pid = request.pid;
+        killGroupDirect(pid);
+        void groupsGone([pid], GROUP_GONE_WAIT_MS).then((gone) =>
+          request.handlers.lost(reason, gone),
+        );
+      } else {
+        // Announced but no pid: the helper died inside spawn(), git may be running unseen.
+        request.handlers.lost(reason, !request.started);
+      }
     }
   }
 
@@ -364,7 +473,14 @@ class HelperProcess {
         handlers.stderr(payload);
         return;
       case HelperFrame.exit:
+        // git is gone: whatever stdin is left would not be read.
+        request.input = undefined;
         handlers.exit();
+        return;
+      case HelperFrame.stdinCredit:
+        if (payload.length !== 4) throw new Error('bad STDIN_CREDIT');
+        request.stdinCredit += payload.readUInt32BE(0);
+        this.pump(id, request);
         return;
       case HelperFrame.close: {
         const event = parseJson(payload);
@@ -392,7 +508,7 @@ class HelperProcess {
         const event = parseJson(payload);
         this.requests.delete(id);
         this.updateRef();
-        handlers.lost(`the git helper refused the request: ${String(event.reason)}`);
+        handlers.lost(`the git helper refused the request: ${String(event.reason)}`, true);
         return;
       }
       default:
