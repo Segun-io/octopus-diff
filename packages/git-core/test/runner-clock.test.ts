@@ -87,6 +87,20 @@ const answers = (pid: number, nth: number) =>
     );
   });
 
+/**
+ * The process keeps answering for `ms` of real time after `since` (probe after probe): the
+ * runner's timers wait for the test clock, not for real time. Bounded by real time on purpose
+ * (twice the grace period), and it can only fail if the process was killed.
+ */
+const answersThroughout = (pid: number, since: number, ms: number) =>
+  Effect.gen(function* () {
+    let nth = 0;
+    do {
+      nth += 1;
+      yield* answers(pid, nth);
+    } while (Date.now() - since < ms);
+  });
+
 const HELPER = defaultHelperEntry() !== null && !gitHelperDisabledByEnv();
 const PATHS = [
   { name: 'direct', helper: false },
@@ -138,19 +152,22 @@ describe('the abort grace period on the TestClock', () => {
           const runner = yield* clockRunner(helper, 60_000);
           const controller = new AbortController();
           const { run, pid, settled } = yield* started(runner, `grace-${name}`, controller.signal);
+          const abortedAt = Date.now();
           controller.abort();
           // SIGTERM reached the process, which ignores it.
           yield* until('SIGTERM delivered', has(`term ${pid}`));
           yield* TestClock.adjust(ABORT_GRACE_MS - 1);
-          // Still running one millisecond before the grace period ends: no SIGKILL yet.
-          yield* answers(pid, 1);
+          // Still running one millisecond before the grace period ends (no SIGKILL yet), and
+          // still after twice the grace period of real time: only the test clock ends it.
+          yield* answersThroughout(pid, abortedAt, 2 * ABORT_GRACE_MS);
           assert.isFalse(settled());
           yield* TestClock.adjust(1);
           const error = yield* Effect.promise(() => run);
           assert.isTrue(isGitCoreError(error, 'aborted'));
           // The run settled once its process had exited: the SIGKILL ended it.
           yield* until('the process gone', () => !alive(pid), 5_000);
-          assert.isFalse(alive(-pid));
+          // The rest of its group (its `sleep`) follows within moments (init reaps it).
+          yield* until('its group gone', () => !alive(-pid), 5_000);
         }),
       ),
     );
