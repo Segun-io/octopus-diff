@@ -86,7 +86,7 @@ import { type BulkWorktree, listsUntracked, type ReviewSource } from './bulk-rev
 import { Coalescer, settleWithin } from './coalesce.js';
 import { ApiError, type ApiErrorInfo, isShutdownError, notFound, toApiError } from './errors.js';
 import type { EventHub } from './events.js';
-import { FlightMap, raceSignal, SharedFlight } from './flight.js';
+import { raceSignal, SharedFlight } from './flight.js';
 import { hashId } from './ids.js';
 import { Limiter } from './limit.js';
 import { resolveInputPath } from './paths.js';
@@ -99,6 +99,7 @@ import {
   pathKey,
   type ReviewComputed,
 } from './review-state.js';
+import { type CacheStats, type Computed, StateCache } from './state-cache.js';
 import {
   type ProjectRow,
   REVIEW_TOUCH_INTERVAL_MS,
@@ -276,6 +277,8 @@ export interface CoreOptions {
    * `CORE_DEFAULTS.reconcileMs`.
    */
   incremental?: boolean | { reconcileMs?: number };
+  /** Max cached file lists (default `CORE_DEFAULTS.filesCacheSize`; tests). */
+  filesCacheSize?: number;
 }
 
 interface WorktreeEntry {
@@ -293,8 +296,6 @@ interface WorktreeEntry {
   /** Status flow v2: the last computed review state (may lag the summary briefly). */
   review: ReviewComputed | null;
   reviewRun: { key: string; promise: Promise<ReviewComputed | null> } | null;
-  /** `readReviewRange` result for (HEAD, bookmark) while the bookmark is reachable. */
-  rangeCache: { key: string; range: ReviewRange } | null;
   /**
    * The state hash of the worktree's first summary in this session. The review state is
    * computed on demand (#10): once the project is opened, or once the worktree changed after
@@ -399,6 +400,15 @@ function compareProjects(a: ProjectRow, b: ProjectRow): number {
  */
 function isCacheableScope(scope: DiffScope): boolean {
   return !(scope.kind === 'review' && !scope.base);
+}
+
+/**
+ * What a cached file list is valid for, within its (worktree, scope) group: the summary's
+ * `stateHash` (HEAD, index, working tree), a branch scope's base commits (#30) and the
+ * attributes files' stamp (`#attributesStamp`).
+ */
+function filesState(stateHash: string | null, base: string | null, attrs: string): string {
+  return `${stateHash ?? ''}\u0000${base ?? ''}\u0000${attrs}`;
 }
 
 /** Lists that were built again because a refresh landed meanwhile (`#listedAt`; tests). */
@@ -523,19 +533,15 @@ export class DaemonCore {
   readonly #projects = new Map<string, ProjectEntry>();
   readonly #scanRoots = new Map<string, ScanState>();
   /**
-   * Changed files per (worktree, scope), valid while the worktree's `stateHash` and, for branch
-   * scopes, the base ref's commit (`base`) are the ones they were listed under (#27).
+   * Changed files per (worktree, scope), valid while the worktree's `stateHash`, for branch
+   * scopes the base ref's commits, and the attributes files are the ones they were listed under
+   * (#27, #30). An Effect `Cache` (`StateCache`, #49): one entry per (worktree, scope), concurrent
+   * lookups of one state share a single run, a run is cancelled only when every request waiting
+   * for it went away (#44), and a cancelled or invalidated run caches nothing.
    */
-  readonly #filesCache = new Map<
-    string,
-    { stateHash: string; base: string | null; attrs: string; files: GitChangedFile[] }
-  >();
-  /**
-   * `#gitFiles` runs in flight (#27), shared by every request that wants the same list. A run is
-   * cancelled only when every request waiting for it went away (#44, `FlightMap`): the others
-   * keep waiting for the same run, and a cancelled run caches nothing.
-   */
-  readonly #filesInflight = new FlightMap<string, ListedChangedFiles>();
+  readonly #filesCache: StateCache<ListedChangedFiles>;
+  /** `readReviewRange` per worktree, valid for (HEAD, bookmark) while the bookmark is reachable. */
+  readonly #rangeCache: StateCache<ReviewRange>;
   /**
    * File origins (#33) per listed file array: `#gitFiles` hands out the same array while its
    * cache entry (worktree, scope, stateHash, base, attributes) is current, so the array's identity
@@ -603,6 +609,9 @@ export class DaemonCore {
     this.#gcIntervalMs = options.gcIntervalMs ?? CORE_DEFAULTS.gcIntervalMs;
     this.#reviewPolicy = options.reviewPolicy ?? null;
     this.#activity = options.activity ?? new ActivityStore();
+    const cacheSize = options.filesCacheSize ?? CORE_DEFAULTS.filesCacheSize;
+    this.#filesCache = new StateCache({ capacity: cacheSize });
+    this.#rangeCache = new StateCache({ capacity: cacheSize });
     const incremental = options.incremental ?? true;
     this.#incremental = incremental !== false;
     this.#reconcileMs = Math.max(
@@ -640,6 +649,11 @@ export class DaemonCore {
 
   get watcher(): WatcherService {
     return this.#watcher;
+  }
+
+  /** Hit / miss / in-flight-join counters and sizes of the state caches (#49; tests, the bench). */
+  cacheStats(): { files: CacheStats; ranges: CacheStats } {
+    return { files: this.#filesCache.stats(), ranges: this.#rangeCache.stats() };
   }
 
   #nowIso(): string {
@@ -802,7 +816,10 @@ export class DaemonCore {
     const id = entry.row.id;
     this.#projects.delete(id);
     this.#invalidateFiles(entry);
-    for (const worktreeId of entry.worktrees.keys()) this.#activity.forget(worktreeId);
+    for (const worktreeId of entry.worktrees.keys()) {
+      this.#activity.forget(worktreeId);
+      this.#rangeCache.invalidateGroup(worktreeId);
+    }
     if (options.exclude && entry.row.scanRootId && this.#scanRoots.has(entry.row.scanRootId)) {
       this.#store.addScanExclusion(entry.row.scanRootId, id, this.#nowIso());
     }
@@ -1058,6 +1075,7 @@ export class DaemonCore {
         removed.push(id);
         changed = true;
         this.#invalidateWorktreeFiles(id);
+        this.#rangeCache.invalidateGroup(id);
         this.#rememberRemoved(id);
         this.#activity.forget(id);
       }
@@ -1196,7 +1214,6 @@ export class DaemonCore {
       refresher: new Coalescer(() => this.#computeSummary(entry)),
       review: null,
       reviewRun: null,
-      rangeCache: null,
       firstHash: null,
       announcing: false,
       readyHeld: false,
@@ -1657,11 +1674,12 @@ export class DaemonCore {
     }
     let attrs: string | null = null;
     for (const scope of scopes) {
-      const cached = this.#filesCache.get(this.#filesKey(entry.worktree.id, scope));
-      if (!cached || cached.stateHash !== summary.stateHash) continue;
       attrs ??= await this.#attributesStamp(project);
-      if (cached.attrs !== attrs) continue;
-      return changedPathsOf(scope, cached.files);
+      const cached = this.#filesCache.peek(
+        this.#filesKey(entry.worktree.id, scope),
+        filesState(summary.stateHash, null, attrs),
+      );
+      if (cached) return changedPathsOf(scope, cached.files);
     }
     return undefined;
   }
@@ -1792,10 +1810,8 @@ export class DaemonCore {
 
   #invalidateWorktreeFiles(worktreeId: string): void {
     this.#treeListings.dropOlderStates(worktreeId, null);
-    const prefix = `${worktreeId}\u0000`;
-    for (const key of this.#filesCache.keys()) {
-      if (key.startsWith(prefix)) this.#filesCache.delete(key);
-    }
+    // Lookups still in flight are dropped with the entries: their results are never stored.
+    this.#filesCache.invalidatePrefix(`${worktreeId}\u0000`);
   }
 
   #invalidateFiles(project: ProjectEntry): void {
@@ -1893,20 +1909,6 @@ export class DaemonCore {
     const attrs = await this.#attributesStamp(project);
     const cacheable =
       isCacheableScope(scope) && stateHash !== null && (scope.kind !== 'branch' || base !== null);
-    if (cacheable) {
-      const cached = this.#filesCache.get(key);
-      if (
-        cached &&
-        cached.stateHash === stateHash &&
-        cached.base === base &&
-        cached.attrs === attrs
-      ) {
-        this.#filesCache.delete(key);
-        this.#filesCache.set(key, cached);
-        return { files: cached.files, summary, of: 'summary' };
-      }
-    }
-    const flightKey = `${key}\u0000${stateHash ?? ''}\u0000${base ?? ''}\u0000${attrs}`;
     // The list of the summary state this cache entry is for: git-core may update its last list
     // from the paths that changed since (#40), and says whether it did (Greptile on PR #95).
     const asked =
@@ -1916,20 +1918,25 @@ export class DaemonCore {
       ...(asked !== null ? { summaryState: asked } : {}),
     };
     const withState = this.#git.listChangedFilesWithState;
-    const listed = await this.#filesInflight.run(flightKey, want.signal, (signal) =>
-      (withState
-        ? withState.call(this.#git, this.#locator(entry), scope, {
-            ...listOptions,
-            ...callOptions(want, signal),
-          })
-        : this.#git
-            .listChangedFiles(this.#locator(entry), scope, {
+    // The cache entry (#49): `key` is the worktree and scope, the state is what the list is valid
+    // for. Requests for the same state share one run, cancelled only when every request waiting
+    // for it went away (#44); a run is stored only when it is the summary's list.
+    const { value: listed, hit } = await this.#filesCache.get(
+      key,
+      filesState(stateHash, base, attrs),
+      async (signal): Promise<Computed<ListedChangedFiles>> => {
+        const result = await (withState
+          ? withState.call(this.#git, this.#locator(entry), scope, {
               ...listOptions,
               ...callOptions(want, signal),
             })
-            // Without the report (older git-core, test doubles): the state asked for, as before.
-            .then((files): ListedChangedFiles => ({ files, summaryState: asked }))
-      ).then((result) => {
+          : this.#git
+              .listChangedFiles(this.#locator(entry), scope, {
+                ...listOptions,
+                ...callOptions(want, signal),
+              })
+              // Without the report (older git-core, test doubles): the state asked for, as before.
+              .then((files): ListedChangedFiles => ({ files, summaryState: asked })));
         const files = result.files;
         // Tracked files under ignored build directories make them watched (review F5).
         const tracked: string[] = [];
@@ -1941,23 +1948,17 @@ export class DaemonCore {
         if (tracked.length) this.#watcher.noteTrackedPaths(entry.worktree.id, tracked);
         // Cached under the summary's stateHash only when it is that summary's list: git-core
         // listed the state asked for (or nothing was asked: the kill switch, committed scopes).
-        if (
+        const store =
           cacheable &&
           stateHash !== null &&
           result.summaryState === asked &&
-          project.worktrees.get(entry.worktree.id) === entry
-        ) {
-          this.#filesCache.set(key, { stateHash, base, attrs, files });
-          while (this.#filesCache.size > CORE_DEFAULTS.filesCacheSize) {
-            const oldest = this.#filesCache.keys().next().value;
-            if (oldest === undefined) break;
-            this.#filesCache.delete(oldest);
-          }
-        }
-        return result;
-      }),
+          project.worktrees.get(entry.worktree.id) === entry;
+        return { value: result, store };
+      },
+      want.signal,
     );
-    if (listed.summaryState === asked) return { files: listed.files, summary, of: 'summary' };
+    if (hit || listed.summaryState === asked)
+      return { files: listed.files, summary, of: 'summary' };
     // git-core listed the worktree as it is now: no summary held here describes this list.
     return {
       files: listed.files,
@@ -2771,18 +2772,16 @@ export class DaemonCore {
     const projectId = project.row.id;
     const bk = bookmarkKey(entry.worktree);
     let bookmark = this.#store.getBookmark(projectId, bk);
-    const rangeKey = `${summary.headSha ?? ''}\u0000${bookmark ?? ''}`;
-    let range: ReviewRange;
-    if (entry.rangeCache?.key === rangeKey) {
-      range = entry.rangeCache.range;
-    } else {
-      range = await readRange.call(this.#git, this.#locator(entry), {
-        bookmark,
+    // A reachable bookmark's range depends only on HEAD and the bookmark (#49: cached per worktree).
+    const rangeBookmark = bookmark;
+    const rangeState = `${summary.headSha ?? ''}\u0000${rangeBookmark ?? ''}`;
+    const { value: range } = await this.#rangeCache.get(entry.worktree.id, rangeState, async () => {
+      const read = await readRange.call(this.#git, this.#locator(entry), {
+        bookmark: rangeBookmark,
         defaultBranch: this.#defaultBranch(project),
       });
-      // A reachable bookmark's range depends only on HEAD and the bookmark.
-      entry.rangeCache = range.bookmarkReachable ? { key: rangeKey, range } : null;
-    }
+      return { value: read, store: read.bookmarkReachable };
+    });
     const firstSight = bookmark === null;
     if (bookmark === null && range.initial !== null) {
       // First sight of this branch: start at HEAD (default branch) or the merge-base.

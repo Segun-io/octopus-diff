@@ -62,6 +62,8 @@ export interface DaemonInternals {
    * `OCTOPUS_DIFF_GIT_HELPER=0`, or `git.helper: false`) spawns git from the daemon process.
    */
   gitHelper?: boolean;
+  /** Max cached file lists (default 2000; `CoreOptions.filesCacheSize`). */
+  filesCacheSize?: number;
   /** Poll interval of the focused worktree when native watching is unavailable (default 5 s). */
   pollDegradedFocusedMs?: number;
   /** Replaces `@parcel/watcher`'s subscribe (simulate inotify failures). */
@@ -241,6 +243,7 @@ export const startDaemon = (async (options: DaemonOptions = {}): Promise<Daemon>
       : {}),
     ...(internal.now ? { now: internal.now } : {}),
     ...(internal.cwd ? { cwd: internal.cwd } : {}),
+    ...(internal.filesCacheSize !== undefined ? { filesCacheSize: internal.filesCacheSize } : {}),
     reviewPolicy: settings,
   });
   const reviewControls = new ReviewControls({
