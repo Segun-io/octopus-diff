@@ -115,7 +115,19 @@ async function main(): Promise<void> {
     const configFile = path.join(root, '.gitconfig');
     writeFileSync(
       configFile,
-      '[user]\n\tname = B\n\temail = b@example.com\n[core]\n\tautocrlf = false\n',
+      // AGENTS.md: the fixture's git config is isolated and explicit.
+      [
+        '[user]',
+        '\tname = Bench',
+        '\temail = bench@example.com',
+        '[init]',
+        '\tdefaultBranch = main',
+        '[commit]',
+        '\tgpgsign = false',
+        '[core]',
+        '\tautocrlf = false',
+        '',
+      ].join('\n'),
     );
     const env = { GIT_CONFIG_GLOBAL: configFile, GIT_CONFIG_NOSYSTEM: '1' };
     const repo = path.join(root, 'repo');
