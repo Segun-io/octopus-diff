@@ -8,6 +8,7 @@ import {
   createApiClient,
   type StartDaemon,
 } from '@octopus-diff/contracts';
+import { defaultHelperEntry, GitRunner, gitHelperDisabledByEnv } from '@octopus-diff/git-core';
 import { openBrowser } from './open-browser.js';
 import type { Env } from './paths.js';
 import { type ReadTextSync, readTextSync } from './platform.js';
@@ -28,6 +29,20 @@ export interface CommandResult {
 export type RunProgram = (command: string, args: string[]) => Promise<CommandResult>;
 
 export type PortProbe = 'free' | 'in_use' | 'denied' | 'error';
+
+/** What `doctor` learned about git-core's spawn helper (#45). */
+export interface GitHelperProbe {
+  /** on: git runs through the helper; off: turned off; broken: asked for but not working. */
+  state: 'on' | 'off' | 'broken';
+  detail: string;
+}
+
+/** Runs `git --version` through git-core's spawn helper, as the daemon would start it. */
+export type ProbeGitHelper = (options: {
+  gitBinary: string;
+  /** `git.helper` from the config file (default true). */
+  enabled: boolean;
+}) => Promise<GitHelperProbe>;
 
 /**
  * Everything the commands touch outside of the filesystem paths they are given. Tests replace
@@ -63,7 +78,41 @@ export interface CliDeps {
   now: () => Date;
   /** Max time to wait for `handle.close()` before giving up (ms). */
   shutdownTimeoutMs: number;
+  probeGitHelper: ProbeGitHelper;
 }
+
+/** The real `ProbeGitHelper`: a git-core runner with one helper, one `git --version`. */
+export const probeGitHelper: ProbeGitHelper = async ({ gitBinary, enabled }) => {
+  if (!enabled) return { state: 'off', detail: 'off ("git.helper": false in the config file)' };
+  if (gitHelperDisabledByEnv(process.env)) {
+    return { state: 'off', detail: 'off (OCTOPUS_DIFF_GIT_HELPER in the environment)' };
+  }
+  if (process.platform === 'win32') {
+    return { state: 'off', detail: 'not used on Windows: the daemon starts git itself' };
+  }
+  const entry = defaultHelperEntry();
+  if (!entry) {
+    return {
+      state: 'broken',
+      detail: 'git-helper.js is missing next to the CLI; the daemon starts git itself',
+    };
+  }
+  const runner = new GitRunner({ gitBinary, helper: { entry, processes: 1 } });
+  try {
+    const version = await runner.version();
+    if (!runner.usesHelper) {
+      return {
+        state: 'broken',
+        detail: `the helper (${entry}) did not start; the daemon starts git itself`,
+      };
+    }
+    return { state: 'on', detail: `${version} through ${entry}` };
+  } catch (error) {
+    return { state: 'broken', detail: `git --version through the helper failed: ${String(error)}` };
+  } finally {
+    await runner.dispose();
+  }
+};
 
 /** Tries to bind `host:port` and immediately releases it. */
 export function probePort(host: string, port: number): Promise<PortProbe> {
@@ -154,6 +203,7 @@ export function defaultDeps(): CliDeps {
     networkInterfaces,
     now: () => new Date(),
     shutdownTimeoutMs: 10_000,
+    probeGitHelper,
   };
 }
 

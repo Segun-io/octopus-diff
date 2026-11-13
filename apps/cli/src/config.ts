@@ -42,6 +42,11 @@ export const GitConfigSchema = z.strictObject({
   maxPatchBytes: z.number().int().positive().optional(),
   /** Max untracked files read per worktree for line counts / patch hashes. */
   maxUntrackedFiles: z.number().int().min(0).optional(),
+  /**
+   * Start git through a helper process so the daemon stays responsive (default true; not on
+   * Windows). `false` spawns git from the daemon itself, as does `OCTOPUS_DIFF_GIT_HELPER=0`.
+   */
+  helper: z.boolean().optional(),
 });
 
 /**

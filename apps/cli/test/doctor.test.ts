@@ -9,6 +9,7 @@ import {
   MIN_GIT_VERSION,
   parseGitVersion,
 } from '../src/commands/doctor.js';
+import { probeGitHelper } from '../src/deps.js';
 import type { ReadTextSync } from '../src/platform.js';
 import { detectWsl, isWindowsMountPath } from '../src/platform.js';
 import { writeRuntimeInfo } from '../src/runtime.js';
@@ -60,6 +61,7 @@ describe('doctor', () => {
       ['node', 'ok'],
       ['config', 'info'],
       ['git', 'ok'],
+      ['git-helper', 'ok'],
       ['platform', 'info'],
       ['inotify-watches', 'ok'],
       ['inotify-instances', 'ok'],
@@ -267,6 +269,52 @@ describe('doctor', () => {
     expect(text).toContain('FAIL  beta   broken');
     expect(text).toContain('fix: do this');
     expect(text).toContain('1 problem, 1 warning.');
+  });
+});
+
+describe('doctor: the git spawn helper (#45)', () => {
+  it('reports it on, off by config, broken, and skips it when git fails', async () => {
+    const asked: Array<{ gitBinary: string; enabled: boolean }> = [];
+    const deps = makeDeps(dirs, {
+      probeGitHelper: async (options) => {
+        asked.push(options);
+        return options.enabled
+          ? { state: 'broken', detail: 'the helper did not start' }
+          : { state: 'off', detail: 'off' };
+      },
+    });
+    const broken = byId(
+      await collectChecks({}, deps, { webRootCandidates: [webDir] }),
+      'git-helper',
+    );
+    expect(broken).toMatchObject({ status: 'warn', detail: 'the helper did not start' });
+    await writeConfig(dirs, { git: { gitBinary: '/opt/git/bin/git', helper: false } });
+    const off = byId(await collectChecks({}, deps, { webRootCandidates: [webDir] }), 'git-helper');
+    expect(off).toMatchObject({ status: 'info' });
+    expect(asked).toEqual([
+      { gitBinary: 'git', enabled: true },
+      { gitBinary: '/opt/git/bin/git', enabled: false },
+    ]);
+    const noGit = makeDeps(dirs, {
+      runProgram: async () => {
+        throw Object.assign(new Error('spawn git ENOENT'), { code: 'ENOENT' });
+      },
+    });
+    const checks = await collectChecks({}, noGit, { webRootCandidates: [webDir] });
+    expect(byId(checks, 'git-helper')).toBeUndefined();
+  });
+
+  it('the real probe runs git --version through a helper process', async () => {
+    const probe = await probeGitHelper({ gitBinary: 'git', enabled: true });
+    if (process.env.OCTOPUS_DIFF_GIT_HELPER === '0') {
+      expect(probe.state).toBe('off');
+      return;
+    }
+    expect(probe.state).toBe('on');
+    expect(probe.detail).toMatch(/^git version \d+\.\d+.* through .*git-helper\.(js|ts)$/);
+    expect(await probeGitHelper({ gitBinary: 'git', enabled: false })).toMatchObject({
+      state: 'off',
+    });
   });
 });
 
