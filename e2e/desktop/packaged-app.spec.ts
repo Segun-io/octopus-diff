@@ -369,6 +369,17 @@ test('killing the app leaves no daemon', async () => {
 
 test('asar integrity: a modified app.asar does not run (macOS, Windows)', async () => {
   test.setTimeout(180_000);
+  if (process.platform === 'linux') {
+    // Electron validates the asar on macOS and Windows only; on Linux the fuse is set (check-fuses)
+    // but the archive is not checked, so there is nothing to observe. (A copy of the installed .deb
+    // layout does not even start: `cp` drops the root-owned setuid chrome-sandbox, so the copy has no
+    // working sandbox: DECISIONS #529.)
+    test.info().annotations.push({
+      type: 'asar integrity',
+      description: 'linux: Electron does not validate the asar; not exercised',
+    });
+    return;
+  }
   // Copy the app (a .app bundle on macOS, the app directory elsewhere) and change one byte of
   // dist/main.js inside the copy's app.asar (a string literal: still valid JavaScript).
   const appRoot = IS_MAC ? dirname(dirname(dirname(app.executable))) : dirname(app.executable);
@@ -430,11 +441,6 @@ test('asar integrity: a modified app.asar does not run (macOS, Windows)', async 
     .slice(0, 3)
     .join(' | ')}`;
   test.info().annotations.push({ type: 'asar integrity', description });
-  if (process.platform === 'linux') {
-    // Electron validates the asar on macOS and Windows only; on Linux the fuse is set (check-fuses)
-    // but the archive is not checked. Recorded, not asserted.
-    return;
-  }
   expect(ran, `the tampered app must not run its main process (${description})`).toBe(false);
   expect(outcome.kind, description).toBe('exited');
   if (outcome.kind === 'exited') {

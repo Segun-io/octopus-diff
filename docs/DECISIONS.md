@@ -5911,3 +5911,8 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
        `LD_LIBRARY_PATH` or a temp copy); the git-core race test skips its race-specific checks silently when the old
        HEAD is observed (annotate it); the watcher child-process check `args.includes('watcher')` is loose (the
        `health.watcher.mode` check is the real one); the Windows refusal test cannot see stderr.
+529. **The tamper test is not exercised on Linux.** Its new positive control (the unmodified copy must start) failed in CI
+     on the installed `.deb` layout: copying `/opt/octopus-diff` drops the root-owned setuid `chrome-sandbox`, so the copy
+     has no working sandbox and does not start. That is no loss: Electron does not validate the asar on Linux, so the
+     test only ever recorded an outcome there. It now returns early on Linux (annotated) and runs, control included,
+     on macOS and Windows only.
