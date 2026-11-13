@@ -71,7 +71,7 @@ const EV_STDIN_CREDIT = 26;
 const STDIN_WINDOW = 256 * 1024;
 /**
  * fd 3: the pid channel. 8-byte records `u32 id | u32 pid`, pid 0 meaning "about to spawn",
- * written synchronously around `spawn()` so they reach the kernel before this process can do
+ * written synchronously around the call that starts git, so they reach the kernel before this process can do
  * anything else: a helper that dies at any point after spawning git has told the parent which
  * process group to kill (stdout frames may still be queued in this process when it dies).
  */
