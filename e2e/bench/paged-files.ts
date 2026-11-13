@@ -305,45 +305,74 @@ async function main() {
           );
         }, id);
         const page = await context.newPage();
+        page.on('pageerror', (error) => log(`page error: ${error.message}`));
         const firstRow = page.locator(
           `[data-testid="${TEST_IDS.fileItem}"][data-worktree-id="${id}"]`,
         );
+        const out = args.out ?? join(REPO_ROOT, 'docs', 'bench');
+        // On a timeout: what the page shows, for the log.
+        const waitRow = async (locator: typeof firstRow) => {
+          try {
+            await locator.first().waitFor({ timeout: 120_000 });
+          } catch (error) {
+            await mkdir(out, { recursive: true });
+            await page.screenshot({ path: join(out, 'paged-timeout.png') }).catch(() => {});
+            const state = await page
+              .evaluate(() => ({
+                ready: document.querySelector('[data-testid="app"]')?.getAttribute('data-ready'),
+                current: document
+                  .querySelector('[aria-current="true"][data-worktree-id]')
+                  ?.getAttribute('data-worktree-id'),
+                rows: document.querySelectorAll('[data-testid="file-item"]').length,
+              }))
+              .catch(() => null);
+            log(`timed out waiting for a file row: ${JSON.stringify(state)}`);
+            throw error;
+          }
+        };
         let t0 = performance.now();
         await page.goto(ready.authUrl);
-        await firstRow.first().waitFor({ timeout: 300_000 });
+        await waitRow(firstRow);
         const coldOpen = performance.now() - t0;
         // Warm: reload (the daemon has the list).
         t0 = performance.now();
         await page.reload();
-        await firstRow.first().waitFor({ timeout: 300_000 });
+        await waitRow(firstRow);
         const warmOpen = performance.now() - t0;
-        // From another worktree: click the many-changed row.
-        await page.evaluate((worktreeId: string) => {
-          localStorage.setItem(
-            'octopus-diff:prefs',
-            JSON.stringify({ version: 2, lastWorktree: worktreeId }),
+        // From another worktree: open it (its row), then click the many-changed row.
+        const rowOf = (worktreeId: string) =>
+          page.locator(
+            `[data-testid="${TEST_IDS.worktreeItem}"][data-worktree-id="${worktreeId}"]`,
           );
-        }, otherRow.worktree.id);
-        await context.clearCookies().catch(() => {});
-        await page.reload();
-        await page
-          .locator(
+        await rowOf(otherRow.worktree.id).first().click();
+        await waitRow(
+          page.locator(
             `[data-testid="${TEST_IDS.fileItem}"][data-worktree-id="${otherRow.worktree.id}"]`,
-          )
-          .first()
-          .waitFor({ timeout: 300_000 });
-        const sidebarRow = page.locator(
-          `[data-testid="${TEST_IDS.worktreeItem}"][data-worktree-id="${id}"]`,
+          ),
         );
+        const sidebarRow = rowOf(id);
         t0 = performance.now();
         await sidebarRow.first().click();
-        await firstRow.first().waitFor({ timeout: 300_000 });
+        await waitRow(firstRow);
         const switchOpen = performance.now() - t0;
         const mounted = await page.locator(`[data-testid="${TEST_IDS.fileItem}"]`).count();
         // One edit in the open worktree: the browser's /api/* traffic until it is quiet.
         const traffic: Array<{ at: number; path: string; bytes: number }> = [];
         const sizing: Promise<void>[] = [];
+        // Requests still running (a refetch can take seconds while the daemon lists 36k files).
+        let inflight = 0;
+        const isApi = (request: Request) => {
+          const path = new URL(request.url()).pathname;
+          return path.startsWith('/api/') && path !== '/api/events';
+        };
+        page.on('request', (request: Request) => {
+          if (isApi(request)) inflight++;
+        });
+        page.on('requestfailed', (request: Request) => {
+          if (isApi(request)) inflight--;
+        });
         page.on('requestfinished', (request: Request) => {
+          if (isApi(request)) inflight--;
           const url = new URL(request.url());
           if (!url.pathname.startsWith('/api/') || url.pathname === '/api/events') return;
           const at = Date.now();
@@ -353,28 +382,58 @@ async function main() {
               .then((sz) => {
                 traffic.push({
                   at,
-                  path: `${url.pathname}${url.search.includes('cursor') ? '?cursor' : ''}`,
+                  path: `${url.pathname}${[...url.searchParams]
+                    .filter(([k]) => k === 'limit' || k === 'cursor' || k === 'worktreeIds')
+                    .map(([k, v]) => (k === 'limit' ? `?limit=${v}` : `?${k}`))
+                    .join('')}`,
                   bytes: sz.responseBodySize + sz.responseHeadersSize,
                 });
               })
               .catch(() => {}),
           );
         });
-        await new Promise((r) => setTimeout(r, 1500));
+        // Quiet first: no request finished for 2 s (what the click caused is not the edit's).
+        const quiet = async (since: () => number, maxMs: number) => {
+          const deadline = Date.now() + maxMs;
+          let last = Date.now();
+          let count = -1;
+          while (Date.now() < deadline) {
+            if (traffic.length !== count || inflight > 0) {
+              count = traffic.length;
+              last = Date.now();
+            } else if (Date.now() - Math.max(last, since()) > 2000) return;
+            await new Promise((r) => setTimeout(r, 100));
+          }
+        };
+        await quiet(() => 0, 30_000);
         traffic.length = 0;
+        const before = (await client.listProjects()).projects
+          .flatMap((p) => p.worktrees)
+          .find((w) => w.worktree.id === id)?.summary?.stateHash;
+        // The edit's event: the daemon announces the worktree's new state.
+        let announcedAt = 0;
+        const announced = new Promise<void>((resolve) => {
+          const sub = client.subscribe({
+            onEvent: (event) => {
+              if (
+                event.type === 'worktree.changed' &&
+                event.worktreeId === id &&
+                event.stateHash !== before
+              ) {
+                announcedAt = Date.now();
+                sub.close();
+                resolve();
+              }
+            },
+          });
+        });
+        const editAt = Date.now();
         const edited = join(many?.path as string, largeFilePath(7));
         await appendFile(edited, '// bench edit\n');
-        // Quiet: no request finished for 2 s (at most 60 s).
-        const deadline = Date.now() + 60_000;
-        let last = Date.now();
-        let count = -1;
-        while (Date.now() < deadline) {
-          if (traffic.length !== count) {
-            count = traffic.length;
-            last = Date.now();
-          } else if (Date.now() - last > 2000 && count > 0) break;
-          await new Promise((r) => setTimeout(r, 100));
-        }
+        await Promise.race([announced, new Promise((r) => setTimeout(r, 60_000))]);
+        const sseMs = announcedAt ? announcedAt - editAt : null;
+        // Then until the browser is quiet again.
+        await quiet(() => announcedAt, 60_000);
         await Promise.all(sizing);
         const editBytes = traffic.reduce((s, t) => s + t.bytes, 0);
         ui = {
@@ -382,7 +441,11 @@ async function main() {
           warmOpenMs: Math.round(warmOpen),
           switchOpenMs: Math.round(switchOpen),
           mountedRows: mounted,
-          edit: { bytes: editBytes, requests: traffic.map((t) => `${t.path} ${t.bytes}`) },
+          edit: {
+            sseMs,
+            bytes: editBytes,
+            requests: traffic.map((t) => `${t.path} ${t.bytes}`),
+          },
         };
         log(
           `UI: open cold ${fmt(coldOpen)}, warm ${fmt(warmOpen)}, from another worktree ${fmt(switchOpen)}; one edit ${kib(editBytes)} in ${traffic.length} requests`,
@@ -458,7 +521,7 @@ function markdown(r: any): string {
       '',
       `- App opened on the worktree (navigation → first file row): cold ${fmt(r.ui.coldOpenMs)}, reload ${fmt(r.ui.warmOpenMs)}.`,
       `- Opened from another worktree (click on its row → first file row): ${fmt(r.ui.switchOpenMs)}; ${r.ui.mountedRows} rows mounted.`,
-      `- One edit in the open worktree: ${kib(r.ui.edit.bytes)} of \`/api/*\` traffic (${r.ui.edit.requests.length} requests: ${r.ui.edit.requests.join(', ') || 'none'}).`,
+      `- One edit in the open worktree: \`worktree.changed\` after ${fmt(r.ui.edit.sseMs)}, then ${kib(r.ui.edit.bytes)} of \`/api/*\` traffic on the wire (${r.ui.edit.requests.length} requests: ${r.ui.edit.requests.join(', ') || 'none'}).`,
     );
   }
   lines.push('', 'Re-run: `pnpm --filter @octopus-diff/e2e bench:paged`.', '');
