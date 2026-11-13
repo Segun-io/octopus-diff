@@ -4611,3 +4611,89 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
        with `ref` the *tree view* (that commit's tree only). An explicit `ref=HEAD` is the committed tree, so a
        client can ask for either without a second flag.
      - Tree cursors are not file cursors (another prefix, `t1`), so a cursor of one route can never page the other.
+396. **A directory is reached by walking tree objects; `ls-tree` is allowlisted for one object id only.** The issue
+     suggested `ls-tree <treeish> -- <dir>/`. Instead git-core resolves the commit (`HEAD` from the HEAD file, a full id
+     memoized, a branch or tag from the ref files, else `rev-parse --verify --end-of-options <ref>^{commit}`), its root
+     tree (`rev-parse <commit>^{tree}`, memoized), then lists one tree per path component with
+     `ls-tree -z -l <tree oid>` and looks the next component up by its raw bytes.
+     - **Why:** no path, pathspec or ref text ever reaches git's command line, so traversal, option injection,
+       non-UTF-8 names (argv cannot carry them from a JS string) and pathspec magic are out of the question by
+       construction. The cache key is the tree oid itself, which is what the issue asked to key by. A symlink
+       (`120000` blob) or a submodule (`160000` commit) ends the walk: neither is ever entered, inside or out of the
+       repository. `ls-tree` reads objects only; with a bare object id it never reads the index or the working tree.
+     - **Allowlist** (`runner/allowlist.ts`): `ls-tree` added with the options `-z`, `-l`/`--long` (sizes), `-r`
+       (`countTreeFiles`) and *exactly one* other argument, a full lowercase object id (40 or 64 hex). Everything
+       else, `--`/`--end-of-options` included, is refused, so the subcommand cannot take a path or a ref at all. No
+       stdin. Tested in `runner.test.ts`; the read-only proof (`readonly.test.ts`) lists every directory of HEAD.
+     - **Cost:** a cold directory at depth d costs d `ls-tree` runs (about 2.4 ms each on the 100k layout); an
+       explorer opens parents first, so in practice one run per newly opened directory.
+397. **Two caches: git-core keeps tree listings by (common dir, tree oid), the daemon keeps composed pages by state.**
+     - git-core (`TreeCache`, `tree.ts`): parsed entries (names as bytes, no paths, so an identical subtree at two paths
+       shares one entry), LRU bounded by an estimate of 64 MiB (name bytes + 160 per entry); a listing larger than the
+       bound is served, not kept. Single-flight per key (`Flight`: cancelled only when every waiter left, #44). File
+       counts (`countTreeFiles`) memoized per (common dir, tree oid), 20k entries. Every worktree of a project, every
+       branch and every commit that holds the same directory share one entry. The common dir in the key is not needed
+       for correctness (an object id names the same content everywhere) but keeps one repository's objects from being
+       answered for another's without that repository having resolved them itself.
+     - daemon (`#treeListings`, 64 entries): the composed listing and its cursor key, by (project, commit, directory)
+       for the tree view and (worktree, stateHash, HEAD, directory) for the working view, so a page or a repeat is a
+       slice, never a recomposition.
+398. **The working view's rules** (`apps/daemon/src/tree.ts`, `packages/contracts/src/tree.ts`; differential test
+     against `git status` in `apps/daemon/test/tree.real-git.test.ts`).
+     - The overlay is the `working` file list the daemon already holds for the summary's state (`#gitFilesAt`): warm,
+       a listing costs no git process. HEAD is the summary's `headSha` (a full id: no ref lookup).
+     - A changed path carries the list's `status`, `staged`, `unstaged` (and `oldPath` for renames and copies). The
+       old path of a rename is listed as `deleted` with `renamedTo`. A deleted tracked file stays listed.
+     - Paths only in the working copy are listed (`oid: null`; kind from the new mode). A new directory is
+       `untracked` when everything below it is untracked, else `added`.
+     - A HEAD directory is `deleted` when nothing below it exists any more: no live change below and its file count
+       (`countTreeFiles`, one `ls-tree -r`, memoized) equals the deletions below. Asked only for such directories.
+     - `changes` on a directory counts the changed paths below (a rename's two paths, omitted untracked files).
+     - Untracked files omitted above the cap (#43): the summary's omitted directories are listed (`status:
+       'untracked'` when not in HEAD) with `untrackedOmitted`. Their files are not listed (no list holds them); single
+       omitted files outside those directories are not listed either.
+     - **Ignored files are not shown** (neither `ls-tree` nor the list holds them). Tracked files that match an ignore
+       rule are listed like every tracked file. A future "show ignored" would need an `ls-files --others --ignored
+       --directory` read per directory; not built.
+     - **Sparse checkout: documented, not refused.** HEAD's whole tree is listed; paths outside the cone look
+       unchanged (git status says nothing about them either). Flagging them would need `ls-files -t`; not built.
+     - Case: names are compared as bytes, as git does; `A.txt` and `a.txt` in one tree are two entries. On a
+       case-folding file system a case-only rename on disk is whatever git status says (usually nothing).
+     - An untracked nested repository appears as an untracked file-like entry (the list has no mode for it).
+399. **Conflicts the working list leaves out come from the summary's snapshot.** git-core's `working` list holds diffs
+     against HEAD, so a conflicted path whose working-tree content equals HEAD (`UD`, "deleted by them", kept as ours)
+     is not in it. Found by the differential test. git-core's list is unchanged (its consumers and patch hashes depend
+     on it); the daemon keeps the unmerged paths of the latest snapshot (`TreeBasis.conflicts`, only when the snapshot
+     was not cut) and lays them over as `conflicted` when the listing is of the same `stateHash`.
+400. **Directory deltas come from consecutive summary snapshots, no git process** (`treeBasis` / `treeDelta`).
+     Per path the inputs of its working-view row are compared: the status letters, the rename source, and for `A`,
+     `D`, `R`, `C` paths the content signature (a content edit can re-pair renames under `--find-renames`). A content
+     edit of a modified file moves nothing. `dirs` names every ancestor of a path that moved (the root included) and
+     every omitted directory that appeared, went or changed count (itself included). `all: true` when HEAD moved, a
+     snapshot was cut by its entry cap (2000 by default), or above 100 directories / 8000 characters. Absent when the
+     daemon has no previous snapshot (first summary, after an error): a client refreshes everything then. The list is
+     a superset: a named directory may list the same entries again.
+401. **Route errors:** a directory not in HEAD and not in the overlay is 404 `not_found` ("no such directory"); an
+     unknown ref is 404; a path that is a file, symlink or submodule is 400 "not a directory (a symlink)"; a malformed
+     path or ref is 400 (schema). An unborn branch lists an empty root. A bare repository answers the tree view of
+     `HEAD` without `ref`. A git-core without `listTree` answers 501.
+402. **Web data layer (`apps/web/src/api/tree.ts`).** One query per open directory,
+     `['tree', worktreeId, ref ?? '', rawPath ?? path]`, holding the loaded prefix (the #42 pattern: a refresh asks for
+     the loaded count, a `restarted` page starts over). Working-view queries never go stale by time; tree views of a
+     full commit id never do; of a branch or `HEAD`, after 30 s. `worktree.changed.dirs` of *every* event of a batch
+     is accumulated (`collectTreeDirs`; the batch's delta map keeps only the latest event per worktree, which would
+     lose an earlier event's directories) and invalidates exactly those working-view queries; `all` or no `dirs`
+     invalidates the worktree's whole working view. No pane uses it yet (the issue asked for no new pane).
+403. **`@pierre/trees` 1.0.0-beta.6 holds 100k paths; the explorer still loads directories lazily.** Measured with
+     `pnpm --filter @octopus-diff/web perf:tree` (headless Chromium, 5 runs, `docs/bench/results-tree-render.json`):
+     all 100k paths open paint in 133 ms (p95 134; 67 ms with `preparePresortedFileTreeInput`), scroll frame p95
+     17.2 ms (60 Hz, no long task), 48 rows mounted; the lazy design paints its root in 33 ms (two frames) and adds an
+     opened directory in 0.2 ms of script (p95 0.4) before its next frame. Both meet the budget (300 ms, 20 ms). Lazy
+     stays the design because the cost is elsewhere: the full path list is 5.3 MB of JSON, a `ls-tree -r` of 46 ms and
+     a status overlay over 100k rows, against 0.8-4.7 KB and about 1 ms per opened directory. A "find any file" search
+     should be a daemon-side query (like `GET /files?q=`), not a client-side 100k list.
+404. **No long-lived `git cat-file --batch`.** The explorer reads no blob content; listings are `ls-tree` runs, about
+     2.4 ms each cold and none warm (the cache). A batch process would save about 2 ms per *cold* object read (the
+     future file preview), would need stdin allowlisted for `cat-file` and its own lifecycle next to the spawn
+     helper's supervision (#45, being reworked by the Effect session). Not worth it until a content view shows reads
+     dominating; revisit with the preview.

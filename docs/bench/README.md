@@ -108,6 +108,22 @@ edit in it (from the edit's `worktree.changed` until no request is in flight for
 `--files` / `--changed` resize the layout. The `large-paged` layout also runs under the main bench
 (`bench --layout large-paged`), which adds the summary-by-role table for the new worktree.
 
+## File explorer listings (issue #9, `bench:tree` and `perf:tree`)
+
+`pnpm --filter @octopus-diff/e2e bench:tree` (`e2e/bench/tree.ts`, about 1.5 minutes, needs `pnpm build`) generates the
+`large` layout (100k tracked files, three worktrees) and runs the built daemon in a child process. Per worktree it
+measures `GET /tree` for the root (the worktree's first request: it pays the `working` list), a middle directory and a
+leaf (first listing, then 30 warm repeats: p50 / p95, the daemon's CPU per request) and the tree view (`ref=HEAD`). In
+process it times git-core's `ls-tree` of the root and `ls-tree -r` of the root, and it walks every directory of HEAD
+once (requests, bytes, time). Report only; written to `results-tree.{json,md}`.
+
+`pnpm --filter @octopus-diff/web perf:tree` (`apps/web/scripts/tree-perf.ts`) builds a dev-only page
+(`apps/web/scripts/tree-perf/`, never part of the app) and renders `@pierre/trees` in headless Chromium with the same
+100k paths: all at once (closed, open, open with prepared input, open with 300 git statuses) and lazily (the root, then
+200 directories opened one by one). It reports time to paint, scroll frame times and long tasks, and fails only on
+structural checks (virtualisation, page errors). `TREE_PERF_SMOKE=1` runs once with 20k paths; `TREE_PERF_OUT=<file>`
+writes the JSON (the committed run is `results-tree-render.json`).
+
 ## How the large layout is built
 
 `tools/fixtures/src/large.ts`: `git fast-import` for the history (100k files in seconds), two linked worktrees,
