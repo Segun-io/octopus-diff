@@ -191,10 +191,17 @@ The daemon (WS2) and git-core (WS1) need **no changes**.
 - The daemon keeps its token, loopback bind, Host/Origin checks and CSP (`apps/web/scripts/csp-check.ts`). The
   app adds no API surface.
 - Electron fuses (`@electron/fuses`, set by electron-builder): **`RunAsNode` stays on**, because the backend and the
-  CLI shim need it (same as T3 Code and VS Code). That means anyone who can run the app binary can run Node with it,
-  which is no more than having Node installed. Everything else is hardened: `EnableNodeOptionsEnvironmentVariable` off,
+  CLI shim need it (same as T3 Code and VS Code). That means anyone who can run the app binary can run Node with it. On Linux and Windows
+  that is no more than having Node installed; **on macOS it is more**: such a process runs as the app and inherits
+  any privacy permission the user granted it (Documents, removable volumes, Full Disk Access). Phase E decides
+  whether to keep it (accept) or move the backend to a `utilityProcess` or a helper binary so the fuse can go off
+  there (PR #109 review, DECISIONS #528). Everything else is hardened: `EnableNodeOptionsEnvironmentVariable` off,
   `EnableNodeCliInspectArguments` off, `EnableCookieEncryption` on, `OnlyLoadAppFromAsar` on,
   `EnableEmbeddedAsarIntegrityValidation` on.
+- **The AppImage and Chromium's OS sandbox.** The AppImage's menu entry has no `--no-sandbox` (CI checks it). Its
+  `AppRun` launcher still adds the flag itself when unprivileged user namespaces are unavailable (Ubuntu 23.10+ by
+  default); the renderer is still sandboxed from Node (`sandbox: true`), the app logs a warning, and the `.deb`
+  (a setuid `chrome-sandbox` and an AppArmor profile) is the recommended install there.
 - The ready line and the shim never put the token on a command line or in a log (tokens on argv show up in `ps`).
 - No remote content, no auto-download of anything except (later) signed updates.
 

@@ -126,6 +126,14 @@ const primary = app.requestSingleInstanceLock();
 if (!primary) app.exit(0);
 
 const log = primary ? openLogFile(app.getPath('logs')) : noLogFile();
+if (primary && app.isPackaged && app.commandLine.hasSwitch('no-sandbox')) {
+  // The AppImage's AppRun adds this itself when unprivileged user namespaces are unavailable
+  // (Ubuntu 23.10+ by default); say so, once, where a bug report will have it (PR #109 review).
+  log.note(
+    "WARNING: running without Chromium's OS sandbox (--no-sandbox); the renderer is still " +
+      'sandboxed from Node. Prefer the .deb on systems that restrict user namespaces.',
+  );
+}
 if (primary) {
   app.on('second-instance', () => focusWindow());
   void app.whenReady().then(main);

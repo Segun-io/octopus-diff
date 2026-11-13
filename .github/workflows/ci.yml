@@ -238,6 +238,13 @@ jobs:
           mkdir -p "$RUNNER_TEMP/appimage"
           (cd "$RUNNER_TEMP/appimage" && "$GITHUB_WORKSPACE/$appimage" --appimage-extract > /dev/null)
           test -x "$RUNNER_TEMP/appimage/squashfs-root/octopus-diff-desktop"
+          # The AppImage's menu entry must not launch the app without Chromium's sandbox
+          # (electron-builder adds `--no-sandbox` to Exec= unless executableArgs is set).
+          if grep -q -e '--no-sandbox' "$RUNNER_TEMP"/appimage/squashfs-root/*.desktop; then
+            echo "the AppImage desktop entry passes --no-sandbox:" >&2
+            grep '^Exec=' "$RUNNER_TEMP"/appimage/squashfs-root/*.desktop >&2
+            exit 1
+          fi
           OCTOPUS_DESKTOP_APP="$RUNNER_TEMP/appimage/squashfs-root" xvfb-run -a pnpm --filter @octopus-diff/e2e test:e2e:desktop
       - name: Packaged-app smoke (macOS)
         if: matrix.os == 'mac'

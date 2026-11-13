@@ -378,6 +378,28 @@ test('asar integrity: a modified app.asar does not run (macOS, Windows)', async 
   const relExe = app.executable.slice(appRoot.length);
   const relAsar = join(app.resources, 'app.asar').slice(appRoot.length);
   const asarPath = join(copyRoot, relAsar);
+  const copied: PackagedApp = {
+    executable: join(copyRoot, relExe),
+    resources: join(copyRoot, app.resources.slice(appRoot.length)),
+    cliEntry: '',
+  };
+  // Positive control: the UNMODIFIED copy must start. Otherwise a copy that the file copy itself
+  // broke (framework symlinks, extended attributes, an install directory) would make the tamper
+  // check below pass for the wrong reason (PR #109 review).
+  {
+    const controlDirs = appDirs(root, 'control');
+    const control = launchApp(copied, controlDirs, env);
+    track(control.child.pid);
+    try {
+      await waitReady(controlDirs);
+    } finally {
+      if (alive(control.child.pid ?? 0)) control.child.kill('SIGKILL');
+      await control.exited;
+      const info = daemonInfo(controlDirs);
+      if (info) track(info.pid);
+      await until(() => !info || !alive(info.pid), 20_000, 'the control daemon to exit');
+    }
+  }
   const asar = readFileSync(asarPath);
   const dataStart = 8 + asar.readUInt32LE(4);
   const at = asar.indexOf('blocked a navigation to', dataStart, 'utf8');
@@ -385,11 +407,7 @@ test('asar integrity: a modified app.asar does not run (macOS, Windows)', async 
   asar[at] = 'B'.charCodeAt(0);
   writeFileSync(asarPath, asar);
 
-  const tampered: PackagedApp = {
-    executable: join(copyRoot, relExe),
-    resources: join(copyRoot, app.resources.slice(appRoot.length)),
-    cliEntry: '',
-  };
+  const tampered = copied;
   const dirs = appDirs(root, 'tampered');
   const run = launchApp(tampered, dirs, env);
   track(run.child.pid);

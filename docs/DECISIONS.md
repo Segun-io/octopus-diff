@@ -5884,3 +5884,30 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      FSEvents (slow on macOS) reported the same `a.txt` write as its own refresh of that path, so the fired list was
      `[null, ['a.txt']]`. The first fire must be `null`, any later one must be exactly `['a.txt']`, and the git and
      focus steps look for their own reason instead of the first fire. Test-only change in the daemon.
+
+### Desktop phase B: independent review of PR #109 (2026-11-13; Greptile's credits had run out)
+
+528. **Review findings.** No P1.
+     - **P2-1 fixed: the AppImage launched without Chromium's sandbox by default.** electron-builder's AppImage desktop
+       entry says `Exec=AppRun --no-sandbox` unless `executableArgs` is set; menu launches and integration tools reuse
+       it. `appImage: { executableArgs: [] }` removes it (the rebuilt AppImage's entry is `Exec=AppRun %U`), and CI
+       greps the extracted `.desktop` for `--no-sandbox`. The `AppRun` launcher still adds the flag itself when
+       unprivileged user namespaces are unavailable (Ubuntu 23.10+ default): the app now logs a warning when it runs
+       with `--no-sandbox`, and DESKTOP §5 says to prefer the `.deb` there (a CI launch through `AppRun` with the
+       default sysctl stays a follow-up).
+     - **P2-2 fixed: the tamper test had no positive control.** The unmodified copy of the app must now start before
+       the copy is tampered with, so a copy the file copy broke cannot make the integrity check pass for the wrong
+       reason.
+     - **P2-4 documented: `RunAsNode` on macOS** lets any local process run as the app and inherit its privacy
+       permissions. DESKTOP §5 no longer says it is "no more than having Node installed"; phase E decides (accept, or a
+       `utilityProcess` / helper binary so the fuse can go off).
+     - **Follow-ups, not in this PR.** P2-3: the stage's `npm install` resolves the watcher's small JS dependencies
+       (`picomatch`, `detect-libc`, `is-glob`, `is-extglob`) from the registry at package time, outside the lockfile and
+       the release-age policy (same versions today; #511 accepted it); assert the staged versions equal the pnpm ones or
+       generate a lock from `pnpm-lock.yaml`. P3: the asar integrity data may not cover the unpacked files
+       (`git-helper.js`, the watcher addon): extend the tamper test to change `git-helper.js` and record the outcome, and
+       note that with ad-hoc signing anyone who can write the bundle can re-sign, so integrity matters only once phase E
+       signs for real; `linkDevMachineChromiumLibs` writes symlinks into `release/linux-unpacked` (use
+       `LD_LIBRARY_PATH` or a temp copy); the git-core race test skips its race-specific checks silently when the old
+       HEAD is observed (annotate it); the watcher child-process check `args.includes('watcher')` is loose (the
+       `health.watcher.mode` check is the real one); the Windows refusal test cannot see stderr.

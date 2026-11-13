@@ -78,6 +78,14 @@ linux:
   maintainer: octopus-diff contributors <noreply@octopus-diff.invalid>
   vendor: octopus-diff
 
+# electron-builder's AppImage desktop entry says `Exec=AppRun --no-sandbox` unless executableArgs is
+# set: every launch from a menu or an integration tool would run without Chromium's OS sandbox
+# (PR #109 review, DECISIONS #528). An empty list removes it. The AppRun launcher still adds the flag
+# itself when unprivileged user namespaces are unavailable (Ubuntu 23.10+ by default); the app logs
+# that, and the deb (a setuid chrome-sandbox) is the recommended install there.
+appImage:
+  executableArgs: []
+
 mac:
   target:
     - dmg
