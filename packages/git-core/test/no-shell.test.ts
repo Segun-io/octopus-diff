@@ -31,14 +31,32 @@ describe('process spawning hygiene', () => {
     }
   });
 
-  it('spawns processes only in the runner, and only with spawn', () => {
+  it('spawns processes only in the runner and its spawn helper, and only with spawn', () => {
     const importers = files.filter((file) =>
       readFileSync(file, 'utf8').includes('node:child_process'),
     );
-    expect(importers.map((file) => path.relative(SRC, file))).toEqual([
+    expect(importers.map((file) => path.relative(SRC, file)).sort()).toEqual([
+      path.join('runner', 'git-helper.ts'),
+      path.join('runner', 'helper-client.ts'),
       path.join('runner', 'runner.ts'),
     ]);
-    const runner = readFileSync(path.join(SRC, 'runner', 'runner.ts'), 'utf8');
-    expect(runner).toMatch(/import \{ type ChildProcess, spawn \} from 'node:child_process';/);
+    const read = (name: string) => readFileSync(path.join(SRC, 'runner', name), 'utf8');
+    const spawnCalls = (text: string) => text.match(/(?<![.\w])spawn\(\s*[^,]+,/g) ?? [];
+    expect(read('runner.ts')).toMatch(
+      /import \{ type ChildProcess, spawn \} from 'node:child_process';/,
+    );
+    // The runner spawns the resolved git binary (direct path, the helper's kill switch).
+    expect(spawnCalls(read('runner.ts'))).toEqual(['spawn(binary,']);
+    // The client starts only the helper entry, with Node.
+    expect(spawnCalls(read('helper-client.ts'))).toEqual([
+      'spawn(\n      options.execPath ?? process.execPath,',
+    ]);
+    // The helper runs only the git binary it was started with, never one from a message.
+    expect(spawnCalls(read('git-helper.ts'))).toEqual(['spawn(GIT,']);
+    for (const name of ['git-helper.ts', 'helper-client.ts']) {
+      expect(read(name)).toMatch(
+        /import \{ type ChildProcess, spawn \} from 'node:child_process';/,
+      );
+    }
   });
 });

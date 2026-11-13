@@ -1,11 +1,25 @@
 import { type ChildProcess, spawn } from 'node:child_process';
 import { accessSync, constants, existsSync, statSync } from 'node:fs';
 import path from 'node:path';
-import { GitCoreError, type GitPriority, type Logger, noopLogger } from '@octopus-diff/contracts';
+import {
+  GitCoreError,
+  type GitHelperOptions,
+  type GitPriority,
+  type Logger,
+  noopLogger,
+} from '@octopus-diff/contracts';
 import { assertAllowedGitArgs, assertStdinAllowed, DIFF_FAMILY } from './allowlist.js';
 import { abortedError, currentCall } from './call-context.js';
 import { CONFIG_PIN_ARGS } from './config-pins.js';
 import { buildGitEnv, withConfigEnv } from './env.js';
+import {
+  defaultHelperEntry,
+  HELPER_MAX_REQUEST_FRAME,
+  HelperPool,
+  type HelperSpawnRequest,
+  type ProcHandle,
+  type ProcHandlers,
+} from './helper-client.js';
 
 export interface GitRunnerOptions {
   gitBinary?: string;
@@ -17,6 +31,40 @@ export interface GitRunnerOptions {
   logger?: Logger;
   /** `core.bigFileThreshold` pinned on every call (default: max(maxOutputBytes, 1 MiB)). */
   bigFileThreshold?: number;
+  /**
+   * Start git through the spawn helper (#45): `true` (the default, except on Windows), `false`
+   * for the direct path, or the helper's settings. `OCTOPUS_DIFF_GIT_HELPER=0` turns it off
+   * whatever this says.
+   */
+  helper?: boolean | GitHelperOptions;
+}
+
+/** Off when `OCTOPUS_DIFF_GIT_HELPER` is `0`, `false`, `no` or `off`. */
+export function gitHelperDisabledByEnv(env: NodeJS.ProcessEnv = process.env): boolean {
+  return /^(0|false|no|off)$/i.test(env.OCTOPUS_DIFF_GIT_HELPER?.trim() ?? '');
+}
+
+interface HelperConfig {
+  entry: string;
+  processes: number;
+  execPath: string | undefined;
+}
+
+function helperConfig(option: GitRunnerOptions['helper'], logger: Logger): HelperConfig | null {
+  if (option === false || gitHelperDisabledByEnv()) return null;
+  // Windows keeps the direct path: no process groups to kill there (see docs/reports/spawn-helper.md).
+  if (process.platform === 'win32') return null;
+  const settings = typeof option === 'object' ? option : {};
+  const entry = settings.entry ?? defaultHelperEntry();
+  if (!entry) {
+    logger.warn('git helper entry not found; spawning git directly');
+    return null;
+  }
+  return {
+    entry,
+    processes: Math.min(4, Math.max(1, Math.floor(settings.processes ?? 1))),
+    execPath: settings.execPath,
+  };
 }
 
 export interface GitRunOptions {
@@ -317,9 +365,11 @@ export class GitRunner {
   private readonly env: Record<string, string>;
   private readonly logger: Logger;
   private readonly scheduler: LaneScheduler;
-  private readonly children = new Map<ChildProcess, (error: GitCoreError) => void>();
+  private readonly children = new Map<ProcHandle, (error: GitCoreError) => void>();
   private disposed = false;
   private resolvedBinary: string | null = null;
+  private readonly helper: HelperConfig | null;
+  private pool: HelperPool | null = null;
 
   constructor(options: GitRunnerOptions = {}) {
     this.gitBinary = options.gitBinary ?? 'git';
@@ -332,6 +382,7 @@ export class GitRunner {
     // twice this size while it is streamed and hashed (`core.bigFileThreshold`).
     const threshold = options.bigFileThreshold ?? defaultBigFileThreshold(this.maxOutputBytes);
     this.extraPins = ['-c', `core.bigFileThreshold=${Math.floor(threshold)}`];
+    this.helper = helperConfig(options.helper, this.logger);
   }
 
   private readonly extraPins: readonly string[];
@@ -399,12 +450,15 @@ export class GitRunner {
     this.disposed = true;
     this.scheduler.rejectAll(disposedError());
     for (const fail of [...this.children.values()]) fail(disposedError());
+    // The helpers SIGKILL whatever is still running and exit (no orphans).
+    await this.pool?.close();
   }
 
   private execute(
     argv: string[],
     args: string[],
     options: GitRunOptions & { okExitCodes: readonly number[] },
+    attempt = 0,
   ): Promise<GitRunResult> {
     if (this.disposed) return Promise.reject(disposedError());
     const { cwd } = options;
@@ -421,7 +475,7 @@ export class GitRunner {
       const stderrChunks: Buffer[] = [];
       let stderrBytes = 0;
 
-      let child: ChildProcess;
+      let proc: ProcHandle;
       let binary: string;
       const { signal } = options;
       // The scheduler already refuses aborted jobs; this keeps `execute` safe on its own.
@@ -435,69 +489,136 @@ export class GitRunner {
         reject(error);
         return;
       }
+
+      let exited = false;
+      let aborting = false;
+      let retrying = false;
+      const handlers: ProcHandlers = {
+        exit: () => {
+          exited = true;
+          // An aborted run settles once its process is gone (its slot stays taken until then). The
+          // forced cleanup of its process group (`onAbort`) stays armed: a filter or hook that
+          // ignored SIGTERM may outlive git.
+          if (aborting && failure) finish(failure);
+        },
+        stdout: (chunk: Buffer) => {
+          if (failure) return;
+          stdoutBytes += chunk.length;
+          if (options.onStdout) {
+            try {
+              options.onStdout(chunk);
+            } catch (error) {
+              fail(
+                error instanceof GitCoreError
+                  ? error
+                  : new GitCoreError(
+                      'git_failed',
+                      `processing git output failed: ${String(error)}`,
+                      { args, cwd },
+                    ),
+              );
+            }
+            return;
+          }
+          if (stdoutBytes > maxOutputBytes) {
+            fail(tooLargeError(args, cwd, maxOutputBytes));
+            return;
+          }
+          stdoutChunks.push(chunk);
+        },
+        stderr: (chunk: Buffer) => {
+          if (stderrBytes >= STDERR_CAP) return;
+          stderrChunks.push(chunk);
+          stderrBytes += chunk.length;
+        },
+        error: (error) => {
+          finish(spawnError(error, this.gitBinary, args, cwd));
+        },
+        tooLarge: () => {
+          if (!failure) fail(tooLargeError(args, cwd, maxOutputBytes));
+        },
+        lost: (reason) => {
+          // The helper died (or refused the request): the process is gone, its group killed.
+          exited = true;
+          if (failure) {
+            finish(failure);
+            return;
+          }
+          // Once (#45): a read-only command can run again, unless streamed output already went out.
+          if (attempt === 0 && (!options.onStdout || stdoutBytes === 0)) {
+            this.logger.debug('git retried', { args, cwd, reason });
+            retrying = true;
+            finish(null);
+            this.execute(argv, args, options, attempt + 1).then(resolve, reject);
+            return;
+          }
+          fail(
+            new GitCoreError('git_failed', `git ${args[0] ?? ''} failed: ${reason}`, {
+              args,
+              cwd,
+              helper: 'lost',
+            }),
+          );
+        },
+        close: (code, closeSignal) => {
+          if (failure) {
+            finish(failure);
+            return;
+          }
+          const stderr = Buffer.concat(stderrChunks).toString('utf8').slice(0, STDERR_CAP);
+          if (code === null || !options.okExitCodes.includes(code)) {
+            finish(classifyFailure(args, cwd, code, closeSignal, stderr));
+            return;
+          }
+          finish(null, { exitCode: code, stdout: Buffer.concat(stdoutChunks), stderr, args });
+        },
+      };
+
       try {
         options.onSpawn?.();
-        child = spawn(binary, argv, {
+        proc = this.spawnProcess(binary, argv, {
           cwd,
           env,
-          stdio: [options.input ? 'pipe' : 'ignore', 'pipe', 'pipe'],
-          windowsHide: true,
-          // Own process group on POSIX, so a timeout kills git's children too.
-          detached: USE_PROCESS_GROUP,
+          input: options.input,
+          maxOutputBytes: options.onStdout ? null : maxOutputBytes,
+          handlers,
         });
       } catch (error) {
         reject(spawnError(error, this.gitBinary, args, cwd));
         return;
       }
 
-      let exited = false;
-      let aborting = false;
-      child.once('exit', () => {
-        exited = true;
-        // An aborted run settles once its process is gone (its slot stays taken until then). The
-        // forced cleanup of its process group (`onAbort`) stays armed: a filter or hook that
-        // ignored SIGTERM may outlive git.
-        if (aborting && failure) finish(failure);
-      });
-
       const fail = (error: GitCoreError): void => {
         if (failure) {
           // Already stopping (an abort's grace period): a timeout or dispose escalates.
-          if (!exited) killTree(child);
+          if (!exited) proc.kill();
           return;
         }
         failure = error;
-        killTree(child);
+        proc.kill();
         // Settle now: a grandchild may keep the pipes (and so 'close') open.
-        child.stdout?.destroy();
-        child.stderr?.destroy();
+        proc.detach();
         finish(error);
       };
-      this.children.set(child, fail);
+      this.children.set(proc, fail);
       const onAbort = (): void => {
         if (failure) return;
         failure = abortedError({ args, cwd });
         aborting = true;
-        child.stdout?.destroy();
-        child.stderr?.destroy();
+        proc.detach();
         if (exited) {
           finish(failure);
           return;
         }
-        killTree(child, 'SIGTERM');
+        proc.kill('SIGTERM');
         // SIGKILL for the whole group after the grace period, also when git itself exited on the
         // SIGTERM: helpers that ignore it (a trusted filter) must not outlive the request. Not
         // cleared by `finish` or the exit; unref'd so it never holds the process open. A group that
         // is already gone makes the kill a no-op.
-        const forced = setTimeout(() => killTree(child), ABORT_GRACE_MS);
+        const forced = setTimeout(() => proc.kill(), ABORT_GRACE_MS);
         forced.unref();
       };
       signal?.addEventListener('abort', onAbort, { once: true });
-      if (options.input && child.stdin) {
-        // git may exit before reading everything (e.g. on an error): ignore EPIPE.
-        child.stdin.on('error', () => {});
-        child.stdin.end(options.input);
-      }
 
       const timer = setTimeout(() => {
         fail(
@@ -513,7 +634,8 @@ export class GitRunner {
         settled = true;
         clearTimeout(timer);
         signal?.removeEventListener('abort', onAbort);
-        this.children.delete(child);
+        this.children.delete(proc);
+        if (retrying) return;
         const elapsed = Math.round(performance.now() - startedAt);
         if (error) {
           this.logger.debug('git failed', { args, cwd, code: error.code, ms: elapsed });
@@ -523,62 +645,123 @@ export class GitRunner {
           resolve(result);
         }
       };
-
-      child.stdout?.on('data', (chunk: Buffer) => {
-        if (failure) return;
-        stdoutBytes += chunk.length;
-        if (options.onStdout) {
-          try {
-            options.onStdout(chunk);
-          } catch (error) {
-            fail(
-              error instanceof GitCoreError
-                ? error
-                : new GitCoreError('git_failed', `processing git output failed: ${String(error)}`, {
-                    args,
-                    cwd,
-                  }),
-            );
-          }
-          return;
-        }
-        if (stdoutBytes > maxOutputBytes) {
-          fail(
-            new GitCoreError(
-              'output_too_large',
-              `git ${args[0]} produced more than ${maxOutputBytes} bytes`,
-              { args, cwd, maxOutputBytes },
-            ),
-          );
-          return;
-        }
-        stdoutChunks.push(chunk);
-      });
-
-      child.stderr?.on('data', (chunk: Buffer) => {
-        if (stderrBytes >= STDERR_CAP) return;
-        stderrChunks.push(chunk);
-        stderrBytes += chunk.length;
-      });
-
-      child.on('error', (error) => {
-        finish(spawnError(error, this.gitBinary, args, cwd));
-      });
-
-      child.on('close', (code, signal) => {
-        if (failure) {
-          finish(failure);
-          return;
-        }
-        const stderr = Buffer.concat(stderrChunks).toString('utf8').slice(0, STDERR_CAP);
-        if (code === null || !options.okExitCodes.includes(code)) {
-          finish(classifyFailure(args, cwd, code, signal, stderr));
-          return;
-        }
-        finish(null, { exitCode: code, stdout: Buffer.concat(stdoutChunks), stderr, args });
-      });
     });
   }
+
+  /** Starts git through the helper pool when it is on, else directly (`spawn` may throw). */
+  private spawnProcess(
+    binary: string,
+    argv: string[],
+    request: {
+      cwd: string;
+      env: Record<string, string>;
+      input: Buffer | undefined;
+      maxOutputBytes: number | null;
+      handlers: ProcHandlers;
+    },
+  ): ProcHandle {
+    const pool = this.helperPool(binary);
+    if (pool) {
+      const message: HelperSpawnRequest = {
+        binary,
+        argv,
+        // The helper runs in `/`: resolve here, as spawn would against this process's cwd.
+        cwd: path.resolve(request.cwd),
+        env: request.env,
+        input: request.input,
+        maxOutputBytes: request.maxOutputBytes,
+      };
+      if (helperRequestFits(message)) return pool.startGit(message, request.handlers);
+    }
+    return spawnDirect(binary, argv, request);
+  }
+
+  private helperPool(binary: string): HelperPool | null {
+    if (!this.helper) return null;
+    if (!this.pool) {
+      this.pool = new HelperPool({
+        gitBinary: binary,
+        entry: this.helper.entry,
+        processes: this.helper.processes,
+        logger: this.logger,
+        ...(this.helper.execPath ? { execPath: this.helper.execPath } : {}),
+      });
+    }
+    return this.pool.available ? this.pool : null;
+  }
+
+  /** Whether git processes go through the spawn helper (#45) right now. */
+  get usesHelper(): boolean {
+    return this.helper !== null && (this.pool?.available ?? true);
+  }
+
+  /** PIDs of the running helper processes (tests and diagnostics). */
+  helperPids(): number[] {
+    return this.pool?.pids() ?? [];
+  }
+
+  /** SIGKILLs the helper processes (tests: crash recovery). */
+  killHelpersForTest(): void {
+    this.pool?.killHelpers();
+  }
+}
+
+function tooLargeError(args: string[], cwd: string, maxOutputBytes: number): GitCoreError {
+  return new GitCoreError(
+    'output_too_large',
+    `git ${args[0]} produced more than ${maxOutputBytes} bytes`,
+    { args, cwd, maxOutputBytes },
+  );
+}
+
+/** A SPAWN frame the helper accepts (else the call spawns directly, as before #45). */
+function helperRequestFits(request: HelperSpawnRequest): boolean {
+  let bytes = 256;
+  for (const arg of request.argv) bytes += Buffer.byteLength(arg) * 2 + 8;
+  for (const [key, value] of Object.entries(request.env)) {
+    bytes += (Buffer.byteLength(key) + Buffer.byteLength(value)) * 2 + 8;
+  }
+  bytes += Buffer.byteLength(request.cwd) * 2;
+  return bytes <= HELPER_MAX_REQUEST_FRAME;
+}
+
+/** The direct path: `child_process.spawn` in this process (the helper's kill switch). */
+function spawnDirect(
+  binary: string,
+  argv: string[],
+  request: {
+    cwd: string;
+    env: Record<string, string>;
+    input: Buffer | undefined;
+    handlers: ProcHandlers;
+  },
+): ProcHandle {
+  const { handlers } = request;
+  const child = spawn(binary, argv, {
+    cwd: request.cwd,
+    env: request.env,
+    stdio: [request.input ? 'pipe' : 'ignore', 'pipe', 'pipe'],
+    windowsHide: true,
+    // Own process group on POSIX, so a timeout kills git's children too.
+    detached: USE_PROCESS_GROUP,
+  });
+  child.once('exit', () => handlers.exit());
+  if (request.input && child.stdin) {
+    // git may exit before reading everything (e.g. on an error): ignore EPIPE.
+    child.stdin.on('error', () => {});
+    child.stdin.end(request.input);
+  }
+  child.stdout?.on('data', (chunk: Buffer) => handlers.stdout(chunk));
+  child.stderr?.on('data', (chunk: Buffer) => handlers.stderr(chunk));
+  child.on('error', (error) => handlers.error(error));
+  child.on('close', (code, signal) => handlers.close(code, signal));
+  return {
+    kill: (signal = 'SIGKILL') => killTree(child, signal),
+    detach: () => {
+      child.stdout?.destroy();
+      child.stderr?.destroy();
+    },
+  };
 }
 
 const USE_PROCESS_GROUP = process.platform !== 'win32';
