@@ -4628,6 +4628,7 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      - **Cost:** a cold directory at depth d costs d `ls-tree` runs (about 2.4 ms each on the 100k layout); an
        explorer opens parents first, so in practice one run per newly opened directory.
 397. **Two caches: git-core keeps tree listings by (common dir, tree oid), the daemon keeps composed pages by state.**
+     (Amended by #414: the daemon's cache is bounded by bytes and keeps one state per worktree.)
      - git-core (`TreeCache`, `tree.ts`): parsed entries (names as bytes, no paths, so an identical subtree at two paths
        shares one entry), LRU bounded by an estimate of 64 MiB (name bytes + 160 per entry); a listing larger than the
        bound is served, not kept. Single-flight per key (`Flight`: cancelled only when every waiter left, #44). File
@@ -4760,5 +4761,54 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      kind without decoding entries, P3-4); `GitCore.countTreeChildren` with `GitTreeChildCount` (files below each child
      directory from one `ls-tree -r`, P3-3); `GIT_OBJECT_MISSING` (`'object_missing'`, the `details.reason` of a
      `not_found` for an object a partial clone lacks, P3-6); `TreeResponse.skipped` (`{ invalidName, tooLong }`, entries
-     left out, P2-3 / P3-2); `treeEntryProblem(entry)`, which flags what `TreeEntrySchema` would reject (and a name
+     left out, P3-2); `treeEntryProblem(entry)`, which flags what `TreeEntrySchema` would reject (and a name
      with `/`, which the schema accepts but which would collide with a nested path). Nothing renamed or removed.
+413. **Partial clones: listings never need blob sizes** (P2-1). `ls-tree -l` reads every blob's size; in a blobless
+     clone a git before 2.44 (no `GIT_NO_LAZY_FETCH`) starts a lazy fetch for a missing blob, `GIT_ALLOW_PROTOCOL=none`
+     blocks it, and the whole listing failed with 128. Now (`git-core/src/tree.ts` `readsSizes`, `lsTree`):
+     - below 2.44, in a repository whose config names a promisor (`remote.*.promisor = true` or
+       `extensions.partialClone`), `ls-tree` runs without `-l`;
+     - any `ls-tree -l` failing with a promisor message is run again without `-l`, and that repository is listed
+       without sizes from then on;
+     - with `GIT_NO_LAZY_FETCH` git prints `BAD` for a missing blob's size, which parses as null (as before).
+     Sizes are then null; nothing else changes. Tests: a real blobless clone (`--filter=blob:none`), with a wrapper that
+     unsets `GIT_NO_LAZY_FETCH` (git before 2.44: the fallback, remembered) and one that also reports 2.40 (no `-l` at
+     all); no spawn is a fetch.
+414. **The daemon's composed listings are bounded by bytes, one state per worktree** (P2-2). `TreeListingCache`: an
+     LRU bounded by an estimate of 64 MiB (UTF-16 strings plus 200 bytes per entry), a listing above it is served
+     and not kept (and evicts nothing else); a new summary drops the worktree's working-view listings of other
+     states, and an explicit refresh or removal drops all of them. Tree views (keyed by commit) stay in the LRU.
+     Before: 64 listings by count, each state change kept another copy of every open directory (the reviewer measured
+     0.62 GB with a 100k-entry directory open). Tests: the cache's bound and eviction, and a 3000-entry directory under
+     12 watcher-driven state changes keeps 2 listings and less than twice the first size.
+415. **Untracked paths whose type or mode changes are named in `dirs`** (P3-1). Already true since #409 (the basis
+     compares the snapshot's `sig`, which for an untracked path is its lstat signature with the mode); now tested
+     (`chmod +x` of a new script, an untracked file replaced by a symlink: `dirs` names the directory and the listing
+     shows the new kind and mode). The rule, for #400 and #409: **the basis covers every field a row renders**
+     (status, staged, unstaged, rename source and target, kind and mode, the counts on its directories).
+416. **Entries no client can take are skipped and counted** (P3-2). A tree written with `hash-object -t tree
+     --literally` can name entries `..` or `a/b`; a deep tree can have paths over 4096 characters. Such an entry
+     made `TreeResponseSchema` reject the whole page (`invalid_response`), so the directory could not be shown. The
+     daemon drops what `treeEntryProblem` flags (stricter than the schema: a name with `/` would collide with a nested
+     path) and says how many in `skipped: { invalidName, tooLong }`; `total` and the pages do not count them.
+     Availability only: nothing reads the working copy. Tested with a literally built tree and a 21-level chain.
+417. **One `ls-tree -r` for many deleted-only siblings; failures remembered** (P3-3). Up to 4 directories with only
+     deletions below are counted one by one (`countTreeFiles`); more with one `ls-tree -r` of the listed directory
+     counting by first component (`countTreeChildren`). Both share a failure memo in git-core per (common dir, tree):
+     an output above the cap for good (an immutable tree fails the same way), anything else for a minute,
+     cancellation never. Before: 2000 siblings cost 2000 processes (1.33 s in the interactive lane), and a capped
+     subtree was retried for every new state. Tests: 30 siblings cost one `ls-tree -r`; a capped and a missing tree
+     are not retried.
+418. **A page of a cached listing decodes nothing again** (P3-4). The tree view first resolves the commit and the
+     directory with `listTree({ withEntries: false })` (ref files and memoized tree objects; no entry decoding), then
+     looks the composed listing up; only a miss lists the entries. The working view did so already (#406). Tested: 8
+     pages of a 200-entry directory make one decoding call in each view.
+419. **Tree views of a ref name follow HEAD** (P3-5). On `dirs.all` (HEAD moved, or no `dirs`) the web refetches the
+     worktree's views of `HEAD` and of branches too, not only the working view; views of a full commit id never.
+420. **Partial clones say what is missing; paths are checked up front** (P3-6). In a treeless clone the commit has
+     no local tree: git-core answers `not_found` with `details.reason = GIT_OBJECT_MISSING` ("the repository does not
+     have the tree of commit … locally (a partial clone?)") instead of "commit not found", for the root tree, an
+     `ls-tree` of a missing tree and `ls-tree -r`; the daemon answers 404 with the same message and `details.reason`,
+     not "unknown ref". Nothing is fetched. The daemon also checks the directory (`dirKeyProblem`: no empty, `.` or
+     `..` component, also inside `rawPath`) before anything else, so an unborn HEAD answers 400 like every other
+     worktree (since #406 git-core already saw the path through the HEAD read; the check no longer depends on it).
