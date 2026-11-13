@@ -257,6 +257,9 @@ describe('screens', () => {
     expect(screenAction(`${screenUrl(startingScreen('x'))}#retry`)).toBeNull();
     expect(screenAction('http://127.0.0.1:7428/#retry')).toBeNull();
     expect(screenAction('http://octopus-diff-desktop:retry')).toBeNull();
+    // Same length as the scheme, then an action name: still not ours.
+    expect(screenAction('https://evil.example/retry')).toBeNull();
+    expect(screenAction('javascript:alert(1)//show-log')).toBeNull();
   });
 
   it('git-missing instructions per platform', () => {

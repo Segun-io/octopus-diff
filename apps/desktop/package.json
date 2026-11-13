@@ -18,7 +18,9 @@
     "lint": "biome check .",
     "start": "electron .",
     "dev": "node scripts/dev.mjs",
-    "smoke:backend": "node scripts/smoke-backend.mjs"
+    "smoke:backend": "node scripts/smoke-backend.mjs",
+    "smoke:app": "node scripts/smoke-app.mjs",
+    "mutation-check": "node scripts/mutation-check.mjs"
   },
   "dependencies": {
     "@octopus-diff/contracts": "workspace:*",
