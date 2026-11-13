@@ -1,8 +1,9 @@
 /**
  * The Effect boundary (#46): interrupting an Effect that runs git through the runner cancels the
  * git process the way an aborted AbortSignal does (lanes.test.ts "cancellation"), and Promise
- * callers see the same errors as before. The runner's grace period is a real timer, so these run
- * on the live clock (`it.live`) and wait on real conditions (a process gone, a log line).
+ * callers see the same errors as before. These runners have no test context, so their grace period
+ * runs on the live clock (`it.live`), and the tests wait on real conditions (a process gone, a log
+ * line). The same paths on a `TestClock` are in runner-clock.test.ts (#47).
  */
 import { chmodSync, existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';

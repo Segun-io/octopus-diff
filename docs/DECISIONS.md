@@ -5016,3 +5016,95 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
        - the daemon passes the names of the checked directories.
      - Mutants killed: children unaccounted, no eviction, names ignored, the daemon asking for all, an off-by-one in
        the binary search (it never ends), an oversized item kept.
+
+## Effect runner scheduling and interruption (session, 2026-11-13; roadmap #47, step 30)
+
+440. **The runner's scheduler is `LaneSemaphore` (`packages/git-core/src/runner/scheduler.ts`), an Effect partitioned
+     semaphore with the two lanes of #44, not Effect's own `PartitionedSemaphore`.** It replaces the hand-written
+     `LaneScheduler`/`FairQueue` of `runner.ts` and keeps their rules exactly:
+     - one global limit (`concurrency`, both lanes share it, nothing reserved);
+     - FIFO per `queueKey` within a lane, keys served round-robin in the order they started waiting (the same
+       `FairQueue` ring);
+     - a free permit goes to `interactive` first, and while `background` work waits it gets the next permit after
+       `INTERACTIVE_BURST` (4) interactive grants in a row (the same counter, reset by every fall-through);
+     - an interrupted waiter leaves its queue and never gets a permit; `close(error)` fails every waiter and later
+       takes.
+
+     `take` is an `Effect.callback` whose interruption removes the waiter; `withPermit` takes the permit interruptibly
+     inside `uninterruptibleMask` and releases it in `ensuring`, the shape of Effect's `PartitionedSemaphore`. Effect's
+     `PartitionedSemaphore` (4.1.4, `@stability unstable`) was not used directly because it has one pool and no
+     priority: two lanes with a starvation bound cannot be expressed over it, and it rotates partitions in hash-map
+     order, which would change the start order of #44 that `lanes.test.ts` pins. Two details differ from a naive port:
+     - **grants are synchronous**: a waiter granted while it is suspended resumes in the same call stack, so a run that
+       finds a free slot spawns inside `run()`, as before; a `pumping` guard keeps a release from inside a grant from
+       recursing (20 000 instant jobs in a row are tested);
+     - **a grant that races an interruption gives its permit back**: the interruption marks the fiber resumed before
+       its cleanup runs, and with a scheduler yield in between a release can grant the permit to a fiber that will
+       never see it. The cleanup releases a permit that was granted. A test forces the race with
+       `MaxOpsBeforeYield = 1` (it failed with the release removed).
+441. **Every git run is a fiber; its AbortSignal interrupts it** (`GitRunner.schedule`). `run()` and `version()` fork
+     `scheduler.withPermit(queueKey, lane, work)` with the runner's context and `{ signal }`
+     (`Effect.runForkWith(context)`), and settle from the fiber's observer:
+     - **queued**: the interruption removes the waiter synchronously (as the old abort listener did); the run rejects
+       with `aborted` and `{ queued: true }`, as before, and never spawns. A signal already aborted is still refused
+       up front, before any fiber;
+     - **running**: `work` is an `Effect.callback` that calls `execute` with the callback's own AbortSignal, so the
+       interruption runs `execute`'s existing abort path unchanged (SIGTERM to the process group, SIGKILL after
+       `ABORT_GRACE_MS`, the helper's `reapGroup`, the exit watchdog). The callback's cancel waits for the run to
+       settle, so the permit (the slot) is released only once the process has exited;
+     - a started run's outcome is always the run's own result or error (`aborted` with `args`/`cwd`, a timeout,
+       `output_too_large`, ...), exactly as before; the fiber's exit only says whether it started;
+     - `dispose()` calls `scheduler.close(disposed)` where it called `rejectAll`, then fails the running children as
+       before.
+
+     Nothing else in the runner moved: the allowlist, `assertStdinAllowed`, config pins, `buildGitArgv`, the safety
+     environment, `resolveExecutable`, the helper/direct spawn and the retry rules are untouched, and so are
+     `GitRunOptions`, `GitCoreOptions` and the public `GitRunner` API. `runGit` (#46) is unchanged: interrupting it
+     aborts the signal it hands to `run()`, which now interrupts the run's fiber.
+442. **The runner's timers read Effect's `Clock`.** The timeout, the abort grace SIGKILL and the helper exit watchdog
+     are `Effect.sleep` fibers started with the runner's context (`GitRunner.timer`, cancelled by interrupting the
+     fiber). On the live clock the grace and watchdog sleeps use an unref'd timer, as the `setTimeout(...).unref()` they
+     replace (Effect's own sleep keeps the event loop alive); the timeout stays ref'd, as before. A test-only option,
+     `GitRunnerOptions.runnerTest.context` (additive, not in the contracts), hands the runner a context: inside
+     `it.effect`, `yield* Effect.context<never>()`, whose `TestClock` then drives those timers. Not moved: the helper
+     client's own timers (the probe wait, the group-gone wait, the close wait, `reapGroup`'s repeats) and
+     `git-helper.ts`. They are process supervision inside `helper-client.ts`, which #46 left on real timers on
+     purpose (DECISIONS #401), and they wait for real processes, not for the scheduler.
+443. **No layer and no `ManagedRuntime` for the scheduler.** The semaphore owns no resources, so it is plain state of
+     the runner, closed by `dispose()`. The helper pool keeps its lazily built runtime (it needs the resolved git
+     binary). Per run the cost is one fiber for the run, one for its timeout and one `AbortController` (the callback's
+     signal), all synchronous until the process is spawned: the bench numbers are in
+     `docs/reports/effect-scheduler.md`.
+444. **Tests.** The acceptance tests are unchanged (`git diff main -- packages/git-core/test/lanes.test.ts
+     runner.test.ts helper.test.ts hostile-config.test.ts readonly.test.ts apps/daemon/test/cancel.real-git.test.ts`
+     is empty) and they still run on the live clock, so the real 500 ms grace period and the real cancellation of both
+     the direct and the helper path stay proven end to end. New:
+     - `scheduler.test.ts`: a property test of `LaneSemaphore` (24 seeds × limits 1, 2, 4, lockstep and bursts) whose
+       reference model is the old `LaneScheduler`, kept in the test. After every step: the start order equals the
+       model's, at most `limit` permits held (an aborted running job holds its permit until it exits), FIFO per key
+       within a lane, at most `INTERACTIVE_BURST` interactive starts in a row while background work waits (so a lone
+       waiting background job starts within 5), an aborted queued job never starts, no idle permit while work waits;
+       after the drain no permit is held, nothing is queued and every fiber has ended (no deadlock). Plus unit tests:
+       queued interruption, release only after the interruption completed, close, synchronous grants, a 20 000-job
+       chain, the grant/interruption race.
+     - `runner-clock.test.ts`: the grace period and the timeout on a `TestClock`, on the direct and the helper path,
+       with real processes. "Not yet" is proved positively: one millisecond before the deadline the process still
+       answers a SIGUSR1 (a SIGKILLed one cannot), and one millisecond later the run settles. The stand-in sends its
+       stderr to `/dev/null`: the shell reports its SIGTERMed `sleep` there, and the runner has already closed that
+       pipe after an abort, so the SIGPIPE would end the shell before its trap ran.
+     - The watchdog is on the runner's clock too but keeps its live-clock tests (`helper.test.ts`): what it does (a
+       PING probe, a SIGKILL if the helper does not answer) has no observable step a test clock could gate.
+     - Mutation check: 15 mutants of the runner and the semaphore against the acceptance suites. 14 were killed:
+       - the signal not interrupting the run's fiber, the permit released before exit, `execute` without the abort
+         signal;
+       - grace ±1 ms, no SIGKILL escalation, unref'd sleeps ignoring the test clock, timeout on `setTimeout`, timeout
+         −1 ms;
+       - lane or `queueKey` ignored, the wrong rejection for a queued abort, a release before the work ends, an
+         uninterruptible queue wait.
+
+       One is equivalent: `dispose()` without `scheduler.close`, because queued runs still reject with `disposed` once
+       a permit frees (`execute` refuses after dispose), only a few milliseconds later. Six more mutants of
+       `scheduler.ts` were killed by `scheduler.test.ts`. The grant/interruption race mutant survived until its test was
+       added. "Unref'd sleeps ignoring the test clock" first survived too, because the real 500 ms fired while the test
+       waited. The grace test now keeps the process answering through 2 × `ABORT_GRACE_MS` of real time while the test
+       clock stands at `ABORT_GRACE_MS - 1`.

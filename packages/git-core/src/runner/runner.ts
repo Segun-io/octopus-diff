@@ -8,6 +8,12 @@ import {
   type Logger,
   noopLogger,
 } from '@octopus-diff/contracts';
+import * as Cause from 'effect/Cause';
+import * as Clock from 'effect/Clock';
+import * as Context from 'effect/Context';
+import * as Duration from 'effect/Duration';
+import * as Effect from 'effect/Effect';
+import * as Exit from 'effect/Exit';
 import * as ManagedRuntime from 'effect/ManagedRuntime';
 import { assertAllowedGitArgs, assertStdinAllowed, DIFF_FAMILY } from './allowlist.js';
 import { abortedError, currentCall } from './call-context.js';
@@ -26,6 +32,9 @@ import {
   type ProcHandlers,
   reapGroup,
 } from './helper-client.js';
+import { INTERACTIVE_BURST, LaneSemaphore } from './scheduler.js';
+
+export { INTERACTIVE_BURST };
 
 export interface GitRunnerOptions {
   gitBinary?: string;
@@ -45,6 +54,17 @@ export interface GitRunnerOptions {
   helper?: boolean | GitHelperOptions;
   /** Tests only (not in the contracts): helper hooks and timings. */
   helperTest?: HelperTestOptions;
+  /** Tests only (not in the contracts): the Effect context of the runner's fibers. */
+  runnerTest?: RunnerTestOptions;
+}
+
+export interface RunnerTestOptions {
+  /**
+   * The context the runner's fibers run with (default: empty, i.e. the live clock). Inside
+   * `it.effect`, `yield* Effect.context<never>()`: its `TestClock` then drives the runner's
+   * timeouts, the abort grace period and the helper exit watchdog.
+   */
+  context?: Context.Context<never>;
 }
 
 export interface HelperTestOptions {
@@ -158,8 +178,6 @@ const STDERR_DETAIL = 4 * 1024;
 const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_MAX_OUTPUT = 64 * 1024 * 1024;
 
-/** Background jobs start after at most this many interactive starts in a row (#44). */
-export const INTERACTIVE_BURST = 4;
 /** After an abort, SIGTERM; SIGKILL if the process group is still there after this long. */
 export const ABORT_GRACE_MS = 500;
 /**
@@ -168,149 +186,23 @@ export const ABORT_GRACE_MS = 500;
  */
 export const HELPER_EXIT_WAIT_MS = ABORT_GRACE_MS + 1_000;
 
-interface Job {
-  start: () => Promise<GitRunResult>;
-  resolve: (value: GitRunResult) => void;
-  reject: (error: unknown) => void;
-  /** Removes the job's abort listener (when it starts or settles). */
-  detach?: () => void;
-}
-
-/** Per-key FIFO queues served round-robin, so one busy repository cannot starve the others. */
-class FairQueue {
-  private readonly queues = new Map<string, Job[]>();
-  private readonly ring: string[] = [];
-  size = 0;
-
-  push(key: string, job: Job): void {
-    let queue = this.queues.get(key);
-    if (!queue) {
-      queue = [];
-      this.queues.set(key, queue);
-      this.ring.push(key);
-    }
-    queue.push(job);
-    this.size += 1;
-  }
-
-  shift(): Job | undefined {
-    while (this.ring.length > 0) {
-      const key = this.ring.shift() as string;
-      const queue = this.queues.get(key);
-      const job = queue?.shift();
-      if (!queue || !job) {
-        this.queues.delete(key);
-        continue;
-      }
-      if (queue.length > 0) this.ring.push(key);
-      else this.queues.delete(key);
-      this.size -= 1;
-      return job;
-    }
-    return undefined;
-  }
-
-  /** Removes a queued job; false when it is not queued (already started). */
-  remove(key: string, job: Job): boolean {
-    const queue = this.queues.get(key);
-    const index = queue ? queue.indexOf(job) : -1;
-    if (!queue || index < 0) return false;
-    queue.splice(index, 1);
-    this.size -= 1;
-    if (queue.length === 0) {
-      this.queues.delete(key);
-      const at = this.ring.indexOf(key);
-      if (at >= 0) this.ring.splice(at, 1);
-    }
-    return true;
-  }
-
-  drain(): Job[] {
-    const jobs = [...this.queues.values()].flat();
-    this.queues.clear();
-    this.ring.length = 0;
-    this.size = 0;
-    return jobs;
-  }
-}
+/** The live clock (Effect's default), whose timers can be unref'd. */
+const LIVE_CLOCK: Clock.Clock = Effect.runSync(Clock.clockWith(Effect.succeed));
 
 /**
- * Global concurrency limit over two lanes (#44), each a `FairQueue`. A free slot goes to the
- * `interactive` lane (requests the user waits on) first; `background` work (summaries, relists,
- * forge and review work) gets the next slot after `INTERACTIVE_BURST` interactive starts in a row
- * while it waits, so it is never starved: under any interactive load it keeps at least one start
- * in `INTERACTIVE_BURST + 1`. Both lanes share the one limit (no reserved slot): the limit stays
- * the maximum number of git processes overall. A queued job whose signal aborts leaves its queue
- * and rejects without ever starting.
+ * `Effect.sleep(ms)`, except that on the live clock its timer never holds the process open (as the
+ * `setTimeout(...).unref()` it replaces). Any other clock (a test's `TestClock`) sleeps as usual.
  */
-class LaneScheduler {
-  private active = 0;
-  private interactiveRun = 0;
-  private readonly lanes: Record<GitPriority, FairQueue> = {
-    interactive: new FairQueue(),
-    background: new FairQueue(),
-  };
-
-  constructor(private readonly limit: number) {}
-
-  schedule(
-    key: string,
-    lane: GitPriority,
-    signal: AbortSignal | undefined,
-    start: () => Promise<GitRunResult>,
-  ): Promise<GitRunResult> {
-    if (signal?.aborted) return Promise.reject(abortedError({ queued: true }));
-    return new Promise<GitRunResult>((resolve, reject) => {
-      const job: Job = { start, resolve, reject };
-      if (signal) {
-        const onAbort = (): void => {
-          if (this.lanes[lane].remove(key, job)) reject(abortedError({ queued: true }));
-        };
-        signal.addEventListener('abort', onAbort, { once: true });
-        job.detach = () => signal.removeEventListener('abort', onAbort);
-      }
-      this.lanes[lane].push(key, job);
-      this.pump();
-    });
-  }
-
-  private next(): Job | undefined {
-    const { interactive, background } = this.lanes;
-    if (
-      interactive.size > 0 &&
-      (background.size === 0 || this.interactiveRun < INTERACTIVE_BURST)
-    ) {
-      this.interactiveRun += 1;
-      return interactive.shift();
-    }
-    this.interactiveRun = 0;
-    return background.shift() ?? interactive.shift();
-  }
-
-  private pump(): void {
-    while (this.active < this.limit) {
-      const job = this.next();
-      if (!job) return;
-      job.detach?.();
-      this.active += 1;
-      job
-        .start()
-        .then(job.resolve, job.reject)
-        .finally(() => {
-          this.active -= 1;
-          this.pump();
-        });
-    }
-  }
-
-  rejectAll(error: unknown): void {
-    for (const lane of Object.values(this.lanes)) {
-      for (const job of lane.drain()) {
-        job.detach?.();
-        job.reject(error);
-      }
-    }
-  }
+function sleepUnref(ms: number): Effect.Effect<void> {
+  return Clock.clockWith((clock) =>
+    clock !== LIVE_CLOCK
+      ? clock.sleep(Duration.millis(ms))
+      : Effect.callback<void>((resume) => {
+          const handle = setTimeout(() => resume(Effect.void), ms);
+          handle.unref();
+          return Effect.sync(() => clearTimeout(handle));
+        }),
+  );
 }
 
 function hasNoIndex(args: readonly string[]): boolean {
@@ -400,7 +292,9 @@ export class GitRunner {
   private readonly maxOutputBytes: number;
   private readonly env: Record<string, string>;
   private readonly logger: Logger;
-  private readonly scheduler: LaneScheduler;
+  private readonly scheduler: LaneSemaphore<GitCoreError>;
+  /** Starts the runner's fibers (scheduling, timers) with the runner's Effect context. */
+  private readonly runFork: ReturnType<typeof Effect.runForkWith<never>>;
   private readonly children = new Map<ProcHandle, (error: GitCoreError) => void>();
   private disposed = false;
   private resolvedBinary: string | null = null;
@@ -417,7 +311,8 @@ export class GitRunner {
     this.env = buildGitEnv(process.env, options.env);
     this.logger = options.logger ?? noopLogger;
     const concurrency = Math.max(1, Math.floor(options.concurrency ?? 4));
-    this.scheduler = new LaneScheduler(concurrency);
+    this.scheduler = new LaneSemaphore<GitCoreError>(concurrency);
+    this.runFork = Effect.runForkWith(options.runnerTest?.context ?? Context.empty());
     // Diff files above the threshold as binary, so no single file's patch can exceed about
     // twice this size while it is streamed and hashed (`core.bigFileThreshold`).
     const threshold = options.bigFileThreshold ?? defaultBigFileThreshold(this.maxOutputBytes);
@@ -462,8 +357,8 @@ export class GitRunner {
     const call = currentCall();
     const signal = options.signal ?? call?.signal;
     const lane = options.priority ?? call?.lane ?? 'background';
-    return this.scheduler.schedule(options.queueKey ?? options.cwd, lane, signal, () =>
-      this.execute(argv, [...args], { ...options, okExitCodes, signal }),
+    return this.schedule(options.queueKey ?? options.cwd, lane, signal, (abort) =>
+      this.execute(argv, [...args], { ...options, okExitCodes, signal: abort }),
     );
   }
 
@@ -471,15 +366,15 @@ export class GitRunner {
   async version(): Promise<string> {
     if (this.disposed) throw disposedError();
     const call = currentCall();
-    const result = await this.scheduler.schedule(
+    const result = await this.schedule(
       '\u0000version',
       call?.lane ?? 'background',
       call?.signal,
-      () =>
+      (abort) =>
         this.execute(['--version'], ['--version'], {
           cwd: process.cwd(),
           okExitCodes: [0],
-          signal: call?.signal,
+          signal: abort,
         }),
     );
     return result.stdout.toString('utf8').trim();
@@ -489,11 +384,72 @@ export class GitRunner {
   async dispose(): Promise<void> {
     if (this.disposed) return;
     this.disposed = true;
-    this.scheduler.rejectAll(disposedError());
+    this.scheduler.close(disposedError());
     for (const fail of [...this.children.values()]) fail(disposedError());
     // The helpers SIGKILL whatever is still running and exit (no orphans): closing the runtime's
     // scope releases the pool's supervisor, which closes every helper.
     await this.runtime?.dispose();
+  }
+
+  /**
+   * Runs `start` once the lanes give it a slot (#47). The run is a fiber that waits for a permit of
+   * the runner's `LaneSemaphore` and holds it until the run has settled; `signal` interrupts it.
+   * Queued, it leaves the queue and `start` is never called (rejects with `aborted`). Running,
+   * `start`'s own signal aborts, so its process gets SIGTERM and later SIGKILL (`execute`), and
+   * the permit is released only once the run has settled, i.e. once its process has exited. A
+   * started run's outcome is the run's own (an aborted one rejects with `aborted` and its args).
+   */
+  private schedule(
+    key: string,
+    lane: GitPriority,
+    signal: AbortSignal | undefined,
+    start: (signal: AbortSignal) => Promise<GitRunResult>,
+  ): Promise<GitRunResult> {
+    if (signal?.aborted) return Promise.reject(abortedError({ queued: true }));
+    return new Promise<GitRunResult>((resolve, reject) => {
+      let run: Promise<GitRunResult> | null = null;
+      const work = Effect.callback<void>((resume, abort) => {
+        let started: Promise<GitRunResult>;
+        try {
+          started = start(abort);
+        } catch (error) {
+          started = Promise.reject(error);
+        }
+        run = started;
+        const settled = (): void => resume(Effect.void);
+        started.then(settled, settled);
+        // Interrupted: `abort` has fired; the permit is held until the run has settled.
+        return Effect.callback<void>((done) => {
+          const gone = (): void => done(Effect.void);
+          started.then(gone, gone);
+        });
+      });
+      const fiber = this.runFork(
+        this.scheduler.withPermit(key, lane, work),
+        signal ? { signal } : undefined,
+      );
+      fiber.addObserver((exit) => {
+        const started = run as Promise<GitRunResult> | null;
+        if (started) {
+          started.then(resolve, reject);
+          return;
+        }
+        // Never started: the queue was closed (dispose), or the signal fired while queued.
+        const failure = Exit.isFailure(exit) ? Cause.findErrorOption(exit.cause) : undefined;
+        reject(failure?._tag === 'Some' ? failure.value : abortedError({ queued: true }));
+      });
+    });
+  }
+
+  /**
+   * Runs `fn` after `ms` on the runner's Effect clock (a test's `TestClock`, if it has one) and
+   * returns what cancels it. `unref`: on the live clock the timer never holds the process open.
+   */
+  private timer(ms: number, fn: () => void, unref = false): () => void {
+    const fiber = this.runFork(
+      Effect.andThen(unref ? sleepUnref(ms) : Effect.sleep(Duration.millis(ms)), Effect.sync(fn)),
+    );
+    return () => fiber.interruptUnsafe();
   }
 
   private execute(
@@ -646,15 +602,19 @@ export class GitRunner {
         return;
       }
 
-      let watchdog: NodeJS.Timeout | undefined;
+      let watchdog = false;
       /** SIGKILL, and give up on the helper if even that brings no exit (review #1). */
       const kill = (): void => {
         proc.kill();
         if (watchdog || !proc.abandon) return;
-        watchdog = setTimeout(() => {
-          if (!exited) proc.abandon?.();
-        }, this.helperTest.exitWaitMs ?? HELPER_EXIT_WAIT_MS);
-        watchdog.unref();
+        watchdog = true;
+        this.timer(
+          this.helperTest.exitWaitMs ?? HELPER_EXIT_WAIT_MS,
+          () => {
+            if (!exited) proc.abandon?.();
+          },
+          true,
+        );
       };
       const fail = (error: GitCoreError): void => {
         if (failure) {
@@ -686,25 +646,24 @@ export class GitRunner {
         // SIGKILL for the whole group after the grace period, also when git itself exited on the
         // SIGTERM: helpers that ignore it (a trusted filter) must not outlive the request. Not
         // cleared by `finish` or the exit; unref'd so it never holds the process open. A group that
-        // is already gone makes the kill a no-op.
-        const forced = setTimeout(kill, ABORT_GRACE_MS);
-        forced.unref();
+        // is already gone makes the kill a no-op. On the runner's Effect clock (#47).
+        this.timer(ABORT_GRACE_MS, kill, true);
       };
       signal?.addEventListener('abort', onAbort, { once: true });
 
-      const timer = setTimeout(() => {
+      const cancelTimeout = this.timer(timeoutMs, () => {
         fail(
           new GitCoreError('timeout', `git ${args[0]} timed out after ${timeoutMs} ms`, {
             args,
             cwd,
           }),
         );
-      }, timeoutMs);
+      });
 
       const finish = (error: GitCoreError | null, result?: GitRunResult): void => {
         if (settled) return;
         settled = true;
-        clearTimeout(timer);
+        cancelTimeout();
         signal?.removeEventListener('abort', onAbort);
         this.children.delete(proc);
         if (retrying) return;
