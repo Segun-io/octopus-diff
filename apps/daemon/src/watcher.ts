@@ -1558,7 +1558,15 @@ export class WatcherService {
     project.relist?.interruptUnsafe();
     const relist = Effect.sync(() => {
       if (this.#closed || this.#projects.get(project.projectId) !== project) return;
-      this.#onListDirty(project.projectId, 'timer');
+      try {
+        this.#onListDirty(project.projectId, 'timer');
+      } catch (error) {
+        // A failing callback must not end the schedule (later relists still run).
+        this.#log.error('worktree list refresh callback failed', {
+          projectId: project.projectId,
+          error,
+        });
+      }
     });
     project.relist = this.#timers.fork(
       Effect.andThen(
