@@ -101,6 +101,7 @@ import {
   type ScanRootRow,
   type Store,
 } from './store.js';
+import type { WatchHost } from './watch-host.js';
 import { gitDirOf } from './watch-identity.js';
 import { type DirtyReason, type SubscribeFn, WatcherService } from './watcher.js';
 
@@ -222,6 +223,8 @@ export interface CoreOptions {
   leadingEdge?: boolean;
   pollDegradedFocusedMs?: number;
   subscribe?: SubscribeFn;
+  /** The watch host to subscribe through (the daemon's runtime owns it, #46). */
+  watchHost?: WatchHost;
   initialSummaryWaitMs?: number;
   gcIntervalMs?: number;
   now?: () => Date;
@@ -599,6 +602,7 @@ export class DaemonCore {
       watcherOptions.pollDegradedFocusedMs = options.pollDegradedFocusedMs;
     }
     if (options.subscribe) watcherOptions.subscribe = options.subscribe;
+    else if (options.watchHost) watcherOptions.host = options.watchHost;
     this.#watcher = new WatcherService(watcherOptions);
   }
 

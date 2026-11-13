@@ -1,7 +1,18 @@
 import { type ChildProcess, spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import type { Logger } from '@octopus-diff/contracts';
+import {
+  makeSupervisor,
+  type RestartPolicyOptions,
+  restartPolicy,
+  type SupervisorUnavailable,
+} from '@octopus-diff/git-core';
 import type parcelWatcher from '@parcel/watcher';
+import * as Context from 'effect/Context';
+import * as Duration from 'effect/Duration';
+import * as Effect from 'effect/Effect';
+import * as Layer from 'effect/Layer';
+import * as Scope from 'effect/Scope';
 
 /**
  * `@parcel/watcher` in a child process, the "watch host" (DECISIONS #130).
@@ -18,6 +29,12 @@ import type parcelWatcher from '@parcel/watcher';
  * interrupted. If it ever stops answering anyway, it is a separate process: requests time out,
  * the host is killed (never waited for), every subscription reports an error (the watcher
  * re-subscribes, on a fresh host) and `close()` kills it without waiting.
+ *
+ * Its lifecycle is an Effect `Supervisor` (#46, `@octopus-diff/git-core`): started lazily, a
+ * dead host is replaced on the next subscribe (at once the first time within a minute, then after
+ * a backoff from 1 s doubling to 30 s), and the request timeout runs on Effect's `Clock`, so
+ * tests drive both with `TestClock`. `makeWatchHost` / `WatchHostService.layer` build it in a
+ * scope whose close kills it for good; `createWatchHost` is the Promise-only form.
  */
 
 /** The host's source, run with `node -e`; argv[1] is `@parcel/watcher`'s resolved entry point. */
@@ -77,7 +94,19 @@ export interface WatchHostOptions {
   logger: Logger;
   /** How long a subscribe may take before the host is considered stuck (default 60 s). */
   requestTimeoutMs?: number;
+  /** How a dead host is replaced (default `WATCH_HOST_RESTART_POLICY`). */
+  restart?: RestartPolicyOptions;
 }
+
+/**
+ * A dead host is replaced on the next subscribe: at once the first time within a minute, then
+ * after 1 s, 2 s, ... at most 30 s (a host that keeps dying costs a process each time; the
+ * watcher polls meanwhile). It never gives up.
+ */
+export const WATCH_HOST_RESTART_POLICY: RestartPolicyOptions = {
+  window: Duration.minutes(1),
+  backoff: { base: Duration.seconds(1), max: Duration.seconds(30), immediate: 1 },
+};
 
 export interface WatchHost {
   subscribe(
@@ -96,16 +125,11 @@ export interface WatchHost {
 interface Host {
   child: ChildProcess;
   callbacks: Map<number, Callback>;
-  pending: Map<
-    number,
-    {
-      resolve: () => void;
-      reject: (error: Error) => void;
-      timer: NodeJS.Timeout;
-    }
-  >;
+  pending: Map<number, { resolve: () => void; reject: (error: Error) => void }>;
   stderr: string;
   stopped: boolean;
+  /** Reports this host's death to its supervisor (after `stop`). */
+  died: (reason: string) => void;
 }
 
 const liveHosts = new Set<ChildProcess>();
@@ -127,150 +151,216 @@ function resolveWatcher(): string {
   return watcherEntry;
 }
 
-export function createWatchHost(options: WatchHostOptions): WatchHost {
-  const log = options.logger;
-  const timeoutMs = options.requestTimeoutMs ?? 60_000;
-  let host: Host | null = null;
-  let nextId = 1;
+const toError = (error: unknown): Error =>
+  error instanceof Error ? error : new Error(String(error));
 
-  const stop = (h: Host, reason: string, notify: boolean): void => {
-    if (h.stopped) return;
-    h.stopped = true;
-    if (host === h) host = null;
-    liveHosts.delete(h.child);
-    h.child.kill('SIGKILL');
-    const error = new Error(`watch host stopped: ${reason}`);
-    // A subscribe still in flight rejects; it gets no error callback as well.
-    for (const [id, p] of h.pending) {
-      h.callbacks.delete(id);
-      clearTimeout(p.timer);
-      p.reject(error);
-    }
-    h.pending.clear();
-    const callbacks = [...h.callbacks.values()];
-    h.callbacks.clear();
-    if (!notify) return;
-    log.warn('watch host stopped; its subscriptions are re-made on a new one', {
-      reason,
-      ...(h.stderr ? { stderr: h.stderr.slice(-2000) } : {}),
-    });
-    for (const fn of callbacks) deliver(fn, error, []);
-  };
+const unavailableError = (error: SupervisorUnavailable): Error =>
+  new Error(`watch host ${error.state === 'closed' ? 'closed' : 'gave up'}: ${error.reason}`);
 
-  /** The channel keeps this process alive only while a request waits for an answer. */
-  const syncRef = (h: Host): void => {
-    if (h.pending.size > 0) h.child.channel?.ref();
-    else h.child.channel?.unref();
-  };
+/**
+ * The watch host in the current scope and context: closing the scope kills the host for good
+ * (later subscribes reject); the restart backoff and the request timeout use Effect's `Clock`.
+ */
+export const makeWatchHost = (
+  options: WatchHostOptions,
+): Effect.Effect<WatchHost, never, Scope.Scope> =>
+  Effect.gen(function* () {
+    const log = options.logger;
+    const timeoutMs = options.requestTimeoutMs ?? 60_000;
+    const context = yield* Effect.context<never>();
+    const runPromise = Effect.runPromiseWith(context);
+    let nextId = 1;
 
-  const deliver = (fn: Callback, error: Error | null, events: parcelWatcher.Event[]): void => {
-    try {
-      fn(error, events);
-    } catch (err) {
-      log.error('watch callback failed', { error: err });
-    }
-  };
-
-  const start = (): Host => {
-    const env = { ...process.env };
-    // The host needs no loaders or flags of the daemon (tsx in development, for instance).
-    delete env.NODE_OPTIONS;
-    const child = spawn(
-      process.execPath,
-      ['--input-type=commonjs', '-e', HOST_SOURCE, resolveWatcher()],
-      {
-        stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
-        env,
-        windowsHide: true,
-      },
-    );
-    const h: Host = { child, callbacks: new Map(), pending: new Map(), stderr: '', stopped: false };
-    liveHosts.add(child);
-    installExitHook();
-    // Neither the process nor its pipes keep the daemon alive.
-    child.unref();
-    child.channel?.unref();
-    child.stderr?.on('data', (chunk: Buffer) => {
-      h.stderr = (h.stderr + chunk.toString('utf8')).slice(-4000);
-    });
-    (child.stderr as unknown as { unref?: () => void } | null)?.unref?.();
-    child.on('message', (raw: HostMessage) => {
+    const stop = (h: Host, reason: string, notify: boolean): void => {
       if (h.stopped) return;
-      if (raw.t === 'ev') {
-        const fn = h.callbacks.get(raw.id);
-        if (!fn) return;
-        if (raw.error !== undefined) {
-          // The host drops a failed subscription itself; so does this side.
-          h.callbacks.delete(raw.id);
-          deliver(fn, new Error(raw.error), []);
-        } else {
-          deliver(fn, null, raw.events ?? []);
-        }
-        return;
-      }
-      const p = h.pending.get(raw.id);
-      if (!p) return;
-      h.pending.delete(raw.id);
-      syncRef(h);
-      clearTimeout(p.timer);
-      if (raw.t === 'ok') p.resolve();
-      else p.reject(new Error(raw.error));
-    });
-    child.on('error', (error) => stop(h, `could not run: ${error.message}`, true));
-    child.on('exit', (code, signal) => stop(h, `exited (code ${code}, signal ${signal})`, true));
-    return h;
-  };
-
-  const subscribe: WatchHost['subscribe'] = async (dir, fn, opts) => {
-    if (!host || host.stopped) host = start();
-    const h = host;
-    const id = nextId++;
-    h.callbacks.set(id, fn);
-    await new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        h.pending.delete(id);
+      h.stopped = true;
+      liveHosts.delete(h.child);
+      h.child.kill('SIGKILL');
+      const error = new Error(`watch host stopped: ${reason}`);
+      // A subscribe still in flight rejects; it gets no error callback as well.
+      for (const [id, p] of h.pending) {
         h.callbacks.delete(id);
-        reject(new Error(`watch host did not answer within ${timeoutMs} ms`));
-        stop(h, 'not answering', true);
-      }, timeoutMs);
-      timer.unref();
-      h.pending.set(id, { resolve, reject, timer });
-      syncRef(h);
-      try {
-        h.child.send({ t: 'sub', id, dir, opts: opts ?? {} });
-      } catch (error) {
-        h.pending.delete(id);
-        syncRef(h);
-        clearTimeout(timer);
-        reject(error instanceof Error ? error : new Error(String(error)));
+        p.reject(error);
       }
-    }).catch((error: unknown) => {
-      h.callbacks.delete(id);
-      throw error;
-    });
-    return {
-      unsubscribe: async () => {
-        // Fire and forget: the host may be stuck; nothing here may wait for it.
-        if (!h.callbacks.delete(id) || h.stopped) return;
-        try {
-          if (h.child.connected) h.child.send({ t: 'unsub', id });
-        } catch {
-          // The host is gone; nothing to release.
+      h.pending.clear();
+      const callbacks = [...h.callbacks.values()];
+      h.callbacks.clear();
+      if (!notify) return;
+      log.warn('watch host stopped; its subscriptions are re-made on a new one', {
+        reason,
+        ...(h.stderr ? { stderr: h.stderr.slice(-2000) } : {}),
+      });
+      for (const fn of callbacks) deliver(fn, error, []);
+    };
+
+    /** A death: stop the host (notifying its subscribers), then tell the supervisor. */
+    const fail = (h: Host, reason: string): void => {
+      const first = !h.stopped;
+      stop(h, reason, true);
+      if (first) h.died(reason);
+    };
+
+    /** The channel keeps this process alive only while a request waits for an answer. */
+    const syncRef = (h: Host): void => {
+      if (h.pending.size > 0) h.child.channel?.ref();
+      else h.child.channel?.unref();
+    };
+
+    const deliver = (fn: Callback, error: Error | null, events: parcelWatcher.Event[]): void => {
+      try {
+        fn(error, events);
+      } catch (err) {
+        log.error('watch callback failed', { error: err });
+      }
+    };
+
+    const start = (died: Host['died']): Host => {
+      const env = { ...process.env };
+      // The host needs no loaders or flags of the daemon (tsx in development, for instance).
+      delete env.NODE_OPTIONS;
+      const child = spawn(
+        process.execPath,
+        ['--input-type=commonjs', '-e', HOST_SOURCE, resolveWatcher()],
+        {
+          stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
+          env,
+          windowsHide: true,
+        },
+      );
+      const h: Host = {
+        child,
+        callbacks: new Map(),
+        pending: new Map(),
+        stderr: '',
+        stopped: false,
+        died,
+      };
+      liveHosts.add(child);
+      installExitHook();
+      // Neither the process nor its pipes keep the daemon alive.
+      child.unref();
+      child.channel?.unref();
+      child.stderr?.on('data', (chunk: Buffer) => {
+        h.stderr = (h.stderr + chunk.toString('utf8')).slice(-4000);
+      });
+      (child.stderr as unknown as { unref?: () => void } | null)?.unref?.();
+      child.on('message', (raw: HostMessage) => {
+        if (h.stopped) return;
+        if (raw.t === 'ev') {
+          const fn = h.callbacks.get(raw.id);
+          if (!fn) return;
+          if (raw.error !== undefined) {
+            // The host drops a failed subscription itself; so does this side.
+            h.callbacks.delete(raw.id);
+            deliver(fn, new Error(raw.error), []);
+          } else {
+            deliver(fn, null, raw.events ?? []);
+          }
+          return;
         }
+        const p = h.pending.get(raw.id);
+        if (!p) return;
+        h.pending.delete(raw.id);
+        syncRef(h);
+        if (raw.t === 'ok') p.resolve();
+        else p.reject(new Error(raw.error));
+      });
+      child.on('error', (error) => fail(h, `could not run: ${error.message}`));
+      child.on('exit', (code, signal) => fail(h, `exited (code ${code}, signal ${signal})`));
+      return h;
+    };
+
+    const supervisor = yield* makeSupervisor<Host>({
+      name: 'watch host',
+      policy: restartPolicy(options.restart ?? WATCH_HOST_RESTART_POLICY),
+      acquire: (died) =>
+        Effect.acquireRelease(
+          Effect.sync(() => start((reason) => died({ reason }))),
+          // Released when it died (a no-op then), on close(), or when the scope closes.
+          (h) => Effect.sync(() => stop(h, 'closed', false)),
+        ),
+    });
+
+    /** Sends one subscribe and waits for its answer; interrupted (a timeout), it is forgotten. */
+    const request = (h: Host, id: number, dir: string, opts: parcelWatcher.Options | undefined) =>
+      Effect.callback<void, Error>((resume) => {
+        h.pending.set(id, {
+          resolve: () => resume(Effect.void),
+          reject: (error) => resume(Effect.fail(error)),
+        });
+        syncRef(h);
+        try {
+          h.child.send({ t: 'sub', id, dir, opts: opts ?? {} });
+        } catch (error) {
+          h.pending.delete(id);
+          syncRef(h);
+          resume(Effect.fail(toError(error)));
+        }
+        return Effect.sync(() => {
+          h.pending.delete(id);
+          syncRef(h);
+        });
+      });
+
+    const subscribeEffect = (
+      dir: string,
+      fn: Callback,
+      opts: parcelWatcher.Options | undefined,
+    ): Effect.Effect<parcelWatcher.AsyncSubscription, Error> =>
+      Effect.gen(function* () {
+        const h = yield* Effect.mapError(supervisor.get, unavailableError);
+        const id = nextId++;
+        h.callbacks.set(id, fn);
+        yield* request(h, id, dir, opts).pipe(
+          Effect.timeoutOrElse({
+            duration: Duration.millis(timeoutMs),
+            orElse: () =>
+              Effect.suspend(() => {
+                h.callbacks.delete(id);
+                fail(h, 'not answering');
+                return Effect.fail(new Error(`watch host did not answer within ${timeoutMs} ms`));
+              }),
+          }),
+          Effect.tapError(() => Effect.sync(() => h.callbacks.delete(id))),
+        );
+        return {
+          unsubscribe: async () => {
+            // Fire and forget: the host may be stuck; nothing here may wait for it.
+            if (!h.callbacks.delete(id) || h.stopped) return;
+            try {
+              if (h.child.connected) h.child.send({ t: 'unsub', id });
+            } catch {
+              // The host is gone; nothing to release.
+            }
+          },
+        };
+      });
+
+    const host: WatchHost = {
+      subscribe: (dir, fn, opts) => runPromise(subscribeEffect(dir, fn, opts)),
+      warm() {
+        if (supervisor.running.length === 0) supervisor.startNow();
+      },
+      close() {
+        for (const h of supervisor.running) supervisor.stopNow(h);
+      },
+      get pid() {
+        return supervisor.running[0]?.child.pid;
       },
     };
-  };
+    return host;
+  });
 
-  return {
-    subscribe,
-    warm() {
-      if (!host || host.stopped) host = start();
-    },
-    close() {
-      if (host) stop(host, 'closed', false);
-    },
-    get pid() {
-      return host?.child.pid;
-    },
-  };
+/** The watch host for Promise-only callers: never closed for good (`close()` stops the current one). */
+export function createWatchHost(options: WatchHostOptions): WatchHost {
+  return Effect.runSync(Scope.provide(Scope.makeUnsafe())(makeWatchHost(options)));
+}
+
+/** The daemon's watch host as a scoped service (#46): released with the daemon's runtime. */
+export class WatchHostService extends Context.Service<WatchHostService, WatchHost>()(
+  '@octopus-diff/daemon/WatchHost',
+) {
+  static layer(options: WatchHostOptions): Layer.Layer<WatchHostService> {
+    return Layer.effect(WatchHostService, makeWatchHost(options));
+  }
 }
