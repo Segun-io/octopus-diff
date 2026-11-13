@@ -195,12 +195,20 @@ export interface GitCore {
   /**
    * Files below each child directory of a tree object, from one `ls-tree -r -z <tree oid>` (#9
    * security review P3-3: one process for many sibling directories instead of one each). Only
-   * children that are directories are listed. Memoized by (common dir, oid); a failure is
-   * remembered too (an output above the cap for good, others for a minute). Optional.
+   * children that are directories are listed. Memoized by (common dir, oid) in compact form,
+   * within the tree cache's byte budget; a failure is remembered too (an output above the cap for
+   * good, others for a minute). Optional.
    */
   countTreeChildren?(
     worktree: WorktreeLocator,
-    options: { tree: string } & CallOptions,
+    options: {
+      tree: string;
+      /**
+       * Only these children (Greptile, PR #99 round 3): the answer holds just their counts (a
+       * name with no file below is absent). Without it, every child directory.
+       */
+      names?: ReadonlyArray<{ name: string; rawName?: string }>;
+    } & CallOptions,
   ): Promise<GitTreeChildCount[]>;
 
   /** Kills in-flight git processes and rejects queued work. */

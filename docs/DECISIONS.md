@@ -4976,3 +4976,9 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      not "unknown ref". Nothing is fetched. The daemon also checks the directory (`dirKeyProblem`: no empty, `.` or
      `..` component, also inside `rawPath`) before anything else, so an unborn HEAD answers 400 like every other
      worktree (since #417 git-core already saw the path through the HEAD read; the check no longer depends on it).
+
+### File explorer: Greptile review of PR #99, round 3 (2026-11-13)
+
+432. **Additive contract: `countTreeChildren({ tree, names })`.** With `names` the answer holds only those children's
+     counts (the daemon asks for the deleted-only directories it checks, #434); without it, every child directory as
+     before. Nothing renamed or removed.
