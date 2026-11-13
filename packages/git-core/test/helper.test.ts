@@ -1411,6 +1411,12 @@ describe.skipIf(!helperOn)('helper crashes', { timeout: 60_000 }, () => {
       });
       await until(() => /\d+\n/.test(out), 20_000, 'the zombie pid');
       const zombie = Number(out.trim());
+      // Its own group, and dead: a loaded machine may not have run the child's setsid() yet.
+      await until(
+        () => processTable().some((p) => p.pid === zombie && p.pgid === zombie && p.zombie),
+        20_000,
+        'the zombie leading its own group',
+      );
       const warnings: string[] = [];
       const gone = await reapGroup(zombie, {
         maxMs: 300,
