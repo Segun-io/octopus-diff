@@ -24,11 +24,13 @@ import { createLogger } from './logger.js';
 import { ensurePrivateDir, resolveDirs } from './paths.js';
 import { RepositoryInfoService } from './repositories.js';
 import { ReviewControls } from './review-controls.js';
+import { type DaemonRuntime, makeDaemonRuntime } from './runtime.js';
 import { hostForUrl, isLoopbackHost, isWildcardHost } from './security.js';
 import { SettingsService } from './settings.js';
 import { StaticFiles } from './static.js';
 import { Store } from './store.js';
 import { loadOrCreateToken } from './token.js';
+import { WatchHostService } from './watch-host.js';
 import type { SubscribeFn } from './watcher.js';
 
 export const DEFAULT_VERSION = '0.0.0-dev';
@@ -202,6 +204,9 @@ export const startDaemon = (async (options: DaemonOptions = {}): Promise<Daemon>
     ...(internal.now ? { now: internal.now } : {}),
   });
 
+  // The Effect runtime (#46): scoped services such as the watch host, released on close.
+  const runtime: DaemonRuntime = makeDaemonRuntime({ logger });
+
   const watch = { ...options.watch };
   const debounceMs = clampDebounce(watch.debounceMs, logger);
   if (debounceMs !== undefined) watch.debounceMs = debounceMs;
@@ -228,7 +233,9 @@ export const startDaemon = (async (options: DaemonOptions = {}): Promise<Daemon>
     ...(internal.pollDegradedFocusedMs !== undefined
       ? { pollDegradedFocusedMs: internal.pollDegradedFocusedMs }
       : {}),
-    ...(internal.subscribe ? { subscribe: internal.subscribe } : {}),
+    ...(internal.subscribe
+      ? { subscribe: internal.subscribe }
+      : { watchHost: runtime.runtime.runSync(WatchHostService) }),
     ...(internal.initialSummaryWaitMs !== undefined
       ? { initialSummaryWaitMs: internal.initialSummaryWaitMs }
       : {}),
@@ -277,6 +284,7 @@ export const startDaemon = (async (options: DaemonOptions = {}): Promise<Daemon>
     repositories.close();
     await forges?.close().catch(() => {});
     await core.close().catch(() => {});
+    await runtime.dispose().catch(() => {});
     hub.close();
     if (ownsGitCore) await gitCore.dispose().catch(() => {});
     store.close();
@@ -388,6 +396,9 @@ export const startDaemon = (async (options: DaemonOptions = {}): Promise<Daemon>
         await core
           .close()
           .catch((error) => logger.warn('error while stopping the core', { error }));
+        await runtime
+          .dispose()
+          .catch((error) => logger.warn('error while stopping the runtime', { error }));
         hub.close();
         // SSE streams were ended above; give responses a moment to flush, then cut the rest.
         await new Promise<void>((resolve) => {

@@ -11,13 +11,27 @@
  * helper announced but whose pid never arrived (it died while starting git) is not retried: git
  * may be running. A helper that exits before it says READY counts as
  * a start failure; after `MAX_START_FAILURES` in a row, or `MAX_CRASHES` within `CRASH_WINDOW_MS`,
- * the pool turns itself off and the runner spawns git directly (logged once).
+ * the pool turns itself off and the runner spawns git directly (logged once). The pool's
+ * lifecycle (lazy start, restarts with a bounded backoff, giving up, close) is an Effect
+ * `Supervisor` (`supervisor.ts`, #46); the protocol and the failure model are here.
  */
 import { AsyncLocalStorage, AsyncResource } from 'node:async_hooks';
 import { type ChildProcess, spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import type { Logger } from '@octopus-diff/contracts';
+import * as Context from 'effect/Context';
+import * as Duration from 'effect/Duration';
+import * as Effect from 'effect/Effect';
+import * as Exit from 'effect/Exit';
+import * as Layer from 'effect/Layer';
+import * as Scope from 'effect/Scope';
+import {
+  makeSupervisor,
+  type RestartPolicyOptions,
+  restartPolicy,
+  type Supervisor,
+} from './supervisor.js';
 
 const HEADER_BYTES = 9;
 /** Largest request frame the helper accepts (`MAX_REQUEST_FRAME` there). */
@@ -642,88 +656,133 @@ class HelperProcess {
 }
 
 /**
- * Up to `processes` helpers, started lazily; each spawn goes to the least busy one. A helper that
- * dies is replaced on the next spawn.
+ * The pool's restart policy (#46): a helper that dies is replaced on the next spawn, at once the
+ * first time within the crash window and after a short backoff when it keeps dying (git is
+ * spawned directly meanwhile). The limits are those of #368: `MAX_START_FAILURES` deaths before
+ * READY in a row, or `MAX_CRASHES` deaths within `CRASH_WINDOW_MS`, and the pool gives up.
+ */
+export const HELPER_RESTART_POLICY: RestartPolicyOptions = {
+  window: Duration.millis(CRASH_WINDOW_MS),
+  maxDeaths: MAX_CRASHES,
+  maxStartFailures: MAX_START_FAILURES,
+  backoff: { base: Duration.millis(250), max: Duration.seconds(2), immediate: 1 },
+};
+
+/**
+ * Up to `processes` helpers, started lazily; each spawn goes to the least busy one. Their
+ * lifecycle (slots, restarts, giving up, close) is a `Supervisor` (`supervisor.ts`); everything
+ * else, the protocol and what a death means for the requests, stays in `HelperProcess`.
  */
 export class HelperPool {
-  private readonly helpers: Array<HelperProcess | null>;
-  private startFailures = 0;
-  private crashes: number[] = [];
-  private closed = false;
   /** True once the pool gave up (start failures or a crash loop): spawn directly. */
   disabled = false;
 
-  constructor(private readonly options: HelperPoolOptions) {
-    this.helpers = Array.from({ length: Math.max(1, options.processes) }, () => null);
+  private constructor(
+    private readonly supervisor: Supervisor<HelperProcess>,
+    private readonly closeScope: () => Promise<void>,
+  ) {}
+
+  /**
+   * A pool in the current scope and context (a test's `TestClock` drives its restart policy):
+   * closing that scope, or `close()`, ends every helper.
+   */
+  static make(
+    options: HelperPoolOptions,
+    policy: RestartPolicyOptions = HELPER_RESTART_POLICY,
+  ): Effect.Effect<HelperPool, never, Scope.Scope> {
+    return Effect.gen(function* () {
+      const scope = yield* Scope.fork(yield* Effect.scope);
+      const context = yield* Effect.context<never>();
+      let pool: HelperPool | null = null;
+      const supervisor = yield* Scope.provide(scope)(
+        makeSupervisor<HelperProcess>({
+          name: 'git helper',
+          slots: Math.max(1, options.processes),
+          policy: restartPolicy(policy),
+          acquire: (died) =>
+            Effect.acquireRelease(
+              Effect.sync(() =>
+                // Outside any call's async context (review #4).
+                inRootContext(
+                  () =>
+                    new HelperProcess(options, (_helper, beforeReady) =>
+                      died({ reason: 'the git helper process exited', beforeReady }),
+                    ),
+                ),
+              ),
+              (helper) => Effect.promise(() => helper.close()),
+            ),
+          onGiveUp: (decision, _death, helper) => {
+            if (pool) pool.disabled = true;
+            const reason =
+              decision.gaveUp === 'start-failures'
+                ? 'it failed to start'
+                : `it exited ${decision.deaths} times within a minute`;
+            options.logger.warn(`git helper disabled (${reason}); spawning git directly`, {
+              entry: options.entry,
+              error: helper.lastError,
+            });
+          },
+        }),
+      );
+      pool = new HelperPool(supervisor, () =>
+        Effect.runPromiseWith(context)(Scope.close(scope, Exit.void)),
+      );
+      return pool;
+    });
   }
 
+  /** A helper can take a request now: one is running, or one may start. */
   get available(): boolean {
-    return !this.disabled && !this.closed;
+    return (
+      !this.disabled &&
+      !this.supervisor.closed &&
+      (this.live().length > 0 || this.supervisor.canStartNow)
+    );
   }
 
   /** PIDs of the in-flight git processes the helpers announced (tests, diagnostics). */
   childPids(): number[] {
-    return this.helpers.flatMap((h) => (h && !h.dead ? h.childPids() : []));
+    return this.live().flatMap((h) => h.childPids());
   }
 
   /** PIDs of the running helpers (tests, diagnostics). */
   pids(): number[] {
-    return this.helpers.flatMap((h) => (h && !h.dead && h.pid !== undefined ? [h.pid] : []));
+    return this.live().flatMap((h) => (h.pid === undefined ? [] : [h.pid]));
   }
 
-  startGit(request: HelperSpawnRequest, handlers: ProcHandlers): ProcHandle {
+  /** null: no helper can take it now (a restart backoff); the caller spawns directly. */
+  startGit(request: HelperSpawnRequest, handlers: ProcHandlers): ProcHandle | null {
     // The least busy running helper; a new one only when every running one is busy.
     let best: HelperProcess | null = null;
-    let free = -1;
-    for (let i = 0; i < this.helpers.length; i++) {
-      const helper = this.helpers[i];
-      if (!helper || helper.dead) {
-        if (free < 0) free = i;
-        continue;
-      }
+    for (const helper of this.live()) {
       if (!best || helper.load < best.load) best = helper;
     }
-    if (!best || (best.load > 0 && free >= 0)) {
-      const at = free;
-      best = inRootContext(
-        () =>
-          new HelperProcess(this.options, (dead, beforeReady) => this.onDead(dead, beforeReady)),
-      );
-      this.helpers[at] = best;
-    }
-    return best.startGit(request, handlers);
+    if (!best || best.load > 0) best = this.supervisor.startNow() ?? best;
+    return best ? best.startGit(request, handlers) : null;
   }
 
   async close(): Promise<void> {
-    this.closed = true;
-    await Promise.all(this.helpers.map((helper) => helper?.close()));
+    await this.closeScope();
   }
 
   /** SIGKILLs every helper (tests: crash recovery). */
   killHelpers(): void {
-    for (const helper of this.helpers) helper?.kill();
+    for (const helper of this.supervisor.running) helper.kill();
   }
 
-  private onDead(helper: HelperProcess, beforeReady: boolean): void {
-    const at = this.helpers.indexOf(helper);
-    if (at >= 0) this.helpers[at] = null;
-    if (this.closed || this.disabled) return;
-    if (beforeReady) this.startFailures += 1;
-    else this.startFailures = 0;
-    const now = Date.now();
-    this.crashes = [...this.crashes.filter((t) => now - t < CRASH_WINDOW_MS), now];
-    const reason =
-      this.startFailures >= MAX_START_FAILURES
-        ? 'it failed to start'
-        : this.crashes.length >= MAX_CRASHES
-          ? `it exited ${this.crashes.length} times within a minute`
-          : null;
-    if (reason) {
-      this.disabled = true;
-      this.options.logger.warn(`git helper disabled (${reason}); spawning git directly`, {
-        entry: this.options.entry,
-        error: helper.lastError,
-      });
-    }
+  private live(): HelperProcess[] {
+    return this.supervisor.running.filter((h) => !h.dead);
   }
 }
+
+/** The runner's helper pool as a scoped service (#46): `gitHelperPoolLayer` builds it. */
+export class GitHelperPool extends Context.Service<GitHelperPool, HelperPool>()(
+  '@octopus-diff/git-core/GitHelperPool',
+) {}
+
+/** The pool as a `Layer`: built lazily by the runner's `ManagedRuntime`, released on dispose. */
+export const gitHelperPoolLayer = (
+  options: HelperPoolOptions,
+  policy?: RestartPolicyOptions,
+): Layer.Layer<GitHelperPool> => Layer.effect(GitHelperPool, HelperPool.make(options, policy));

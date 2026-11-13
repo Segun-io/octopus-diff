@@ -4596,3 +4596,167 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
 394. **Warm-ups are quick (Greptile P2 on PR #98).** A warm-up in a `FAKE_MODE: 'hang'` runner ran `sleep 30`. The fake
      now runs every `warm` job in its fast default mode, whatever `FAKE_MODE` says. `helper.test.ts` went from 58 s to
      29 s.
+
+## Effect foundation (session, 2026-11-13; roadmap #46, step 29; decision 1 of #25)
+
+395. **Effect is adopted in the daemon core and in git-core's runner internals, incrementally.** `effect@4.1.4` (MIT, no
+     dependencies of its own) is a dependency of `@octopus-diff/git-core` and `@octopus-diff/daemon`, `@effect/vitest`
+     a dev dependency of both. Not in `packages/contracts` (zod stays), not in `apps/web` (React Query stays), not in
+     `packages/forge`; Hono and `node:sqlite` stay. The CLI gets it through the daemon bundle (`pack.mjs` bundles it;
+     no packaging change). Layering rules:
+     - **Effect stays inside** `packages/git-core/src/runner/` and `apps/daemon/src/`. Every public API stays
+       Promise-based and unchanged: `GitCore`, `createGitCore`, `GitRunner`, `DaemonCore`, `startDaemon`/`DaemonHandle`,
+       `WatchHost`/`createWatchHost`. No Effect type appears in `packages/contracts`.
+     - **One `ManagedRuntime` per owner of long-lived resources**: the daemon (`makeDaemonRuntime`, `runtime.ts`: the
+       watch host's layer and the logger) and each `GitRunner` (the `GitHelperPool` layer, built on the first helper
+       spawn, disposed by `dispose()`). Layers are scoped: disposing a runtime closes their scopes, which kills the
+       processes they own.
+     - **Promise callers enter through `runAtBoundary(runtime, effect, { signal })`** (`DaemonRuntime.run` in the
+       daemon). Effect code calls Promise code with `Effect.callback` / `Effect.promise` and a cancel step.
+     - **Hot paths stay plain.** The per-spawn path of the runner reads the supervisor's state synchronously (`running`,
+       `canStartNow`, `startNow`) and never enters a fiber; only starts, deaths and close run Effects (`runSyncWith` the
+       context captured when the supervisor was built, so a test's `TestClock` applies).
+     - **Per-module imports** (`import * as Effect from 'effect/Effect'`), as T3 Code's server does.
+     - git-core's `index.ts` exports the supervisor and the boundary helpers (the daemon's watch host uses the
+       supervisor). An additive export of git-core, not a contract change.
+396. **Supervision is one generic `Supervisor` (`packages/git-core/src/runner/supervisor.ts`); the processes' own code is
+     untouched.** It owns up to `slots` instances, each in a `Scope` of its own, and only decides lifecycle:
+     - started lazily (`get`, or `startNow` for synchronous callers);
+     - an instance reports its own death (`died`); the supervisor frees its slot, feeds the `Death` to the restart
+       policy, and closes the instance's scope (a no-op release for a dead process);
+     - the restart policy is an Effect `Schedule<RestartDecision, Death>`: its delay is the backoff before the next
+       start (`get` sleeps on the `Clock`, `startNow` returns null meanwhile), its end means giving up (`onGiveUp` once,
+       then `get` fails with `SupervisorUnavailable`);
+     - `stop(instance)` releases one on purpose and is not a death;
+     - closing the supervisor's scope marks it closed first, then releases every instance in parallel and waits for each
+       release; nothing starts afterwards, so nothing is orphaned.
+
+     `restartPolicy({ window, maxDeaths?, maxStartFailures?, backoff? })` is the bounded schedule both owners use: a
+     sliding crash window (deaths older than it are forgotten, so is the backoff), give up at `maxDeaths` within it or at
+     `maxStartFailures` before-ready deaths in a row, and a backoff that is 0 for the first `immediate` deaths within
+     the window and then `base` · 2^k up to `max`. (`Schedule.exponential` alone never forgets old crashes.)
+     - **Git helpers** (`HELPER_RESTART_POLICY`): the limits of #368 exactly (2 start failures in a row, 5 deaths within
+       a minute: the pool gives up and git is spawned directly, with the same warning text). **New:** after the first
+       death within the window, a replacement waits 250 ms, doubling to 2 s; meanwhile `HelperPool.startGit` returns
+       null and the runner spawns git directly (the path it already had for a disabled pool). The first death within a
+       minute is still replaced at once, so a crashed helper's retried request runs on its replacement (#368, the
+       existing crash tests).
+     - **Watch host** (`WATCH_HOST_RESTART_POLICY`): never gives up (the watcher polls meanwhile); the first death within
+       a minute is replaced on the next subscribe at once, later ones after 1 s doubling to 30 s. Before, a host that
+       kept dying was respawned on every re-subscribe. A host that does not answer a subscribe in time counts as a death;
+       `close()` (the watcher's close) does not.
+     - The watch host's request timeout is `Effect.timeoutOrElse` on the `Clock` instead of a `setTimeout` per request.
+       Same 60 s default, same messages, same order (the request is forgotten, the host stopped, its subscribers told).
+397. **Error model.** Effect code fails with typed errors: `GitCoreError` (`runGit`, `decodeUnknown`) or tagged errors
+     of its own (`SupervisorUnavailable`, internal to the supervisor's owners: the watch host turns it into an `Error`,
+     "watch host closed: …" / "watch host gave up: …", at its Promise API). At `runAtBoundary` a failure rejects with
+     the error itself, so a `GitCoreError` stays one and the daemon's `toApiError` maps it to an `ApiErrorBody` as
+     before; an interruption rejects with `GitCoreError('aborted')` (the code the daemon already handles for aborted
+     requests); a defect rejects with the defect (→ `internal`, 500). No `any` (Biome's `noExplicitAny` stays an error).
+     `decodeUnknown(schema, input)` takes any Standard Schema v1 (the contracts' zod 4 schemas implement it), so
+     decoding needs no zod-to-Effect-Schema port; it fails with `GitCoreError('invalid_argument')` and `details.issues`.
+398. **Interruption and AbortSignal are the same thing at the boundary.** `runGit(runner, args, options)` hands the
+     runner `Effect.callback`'s AbortSignal (merged with `options.signal` by `AbortSignal.any`), and its cancel step
+     waits for the run to settle. So interrupting the fiber does what aborting the signal does today (queued: never
+     spawns; running: SIGTERM to the group, SIGKILL after `ABORT_GRACE_MS`, the slot held until exit), and
+     `Fiber.interrupt` returns only once git has exited. The other way, `runAtBoundary`'s `signal` interrupts the fiber
+     (`ManagedRuntime.runPromiseExit(effect, { signal })`). `currentCall()` (AsyncLocalStorage) is not read inside
+     fibers: Effect code passes signals and lanes explicitly (#47 will thread the lane).
+399. **Logging goes through the existing logger.** The daemon's runtime replaces Effect's loggers with
+     `effectLoggerFor(logger)`: the first string of a message is the message, other parts are `data`, the fiber's log
+     annotations are fields, a cause is `error`; `MinimumLogLevel` is `All` because the daemon's logger filters by
+     level and redacts. Supervision messages are still written by their owners with the same text (`git helper
+     disabled (…)`, `watch host stopped; …`), so nothing that reads the logs changes.
+400. **Tests use `TestClock` for time and real conditions for processes.** `@effect/vitest`'s `it.effect` runs on a
+     `TestClock`; everything time-based in the supervision (crash windows, backoffs, the watch host's request timeout)
+     reads Effect's `Clock`, so `TestClock.adjust` advances it deterministically and no test sleeps for it. Real
+     processes are waited on with real-condition polls (`until`: a pid gone, a log line, an event), never with fixed
+     sleeps. Tests of the runner's cancellation use `it.live`, because `ABORT_GRACE_MS` is still a `setTimeout` in the
+     runner (#47 moves it). Before/after of a timer test: watch-host.test.ts "kills a host that stops answering" uses a
+     real 500 ms timeout and asserts `Date.now() - started < 3000` (load-sensitive both ways); its TestClock version
+     (watch-host-supervision.test.ts) keeps the default 60 s, adjusts the clock by 59 s (still pending), then by 1 s
+     (rejected), and measures nothing in real time. The old test stays, unchanged, as the acceptance asks.
+401. **Not migrated yet (on purpose).** The runner's `LaneScheduler`, timeouts and abort grace timers (#47); the
+     watcher's timers, `Coalescer` and the event fan-out (#48); the `DaemonCore` caches (#49); Hono handlers (none calls
+     the runtime yet; the boundary is ready for them); the forge service, the store, settings. The processes' own code
+     is unchanged: `HelperProcess` (frames, pid channel, probes, the crash cleanup and `reapGroup`), `git-helper.ts`,
+     the watch host's child source and protocol, the exit hook that SIGKILLs live hosts on exit.
+402. **Cost** (CLI tarball, `pnpm --filter octopus-diff run pack:tarball`): 9 461 344 → 9 896 452 bytes (+435 108,
+     +4.6 %); the bundled `dist/index.js` 1 895 520 → 2 064 589 bytes (+169 069; Effect's share is 150 912 bytes over 42
+     modules, the core runtime); its source map +2.9 MB (Effect's sources). `tsc` outputs: `apps/daemon/dist` +17 KB,
+     `packages/git-core/dist` +46 KB. CLI cold start (`--version` of the unpacked tarball, median of 15, two rounds):
+     88.8 / 90.6 ms → 97.3 / 95.6 ms, i.e. +5 to +8 ms of module evaluation.
+
+     The default bench runs the **unbundled** `apps/daemon/dist`, where Effect's ESM files load one by one from
+     `node_modules`: alternating runs of `main` and this branch (two each) show "daemon listening" 610 / 575 → 663 /
+     663 ms and RSS 141 / 140 → 176 / 176 MiB, every budget still passing, cold paint 157 / 156 → 165 / 163 ms, and
+     warm reload, edit → SSE and the burst diff within noise. Importing that dist alone costs +45-50 ms and +10 MiB RSS
+     (+5.3 MiB heap); a 30-repository start of it, after GC, +5.6 MiB heap (the import's share; RSS beyond that follows
+     V8's heap sizing). The **bundled** daemon, as the CLI tarball ships it, imports +6 ms slower with +0.8 MiB heap
+     and +3-8 MiB RSS, and starts within noise. So the cost is loading Effect's code, not running it; bundling removes
+     most of it. Recorded as a known gap for dev and bench runs, not fixed here. Details in
+     `docs/reports/effect-foundation.md`.
+
+### Effect foundation: Greptile review (PR #100, 2026-11-13)
+
+403. **`close()` of the watch host cancels every waiting subscribe at once (P1).** After repeated crashes a subscribe
+     can be sleeping out the restart backoff (up to 30 s) in `supervisor.get` when `WatcherService.close()` calls
+     `host.close()`. There was no running host to stop, so the subscribe woke later and started a new host. The watcher
+     awaits its subscribes, and the daemon disposes its runtime only afterwards, so shutdown waited for the backoff,
+     plus the new host's subscribe timeout if that one hung. Now the supervisor has **generations**. Every wait in `get`
+     (a backoff sleep, joining a start in flight) races the current generation's gate, a `Deferred`.
+     `Supervisor.stopAll` (the watch host's `close()` calls `stopAllNow()`) works in four steps:
+     - it ends the generation: every pending `get` fails at once with `SupervisorUnavailable` (`closed`, reason
+       `stopped`), which the watch host reports as "watch host closed: stopped";
+     - it stops every running instance (not a death);
+     - it clears the backoff: a deliberate stop is not a crash, while the crash window stays, so a later crash
+       continues where the window left off;
+     - it leaves the supervisor open: the next subscribe starts a host at once.
+
+     Closing the scope ends the generation too. Nothing is started after a stop, because a start that was in flight is
+     released when its acquisition ends, not installed. Test (TestClock, failing first: the subscribe stayed asleep):
+     seven crashes take the backoff to its 30 s cap, a subscribe sleeps 29 s into it, then `close()`. The subscribe
+     rejects without the clock moving, `started` is unchanged, and a later subscribe starts a host at once.
+404. **A start reserves its slot and its scope before `acquire` runs (P2).** `startIn` used to leave its slot empty and
+     its scope untracked while it awaited `acquire`. With an asynchronous acquisition (allowed for `get`), two
+     concurrent starts could pick the same slot and overwrite an instance, and a close during the acquisition missed
+     the new scope. Now:
+     - `reserve(at)` puts a `Starting` entry in the slot synchronously, holding the instance's scope, its generation
+       and a `done` Deferred;
+     - `acquireInto` runs `acquire` in that scope, under `uninterruptibleMask`, and **installs** the instance only if
+       the reservation is still current (same generation, not closed). Otherwise (a failure, an interruption, a close
+       or `stopAll` meanwhile) it closes the scope, which releases what was acquired, and fails `done`;
+     - `get` shares a start in flight of the current generation. When it starts one itself, it runs the acquisition in
+       a fiber of its own and waits on `done` through the gate, like every other caller. So `stopAll` or a close ends
+       even the starter's wait while an uninterruptible `acquireRelease` acquisition runs, and a caller that is
+       interrupted does not lose the shared start;
+     - concurrent starts take distinct slots (`startNow` during an asynchronous `get` takes the next one);
+     - the close finalizer releases the running instances and then waits for starts in flight, which release
+       themselves: when the owner's scope has closed, nothing it acquired is left;
+     - `startNow` keeps its synchronous inline path.
+
+     Tests (TestClock gates on the acquisition, failing first: 6 of 6 failed before):
+     - two concurrent `get`s share one acquisition;
+     - `startNow` during an asynchronous start takes the other slot and both are released on close;
+     - a close during an acquisition fails the waiter at once with `closed`, returns once what was acquired is released
+       (acquires 1, releases 1), and leaves nothing running;
+     - an interrupted waiter leaves the start reserved, and it is installed and then released on close;
+     - `stopAll` fails a backoff sleeper and a waiter on a start in flight.
+405. **Same class in the git helper pool: not affected, now covered by the same code.** `HelperPool` acquires
+     synchronously (`startNow` inside `startGit`, never `get`), and nothing waits in a backoff: during one `startGit`
+     returns null and the runner spawns directly. So there are no overlapping starts and no sleeping callers. Its close
+     (`runner.dispose()` → runtime dispose → the supervisor's finalizer) releases every helper and waits for each. The
+     reservation and generation code is shared, and the pool's tests (`supervisor.test.ts` "the git helper pool under
+     supervision", `helper.test.ts`) pass unchanged.
+
+     Mutation check: 9 new mutants. Eight were killed:
+     - `stopAll` not ending the generation, or keeping the backoff;
+     - ungated waits;
+     - the watch host's `close()` stopping only running hosts;
+     - no reservation;
+     - `get` not sharing the start in flight;
+     - the close not waiting for starts in flight;
+     - a cancelled start not released.
+
+     One is equivalent: dropping `!closed` from the install check, since a close also ends the generation and the
+     generation check refuses the install. The 14 mutants of #46 are still killed.

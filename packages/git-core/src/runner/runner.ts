@@ -8,16 +8,19 @@ import {
   type Logger,
   noopLogger,
 } from '@octopus-diff/contracts';
+import * as ManagedRuntime from 'effect/ManagedRuntime';
 import { assertAllowedGitArgs, assertStdinAllowed, DIFF_FAMILY } from './allowlist.js';
 import { abortedError, currentCall } from './call-context.js';
 import { CONFIG_PIN_ARGS } from './config-pins.js';
 import { buildGitEnv, withConfigEnv } from './env.js';
 import {
   defaultHelperEntry,
+  GitHelperPool,
+  gitHelperPoolLayer,
   HELPER_MAX_ARGV,
   HELPER_MAX_ENV,
   HELPER_MAX_REQUEST_FRAME,
-  HelperPool,
+  type HelperPool,
   type HelperSpawnRequest,
   type ProcHandle,
   type ProcHandlers,
@@ -403,6 +406,8 @@ export class GitRunner {
   private resolvedBinary: string | null = null;
   private readonly helper: HelperConfig | null;
   private pool: HelperPool | null = null;
+  /** Owns the helper pool's scope (#46): built on the first helper spawn, disposed by `dispose`. */
+  private runtime: ManagedRuntime.ManagedRuntime<GitHelperPool, never> | null = null;
   private readonly helperTest: HelperTestOptions;
 
   constructor(options: GitRunnerOptions = {}) {
@@ -486,8 +491,9 @@ export class GitRunner {
     this.disposed = true;
     this.scheduler.rejectAll(disposedError());
     for (const fail of [...this.children.values()]) fail(disposedError());
-    // The helpers SIGKILL whatever is still running and exit (no orphans).
-    await this.pool?.close();
+    // The helpers SIGKILL whatever is still running and exit (no orphans): closing the runtime's
+    // scope releases the pool's supervisor, which closes every helper.
+    await this.runtime?.dispose();
   }
 
   private execute(
@@ -738,7 +744,9 @@ export class GitRunner {
         input: request.input,
         maxOutputBytes: request.maxOutputBytes,
       };
-      if (helperRequestFits(message)) return pool.startGit(message, request.handlers);
+      // null: no helper can take it right now (a restart backoff): spawn directly.
+      const handle = helperRequestFits(message) ? pool.startGit(message, request.handlers) : null;
+      if (handle) return handle;
     }
     return spawnDirect(binary, argv, request);
   }
@@ -746,14 +754,19 @@ export class GitRunner {
   private helperPool(binary: string): HelperPool | null {
     if (!this.helper) return null;
     if (!this.pool) {
-      this.pool = new HelperPool({
-        gitBinary: binary,
-        entry: this.helper.entry,
-        processes: this.helper.processes,
-        logger: this.logger,
-        ...(this.helper.execPath ? { execPath: this.helper.execPath } : {}),
-        test: this.helperTest,
-      });
+      const runtime = ManagedRuntime.make(
+        gitHelperPoolLayer({
+          gitBinary: binary,
+          entry: this.helper.entry,
+          processes: this.helper.processes,
+          logger: this.logger,
+          ...(this.helper.execPath ? { execPath: this.helper.execPath } : {}),
+          test: this.helperTest,
+        }),
+      );
+      // The layer builds synchronously (nothing starts until the first spawn asks for a helper).
+      this.pool = runtime.runSync(GitHelperPool);
+      this.runtime = runtime;
     }
     return this.pool.available ? this.pool : null;
   }
