@@ -4638,7 +4638,7 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      - daemon (`#treeListings`, 64 entries): the composed listing and its cursor key, by (project, commit, directory)
        for the tree view and (worktree, stateHash, HEAD, directory) for the working view, so a page or a repeat is a
        slice, never a recomposition.
-398. **The working view's rules** (`apps/daemon/src/tree.ts`, `packages/contracts/src/tree.ts`; differential test
+398. **The working view's rules** (amended by #407 and #408: one row per name, raw rename sources) (`apps/daemon/src/tree.ts`, `packages/contracts/src/tree.ts`; differential test
      against `git status` in `apps/daemon/test/tree.real-git.test.ts`).
      - The overlay is the `working` file list the daemon already holds for the summary's state (`#gitFilesAt`): warm,
        a listing costs no git process. HEAD is the summary's `headSha` (a full id: no ref lookup).
@@ -4666,9 +4666,9 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      on it); the daemon keeps the unmerged paths of the latest snapshot (`TreeBasis.conflicts`, only when the snapshot
      was not cut) and lays them over as `conflicted` when the listing is of the same `stateHash`.
 400. **Directory deltas come from consecutive summary snapshots, no git process** (`treeBasis` / `treeDelta`).
-     Per path the inputs of its working-view row are compared: the status letters, the rename source, and for `A`,
-     `D`, `R`, `C` paths the content signature (a content edit can re-pair renames under `--find-renames`). A content
-     edit of a modified file moves nothing. `dirs` names every ancestor of a path that moved (the root included) and
+     *Superseded in part by #409:* every field of a snapshot entry is compared now, so a content edit names its
+     ancestors too. Originally: per path the status letters, the rename source, and for `A`, `D`, `R`, `C` paths the
+     content signature were compared, and a content edit of a modified file moved nothing (wrong: see #409). `dirs` names every ancestor of a path that moved (the root included) and
      every omitted directory that appeared, went or changed count (itself included). `all: true` when HEAD moved, a
      snapshot was cut by its entry cap (2000 by default), or above 100 directories / 8000 characters. Absent when the
      daemon has no previous snapshot (first summary, after an error): a client refreshes everything then. The list is
@@ -4678,7 +4678,7 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      path or ref is 400 (schema). An unborn branch lists an empty root. A bare repository answers the tree view of
      `HEAD` without `ref`. A git-core without `listTree` answers 501.
 402. **Web data layer (`apps/web/src/api/tree.ts`).** One query per open directory,
-     `['tree', worktreeId, ref ?? '', rawPath ?? path]`, holding the loaded prefix (the #42 pattern: a refresh asks for
+     `['tree', worktreeId, ref ?? '', treeDirIdentity(dir)]` (was `rawPath ?? path`, ambiguous: #410), holding the loaded prefix (the #42 pattern: a refresh asks for
      the loaded count, a `restarted` page starts over). Working-view queries never go stale by time; tree views of a
      full commit id never do; of a branch or `HEAD`, after 30 s. `worktree.changed.dirs` of *every* event of a batch
      is accumulated (`collectTreeDirs`; the batch's delta map keeps only the latest event per worktree, which would
@@ -4707,3 +4707,48 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      `ZP8=` and one whose bytes are `64 ff` (base64 `ZP8=`) no longer hash alike. `worktree.changed.dirs` entries were
      already unambiguous (`rawPath` present or not); clients key them with `treeDirIdentity` too. Nothing renamed or
      removed.
+406. **A working-view listing is of one state: the file list's and its commit's** (Greptile P1 1). Before, after one
+     retry the route could combine a list git-core made of the worktree *now* (`of: 'now'`) with the HEAD of an older
+     summary, or a list made after a commit landed (still labelled with the summary, as git-core's full lists are)
+     with the old commit's tree: a newly committed file was in neither and vanished. Now (`DaemonCore.listTree`):
+     - the list is used only when git-core says it is of the summary it was asked for (`of: 'summary'`);
+     - HEAD is read *after* the list (`listTree` of `HEAD`: from the HEAD and ref files, no process when they can
+       tell) and must equal that summary's `headSha`; the list was read in between, so no commit landed under it, and
+       that HEAD read is also the listing used;
+     - otherwise a summary refresh runs (`refresher.current`, else a new refresh) and it is tried again, up to
+       `LIST_ATTEMPTS` (3) times; then **409 `conflict`** with `details: { retryable: true }`. A client retries (the web
+       data layer's query retries); a listing never mixes two states.
+     - The response's `stateHash` is that summary's; the composed listing is cached under it (and HEAD).
+     Tests (`tree-review.real-git.test.ts`, real git, a gate in a wrapped git-core): a commit lands before the list,
+     after the list, on every list (409); git-core lists a newer state than the daemon's summary (never labelled with
+     the older summary). All failed first. Warm cost: one HEAD read from files per request (re-measured below).
+407. **One row per name** (Greptile P1 2). A tracked file `d` deleted and a directory `d/` created (or a tracked
+     directory replaced by a file) gave two rows named `d`. Rule: the row that exists in the working copy wins (one
+     only in the working copy and not deleted first, then a live HEAD row, then HEAD's row) and carries
+     `replaces: <HEAD's kind>`. HEAD's side stays reachable by path: `GET /tree?path=d` of a directory that became a
+     file lists its deleted files. Both directions are in the differential test (`repl-f`, `repl-d`), a dedicated
+     real-git test and a unit test (also with the file count unknown).
+408. **Rename sources by their bytes** (Greptile P1 3). The working list's `oldPath` is a display string, so the
+     deleted row of a rename from a name that is not UTF-8 was keyed by the lossy text: the real source stayed
+     unchanged and a false deleted row appeared under the U+FFFD name. git-core now sets `oldRawPath` (#405) and the
+     overlay keys the source by it; rows carry `oldRawPath` / `renamedToRawPath`. Tested in git-core and the daemon
+     with a commit built by `git mktree` and a rename made in the index (no such name on disk, so it runs on APFS).
+409. **Directory deltas compare every field of a snapshot entry** (Greptile P1 4): status letters, rename source (as
+     `r:` raw or `p:` display), the worktree signature, and the HEAD and index object ids. Example of what was missed:
+     HEAD `A`, staged `B`, working `C`, then working back to `A`: status stays `MM` but the path leaves the working
+     list (`git diff HEAD`), so the row's marker and its directories' counts move with no status change. A content
+     edit of a modified file now names its ancestors (a few warm refetches; no git process on the daemon). Tests: the
+     A/B/C case; a table of transitions (unstaged and staged edits, MM, back to HEAD, unstage, rename and back, mode
+     change, untracked, untracked to ignored and back, a deleted directory and its restore); and a property test over
+     40 random operations: after each, every directory's listing is walked through the route before and after, and
+     the event's `dirs` must name every directory whose listing moved (or say `all`). Mutants without the signature,
+     the index id or any but the status letters are killed.
+410. **Raw and display directory identities are never confused** (Greptile P1 5). The web keyed directories by
+     `rawPath ?? path`, so the bytes `64 ff` (base64 `ZP8=`) and a directory literally named `ZP8=` shared a query,
+     a wanted count and event invalidations. Query keys, wanted counts and `dirs` effects use `treeDirIdentity`
+     (`r:` / `p:`), as does the contracts' listing key. The daemon's own keys are raw bytes (`bstrOf`), which were
+     already unambiguous, and `dirs` entries say raw or display by `rawPath`'s presence.
+411. **The web paging tests page** (Greptile P2 6). The fake daemon caps pages at 20 for a directory of 50; the tests
+     assert three requests with the cursors of the previous answers, a restart when the listing moves between page 1
+     and page 2 (restarted page, then a fresh first page) and that the result is the new listing. Mutants that drop the
+     cursor, ignore `restarted` or keep the restarted pages are killed.
