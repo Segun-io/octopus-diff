@@ -4899,7 +4899,8 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      unchanged and a false deleted row appeared under the U+FFFD name. git-core now sets `oldRawPath` (#416) and the
      overlay keys the source by it; rows carry `oldRawPath` / `renamedToRawPath`. Tested in git-core and the daemon
      with a commit built by `git mktree` and a rename made in the index (no such name on disk, so it runs on APFS).
-420. **Directory deltas compare every field of a snapshot entry** (Greptile P1 4): status letters, rename source (as
+420. **Directory deltas compare every field of a snapshot entry** (Greptile P1 4; extended by #433 to the working
+     list's rename pairs): status letters, rename source (as
      `r:` raw or `p:` display), the worktree signature, and the HEAD and index object ids. Example of what was missed:
      HEAD `A`, staged `B`, working `C`, then working back to `A`: status stays `MM` but the path leaves the working
      list (`git diff HEAD`), so the row's marker and its directories' counts move with no status change. A content
@@ -4938,7 +4939,8 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      Sizes are then null; nothing else changes. Tests: a real blobless clone (`--filter=blob:none`), with a wrapper that
      unsets `GIT_NO_LAZY_FETCH` (git before 2.44: the fallback, remembered) and one that also reports 2.40 (no `-l` at
      all); no spawn is a fetch.
-425. **The daemon's composed listings are bounded by bytes, one state per worktree** (P2-2). `TreeListingCache`: an
+425. **The daemon's composed listings are bounded by bytes, one state per worktree** (P2-2; git-core's child counts
+     share git-core's own budget since #434). `TreeListingCache`: an
      LRU bounded by an estimate of 64 MiB (UTF-16 strings plus 200 bytes per entry), a listing above it is served
      and not kept (and evicts nothing else); a new summary drops the worktree's working-view listings of other
      states, and an explicit refresh or removal drops all of them. Tree views (keyed by commit) stay in the LRU.
@@ -4956,7 +4958,8 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      daemon drops what `treeEntryProblem` flags (stricter than the schema: a name with `/` would collide with a nested
      path) and says how many in `skipped: { invalidName, tooLong }`; `total` and the pages do not count them.
      Availability only: nothing reads the working copy. Tested with a literally built tree and a 21-level chain.
-428. **One `ls-tree -r` for many deleted-only siblings; failures remembered** (P3-3). Up to 4 directories with only
+428. **One `ls-tree -r` for many deleted-only siblings; failures remembered** (P3-3; counts kept compactly and asked
+     for by name since #434). Up to 4 directories with only
      deletions below are counted one by one (`countTreeFiles`); more with one `ls-tree -r` of the listed directory
      counting by first component (`countTreeChildren`). Both share a failure memo in git-core per (common dir, tree):
      an output above the cap for good (an immutable tree fails the same way), anything else for a minute,
@@ -4982,3 +4985,34 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
 432. **Additive contract: `countTreeChildren({ tree, names })`.** With `names` the answer holds only those children's
      counts (the daemon asks for the deleted-only directories it checks, #434); without it, every child directory as
      before. Nothing renamed or removed.
+433. **Rename pairs of the working list move directories too** (Greptile P1, round 3). The working list (`git diff HEAD
+     --find-renames`) pairs a deleted path with a path new in the index by content, so a pair can appear or go while
+     the summary entry of one side stays the same. Example: `src/a` deleted (not staged, ` D` throughout), a
+     different `dst/b` staged, then `dst/b` edited to `src/a`'s content: only `dst/b`'s entry moves, but `src`'s
+     listing gains `renamedTo` on its deleted row. Rule (`treeBasis.candidates`, `treeDelta`): a path is a rename
+     candidate when its status letters have `D` (a source) or an index `A`, `R`, `C` or a worktree `A` (a target), and
+     the old path of a rename or copy is one too. When any candidate's entry moved (or one appeared or went), the
+     directories of **every** candidate of both states are named. That is a superset of the pairs that can have
+     changed, with no list needed when the event is announced (the new state's list is often not built yet). HEAD
+     moving already sends `all`. Ignoring the previous state's candidates is an equivalent mutant: a path that is a
+     candidate only before has a changed entry, so it is named anyway.
+     Tests: the exact sequence and its reverse, with real git (`dirs` holds `src` and `dst`, and `src/a` gains and
+     loses `renamedTo`); a unit test; and the brute-force property test now has 60 random operations, including
+     making, breaking and remaking pairs (a staged new file takes a deleted file's content, changes away, gets it
+     back), comparing every directory's full listing before and after with the event's `dirs`. That property test
+     alone kills the mutant without the rule.
+434. **git-core's child counts are compact, inside the byte budget, and asked for by name** (Greptile P2, round 3).
+     - `countTreeChildren` kept one object per child directory per tree, up to 2000 trees, outside any byte bound. Now
+       one LRU in `TreeCache` holds the listings and the child counts together under the 64 MiB estimate.
+     - Child counts are stored compactly: the names (bytes) sorted and joined by NUL into one string, plus `Uint32Array`
+       offsets and counts. About 2 bytes per name character and 8 per child, against about 100 for an object.
+     - The answer holds only the `names` asked for (#432). The daemon asks for the deleted-only directories it checks;
+       without `names` every child is decoded for that answer and not stored.
+     - Tests:
+       - unit: 100k children compact and within bytes;
+       - 20 wide root trees under an 8 MiB budget evict the oldest, together with listings;
+       - an item above the budget is not kept and evicts nothing;
+       - a real 100k-child tree is counted once, accounted between 0.8 and 3 MB, and answers the asked names only;
+       - the daemon passes the names of the checked directories.
+     - Mutants killed: children unaccounted, no eviction, names ignored, the daemon asking for all, an off-by-one in
+       the binary search (it never ends), an oversized item kept.
