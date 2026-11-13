@@ -4,7 +4,7 @@
 > (identity, themes, settings, bulk review; two unslop passes; the sidebar: folders, settle, a closed shelf) are done:
 > `docs/reports/ux-*.md`. Forges (read-only PR/MR status through `gh`/`glab`, 2026-11-09) are done: `docs/FORGES.md`,
 > `docs/reports/forges.md`. The Request tab and repository information on the Overviews (2026-11-09) are done:
-> `docs/FORGES.md`, `docs/reports/forge-details.md`.
+> `docs/FORGES.md`, `docs/reports/forge-details.md`. The Electron desktop app is in scope (2026-11-13): `docs/DESKTOP.md`.
 > This file is the source of truth for every session working on the project. If reality disagrees
 > with it, fix the code or update this file and log why in `docs/DECISIONS.md`. Never leave them out of sync.
 
@@ -47,7 +47,7 @@ these well (lazygit, GitButler, forges). A read-only product also removes the ri
 | Decision | Choice |
 |---|---|
 | Write capability | **Read-only** (no stage/commit/discard) |
-| Delivery | **Browser app first**; desktop shell (Tauri/Electron) is post-MVP |
+| Delivery | **CLI + browser app first; an Electron desktop app is in scope** (2026-11-13), the same model as T3 Code: the app runs the bundled CLI's daemon as a child process and shows the same web UI. The plan is `docs/DESKTOP.md` (DECISIONS #466-#475) |
 | Architecture | **Daemon + web UI** |
 | Agent coupling | **Agent-agnostic**: git only, no agent integration in MVP |
 
@@ -189,7 +189,7 @@ file's patch changed, show a subtle "updated" banner and keep reading position w
 ### 4.4 Post-MVP backlog (not for the first build)
 
 Interdiff "since I last reviewed" (store the reviewed patch, show the delta), comments that export as an
-agent prompt (difit-style), open-in-editor deep links, commit browser, desktop shell, remote access (Tailscale),
+agent prompt (difit-style), open-in-editor deep links, commit browser, remote access (Tailscale),
 multiple machines, fetch-on-demand (opt-in write-ish). (PR/CI status via `gh`/`glab` is built: `docs/FORGES.md`.)
 
 ## 5. Architecture
@@ -501,7 +501,12 @@ sidebar (DECISIONS #47–#52; the report is appended to `docs/reports/ux-sidebar
 
 ### Phase 3 — After the MVP (needs user input; do not start autonomously)
 
-Backlog in §4.4. Desktop shell. Naming / branding / public repo / npm publish.
+Backlog in §4.4. Naming / branding / public repo / npm publish.
+
+The Electron desktop app is **in scope and no longer waits for the user** (2026-11-13, `docs/DESKTOP.md`, issues
+#15–#23): phases 0 to D (shell, packaging, native integration, the `octopus-diff` command from the app, the Windows app
+with a WSL backend) can run autonomously. Phase E (code signing and notarization, auto-update, the app's name,
+the first public release) still needs the user.
 
 ## 7. Rules for autonomous sessions
 
