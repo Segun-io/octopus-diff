@@ -5310,9 +5310,9 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
 457. **Tests and mutation check.** `caches.test.ts` (fake git-core, HTTP: shared lookups, abort rules, invalidation in flight,
      failures, every key piece, the invalidation points, bounds, counters), `state-cache.test.ts` (the same on the helper),
      `caches.real-git.test.ts` (the range key, the unreachable bookmark, the attributes stamp in the announced paths),
-     `core-timers.test.ts`. No assertion of an existing test changed. 38 mutants of the keys, the invalidation points,
-     the bounds, the abort rules and the store conditions: 34 killed. Four survive on purpose and are not reachable
-     from a test: the invalidation in `#markMissing` (the cache is empty when a stored project is found missing at
+     `core-timers.test.ts`. No assertion of an existing test changed. 37 mutants (33 of the keys, the invalidation points,
+     the bounds, the abort rules and the store conditions, 4 of the core timers): 34 killed. Three survive and are not
+     reachable from a test: the invalidation in `#markMissing` (the cache is empty when a stored project is found missing at
      startup), the `project.worktrees.get(id) === entry` store condition (a removed worktree's pending entries are
      already dropped by the removal's invalidation), and the `hit ||` in `#gitFilesAt` (a hit's `summaryState` equals
      the `asked` of any caller with the same `stateHash`; it keeps the old "a hit is always the summary's list").
