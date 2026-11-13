@@ -71,6 +71,33 @@ describe('parseCommandLine', () => {
     expect(parseCommandLine(['serve', '--no-open'])).toMatchObject({ flags: { open: false } });
   });
 
+  it('parses --ready-fd and --exit-with-stdin (and leaves them unset otherwise)', () => {
+    expect(parseCommandLine(['serve', '--ready-fd', '3', '--exit-with-stdin'])).toMatchObject({
+      command: 'serve',
+      flags: { readyFd: 3, exitWithStdin: true },
+    });
+    expect(parseCommandLine(['serve', '--ready-fd=12'])).toMatchObject({ flags: { readyFd: 12 } });
+    const plain = parseCommandLine(['serve']);
+    expect(plain).toMatchObject({ command: 'serve' });
+    if (plain.command !== 'serve') throw new Error('unreachable');
+    expect(plain.flags).not.toHaveProperty('readyFd');
+    expect(plain.flags).not.toHaveProperty('exitWithStdin');
+  });
+
+  it.each([
+    [['serve', '--ready-fd', '0'], /--ready-fd must be a file descriptor of 3 or more/],
+    [['serve', '--ready-fd', '2'], /--ready-fd must be a file descriptor of 3 or more/],
+    [['serve', '--ready-fd', '99999999999'], /--ready-fd must be a file descriptor of 3 or more/],
+    [['serve', '--ready-fd', 'abc'], /--ready-fd must be an integer/],
+    [['serve', '--ready-fd', '3.5'], /--ready-fd must be an integer/],
+    [['serve', '--ready-fd=-1'], /--ready-fd must be an integer/],
+    [['serve', '--ready-fd', ''], /--ready-fd must be an integer/],
+    [['serve', '--ready-fd'], /--ready-fd/],
+  ])('rejects %j', (argv, message) => {
+    expect(() => parseCommandLine(argv)).toThrow(UsageError);
+    expect(() => parseCommandLine(argv)).toThrow(message);
+  });
+
   it.each([
     [['serve', '--port', 'abc'], /--port must be an integer/],
     [['serve', '--port', '70000'], /--port must be between 0 and 65535/],

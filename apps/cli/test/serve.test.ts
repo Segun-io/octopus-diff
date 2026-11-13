@@ -1,5 +1,7 @@
+import { readFileSync } from 'node:fs';
 import { mkdir, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { ServeReadySchema } from '@octopus-diff/contracts';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { run } from '../src/cli.js';
 import { formatBanner } from '../src/commands/serve.js';
@@ -27,6 +29,260 @@ beforeEach(async () => {
 });
 afterEach(async () => {
   await dirs.cleanup();
+});
+
+/** A fake ready fd: records what is written and whether it was closed. */
+function fakeChannel(failWith?: Error) {
+  const lines: string[] = [];
+  const state = { closed: 0, opened: [] as number[] };
+  return {
+    lines,
+    state,
+    open: (fd: number) => {
+      state.opened.push(fd);
+      return {
+        write: (line: string) => {
+          if (failWith) throw failWith;
+          lines.push(line);
+        },
+        close: () => {
+          state.closed++;
+        },
+      };
+    },
+  };
+}
+
+describe('serve --ready-fd', () => {
+  it('writes one valid started line once listening, without the token on stdout or stderr', async () => {
+    const daemon = fakeDaemon();
+    const channel = fakeChannel();
+    const shutdown = shutdownSignal();
+    const deps = makeDeps(dirs, {
+      loadStartDaemon: async () => daemon.startDaemon,
+      waitForShutdown: shutdown.wait,
+      openReadyChannel: channel.open,
+    });
+    let linesAtReady = 0;
+    const done = run(['serve', '--ready-fd', '4', '--port', '0'], deps, {
+      serve: {
+        webRootCandidates: [webDir],
+        onReady: () => {
+          linesAtReady = channel.lines.length;
+          shutdown.trigger('SIGTERM');
+        },
+      },
+    });
+    expect(await done).toBe(0);
+    expect(linesAtReady).toBe(1);
+    expect(channel.state.opened).toEqual([4]);
+    expect(channel.state.closed).toBe(1);
+    expect(channel.lines).toHaveLength(1);
+    expect(channel.lines[0]?.endsWith('\n')).toBe(true);
+    expect(channel.lines[0]?.trimEnd()).not.toContain('\n');
+    const ready = ServeReadySchema.parse(JSON.parse(channel.lines[0] ?? ''));
+    expect(ready).toEqual({
+      mode: 'started',
+      url: 'http://127.0.0.1:45678',
+      authUrl: 'http://127.0.0.1:45678/#token=tok123',
+      pid: deps.pid,
+      version: expect.any(String),
+    });
+    expect(deps.out.text).not.toContain('tok123');
+    expect(deps.err.text).not.toContain('tok123');
+    expect(deps.out.text).toContain('API:    http://127.0.0.1:45678');
+    expect(deps.out.text).toContain('file descriptor 4');
+    expect(daemon.closed).toBe(1);
+  });
+
+  it('writes the line after daemon.json exists', async () => {
+    const channel = fakeChannel();
+    const shutdown = shutdownSignal();
+    let runtimeAtWrite = '';
+    const deps = makeDeps(dirs, {
+      loadStartDaemon: async () => fakeDaemon().startDaemon,
+      waitForShutdown: shutdown.wait,
+      openReadyChannel: (fd) => {
+        const inner = channel.open(fd);
+        return {
+          ...inner,
+          write: (line) => {
+            runtimeAtWrite = readFileSync(runtimeFilePath(dirs.stateDir), 'utf8');
+            inner.write(line);
+          },
+        };
+      },
+    });
+    await run(['serve', '--ready-fd', '3'], deps, {
+      serve: { webRootCandidates: [webDir], onReady: () => shutdown.trigger() },
+    });
+    expect(JSON.parse(runtimeAtWrite)).toMatchObject({ pid: deps.pid, port: 7428 });
+  });
+
+  it("attached: writes the running daemon's line right away, exits 0, starts nothing, no token on stdout", async () => {
+    await writeRuntimeInfo(dirs.stateDir, {
+      pid: 777,
+      url: 'http://127.0.0.1:5555',
+      host: '127.0.0.1',
+      port: 5555,
+      version: '0.0.0',
+      startedAt: '2026-11-08T00:00:00.000Z',
+    });
+    await writeFile(path.join(dirs.stateDir, 'token'), 'existing-token\n', { mode: 0o600 });
+    const api = clientFactory((req) =>
+      isHealth(req.url, 'http://127.0.0.1:5555')
+        ? { body: healthFor(req.url, 'existing-token', { version: '1.2.3' }) }
+        : undefined,
+    );
+    const daemon = fakeDaemon();
+    const channel = fakeChannel();
+    const watched: string[] = [];
+    const deps = makeDeps(dirs, {
+      loadStartDaemon: async () => daemon.startDaemon,
+      createApiClient: api.createApiClient,
+      isProcessAlive: (pid) => pid === 777,
+      openReadyChannel: channel.open,
+      watchStdin: () => {
+        watched.push('watch');
+        return { closed: new Promise<string>(() => {}), stop: () => {} };
+      },
+    });
+    expect(await run(['serve', '--ready-fd', '3', '--exit-with-stdin'], deps)).toBe(0);
+    expect(daemon.calls).toHaveLength(0);
+    expect(watched).toEqual([]);
+    expect(channel.state.closed).toBe(1);
+    expect(ServeReadySchema.parse(JSON.parse(channel.lines[0] ?? ''))).toEqual({
+      mode: 'attached',
+      url: 'http://127.0.0.1:5555',
+      authUrl: 'http://127.0.0.1:5555/#token=existing-token',
+      pid: 777,
+      version: '1.2.3',
+    });
+    expect(deps.out.text).toContain('already running (pid 777)');
+    expect(deps.out.text).not.toContain('existing-token');
+    expect(deps.err.text).not.toContain('existing-token');
+  });
+
+  it('fails before starting anything when the descriptor is not open', async () => {
+    const daemon = fakeDaemon();
+    const deps = makeDeps(dirs, {
+      loadStartDaemon: async () => daemon.startDaemon,
+      openReadyChannel: () => {
+        throw new Error('file descriptor 9 is not open (the parent must pass it to this process)');
+      },
+    });
+    expect(await run(['serve', '--ready-fd', '9'], deps)).toBe(1);
+    expect(deps.err.text).toContain('--ready-fd 9: file descriptor 9 is not open');
+    expect(daemon.calls).toHaveLength(0);
+  });
+
+  it('stops the daemon and exits 1 when the ready line cannot be delivered', async () => {
+    const daemon = fakeDaemon();
+    const channel = fakeChannel(new Error('EPIPE: broken pipe'));
+    let onReadyCalled = false;
+    const deps = makeDeps(dirs, {
+      loadStartDaemon: async () => daemon.startDaemon,
+      waitForShutdown: () => new Promise<string>(() => {}),
+      openReadyChannel: channel.open,
+    });
+    const code = await run(['serve', '--ready-fd', '3'], deps, {
+      serve: {
+        webRootCandidates: [webDir],
+        onReady: () => {
+          onReadyCalled = true;
+        },
+      },
+    });
+    expect(code).toBe(1);
+    expect(onReadyCalled).toBe(false);
+    expect(daemon.closed).toBe(1);
+    expect(channel.state.closed).toBe(1);
+    expect(deps.err.text).toContain('could not write the ready line to file descriptor 3: EPIPE');
+    expect(deps.err.text).not.toContain('tok123');
+    await expect(stat(runtimeFilePath(dirs.stateDir))).rejects.toThrow();
+  });
+
+  it('without the flag the banner keeps its token URL and no channel is opened', async () => {
+    const deps = makeDeps(dirs, { loadStartDaemon: async () => fakeDaemon().startDaemon });
+    expect(await run(['serve'], deps, { serve: { webRootCandidates: [webDir] } })).toBe(0);
+    expect(deps.out.text).toContain('Open:   http://127.0.0.1:7428/#token=tok123');
+  });
+});
+
+describe('serve --exit-with-stdin', () => {
+  it('shuts down gracefully when stdin ends, and stops watching stdin afterwards', async () => {
+    const daemon = fakeDaemon();
+    let end!: (reason: string) => void;
+    const stdin = {
+      closed: new Promise<string>((resolve) => {
+        end = resolve;
+      }),
+      stopped: 0,
+      stop() {
+        this.stopped++;
+      },
+    };
+    const deps = makeDeps(dirs, {
+      loadStartDaemon: async () => daemon.startDaemon,
+      waitForShutdown: () => new Promise<string>(() => {}),
+      watchStdin: () => stdin,
+    });
+    const done = run(['serve', '--exit-with-stdin'], deps, {
+      serve: { webRootCandidates: [webDir], onReady: () => end('stdin closed') },
+    });
+    expect(await done).toBe(0);
+    expect(daemon.closed).toBe(1);
+    expect(stdin.stopped).toBe(1);
+    expect(deps.err.text).toContain('stdin closed, shutting down');
+    await expect(stat(runtimeFilePath(dirs.stateDir))).rejects.toThrow();
+  });
+
+  it('listens to stdin before starting the daemon, so an early EOF still closes it', async () => {
+    const order: string[] = [];
+    const daemon = fakeDaemon();
+    const deps = makeDeps(dirs, {
+      loadStartDaemon: async () => async (options) => {
+        order.push('start');
+        return daemon.startDaemon(options);
+      },
+      waitForShutdown: () => new Promise<string>(() => {}),
+      watchStdin: () => {
+        order.push('watch');
+        return { closed: Promise.resolve('stdin closed'), stop: () => {} };
+      },
+    });
+    expect(
+      await run(['serve', '--exit-with-stdin'], deps, { serve: { webRootCandidates: [webDir] } }),
+    ).toBe(0);
+    expect(order).toEqual(['watch', 'start']);
+    expect(daemon.closed).toBe(1);
+  });
+
+  it('does not touch stdin without the flag', async () => {
+    let watched = 0;
+    const deps = makeDeps(dirs, {
+      loadStartDaemon: async () => fakeDaemon().startDaemon,
+      watchStdin: () => {
+        watched++;
+        return { closed: Promise.resolve('stdin closed'), stop: () => {} };
+      },
+    });
+    expect(await run(['serve'], deps, { serve: { webRootCandidates: [webDir] } })).toBe(0);
+    expect(watched).toBe(0);
+    expect(deps.err.text).toContain('received SIGTERM');
+  });
+
+  it('a signal still wins when stdin stays open', async () => {
+    const deps = makeDeps(dirs, {
+      loadStartDaemon: async () => fakeDaemon().startDaemon,
+      waitForShutdown: () => Promise.resolve('SIGINT'),
+      watchStdin: () => ({ closed: new Promise<string>(() => {}), stop: () => {} }),
+    });
+    expect(
+      await run(['serve', '--exit-with-stdin'], deps, { serve: { webRootCandidates: [webDir] } }),
+    ).toBe(0);
+    expect(deps.err.text).toContain('received SIGINT, shutting down');
+  });
 });
 
 describe('serve', () => {

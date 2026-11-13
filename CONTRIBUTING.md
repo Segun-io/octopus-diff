@@ -141,6 +141,22 @@ The CLI build copies `apps/web/dist` into `apps/cli/dist/web`, so a packed CLI c
 checkout, `octopus-diff serve` prefers `apps/web/dist` (so rebuilding only the web app is enough), then
 `apps/cli/dist/web`; `--web-root <dir>` overrides both.
 
+**The CLI bundle step.** `apps/cli/scripts/bundle.mjs` is the one place that builds the shippable CLI:
+`dist/index.js` (one ESM file with contracts, git-core, forge and the daemon inlined; only
+`@parcel/watcher` stays external), `dist/git-helper.js` (git-core's spawn helper, which the bundle finds
+next to itself) and `dist/web` (the built UI). `pack.mjs` (`pnpm --filter octopus-diff run pack:tarball`)
+calls it into the npm tarball's `dist/`; the desktop app reuses it so both ship the same CLI:
+
+```sh
+pnpm build                                          # apps/web/dist must exist
+node apps/cli/scripts/bundle.mjs --out <dir>        # or: import { bundleCli } from './bundle.mjs'
+node <dir>/index.js serve --ready-fd 3 --exit-with-stdin
+```
+
+Whoever ships `<dir>` must make `@parcel/watcher` resolvable from it (`externalDependencies()` returns
+the version range) and run it with Node >= 24. `serve --ready-fd <n>` / `--exit-with-stdin` are the hooks
+a supervisor uses (see `octopus-diff help serve`).
+
 ## Conventions
 
 - TypeScript strict, ESM only, `module: nodenext`: relative imports end in `.js` (the web app uses
