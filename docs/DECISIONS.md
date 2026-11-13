@@ -5740,3 +5740,105 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      - **P3, the log grows during a long session.** It is rotated at startup only and the daemon writes to it
        directly. Acceptable for the MVP (5 MiB between launches); a size check on "Show the log" or a periodic
        rotation is a follow-up.
+
+## Desktop phase B: packaging (session, 2026-11-13; roadmap #19)
+
+508. **The CLI bundle stays at `app.asar/dist/cli/`.** DESKTOP §7 said `app.asar/cli/`; phase A's `backend-command.ts`
+     already runs `<dir of main.js>/cli/index.js` and `scripts/build.mjs` writes `dist/main.js` + `dist/cli/`, so the
+     package copies `dist/` whole and nothing in the runtime changed. `webRootCandidates` finds `dist/cli/web`, and
+     `@parcel/watcher` resolves from `app.asar/node_modules`. `scripts/build.mjs` builds `src/preload.cts` (CommonJS)
+     into `dist/preload.cjs` only once the file exists (phase C, #20; no preload yet, #486). DESKTOP §7 updated.
+509. **Packaged builds refuse the dev options and the debugger switches** (#502, #507). `parseDesktopArgs(argv, cwd,
+     { isPackaged })` (pure, `src/args.ts`): with `isPackaged`, `--dev`, `--backend source` and `--renderer-url` are
+     refused, and so is every switch that opens a debugger on a TCP port (`--remote-debugging-port`,
+     `--remote-debugging-address`, `--inspect*`, `--debug`, `--debug-brk`). Chromium reads every argv element as a
+     possible switch, with one or two dashes (and `/x`, case-insensitive, on Windows), also an element our parser takes
+     as an option's value, so all of argv is checked in those spellings; `main.ts` also asks Chromium's own parser
+     (`app.commandLine.hasSwitch`). A refusal exits 2 with a message on stderr, before the single-instance lock and
+     the log. `--renderer-url` takes loopback hosts only (`localhost`, 127.0.0.0/8, `[::1]`), packaged or not.
+     `--remote-debugging-pipe` is **not** refused: it is a channel to the launching process only, which (with
+     `RunAsNode` on) can already run any code as the user; the packaged smoke needs it (#510). Verified on the
+     packaged binary: no "DevTools listening" line before the exit. 17 unit tests (`test/args.test.ts`), 12 new
+     mutants in `scripts/mutation-check.mjs`.
+510. **The packaged-app smoke drives the window over `--remote-debugging-pipe`, not Playwright's `_electron.launch`.**
+     `_electron.launch` starts Electron with `-r loader.js --inspect=0 --remote-debugging-port=0` (read in
+     playwright-core 1.65's `coreBundle.js` and `server/electron/loader.js`) and connects through Node's inspector:
+     the `EnableNodeCliInspectArguments` fuse and #509 forbid exactly that in an installed app, so it cannot drive the
+     shipped binary (the issue's "Playwright `_electron.launch` against the packaged app" is not possible without
+     weakening the build under test). `e2e/desktop/support/cdp-pipe.ts` is a ~150-line CDP client over fds 3/4
+     (NUL-delimited JSON, `Target.attachToTarget` flatten, `Runtime.evaluate`), tested with Electron 45.3.2; the
+     specs still run under Playwright Test (`e2e/playwright.desktop.config.ts`, `pnpm --filter @octopus-diff/e2e
+     test:e2e:desktop`). It is not part of `pnpm test:e2e` (it needs a packaged app and a display). Phase A's
+     `smoke-app.mjs` keeps `--remote-debugging-port` against the unpackaged app.
+511. **electron-builder packages a staged app, not the workspace package.** `scripts/package.mjs` writes
+     `.stage/<platform>-<arch>/` per target: a generated `package.json` (the CLI's version, `main`, `desktopName`,
+     and one dependency: the lockfile's exact `@parcel/watcher` version; `main.js` inlines contracts and zod, the CLI
+     bundle inlines the rest), `npm install --omit=dev --ignore-scripts --os --cpu [--libc=glibc]` (the TARGET's
+     prebuilt watcher package only, so x64 runners build arm64 artifacts with the right binary; pnpm installs only
+     the host's optional package), `dist/` without source maps, the icons as `build/`, and the config. electron-builder
+     then finds npm by the stage's lockfile and copies that flat `node_modules`. npm runs as `node <npm-cli.js>` (no
+     shell, no `npm.cmd`). Trade-off: the watcher's small JS dependencies (detect-libc, is-glob, is-extglob,
+     picomatch) are resolved by npm within their ranges at package time, not pinned by `pnpm-lock.yaml`.
+512. **`asarUnpack` is exactly phase 0's list** (#469): `node_modules/@parcel/watcher/**/*`,
+     `node_modules/@parcel/watcher-*/**/*`, `dist/cli/git-helper.js`. Verified on the packaged Linux app: the watch
+     host maps `watcher.node` from `app.asar.unpacked` (`/proc/<pid>/maps`, no temp copy); the helper's argv shows
+     `…/resources/app.asar/dist/cli/git-helper.js` (Electron redirects it); nothing else is unpacked. `files`
+     also drops the watcher's C++ sources and build script and `node-addon-api` (headers, never loaded): `app.asar` is
+     20 MB. `npmRebuild`/`nodeGypRebuild` off (N-API prebuilt).
+513. **Fuses and signing.** electron-builder's `electronFuses` (flipped right before its signing step): the §5 set,
+     plus `GrantFileProtocolExtraPrivileges` off (the app never loads `file://`; screens are `data:`, the UI is the
+     daemon's http origin; not asked by #19, reversible). macOS: `identity: null` (electron-builder never signs here,
+     and skips signing on PR builds anyway), `hardenedRuntime: false` (notarization only, phase E), and
+     `resetAdHocDarwinSignature: true`, so @electron/fuses re-signs the whole `.app` ad-hoc (`codesign --sign -
+     --force --deep`) after flipping the fuses: an arm64 Mac does not start an unsigned or invalidly signed binary.
+     `scripts/check-fuses.mjs <app>` reads the fuse wire (`@electron/fuses`) and the embedded asar integrity data
+     (Info.plist `ElectronAsarIntegrity` on macOS, the `INTEGRITY`/`ELECTRONASAR` resource on Windows) and fails on
+     any difference; it fails on a stock Electron binary and passes on the Linux build and on a Windows build made on
+     Linux. The integrity fuse is exercised by the e2e tamper test (one byte of `dist/main.js` changed in a copy of
+     the app): macOS and Windows must refuse to run it; on Linux Electron does not validate the asar (observed: the
+     tampered copy ran), which the test records.
+514. **Names.** Linux `executableName: octopus-diff-desktop`: the deb links `/usr/bin/<executableName>`, and
+     `octopus-diff` is the CLI's command (phase C installs a launcher for it, DESKTOP §3.2), so the app must not
+     shadow it; `desktopName`/`syncDesktopName` make the window's WM_CLASS match the `.desktop` file. `productName`
+     `octopus-diff`, `appId` `io.github.segun-io.octopus-diff`, the version of the bundled CLI, artifacts
+     `octopus-diff-<version>-<os>-<arch>.<ext>`, the deb maintainer a placeholder (`noreply@octopus-diff.invalid`):
+     all reversible until phase E's naming (#23). NSIS: the assisted per-user installer (no elevation, the folder can
+     be changed; `/S /D=` works for CI).
+515. **Icons.** `apps/web/scripts/icons.ts` gained one additive section (WS3's file, #19's explicit scope):
+     `apps/desktop/resources/icon.png` (1024), `icon.icns` (PNG entries ic07-ic14, 32-1024 px) and `icon.ico` (PNG
+     entries 16-256), from the same tile on a transparent canvas, rounded on macOS's 824/1024 grid. The web icons
+     regenerate byte-identical.
+516. **Dependencies.** `electron-builder` ^26.18.0 and `@electron/fuses` ^1.8.0 (electron-builder's own major) as
+     devDependencies of `apps/desktop`. pnpm auto-installs electron-builder's optional peer
+     `electron-builder-squirrel-windows`, whose `electron-winstaller` has an install script: `allowBuilds:
+     electron-winstaller: false` (Squirrel.Windows is not built; NSIS only). The existing CI jobs install these from
+     the pnpm cache and still download no Electron binary (Electron 45 has no install script, #487).
+517. **Credits.** `@octopus-diff/desktop` is a shipped workspace (its `@parcel/watcher` and `zod`). Electron is a
+     devDependency whose runtime ships: a new `shippedRuntimes` map in `acknowledgements.json` credits it as shipped
+     (MIT, with its license text) with a note on Chromium (BSD-3-Clause plus its components' licenses) and Node.js
+     (MIT), whose full texts electron-builder installs next to the executable (`LICENSES.chromium.html`,
+     `LICENSE.electron.txt`), **without** following its npm dependencies (`@electron/get` and friends only download
+     the binary; `alsoShipped` would have listed them as shipped and pushed the root's `@types/node` out of the dev
+     tools). No license outside `allowedRuntimeLicenses` appeared. The web About page reads the same JSON shape.
+518. **CI: one new `desktop` job** (the existing jobs are unchanged). Matrix ubuntu-latest / macos-latest (arm64) /
+     windows-latest (x64), Node 24, `CSC_IDENTITY_AUTO_DISCOVERY=false`; Electron and electron-builder download caches
+     (`ELECTRON_CACHE`, `electron_config_cache`, `ELECTRON_BUILDER_CACHE`) in this job only. Per OS: package x64 and
+     arm64; `check-fuses` on both; `codesign --verify --deep --strict` on macOS; install the native-arch build the way
+     a user does and run `test:e2e:desktop` against it (Linux: the deb with apt, with Ubuntu 24.04's default AppArmor
+     userns restriction, which the deb's AppArmor profile handles; then the AppImage extracted with
+     `kernel.apparmor_restrict_unprivileged_userns=0`, never `--no-sandbox`; macOS: the app copied out of the dmg;
+     Windows: the NSIS installer with `/S /D=`); on Linux also phase A's unpackaged smokes (#501), with a check that
+     the Electron binary is there (they skip without it); upload the installers as workflow artifacts (7 days, not
+     published). Each OS step is gated by `matrix.os` and fails loudly; arm64 artifacts are built but not run (no arm
+     runners in the matrix).
+519. **The read-only proof runs against the packaged app** (D4) inside the packaged smoke, not as a second copy of
+     `07-readonly.spec.ts`: its own fixture set (seed 1901), `startReadOnlyProof` over the control and source repos,
+     the projects registered through the app's bundled CLI, an agent simulator on `live-agent`, every read path
+     through the app's daemon (projects, inbox, refresh, files in working/staged/branch/commit scopes, diffs,
+     commits, scan-root rescans, SSE) and the window's own UI traffic; `assertReadOnly` at the end.
+520. **Observed, not changed.** (a) electron-builder's AppImage `.desktop` entry runs `AppRun --no-sandbox` (its
+     default), and `AppRun` adds `--no-sandbox` when `unshare -Ur true` fails; launched otherwise the AppImage keeps
+     Chromium's sandbox. (b) Under `--appimage-extract-and-run`, SIGTERM to the AppImage runtime does not reach
+     Electron (the runtime exits, the app and its daemon keep running until the window is closed or Electron itself
+     is signalled; the extraction dir then stays in /tmp). Closing the window, Quit, and a signal to Electron all stop
+     the daemon. Candidates for phase E/D, logged in the phase B report.
