@@ -16,6 +16,7 @@ import {
   type GitTreeListing,
   type SummarySnapshot,
   type TreeEntry,
+  treeEntryProblem,
   type UntrackedOmission,
   WORKTREE_CHANGED_DIRS_MAX,
   WORKTREE_CHANGED_DIRS_MAX_CHARS,
@@ -288,21 +289,38 @@ function applyDir(entry: TreeEntry, agg: DirAggregate): void {
 }
 
 /**
+ * How many files HEAD directories hold, for the `deleted` status: one directory's
+ * (`file(treeOid)`, one `ls-tree -r` of it) or every child directory's of the listed one
+ * (`children()`, one `ls-tree -r` of the listed tree; bstr name → count). Null: unknown.
+ */
+export interface FileCounts {
+  file(tree: string): Promise<number | null>;
+  children(): Promise<Map<string, number> | null>;
+}
+
+/** Up to this many directories to check are counted one by one; more, with one run (P3-3). */
+export const COUNT_ONE_BY_ONE_MAX = 4;
+
+/**
  * The working view of one directory (bstr `dirKey`): `listing` (HEAD's, or null when HEAD has no
- * such directory) with the overlay, in tree order. `countFiles` says how many files a HEAD
- * directory holds; it is asked only for a directory whose every change below is a deletion.
+ * such directory) with the overlay, in tree order. `counts` say how many files a HEAD directory
+ * holds; asked only for directories whose every change below is a deletion: one by one for a few,
+ * with one run over the listed tree for more (security review P3-3: 2000 such siblings cost 2000
+ * processes before).
  */
 export async function workingEntries(
   listing: GitTreeListing | null,
   dirKey: string,
   index: OverlayIndex,
-  countFiles: (tree: string) => Promise<number | null>,
+  counts: FileCounts | ((tree: string) => Promise<number | null>),
 ): Promise<TreeEntry[]> {
+  const fileCounts: FileCounts =
+    typeof counts === 'function' ? { file: counts, children: async () => null } : counts;
+  const checks: Array<{ key: string; oid: string; entry: TreeEntry; deleted: number }> = [];
   const overlay = index.byDir.get(dirKey);
   const out: Array<{ key: string; dir: boolean; entry: TreeEntry }> = [];
   const seenFiles = new Set<string>();
   const seenDirs = new Set<string>();
-  const deletedChecks: Array<Promise<void>> = [];
   for (const git of listing?.kind === 'dir' ? listing.entries : []) {
     const entry = fromGit(git);
     const key = bstrOf({ path: git.name, rawPath: git.rawName });
@@ -312,11 +330,7 @@ export async function workingEntries(
       if (agg) {
         applyDir(entry, agg);
         if (agg.live === 0 && agg.deleted > 0) {
-          deletedChecks.push(
-            countFiles(git.oid).then((count) => {
-              if (count !== null && count === agg.deleted) entry.status = 'deleted';
-            }),
-          );
+          checks.push({ key, oid: git.oid, entry, deleted: agg.deleted });
         }
       }
     } else {
@@ -351,7 +365,21 @@ export async function workingEntries(
     applyDir(entry, agg);
     out.push({ key, dir: true, entry });
   }
-  await Promise.all(deletedChecks);
+  if (checks.length > COUNT_ONE_BY_ONE_MAX) {
+    const byChild = await fileCounts.children();
+    for (const c of checks) {
+      const count = byChild?.get(c.key);
+      if (count !== undefined && count === c.deleted) c.entry.status = 'deleted';
+    }
+  } else {
+    await Promise.all(
+      checks.map((c) =>
+        fileCounts.file(c.oid).then((count) => {
+          if (count !== null && count === c.deleted) c.entry.status = 'deleted';
+        }),
+      ),
+    );
+  }
   // One row per name (PR #99 review): when the working copy replaced HEAD's file `d` with a
   // directory `d/` (or a directory with a file), HEAD's row and the working copy's would both be
   // named `d`. The row that exists in the working copy wins and says what it `replaces`.
@@ -484,4 +512,135 @@ export function treeDelta(prev: TreeBasis, cur: TreeBasis): WorktreeChangedDirs 
     out.push(dir);
   }
   return { all: false, dirs: out };
+}
+
+// --- sendable entries and the composed-listing cache (security review P3-2, P2-2) --------------
+
+/**
+ * The entries a client can take, and how many were left out (`treeEntryProblem`): a hostile tree
+ * (`hash-object -t tree --literally`) with a `..` or `a/b` entry, or paths past the limits, must not
+ * make the whole page fail the client's schema.
+ */
+export function sendableEntries(entries: TreeEntry[]): {
+  entries: TreeEntry[];
+  skipped: { invalidName: number; tooLong: number } | null;
+} {
+  let invalidName = 0;
+  let tooLong = 0;
+  const kept: TreeEntry[] = [];
+  for (const e of entries) {
+    const problem = treeEntryProblem(e);
+    if (problem === 'invalid_name') invalidName++;
+    else if (problem === 'too_long') tooLong++;
+    else kept.push(e);
+  }
+  return {
+    entries: invalidName + tooLong === 0 ? entries : kept,
+    skipped: invalidName + tooLong === 0 ? null : { invalidName, tooLong },
+  };
+}
+
+/** A directory key a listing can name (the checks git-core makes, also where it is not asked). */
+export function dirKeyProblem(dirKey: string): string | null {
+  if (dirKey === '') return null;
+  if (dirKey.length > 4096) return 'path is too long';
+  for (const part of dirKey.split('/')) {
+    if (part === '' || part === '.' || part === '..' || part.includes('\u0000')) {
+      return 'path must be a repo-relative directory without empty, "." or ".." components';
+    }
+  }
+  return null;
+}
+
+/** A composed `GET /tree` listing (#9) and what it is of. */
+export interface TreeListingMemo {
+  entries: TreeEntry[];
+  listKey: string;
+  commit: string | null;
+  tree: string | null;
+  skipped: { invalidName: number; tooLong: number } | null;
+  /** Estimated bytes held (`estimateListingBytes`). */
+  bytes: number;
+}
+
+const TREE_ENTRY_OVERHEAD_BYTES = 200;
+
+/** An estimate of the memory a composed listing holds: its strings (UTF-16) and per-entry objects. */
+export function estimateListingBytes(entries: readonly TreeEntry[]): number {
+  let bytes = 0;
+  for (const e of entries) {
+    bytes +=
+      TREE_ENTRY_OVERHEAD_BYTES +
+      2 *
+        (e.name.length +
+          e.path.length +
+          (e.rawName?.length ?? 0) +
+          (e.rawPath?.length ?? 0) +
+          (e.oldPath?.length ?? 0) +
+          (e.oldRawPath?.length ?? 0) +
+          (e.renamedTo?.length ?? 0) +
+          (e.renamedToRawPath?.length ?? 0));
+  }
+  return bytes;
+}
+
+/** Default bound of the daemon's composed listings (as git-core's tree cache). */
+export const TREE_LISTINGS_MAX_BYTES = 64 * 1024 * 1024;
+
+/**
+ * The daemon's composed listings, an LRU bounded by bytes (security review P2-2: it was bounded by
+ * count, 64 listings of a 100k-entry directory held about 0.6 GB). A listing above the bound is
+ * served, not kept. `dropOlderStates` drops a worktree's working-view listings of other states when
+ * a new summary lands: an agent churning a worktree no longer piles up a copy per state.
+ */
+export class TreeListingCache {
+  readonly #map = new Map<string, TreeListingMemo>();
+  #bytes = 0;
+
+  constructor(readonly maxBytes = TREE_LISTINGS_MAX_BYTES) {}
+
+  get bytes(): number {
+    return this.#bytes;
+  }
+
+  get size(): number {
+    return this.#map.size;
+  }
+
+  get(key: string): TreeListingMemo | undefined {
+    const hit = this.#map.get(key);
+    if (hit) {
+      this.#map.delete(key);
+      this.#map.set(key, hit);
+    }
+    return hit;
+  }
+
+  set(key: string, value: TreeListingMemo): void {
+    this.delete(key);
+    if (value.bytes > this.maxBytes) return;
+    this.#map.set(key, value);
+    this.#bytes += value.bytes;
+    while (this.#bytes > this.maxBytes) {
+      const oldest = this.#map.keys().next();
+      if (oldest.done) break;
+      this.delete(oldest.value);
+    }
+  }
+
+  delete(key: string): void {
+    const old = this.#map.get(key);
+    if (!old) return;
+    this.#bytes -= old.bytes;
+    this.#map.delete(key);
+  }
+
+  /** Drops the working-view listings of `worktreeId` that are not of `stateHash` (all with null). */
+  dropOlderStates(worktreeId: string, stateHash: string | null): void {
+    const prefix = `w\u0000${worktreeId}\u0000`;
+    const keep = stateHash === null ? null : `${prefix}${stateHash}\u0000`;
+    for (const key of [...this.#map.keys()]) {
+      if (key.startsWith(prefix) && (keep === null || !key.startsWith(keep))) this.delete(key);
+    }
+  }
 }
