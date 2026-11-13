@@ -41,6 +41,7 @@ import {
   type Project,
   type ProjectListItem,
   pageFileList,
+  pageTreeEntries,
   type ResolvedProject,
   type ReviewRange,
   type ReviewRequest,
@@ -50,6 +51,10 @@ import {
   type ServerEventOf,
   type SummarySnapshot,
   scopeKey,
+  type TreeEntry,
+  type TreeQuery,
+  type TreeResponse,
+  treeListingKey,
   type UntrackedOmission,
   type UpdateProjectRequest,
   utf8Length,
@@ -58,6 +63,7 @@ import {
   WORKTREE_CHANGED_PATHS_MAX,
   WORKTREE_CHANGED_PATHS_MAX_CHARS,
   type Worktree,
+  type WorktreeChangedDirs,
   WorktreeChangedEventSchema,
   type WorktreeChangedPaths,
   type WorktreeListItem,
@@ -101,6 +107,17 @@ import {
   type ScanRootRow,
   type Store,
 } from './store.js';
+import {
+  bstrOf,
+  decodeBstr,
+  overlayHasDir,
+  overlayIndex,
+  type TreeBasis,
+  treeBasis,
+  treeDelta,
+  treeEntries,
+  workingEntries,
+} from './tree.js';
 import { gitDirOf } from './watch-identity.js';
 import { type DirtyReason, type SubscribeFn, WatcherService } from './watcher.js';
 
@@ -128,6 +145,8 @@ export const CORE_DEFAULTS = {
    * this leaves half of them to interactive requests.
    */
   originsConcurrency: 2,
+  /** Composed `GET /tree` listings kept (#9; git-core keeps the tree objects' listings). */
+  treeListingsCacheSize: 64,
 } as const;
 
 /**
@@ -308,6 +327,8 @@ interface WorktreeEntry {
   reconcile: NodeJS.Timeout | null;
   /** The next summary passes `forgetState` (an explicit Refresh). */
   forgetState: boolean;
+  /** What the file explorer's directory deltas compare against: the last summary's (#9). */
+  treeBasis: TreeBasis | null;
 }
 
 /** First review states that land within this window share one `review.ready` per project. */
@@ -531,6 +552,12 @@ export class DaemonCore {
   >();
   /** Identical inbox requests that overlap share one run (`inbox`), keyed by what it reads. */
   readonly #inboxInflight = new Map<string, Promise<InboxResponse>>();
+  /**
+   * Composed directory listings of `GET /tree` (#9) with their cursor keys, by what they are of:
+   * the tree view by (project, commit, directory), the working view by (worktree, state, HEAD,
+   * directory). git-core caches the listings themselves by (common dir, tree oid).
+   */
+  readonly #treeListings = new Map<string, { entries: TreeEntry[]; listKey: string }>();
   /** Worktree ids removed recently (id → time), to spot a path re-added soon after (F1). */
   readonly #recentlyRemoved = new Map<string, number>();
   /** Bumped on every review write in a project (marks, bookmarks, reviewed commits). */
@@ -1171,6 +1198,7 @@ export class DaemonCore {
       gitStateHash: null,
       reconcile: null,
       forgetState: false,
+      treeBasis: null,
     };
     return entry;
   }
@@ -1344,6 +1372,7 @@ export class DaemonCore {
     }
     if (entry.worktree.missing) {
       entry.summary = null;
+      entry.treeBasis = null;
       entry.error = {
         code: 'not_found',
         message: `worktree path no longer exists: ${entry.worktree.path}`,
@@ -1388,6 +1417,18 @@ export class DaemonCore {
       if (this.#closed || project.worktrees.get(entry.worktree.id) !== entry) return;
       entry.summary = summary;
       entry.error = null;
+      // The file explorer's directory deltas (#9): from the snapshot, no git process.
+      let dirs: WorktreeChangedDirs | undefined;
+      if (snapshot) {
+        const basis = treeBasis(
+          summary.stateHash,
+          summary.headSha,
+          snapshot,
+          summary.untrackedOmitted,
+        );
+        if (entry.treeBasis) dirs = treeDelta(entry.treeBasis, basis);
+        entry.treeBasis = basis;
+      } else entry.treeBasis = null;
       if (
         entry.worktree.branch !== summary.branch ||
         entry.worktree.headSha !== summary.headSha ||
@@ -1422,7 +1463,7 @@ export class DaemonCore {
       }
       const paths = await this.#cachedPaths(project, entry, summary);
       if (this.#closed || project.worktrees.get(entry.worktree.id) !== entry) return;
-      const announced = this.#announce(entry, summary.stateHash, paths);
+      const announced = this.#announce(entry, summary.stateHash, paths, dirs);
       if (entry.readyHeld) {
         entry.readyHeld = false;
         // Nothing announced, or a projects answer already gave a client this state hash without
@@ -1435,6 +1476,7 @@ export class DaemonCore {
       if (project.worktrees.get(entry.worktree.id) !== entry) return;
       const apiError = toApiError(error);
       entry.summary = null;
+      entry.treeBasis = null;
       entry.error = apiError.toBody().error;
       this.#log.debug('summary failed', { worktreeId: entry.worktree.id, error });
       this.#announce(entry, `error:${apiError.code}`);
@@ -1542,7 +1584,12 @@ export class DaemonCore {
    * Replayed after a reconnect (`Last-Event-ID`) without them: that client resyncs anyway, and the
    * replay buffer keeps its old size.
    */
-  #announce(entry: WorktreeEntry, stateHash: string, paths?: WorktreeChangedPaths): boolean {
+  #announce(
+    entry: WorktreeEntry,
+    stateHash: string,
+    paths?: WorktreeChangedPaths,
+    dirs?: WorktreeChangedDirs,
+  ): boolean {
     if (entry.lastHash === stateHash) return false;
     entry.lastHash = stateHash;
     const activitySeq = this.#activity.seqOf(entry.worktree.id);
@@ -1562,6 +1609,7 @@ export class DaemonCore {
       ...slim,
       ...this.#row(project, entry),
       ...(paths ? { paths } : {}),
+      ...(dirs ? { dirs } : {}),
     };
     // A client drops an event its schema rejects, so a field it would reject (a path the list
     // schema refuses) must cost the delta, not the event.
@@ -2149,6 +2197,136 @@ export class DaemonCore {
       resolved.review,
     );
     return { files, listKey };
+  }
+
+  /**
+   * One directory for the file explorer (`GET /tree`, #9). Without `ref` the working view: HEAD's
+   * listing (git-core, cached by tree oid) with the `working` list of the summary's state laid
+   * over it (`#gitFilesAt`, cached by state): warm, no git process at all. With `ref` the tree
+   * view: the commit's listing only. Pages are slices of the composed listing (`pageTreeEntries`).
+   * `signal` as in `listFiles` (interactive lane, #44).
+   */
+  async listTree(
+    worktreeId: string,
+    query: TreeQuery,
+    signal?: AbortSignal,
+  ): Promise<TreeResponse> {
+    const { project, entry } = this.#requireWorktree(worktreeId);
+    const listTree = this.#git.listTree;
+    if (!listTree)
+      throw new ApiError('internal', 'tree listings are not available', { status: 501 });
+    const want: Want = { signal, priority: 'interactive' };
+    const path = query.path ?? '';
+    const dirKey = bstrOf({ path, rawPath: query.rawPath });
+    const dir = decodeBstr(dirKey);
+    const asked = { path, ...(query.rawPath !== undefined ? { rawPath: query.rawPath } : {}) };
+    const list = (ref: string) =>
+      listTree
+        .call(this.#git, this.#locator(entry), { ref, ...asked, ...callOptions(want) })
+        .catch((error: unknown) => {
+          if (isGitCoreError(error, 'not_found')) {
+            throw new ApiError('not_found', `unknown ref: ${ref}`, { cause: error });
+          }
+          if (isGitCoreError(error, 'invalid_argument')) {
+            throw new ApiError('bad_request', error.message, { cause: error });
+          }
+          throw error;
+        });
+    const notADirectory = (kind: string | null): never => {
+      if (kind === null) throw new ApiError('not_found', 'no such directory');
+      throw new ApiError('bad_request', `not a directory (a ${kind})`);
+    };
+    let cached: { entries: TreeEntry[]; listKey: string } | undefined;
+    let commit: string | null;
+    let tree: string | null;
+    let stateHash: string | null = null;
+    const view: TreeResponse['view'] =
+      query.ref !== undefined || entry.worktree.bare ? 'tree' : 'working';
+    if (view === 'tree') {
+      const listing = await list(query.ref ?? 'HEAD');
+      commit = listing.commit;
+      tree = listing.tree;
+      // An unborn branch: its root is empty, every other path is not there.
+      if (listing.kind !== 'dir' && !(commit === null && dirKey === ''))
+        notADirectory(listing.kind);
+      const key = `t ${project.row.id} ${commit ?? ''} ${dirKey}`;
+      cached = this.#treeListings.get(key);
+      if (!cached) {
+        const entries = treeEntries(listing);
+        cached = { entries, listKey: treeListingKey(key, entries) };
+        this.#rememberTree(key, cached);
+      }
+    } else {
+      await raceSignal(this.#ensureSummary(entry), signal);
+      this.#summaryOrThrow(entry);
+      let listed = await this.#gitFilesAt(project, entry, { kind: 'working' }, want);
+      if (listed.of === 'now') {
+        // git-core listed a newer state than the summary held: wait for that summary, once.
+        await raceSignal(entry.refresher.current ?? Promise.resolve(), signal);
+        listed = await this.#gitFilesAt(project, entry, { kind: 'working' }, want);
+      }
+      const summary = listed.summary ?? entry.summary;
+      if (!summary) throw this.#errorFromInfo(entry.error);
+      const omission = listed.of === 'now' ? listed.untrackedOmitted : summary.untrackedOmitted;
+      stateHash =
+        listed.of === 'now'
+          ? listedStateHash(listed.files, listed.untrackedOmitted)
+          : summary.stateHash;
+      // Conflicts the list lacks (content equal to HEAD), from the same state's snapshot.
+      const basis = entry.treeBasis;
+      const conflicts = basis?.stateHash === stateHash ? (basis.conflicts ?? []) : [];
+      const index = overlayIndex(listed.files, omission, conflicts);
+      const head = summary.headSha;
+      const listing = head === null ? null : await list(head);
+      commit = listing?.commit ?? null;
+      tree = listing?.tree ?? null;
+      if (listing?.kind !== 'dir' && !overlayHasDir(index, dirKey)) {
+        notADirectory(listing?.kind ?? null);
+      }
+      const key = `w ${worktreeId} ${stateHash} ${head ?? ''} ${dirKey}`;
+      cached = this.#treeListings.get(key);
+      if (!cached) {
+        const locator = this.#locator(entry);
+        const count = this.#git.countTreeFiles;
+        const entries = await workingEntries(listing, dirKey, index, (oid) =>
+          count
+            ? count.call(this.#git, locator, { tree: oid, ...callOptions(want) }).catch((error) => {
+                if (isShutdownError(error) || isGitCoreError(error, 'aborted')) throw error;
+                return null;
+              })
+            : Promise.resolve(null),
+        );
+        cached = { entries, listKey: treeListingKey(key, entries) };
+        this.#rememberTree(key, cached);
+      }
+    }
+    const page = pageTreeEntries(cached.entries, query, { listKey: cached.listKey });
+    return {
+      worktreeId,
+      view,
+      ref: view === 'tree' ? (query.ref ?? 'HEAD') : null,
+      commit,
+      tree,
+      path: dir.path,
+      ...(dir.rawPath !== undefined ? { rawPath: dir.rawPath } : {}),
+      stateHash,
+      entries: page.entries,
+      total: page.total,
+      offset: page.offset,
+      nextCursor: page.nextCursor,
+      truncated: page.truncated,
+      restarted: page.restarted,
+    };
+  }
+
+  #rememberTree(key: string, value: { entries: TreeEntry[]; listKey: string }): void {
+    this.#treeListings.delete(key);
+    this.#treeListings.set(key, value);
+    while (this.#treeListings.size > CORE_DEFAULTS.treeListingsCacheSize) {
+      const oldest = this.#treeListings.keys().next().value;
+      if (oldest === undefined) break;
+      this.#treeListings.delete(oldest);
+    }
   }
 
   /** One file's diff (`GET /diff`); `signal` as in `listFiles` (interactive lane, #44). */
