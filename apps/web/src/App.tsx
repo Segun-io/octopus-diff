@@ -1,6 +1,7 @@
 import './zod-config.ts';
 import { type ApiClient, type FilesResponse, scopeKey, TEST_IDS } from '@octopus-diff/contracts';
 import { type QueryClient, QueryClientProvider, useQueryClient } from '@tanstack/react-query';
+import { type RouterHistory, RouterProvider } from '@tanstack/react-router';
 import {
   lazy,
   Suspense,
@@ -54,10 +55,20 @@ import {
 import { useDocumentTitle } from './lib/title.ts';
 import { useDelayedFlag } from './lib/useWait.ts';
 import { LOCAL_WAIT } from './lib/wait.ts';
+import { createAppRouter } from './router.tsx';
 import { useCommands, useKeyboardShortcuts } from './state/commands.ts';
 import { CommandsContext } from './state/commandsContext.tsx';
 import { AppModelProvider, useAppModel } from './state/model.tsx';
-import { actions, type UiStore, UiStoreProvider, useUi, useUiStore } from './state/ui.tsx';
+import {
+  actions,
+  createUiStore,
+  type UiStore,
+  UiStoreProvider,
+  useUi,
+  useUiStore,
+} from './state/ui.tsx';
+import { parseSearch, stateOfSearch } from './state/urlState.ts';
+import { useUrlSync } from './state/useUrlSync.ts';
 import { applyTheme } from './theme/apply.ts';
 import { useTheme } from './theme/useTheme.ts';
 import { activeView } from './views/registry.ts';
@@ -87,17 +98,46 @@ export interface AppProps {
   uiStore?: UiStore;
   /** Override the SSE transport (tests); `null` uses the client's fetch-based subscribe. */
   eventSourceFactory?: EventSourceFactory | null;
+  /** The router's history (tests pass a memory history); defaults to the browser's. */
+  history?: RouterHistory;
 }
 
-export function App({ api, queryClient, uiStore, eventSourceFactory }: AppProps) {
+export function App({ api, queryClient, uiStore, eventSourceFactory, history }: AppProps) {
   const [client] = useState(() => api ?? createBrowserApiClient());
   const [qc] = useState(() => queryClient ?? createQueryClient());
+  const [router] = useState(() =>
+    createAppRouter({
+      component: () => (
+        <AppShell {...(eventSourceFactory !== undefined ? { eventSourceFactory } : {})} />
+      ),
+      ...(history ? { history } : {}),
+    }),
+  );
+  // The address bar wins over the remembered worktree when it names a view (state/urlState.ts);
+  // the store starts there, so the landing has nothing to decide.
+  const [store] = useState(() => {
+    const url = stateOfSearch(parseSearch(router.history.location.search));
+    const initial =
+      url.view.kind === 'none'
+        ? {}
+        : {
+            view: url.view,
+            selected: url.selected,
+            ...(url.scope ? { scope: url.scope } : {}),
+          };
+    if (!uiStore) return createUiStore(initial);
+    // A store handed in with a view already chosen (tests) keeps it.
+    if (url.view.kind !== 'none' && uiStore.getState().view.kind === 'none') {
+      uiStore.setState(initial);
+    }
+    return uiStore;
+  });
   return (
     <ApiContext value={client}>
       <QueryClientProvider client={qc}>
-        <UiStoreProvider {...(uiStore ? { store: uiStore } : {})}>
+        <UiStoreProvider store={store}>
           <AppModelProvider>
-            <AppShell {...(eventSourceFactory !== undefined ? { eventSourceFactory } : {})} />
+            <RouterProvider router={router} />
           </AppModelProvider>
         </UiStoreProvider>
       </QueryClientProvider>
@@ -587,6 +627,7 @@ function AppShell({ eventSourceFactory }: { eventSourceFactory?: EventSourceFact
   useFocusReporting(focusWorktree, model.view.kind === 'project' ? model.view.projectId : null);
   useSelectionRepair();
   useLanding();
+  useUrlSync(model, commands);
   const toggleOrigin = useCallback(
     (worktreeId: string) => actions.toggleOriginGroup(store, worktreeId),
     [store],
