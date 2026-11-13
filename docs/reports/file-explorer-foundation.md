@@ -432,3 +432,49 @@ repository have. After that: 3 loaded runs and 10 runs of the explorer suites, a
 - Default bench: all 9 budgets PASS (cold paint 158 ms, warm 80 ms, 4.7 spawns per worktree, edit to SSE p95 23 ms).
 - **Warm listing** (`bench:tree`, `docs/bench/results-tree.md`): p50 0.73-0.89 ms, p95 0.82-1.19 ms; cold leaf
   (6 new trees) 14.4 ms. These are the original numbers again; the load is gone.
+
+## PR #99 Greptile review, round 3 (one P1, one P2), 2026-11-13
+
+1. **P1, rename targets stayed stale** (#433). The working list pairs a deleted path with a staged new path by
+   content. In the reported sequence the summary entry of the deleted side (` D src/a`) never changes, so `dirs`
+   named only `dst`.
+   - **Fix:** rename candidates (`D` sources; index `A`/`R`/`C` or worktree `A` targets; rename and copy sources) are
+     part of the basis. When any candidate moves, every candidate's directories, of both states, are named.
+   - **Tests:** the exact sequence with real git and its reverse (`dirs` holds `src` and `dst`; `src/a` gains and
+     loses `renamedTo`); a unit test; the brute-force property test extended to 60 operations with pair
+     making, breaking and remaking.
+   - **Mutants:** 4 of 5 killed; the property test alone kills the mutant without the rule. One is equivalent:
+     ignoring the previous state's candidates, which are named anyway because their entries changed.
+2. **P2, child counts outside any byte budget** (#434).
+   - **Fix:** `TreeCache` is one LRU for listings and child counts under 64 MiB. Child counts are compact (one
+     NUL-joined name string and two `Uint32Array`s), and `countTreeChildren({ names })` answers only the names asked
+     for; the daemon asks for the deleted-only directories it checks.
+   - **Tests:** 100k-child arrays across 20 roots under an 8 MiB budget; an oversized item is not kept and evicts
+     nothing; a real 100k-child tree is accounted at 0.8-3 MB and answers the asked names only; the daemon passes the
+     names.
+   - **Mutants:** 6 of 6 killed. The off-by-one in the binary search never ends, so its run hit the harness
+     timeout.
+
+**Verification** (final head; load average 2-3):
+
+- `pnpm lint` exit 0 (4 warnings and 1 info in untouched files; credits up to date); `pnpm typecheck` exit 0;
+  `pnpm build` exit 0.
+- `pnpm test` exit 0 in 1 min 30 s:
+
+  | Package | Passed | Skipped |
+  |---|---|---|
+  | contracts | 135 | 0 |
+  | forge | 101 | 5 |
+  | fixtures | 58 | 0 |
+  | web | 491 | 0 |
+  | git-core | 540 | 1 |
+  | daemon | 471 | 4 |
+  | e2e unit | 8 | 0 |
+  | cli | 141 | 0 |
+  | scripts | 34 | 0 |
+
+- git-core and daemon, run twice more: the same counts.
+- Folding mode: git-core 525 passed, 16 skipped; daemon 469 passed, 6 skipped.
+- `pnpm test:e2e -- --workers=1`: **106 passed (2.9 min)**; read-only proof 4330 lock polls, 0 violations.
+- `perf:smoke`: exit 0, no failed check.
+- **Warm listing** (`bench:tree`): p50 0.72-0.86 ms, p95 0.84-1.25 ms; cold leaf 14.8 ms.
