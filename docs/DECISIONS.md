@@ -4852,3 +4852,127 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
        added. "Unref'd sleeps ignoring the test clock" first survived too, because the real 500 ms fired while the test
        waited. The grace test now keeps the process answering through 2 × `ABORT_GRACE_MS` of real time while the test
        clock stands at `ABORT_GRACE_MS - 1`.
+
+## Effect watch pipeline (session, 2026-11-13; roadmap #48, step 31)
+
+445. **The watch pipeline runs on Effect's clock and fibers; it is not built from `Stream` operators.** Watcher events
+     → coalescing window → summary refresh → fan-out → SSE stays a chain of synchronous callbacks between stages,
+     and every stage that waits (debounces, polls, relists, backoffs, the new-subtree checks, the SSE heartbeat, an
+     SSE connection's wait for frames) is a fiber on one Effect context. `Stream.debounce` / `groupedWithin` were not
+     used: they have no maxWait and no leading edge, and a `Stream` stage emits from a fiber. The leading edge has to
+     fire inside `markDirty`: a focus refresh starts before the focus request continues, which then joins that
+     refresh instead of starting a second one, and the startup spawn counts depend on it. So the stages are small
+     combinators of our own (`DirtyWindow`, `TimerSlot`, `Coalescer`) on Effect primitives (`Clock`, fibers, `Schedule`,
+     `PubSub`, `Scope`), with the old rules kept exactly (#448).
+     - **One time source, `Timers` (`apps/daemon/src/timers.ts`).** It forks fibers with one context and owns them:
+       `close()` interrupts every one still sleeping, so a forgotten cancel cannot leak a timer past its owner.
+       `TimerSlot` is the old `clearTimeout` + `setTimeout` pattern (one pending run, replaced by the next `set`).
+       `now()` reads the same clock, so every `Date.now()` of the watcher, `NewSubtreeWatch` and `ResubscribeGate` now
+       reads it too.
+     - **Unref'd on the live clock.** Effect's live sleeps hold the process open, while the timers they replace were
+       all `unref()`ed. The context therefore holds `unrefClock`: the live clock, except that its sleeps are unref'd
+       `setTimeout`s, as `GitRunner`'s `sleepUnref` does (#442), but for every fiber of the context. A test's
+       `TestClock` is kept as is.
+     - **A zero wait still runs later.** `TestClock` completes a zero sleep inside the call, while the live clock
+       yields, so `Timers.after(0, fn)` always yields first. A `TestClock` test therefore sees the same order as
+       production (a zero debounce, maxWait reached).
+     - **Test-only options, additive, not in the contracts:** `WatcherServiceOptions.context`, `EventHubOptions.context`
+       and `NewSubtreeWatchOptions.timers` / `ResubscribeGate(gap, timers)`. Inside `it.effect`,
+       `yield* Effect.context<never>()` hands the timers its `TestClock`. Diagnostics: `WatcherService.pendingTimers`,
+       `WatcherService.busy` (async work in flight, so a test moves the test clock only while real I/O is not
+       running), `NewSubtreeWatch.busy`, `EventHub.diagnostics`.
+446. **`EventHub` on a `PubSub`, one scoped subscription per SSE connection.** The public API is unchanged (`emit(event,
+     replay?)`, `createStream(hello, lastEventId)`, `on`, `clientCount`, `lastEventId`, `bootId`, `close`), and so is
+     the wire format: the same frames, ids `<bootId>.<seq>`, the `hello` first, replay after `Last-Event-ID` from a
+     1000-event buffer that keeps the slim form (#51), and `: ping` every 15 s.
+     - Frames are published to an unbounded `PubSub` (synchronously, `publishUnsafe`). A connection subscribes inside
+       a `Scope` of its own in the stream's `start`, before it reads the replay buffer, so an event is in exactly one
+       of the two (`emit` is synchronous). The stream's `pull` drains the subscription (`takeAll`, sent as one chunk)
+       in a fiber.
+     - The scope is closed, which unsubscribes and interrupts the waiting pull, when the body stream is cancelled
+       (`@hono/node-server` cancels it when the socket closes), when the request's `AbortSignal` aborts (new optional
+       third argument; `app.ts` passes `c.req.raw.signal`), when the client is too slow, or when the hub closes.
+     - The replay buffer is a ring (no `shift()` per event). The rules are the same: same boot only, `seq` within
+       range, events after it.
+     - **Slow clients: the same policy, counted where the backlog now lives.** A client is disconnected once more than
+       `maxQueuedFrames` (2000) frames wait for it, and it reconnects with `Last-Event-ID`. The backlog used to be the
+       `ReadableStream`'s queue (push model); with `pull` it is the subscription's (`PubSub.remainingUnsafe`), checked
+       on every publish. Either way a stalled socket stops `pull` (node-server waits for `drain`), so memory per client
+       is bounded and nobody else waits.
+     - The heartbeat is one fiber on the hub's clock (`Effect.forever(sleep(heartbeatMs) → publish ping)`). It runs
+       while at least one client is connected, as the old interval did.
+     - **In-process listeners (`on`) stay synchronous**, called inside `emit`. The forge service and the repositories
+       service react before `emit` returns, and an unsubscribed listener gets nothing more, as before.
+447. **`Coalescer` is a serial consumer fiber with a one-slot request buffer.** Same API (`run`, `running`, `current`)
+     and guarantees:
+     - the first run starts synchronously inside `run()` (a fork runs synchronously until its first suspension);
+     - requests during a run share one follow-up;
+     - a caller never observes a run that started before its request;
+     - `run()` never rejects.
+
+     The follow-up starts in the same fiber as soon as the run before it ends. The Promise version waited a few
+     microtasks, during which a request could start a run of its own and push the queued callers to a third run. A
+     differential test drives both over 40 random request/completion sequences with the old class as the reference
+     model: at every step they start the same runs and settle the same callers. `settleWithin`'s timer is on the
+     pipeline clock. `DaemonCore` (the summary `refresher`, the `relister`) is unchanged.
+448. **`DirtyWindow` is the per-worktree coalescing window** (`apps/daemon/src/dirty-window.ts`), lifted out of
+     `markDirty` with its rules unchanged:
+     - a trigger re-arms a trailing `debounceMs`, capped at `maxWaitMs` after the burst's first trigger;
+     - the burst keeps its first reason, except that `git` wins;
+     - `leadingEdge` fires a quiet worktree (nothing armed, no fire within `debounceMs`) inside the call;
+     - any fire, a poll's included, counts as the last fire.
+
+     The pending paths (#40) stay in the watcher, unchanged: `MAX_PENDING_PATHS`, `full` once anything without paths
+     asked. "Never fired" is `-Infinity` instead of `0`, which is the same thing on the live clock and also right on a
+     `TestClock` that starts at 0. A differential test runs `DirtyWindow` and the old inline code (the reference model,
+     on a virtual clock) over 30 random sequences of triggers, poll fires and time steps (debounce 0-200 ms, maxWait,
+     leading edge on and off). Both fire at the same virtual times with the same reasons.
+449. **The watcher's timers.**
+     - The debounce is a `DirtyWindow`.
+     - The fallback poll, the ignore-rule recheck, the list debounce and both re-subscribe backoffs are `TimerSlot`s.
+       The poll is re-armed by every refresh and its interval changes with focus and health, so a `Schedule` would
+       only be restarted on every step.
+     - The periodic relist is a fiber: a first jittered sleep, then `Effect.repeat` with `Schedule.spaced(relistMs)`
+       whose delay is re-drawn per recurrence (`Schedule.modifyDelay`, ±25 % with `Math.random`, as before;
+       `Schedule.jittered` is 80-120 % from Effect's `Random`).
+     - A relist callback that throws is logged and does not end the schedule. The old timer re-armed itself after
+       the callback.
+     - The backoff is still a function of the error streak (doubling from `resubscribeDelayMs` up to 5 min, starting
+       over after 10 min without errors) and now reads the pipeline clock.
+     - `NewSubtreeWatch`'s burst timer and `ResubscribeGate`'s gap run on the watcher's `Timers`.
+     - `close()` closes the `Timers` (every timer at once) instead of clearing each by hand. `removeProject` /
+       unwatching a worktree still cancel theirs, and the relist fiber is interrupted.
+     - The watch host's supervision (#46) is unchanged: a dead host is replaced on the next subscribe, and the
+       watcher's backoff drives those re-subscribes.
+450. **Tests on `TestClock`, and what stays real-time.**
+     - Moved in place, assertions unchanged:
+       - `watcher-backend-errors.test.ts`, all 6 tests: `eventually` / `sleep` became `advanceUntil` / `advance`
+         with the same bounds in virtual milliseconds;
+       - in `watch-new-subtree.test.ts`, the `ResubscribeGate` test and both `NewSubtreeWatch` replaced-directory
+         tests.
+     - Where the test clock makes a bound exact, an exact assertion was added next to the old one: the backoff is
+       100 / 200 ms, the gap 150 ms.
+     - New on `TestClock`:
+       - `watch-timers.test.ts`: the window, maxWait, leading edge (also while armed), reason precedence, path
+         hints, focus, polls (focused, idle, degraded, jitter bounds), the relist `Schedule` and its teardown, the git-dir
+         list debounce, the backoff with its streak reset, close, the differential test;
+       - `events-pubsub.test.ts`: the heartbeat;
+       - a new `NewSubtreeWatch` maxWait test.
+     - **Real-time on purpose** (real `@parcel/watcher` events or real processes, which no test clock drives):
+       `watcher.test.ts`, `watcher-review-fixes.test.ts`, `watch-paths.test.ts`, the file-event tests of
+       `watch-new-subtree.test.ts`, `watch.real-git.test.ts`, `incremental*.test.ts`, `event-deltas.real-git.test.ts`,
+       `status-flow`, `watch-host*.test.ts`. Also `watch-core.test.ts` and other daemon-level tests: `DaemonCore`'s
+       own intervals (GC, missing-project retry, `review.ready` batching) are not on the clock (#451). The original
+       SSE tests in `events.test.ts` are unchanged and live.
+     - A test that steps the test clock moves it only while the watcher is idle (`busy`). Real I/O (stat, ignore files,
+       a fake subscribe's promises) finishes first, so it cannot race virtual time.
+451. **Not migrated (on purpose).**
+     - `DaemonCore`'s own timers (`gc`, the missing-project retry interval, the `review.ready` batch), and the rest of
+       `core.ts`. The file-explorer session (PR #99) edits `core.ts`, so the wiring there is untouched; they can join
+       the clock with #49.
+     - The forge service's timers, the watch host's protocol, `settings`.
+     - `WatcherService`'s subscription logic (enqueue, identity checks, healing) stays Promise-based. It awaits real
+       I/O and the watch host.
+452. **Cost.** No new dependency (Effect's `PubSub`, `Schedule`, `Scope` are in `effect@4.1.4`, already bundled). Per
+     SSE connection: one `Scope`, one subscription, one fiber per pull. Per timer: one fiber instead of one `Timeout`.
+     The bench numbers alternating with `main` are in `docs/reports/effect-watch-pipeline.md`.
