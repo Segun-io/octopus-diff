@@ -25,6 +25,7 @@ import {
   type FilesResponse,
   fileListCounts,
   fileListKey,
+  GIT_OBJECT_MISSING,
   type GitChangedFile,
   type GitCore,
   type GitPriority,
@@ -41,6 +42,7 @@ import {
   type Project,
   type ProjectListItem,
   pageFileList,
+  pageTreeEntries,
   type ResolvedProject,
   type ReviewRange,
   type ReviewRequest,
@@ -50,6 +52,10 @@ import {
   type ServerEventOf,
   type SummarySnapshot,
   scopeKey,
+  type TreeEntry,
+  type TreeQuery,
+  type TreeResponse,
+  treeListingKey,
   type UntrackedOmission,
   type UpdateProjectRequest,
   utf8Length,
@@ -58,6 +64,7 @@ import {
   WORKTREE_CHANGED_PATHS_MAX,
   WORKTREE_CHANGED_PATHS_MAX_CHARS,
   type Worktree,
+  type WorktreeChangedDirs,
   WorktreeChangedEventSchema,
   type WorktreeChangedPaths,
   type WorktreeListItem,
@@ -101,6 +108,22 @@ import {
   type ScanRootRow,
   type Store,
 } from './store.js';
+import {
+  bstrOf,
+  decodeBstr,
+  dirKeyProblem,
+  estimateListingBytes,
+  overlayHasDir,
+  overlayIndex,
+  sendableEntries,
+  type TreeBasis,
+  TreeListingCache,
+  type TreeListingMemo,
+  treeBasis,
+  treeDelta,
+  treeEntries,
+  workingEntries,
+} from './tree.js';
 import type { WatchHost } from './watch-host.js';
 import { gitDirOf } from './watch-identity.js';
 import { type DirtyReason, type SubscribeFn, WatcherService } from './watcher.js';
@@ -311,6 +334,8 @@ interface WorktreeEntry {
   reconcile: NodeJS.Timeout | null;
   /** The next summary passes `forgetState` (an explicit Refresh). */
   forgetState: boolean;
+  /** What the file explorer's directory deltas compare against: the last summary's (#9). */
+  treeBasis: TreeBasis | null;
 }
 
 /** First review states that land within this window share one `review.ready` per project. */
@@ -387,6 +412,7 @@ export const inboxOvertaken = { count: 0 };
 export const LIST_ATTEMPTS = 3;
 
 /** A list and the state it is of (`#gitFilesAt`). */
+
 interface ListedAt<F> {
   files: F[];
   /** The summary read when the list was asked for. */
@@ -534,6 +560,12 @@ export class DaemonCore {
   >();
   /** Identical inbox requests that overlap share one run (`inbox`), keyed by what it reads. */
   readonly #inboxInflight = new Map<string, Promise<InboxResponse>>();
+  /**
+   * Composed directory listings of `GET /tree` (#9) with their cursor keys, by what they are of:
+   * the tree view by (project, commit, directory), the working view by (worktree, state, HEAD,
+   * directory). git-core caches the listings themselves by (common dir, tree oid).
+   */
+  readonly #treeListings = new TreeListingCache();
   /** Worktree ids removed recently (id → time), to spot a path re-added soon after (F1). */
   readonly #recentlyRemoved = new Map<string, number>();
   /** Bumped on every review write in a project (marks, bookmarks, reviewed commits). */
@@ -1175,6 +1207,7 @@ export class DaemonCore {
       gitStateHash: null,
       reconcile: null,
       forgetState: false,
+      treeBasis: null,
     };
     return entry;
   }
@@ -1348,6 +1381,7 @@ export class DaemonCore {
     }
     if (entry.worktree.missing) {
       entry.summary = null;
+      entry.treeBasis = null;
       entry.error = {
         code: 'not_found',
         message: `worktree path no longer exists: ${entry.worktree.path}`,
@@ -1392,6 +1426,20 @@ export class DaemonCore {
       if (this.#closed || project.worktrees.get(entry.worktree.id) !== entry) return;
       entry.summary = summary;
       entry.error = null;
+      // Composed explorer listings of older states go (security review P2-2).
+      this.#treeListings.dropOlderStates(entry.worktree.id, summary.stateHash);
+      // The file explorer's directory deltas (#9): from the snapshot, no git process.
+      let dirs: WorktreeChangedDirs | undefined;
+      if (snapshot) {
+        const basis = treeBasis(
+          summary.stateHash,
+          summary.headSha,
+          snapshot,
+          summary.untrackedOmitted,
+        );
+        if (entry.treeBasis) dirs = treeDelta(entry.treeBasis, basis);
+        entry.treeBasis = basis;
+      } else entry.treeBasis = null;
       if (
         entry.worktree.branch !== summary.branch ||
         entry.worktree.headSha !== summary.headSha ||
@@ -1426,7 +1474,7 @@ export class DaemonCore {
       }
       const paths = await this.#cachedPaths(project, entry, summary);
       if (this.#closed || project.worktrees.get(entry.worktree.id) !== entry) return;
-      const announced = this.#announce(entry, summary.stateHash, paths);
+      const announced = this.#announce(entry, summary.stateHash, paths, dirs);
       if (entry.readyHeld) {
         entry.readyHeld = false;
         // Nothing announced, or a projects answer already gave a client this state hash without
@@ -1439,6 +1487,7 @@ export class DaemonCore {
       if (project.worktrees.get(entry.worktree.id) !== entry) return;
       const apiError = toApiError(error);
       entry.summary = null;
+      entry.treeBasis = null;
       entry.error = apiError.toBody().error;
       this.#log.debug('summary failed', { worktreeId: entry.worktree.id, error });
       this.#announce(entry, `error:${apiError.code}`);
@@ -1546,7 +1595,12 @@ export class DaemonCore {
    * Replayed after a reconnect (`Last-Event-ID`) without them: that client resyncs anyway, and the
    * replay buffer keeps its old size.
    */
-  #announce(entry: WorktreeEntry, stateHash: string, paths?: WorktreeChangedPaths): boolean {
+  #announce(
+    entry: WorktreeEntry,
+    stateHash: string,
+    paths?: WorktreeChangedPaths,
+    dirs?: WorktreeChangedDirs,
+  ): boolean {
     if (entry.lastHash === stateHash) return false;
     entry.lastHash = stateHash;
     const activitySeq = this.#activity.seqOf(entry.worktree.id);
@@ -1566,6 +1620,7 @@ export class DaemonCore {
       ...slim,
       ...this.#row(project, entry),
       ...(paths ? { paths } : {}),
+      ...(dirs ? { dirs } : {}),
     };
     // A client drops an event its schema rejects, so a field it would reject (a path the list
     // schema refuses) must cost the delta, not the event.
@@ -1736,6 +1791,7 @@ export class DaemonCore {
   }
 
   #invalidateWorktreeFiles(worktreeId: string): void {
+    this.#treeListings.dropOlderStates(worktreeId, null);
     const prefix = `${worktreeId}\u0000`;
     for (const key of this.#filesCache.keys()) {
       if (key.startsWith(prefix)) this.#filesCache.delete(key);
@@ -2153,6 +2209,209 @@ export class DaemonCore {
       resolved.review,
     );
     return { files, listKey };
+  }
+
+  /**
+   * One directory for the file explorer (`GET /tree`, #9). Without `ref` the working view: HEAD's
+   * listing (git-core, cached by tree oid) with the `working` list of the summary's state laid
+   * over it (`#gitFilesAt`, cached by state): warm, no git process at all. With `ref` the tree
+   * view: the commit's listing only. Pages are slices of the composed listing (`pageTreeEntries`).
+   * `signal` as in `listFiles` (interactive lane, #44).
+   */
+  async listTree(
+    worktreeId: string,
+    query: TreeQuery,
+    signal?: AbortSignal,
+  ): Promise<TreeResponse> {
+    const { project, entry } = this.#requireWorktree(worktreeId);
+    const listTree = this.#git.listTree;
+    if (!listTree)
+      throw new ApiError('internal', 'tree listings are not available', { status: 501 });
+    const want: Want = { signal, priority: 'interactive' };
+    const path = query.path ?? '';
+    const dirKey = bstrOf({ path, rawPath: query.rawPath });
+    // Checked here, whatever is asked of git-core afterwards (an unborn HEAD asks it nothing).
+    const invalid = dirKeyProblem(dirKey);
+    if (invalid) throw new ApiError('bad_request', invalid);
+    const dir = decodeBstr(dirKey);
+    const asked = { path, ...(query.rawPath !== undefined ? { rawPath: query.rawPath } : {}) };
+    const list = (ref: string, withEntries: boolean) =>
+      listTree
+        .call(this.#git, this.#locator(entry), {
+          ref,
+          ...asked,
+          ...(withEntries ? {} : { withEntries: false }),
+          ...callOptions(want),
+        })
+        .catch((error: unknown) => {
+          if (isGitCoreError(error, 'not_found')) {
+            // A partial clone without the tree (P3-6): say so, with a stable reason.
+            if (error.details.reason === GIT_OBJECT_MISSING) {
+              throw new ApiError('not_found', error.message, {
+                details: { reason: GIT_OBJECT_MISSING },
+                cause: error,
+              });
+            }
+            throw new ApiError('not_found', `unknown ref: ${ref}`, { cause: error });
+          }
+          if (isGitCoreError(error, 'invalid_argument')) {
+            throw new ApiError('bad_request', error.message, { cause: error });
+          }
+          throw error;
+        });
+    const notADirectory = (kind: string | null): never => {
+      if (kind === null) throw new ApiError('not_found', 'no such directory');
+      throw new ApiError('bad_request', `not a directory (a ${kind})`);
+    };
+    const remember = (
+      key: string,
+      entries: TreeEntry[],
+      commit: string | null,
+      tree: string | null,
+    ): TreeListingMemo => {
+      const sendable = sendableEntries(entries);
+      const memo: TreeListingMemo = {
+        entries: sendable.entries,
+        listKey: treeListingKey(key, sendable.entries),
+        commit,
+        tree,
+        skipped: sendable.skipped,
+        bytes: estimateListingBytes(sendable.entries),
+      };
+      this.#treeListings.set(key, memo);
+      return memo;
+    };
+    let cached: TreeListingMemo;
+    let stateHash: string | null = null;
+    const view: TreeResponse['view'] =
+      query.ref !== undefined || entry.worktree.bare ? 'tree' : 'working';
+    if (view === 'tree') {
+      // The commit and the directory first, without decoding entries (P3-4): a page of a cached
+      // listing is a slice of it, not a new decode of the whole directory.
+      const ref = query.ref ?? 'HEAD';
+      const head = await list(ref, false);
+      // An unborn branch: its root is empty, every other path is not there.
+      if (head.kind !== 'dir' && !(head.commit === null && dirKey === '')) {
+        notADirectory(head.kind);
+      }
+      const key = `t\u0000${project.row.id}\u0000${head.commit ?? ''}\u0000${dirKey}`;
+      const hit = this.#treeListings.get(key);
+      if (hit) cached = hit;
+      else {
+        const full = head.commit === null ? head : await list(head.commit, true);
+        cached = remember(key, treeEntries(full), full.commit, full.tree);
+      }
+    } else {
+      await raceSignal(this.#ensureSummary(entry), signal);
+      this.#summaryOrThrow(entry);
+      // The file list and the commit must describe one state (PR #99 review, #417): the list is
+      // taken only when git-core says it is of the summary it was asked for, and HEAD read *after*
+      // it is still that summary's HEAD. Otherwise a summary refresh runs and it is tried again, up
+      // to `LIST_ATTEMPTS` times; then a retryable 409. A listing composed for the same state and
+      // HEAD was verified when it was composed: a warm request reads nothing else (not even HEAD).
+      const workingKey = (held: WorktreeSummary) =>
+        `w\u0000${worktreeId}\u0000${held.stateHash}\u0000${held.headSha ?? ''}\u0000${dirKey}`;
+      let warm: { memo: TreeListingMemo; summary: WorktreeSummary } | null = null;
+      let agreed: { listed: ListedAt<GitChangedFile>; summary: WorktreeSummary } | null = null;
+      let headKind: string | null = null;
+      for (let attempt = 1; attempt <= LIST_ATTEMPTS; attempt++) {
+        const listed = await this.#gitFilesAt(project, entry, { kind: 'working' }, want);
+        const held = listed.summary;
+        if (listed.of === 'summary' && held) {
+          const memo = this.#treeListings.get(workingKey(held));
+          if (memo) {
+            warm = { memo, summary: held };
+            break;
+          }
+          const now = await list('HEAD', false);
+          if (now.commit === held.headSha) {
+            agreed = { listed, summary: held };
+            headKind = now.kind;
+            break;
+          }
+        }
+        if (attempt === LIST_ATTEMPTS) break;
+        await raceSignal(entry.refresher.current ?? this.#refresh(entry), signal);
+      }
+      if (warm) {
+        cached = warm.memo;
+        stateHash = warm.summary.stateHash;
+      } else if (!agreed) {
+        throw new ApiError('conflict', 'the worktree changed while it was listed; retry', {
+          details: { retryable: true },
+        });
+      } else {
+        const { listed, summary } = agreed;
+        stateHash = summary.stateHash;
+        // Conflicts the list lacks (content equal to HEAD), from the same state's snapshot.
+        const basis = entry.treeBasis;
+        const conflicts = basis?.stateHash === stateHash ? (basis.conflicts ?? []) : [];
+        const index = overlayIndex(listed.files, summary.untrackedOmitted, conflicts);
+        const head = summary.headSha;
+        if (headKind !== 'dir' && !overlayHasDir(index, dirKey)) notADirectory(headKind);
+        // HEAD's listing of the directory (by its full id: memoized), only when it is one.
+        const listing = head !== null && headKind === 'dir' ? await list(head, true) : null;
+        const locator = this.#locator(entry);
+        const countOne = this.#git.countTreeFiles;
+        const countChildren = this.#git.countTreeChildren;
+        const quiet = (error: unknown): null => {
+          if (isShutdownError(error) || isGitCoreError(error, 'aborted')) throw error;
+          return null;
+        };
+        const entries = await workingEntries(listing, dirKey, index, {
+          file: (oid) =>
+            countOne
+              ? countOne.call(this.#git, locator, { tree: oid, ...callOptions(want) }).catch(quiet)
+              : Promise.resolve(null),
+          children: async (names) => {
+            if (!countChildren || !listing?.tree) return null;
+            // Only the directories checked: git-core keeps the counts compactly, the answer is small.
+            const asked = names.map((key) => {
+              const d = decodeBstr(key);
+              return d.rawPath !== undefined
+                ? { name: d.path, rawName: d.rawPath }
+                : { name: d.path };
+            });
+            const counts = await countChildren
+              .call(this.#git, locator, { tree: listing.tree, names: asked, ...callOptions(want) })
+              .catch(quiet);
+            if (!counts) return null;
+            return new Map(
+              counts.map((c) => [bstrOf({ path: c.name, rawPath: c.rawName }), c.count] as const),
+            );
+          },
+        });
+        cached = remember(
+          workingKey(summary),
+          entries,
+          listing?.commit ?? head,
+          listing?.tree ?? null,
+        );
+      }
+    }
+    const page = pageTreeEntries(cached.entries, query, { listKey: cached.listKey });
+    return {
+      worktreeId,
+      view,
+      ref: view === 'tree' ? (query.ref ?? 'HEAD') : null,
+      commit: cached.commit,
+      tree: cached.tree,
+      path: dir.path,
+      ...(dir.rawPath !== undefined ? { rawPath: dir.rawPath } : {}),
+      stateHash,
+      entries: page.entries,
+      total: page.total,
+      offset: page.offset,
+      nextCursor: page.nextCursor,
+      truncated: page.truncated,
+      restarted: page.restarted,
+      ...(cached.skipped ? { skipped: cached.skipped } : {}),
+    };
+  }
+
+  /** The composed listings' size (tests, memory checks). */
+  treeListingStats(): { listings: number; bytes: number } {
+    return { listings: this.#treeListings.size, bytes: this.#treeListings.bytes };
   }
 
   /** One file's diff (`GET /diff`); `signal` as in `listFiles` (interactive lane, #44). */

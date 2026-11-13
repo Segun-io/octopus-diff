@@ -18,3 +18,4 @@ export * from './paging.js';
 export * from './scope.js';
 export * from './settings.js';
 export * from './test-ids.js';
+export * from './tree.js';

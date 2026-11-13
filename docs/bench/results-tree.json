@@ -1,0 +1,240 @@
+{
+  "date": "2026-11-13T13:55:30.843Z",
+  "machine": {
+    "platform": "linux",
+    "release": "6.18.58.1-microsoft-standard-WSL2",
+    "cpus": 12,
+    "node": "v26.13.0"
+  },
+  "layout": {
+    "files": 100000,
+    "dirtyTracked": 300,
+    "untracked": 400,
+    "manyUntracked": 30000,
+    "rewriteLines": 300000
+  },
+  "generationMs": 9353,
+  "gitCore": {
+    "recursiveFiles": 100002,
+    "lsTreeRootColdMs": {
+      "n": 5,
+      "p50": 6.27,
+      "p95": 6.89,
+      "max": 6.89
+    },
+    "lsTreeRecursiveRootMs": {
+      "n": 5,
+      "p50": 38.76,
+      "p95": 42.23,
+      "max": 42.23
+    },
+    "fullPathListJsonBytes": 5312001
+  },
+  "worktrees": {
+    "main": {
+      "firstMs": 526,
+      "root": {
+        "path": "",
+        "entries": 4,
+        "changed": 3,
+        "bytes": 821,
+        "coldMs": 1.65,
+        "warm": {
+          "n": 30,
+          "p50": 0.86,
+          "p95": 1.25,
+          "max": 1.27
+        },
+        "warmCpuMsPerRequest": 1,
+        "treeViewFirstMs": 1.43,
+        "treeViewWarm": {
+          "n": 10,
+          "p50": 1.24,
+          "p95": 1.46,
+          "max": 1.46
+        }
+      },
+      "middle": {
+        "path": "apps/app3/packages",
+        "entries": 10,
+        "changed": 10,
+        "bytes": 1836,
+        "coldMs": 8.39,
+        "warm": {
+          "n": 30,
+          "p50": 0.81,
+          "p95": 0.94,
+          "max": 0.94
+        },
+        "warmCpuMsPerRequest": 0.67,
+        "treeViewFirstMs": 1.32,
+        "treeViewWarm": {
+          "n": 10,
+          "p50": 1.24,
+          "p95": 1.43,
+          "max": 1.43
+        }
+      },
+      "leaf": {
+        "path": "apps/app5/packages/pkg7/src/mod2/sub4",
+        "entries": 25,
+        "changed": 0,
+        "bytes": 4745,
+        "coldMs": 14.79,
+        "warm": {
+          "n": 30,
+          "p50": 0.81,
+          "p95": 1.02,
+          "max": 1.08
+        },
+        "warmCpuMsPerRequest": 1,
+        "treeViewFirstMs": 1.33,
+        "treeViewWarm": {
+          "n": 10,
+          "p50": 1.22,
+          "p95": 1.35,
+          "max": 1.35
+        }
+      }
+    },
+    "stale-index": {
+      "firstMs": 207,
+      "root": {
+        "path": "",
+        "entries": 4,
+        "changed": 2,
+        "bytes": 809,
+        "coldMs": 1.12,
+        "warm": {
+          "n": 30,
+          "p50": 0.75,
+          "p95": 1.02,
+          "max": 1.07
+        },
+        "warmCpuMsPerRequest": 0.33,
+        "treeViewFirstMs": 2.41,
+        "treeViewWarm": {
+          "n": 10,
+          "p50": 1.17,
+          "p95": 1.4,
+          "max": 1.4
+        }
+      },
+      "middle": {
+        "path": "apps/app3/packages",
+        "entries": 10,
+        "changed": 10,
+        "bytes": 1836,
+        "coldMs": 1.8,
+        "warm": {
+          "n": 30,
+          "p50": 0.77,
+          "p95": 0.97,
+          "max": 1.05
+        },
+        "warmCpuMsPerRequest": 0.67,
+        "treeViewFirstMs": 1.2,
+        "treeViewWarm": {
+          "n": 10,
+          "p50": 1.14,
+          "p95": 1.29,
+          "max": 1.29
+        }
+      },
+      "leaf": {
+        "path": "apps/app5/packages/pkg7/src/mod2/sub4",
+        "entries": 25,
+        "changed": 0,
+        "bytes": 4745,
+        "coldMs": 1.64,
+        "warm": {
+          "n": 30,
+          "p50": 0.76,
+          "p95": 0.88,
+          "max": 1.01
+        },
+        "warmCpuMsPerRequest": 0.67,
+        "treeViewFirstMs": 1.26,
+        "treeViewWarm": {
+          "n": 10,
+          "p50": 1.31,
+          "p95": 1.55,
+          "max": 1.55
+        }
+      }
+    },
+    "untracked-heavy": {
+      "firstMs": 206,
+      "root": {
+        "path": "",
+        "entries": 4,
+        "changed": 2,
+        "bytes": 836,
+        "coldMs": 0.95,
+        "warm": {
+          "n": 30,
+          "p50": 0.72,
+          "p95": 0.84,
+          "max": 0.87
+        },
+        "warmCpuMsPerRequest": 0.33,
+        "treeViewFirstMs": 1.08,
+        "treeViewWarm": {
+          "n": 10,
+          "p50": 1.07,
+          "p95": 1.2,
+          "max": 1.2
+        }
+      },
+      "middle": {
+        "path": "apps/app3/packages",
+        "entries": 10,
+        "changed": 10,
+        "bytes": 1836,
+        "coldMs": 1.34,
+        "warm": {
+          "n": 30,
+          "p50": 0.75,
+          "p95": 0.9,
+          "max": 0.93
+        },
+        "warmCpuMsPerRequest": 0.33,
+        "treeViewFirstMs": 2.03,
+        "treeViewWarm": {
+          "n": 10,
+          "p50": 1.14,
+          "p95": 1.3,
+          "max": 1.3
+        }
+      },
+      "leaf": {
+        "path": "apps/app5/packages/pkg7/src/mod2/sub4",
+        "entries": 25,
+        "changed": 0,
+        "bytes": 4745,
+        "coldMs": 1.41,
+        "warm": {
+          "n": 30,
+          "p50": 0.76,
+          "p95": 0.94,
+          "max": 0.95
+        },
+        "warmCpuMsPerRequest": 0.33,
+        "treeViewFirstMs": 1.28,
+        "treeViewWarm": {
+          "n": 10,
+          "p50": 1.14,
+          "p95": 1.24,
+          "max": 1.24
+        }
+      }
+    }
+  },
+  "walk": {
+    "requests": 4980,
+    "entries": 104981,
+    "bytes": 19735042,
+    "ms": 16062,
+    "daemonCpuMs": 5390
+  }
+}

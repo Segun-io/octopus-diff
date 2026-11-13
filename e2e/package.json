@@ -12,6 +12,7 @@
     "test:e2e": "playwright test",
     "bench": "tsx bench/bench.ts",
     "bench:paged": "tsx bench/paged-files.ts",
+    "bench:tree": "tsx bench/tree.ts",
     "profile:real": "tsx --conditions=@octopus-diff/source bench/real-repos.ts",
     "screenshots": "tsx scripts/screenshots.ts",
     "lint": "biome check ."

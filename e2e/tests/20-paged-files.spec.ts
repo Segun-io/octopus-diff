@@ -99,15 +99,19 @@ test.describe('paged file lists (#42)', () => {
     await expect(more).toHaveAttribute('data-total', String(FILES));
     await expect(app.fileItem(rel(0))).toBeVisible();
     // Scrolling to the end loads the next pages.
-    for (let i = 0; i < 20; i++) {
+    // Keep scrolling until the LAST file is mounted, not only until the Load-more footer is gone:
+    // the footer disappears as the last page arrives, and that page's rows land below the viewport
+    // and are not mounted until one more scroll (this loop used to stop too early under load).
+    const last = app.fileItem(rel(FILES - 1));
+    for (let i = 0; i < 60; i++) {
       await app.fileList.evaluate((el) => {
         el.scrollTop = el.scrollHeight;
       });
-      if ((await more.count()) === 0) break;
+      if ((await more.count()) === 0 && (await last.count()) > 0) break;
       await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => r(null))));
     }
     await expect(more).toHaveCount(0, { timeout: 15_000 });
-    await expect(app.fileItem(rel(FILES - 1))).toBeAttached();
+    await expect(last).toBeAttached({ timeout: 15_000 });
     expect(sizes.length).toBeGreaterThan(0);
     expect(Math.max(...sizes.map((s) => s.bytes))).toBeLessThan(1_000_000);
     // The file list requests asked for pages.

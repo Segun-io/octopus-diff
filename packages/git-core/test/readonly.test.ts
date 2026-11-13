@@ -247,6 +247,17 @@ describe('read-only proof', () => {
       if (treeOid) {
         const refused = await core.readBlob?.(wt, { oid: treeOid }).catch((e: unknown) => e);
         expect(isGitCoreError(refused, 'invalid_argument')).toBe(true);
+        // The file explorer (#9): every directory of HEAD, and the file count of the root.
+        const dirs = [''];
+        while (dirs.length > 0) {
+          const dir = dirs.pop() as string;
+          const listing = await core.listTree?.(wt, { ref: 'HEAD', path: dir });
+          for (const entry of listing?.entries ?? []) {
+            if (entry.kind === 'dir' && entry.rawPath === undefined) dirs.push(entry.path);
+          }
+        }
+        await core.countTreeFiles?.(wt, { tree: treeOid });
+        await core.countTreeChildren?.(wt, { tree: treeOid });
       }
       await core.getWatchTargets(wt);
       const commits = await core.listCommits(wt, { limit: 5 });

@@ -4761,6 +4761,262 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      One is equivalent: dropping `!closed` from the install check, since a close also ends the generation and the
      generation check refuses the install. The 14 mutants of #46 are still killed.
 
+## File explorer foundation (session, 2026-11-13; roadmap #9, step 27)
+
+406. **Contracts for the explorer are additive (`packages/contracts/src/tree.ts`).** A new route
+     `GET /api/worktrees/:worktreeId/tree?path=&rawPath=&ref=&limit=&cursor=` (`ROUTES.getTree`,
+     `ApiClient.getTree`), `TreeQuerySchema`, `TreeResponseSchema`, `TreeEntrySchema`, the tree order
+     (`compareTreeNames`), the paging helper (`pageTreeEntries`, `treeListingKey`, cursors `t1.<16 hex>.<offset>`)
+     and an optional `worktree.changed.dirs` (`WorktreeChangedDirsSchema`: `{ all, dirs[] }`, at most
+     `WORKTREE_CHANGED_DIRS_MAX` = 100 directories and 8000 characters, else `all: true`). `GitCore` gains two
+     optional methods, `listTree` and `countTreeFiles`. `paging.ts` now exports its `Hash64` (no behaviour change)
+     so tree cursors hash like file cursors. Nothing was renamed or removed; older clients strip `dirs`.
+     - Without `ref` the route answers the *working view* (HEAD's tree with the worktree's changes laid over it);
+       with `ref` the *tree view* (that commit's tree only). An explicit `ref=HEAD` is the committed tree, so a
+       client can ask for either without a second flag.
+     - Tree cursors are not file cursors (another prefix, `t1`), so a cursor of one route can never page the other.
+407. **A directory is reached by walking tree objects; `ls-tree` is allowlisted for one object id only.** The issue
+     suggested `ls-tree <treeish> -- <dir>/`. Instead git-core resolves the commit (`HEAD` from the HEAD file, a full id
+     memoized, a branch or tag from the ref files, else `rev-parse --verify --end-of-options <ref>^{commit}`), its root
+     tree (`rev-parse <commit>^{tree}`, memoized), then lists one tree per path component with
+     `ls-tree -z -l <tree oid>` and looks the next component up by its raw bytes.
+     - **Why:** no path, pathspec or ref text ever reaches git's command line, so traversal, option injection,
+       non-UTF-8 names (argv cannot carry them from a JS string) and pathspec magic are out of the question by
+       construction. The cache key is the tree oid itself, which is what the issue asked to key by. A symlink
+       (`120000` blob) or a submodule (`160000` commit) ends the walk: neither is ever entered, inside or out of the
+       repository. `ls-tree` reads objects only; with a bare object id it never reads the index or the working tree.
+     - **Allowlist** (`runner/allowlist.ts`): `ls-tree` added with the options `-z`, `-l`/`--long` (sizes), `-r`
+       (`countTreeFiles`) and *exactly one* other argument, a full lowercase object id (40 or 64 hex). Everything
+       else, `--`/`--end-of-options` included, is refused, so the subcommand cannot take a path or a ref at all. No
+       stdin. Tested in `runner.test.ts`; the read-only proof (`readonly.test.ts`) lists every directory of HEAD.
+     - **Cost:** a cold directory at depth d costs d `ls-tree` runs (about 2.4 ms each on the 100k layout); an
+       explorer opens parents first, so in practice one run per newly opened directory.
+408. **Two caches: git-core keeps tree listings by (common dir, tree oid), the daemon keeps composed pages by state.**
+     (Amended by #425: the daemon's cache is bounded by bytes and keeps one state per worktree.)
+     - git-core (`TreeCache`, `tree.ts`): parsed entries (names as bytes, no paths, so an identical subtree at two paths
+       shares one entry), LRU bounded by an estimate of 64 MiB (name bytes + 160 per entry); a listing larger than the
+       bound is served, not kept. Single-flight per key (`Flight`: cancelled only when every waiter left, #44). File
+       counts (`countTreeFiles`) memoized per (common dir, tree oid), 20k entries. Every worktree of a project, every
+       branch and every commit that holds the same directory share one entry. The common dir in the key is not needed
+       for correctness (an object id names the same content everywhere) but keeps one repository's objects from being
+       answered for another's without that repository having resolved them itself.
+     - daemon (`#treeListings`, 64 entries): the composed listing and its cursor key, by (project, commit, directory)
+       for the tree view and (worktree, stateHash, HEAD, directory) for the working view, so a page or a repeat is a
+       slice, never a recomposition.
+409. **The working view's rules** (amended by #418 and #419: one row per name, raw rename sources) (`apps/daemon/src/tree.ts`, `packages/contracts/src/tree.ts`; differential test
+     against `git status` in `apps/daemon/test/tree.real-git.test.ts`).
+     - The overlay is the `working` file list the daemon already holds for the summary's state (`#gitFilesAt`): warm,
+       a listing costs no git process. HEAD is the summary's `headSha` (a full id: no ref lookup).
+     - A changed path carries the list's `status`, `staged`, `unstaged` (and `oldPath` for renames and copies). The
+       old path of a rename is listed as `deleted` with `renamedTo`. A deleted tracked file stays listed.
+     - Paths only in the working copy are listed (`oid: null`; kind from the new mode). A new directory is
+       `untracked` when everything below it is untracked, else `added`.
+     - A HEAD directory is `deleted` when nothing below it exists any more: no live change below and its file count
+       (`countTreeFiles`, one `ls-tree -r`, memoized) equals the deletions below. Asked only for such directories.
+     - `changes` on a directory counts the changed paths below (a rename's two paths, omitted untracked files).
+     - Untracked files omitted above the cap (#43): the summary's omitted directories are listed (`status:
+       'untracked'` when not in HEAD) with `untrackedOmitted`. Their files are not listed (no list holds them); single
+       omitted files outside those directories are not listed either.
+     - **Ignored files are not shown** (neither `ls-tree` nor the list holds them). Tracked files that match an ignore
+       rule are listed like every tracked file. A future "show ignored" would need an `ls-files --others --ignored
+       --directory` read per directory; not built.
+     - **Sparse checkout: documented, not refused.** HEAD's whole tree is listed; paths outside the cone look
+       unchanged (git status says nothing about them either). Flagging them would need `ls-files -t`; not built.
+     - Case: names are compared as bytes, as git does; `A.txt` and `a.txt` in one tree are two entries. On a
+       case-folding file system a case-only rename on disk is whatever git status says (usually nothing).
+     - An untracked nested repository appears as an untracked file-like entry (the list has no mode for it).
+410. **Conflicts the working list leaves out come from the summary's snapshot.** git-core's `working` list holds diffs
+     against HEAD, so a conflicted path whose working-tree content equals HEAD (`UD`, "deleted by them", kept as ours)
+     is not in it. Found by the differential test. git-core's list is unchanged (its consumers and patch hashes depend
+     on it); the daemon keeps the unmerged paths of the latest snapshot (`TreeBasis.conflicts`, only when the snapshot
+     was not cut) and lays them over as `conflicted` when the listing is of the same `stateHash`.
+411. **Directory deltas come from consecutive summary snapshots, no git process** (`treeBasis` / `treeDelta`).
+     *Superseded in part by #420:* every field of a snapshot entry is compared now, so a content edit names its
+     ancestors too. Originally: per path the status letters, the rename source, and for `A`, `D`, `R`, `C` paths the
+     content signature were compared, and a content edit of a modified file moved nothing (wrong: see #420). `dirs` names every ancestor of a path that moved (the root included) and
+     every omitted directory that appeared, went or changed count (itself included). `all: true` when HEAD moved, a
+     snapshot was cut by its entry cap (2000 by default), or above 100 directories / 8000 characters. Absent when the
+     daemon has no previous snapshot (first summary, after an error): a client refreshes everything then. The list is
+     a superset: a named directory may list the same entries again.
+412. **Route errors:** a directory not in HEAD and not in the overlay is 404 `not_found` ("no such directory"); an
+     unknown ref is 404; a path that is a file, symlink or submodule is 400 "not a directory (a symlink)"; a malformed
+     path or ref is 400 (schema). An unborn branch lists an empty root. A bare repository answers the tree view of
+     `HEAD` without `ref`. A git-core without `listTree` answers 501.
+413. **Web data layer (`apps/web/src/api/tree.ts`).** One query per open directory,
+     `['tree', worktreeId, ref ?? '', treeDirIdentity(dir)]` (was `rawPath ?? path`, ambiguous: #421), holding the loaded prefix (the #42 pattern: a refresh asks for
+     the loaded count, a `restarted` page starts over). Working-view queries never go stale by time; tree views of a
+     full commit id never do; of a branch or `HEAD`, after 30 s. `worktree.changed.dirs` of *every* event of a batch
+     is accumulated (`collectTreeDirs`; the batch's delta map keeps only the latest event per worktree, which would
+     lose an earlier event's directories) and invalidates exactly those working-view queries; `all` or no `dirs`
+     invalidates the worktree's whole working view. No pane uses it yet (the issue asked for no new pane).
+414. **`@pierre/trees` 1.0.0-beta.6 holds 100k paths; the explorer still loads directories lazily.** Measured with
+     `pnpm --filter @octopus-diff/web perf:tree` (headless Chromium, 5 runs, `docs/bench/results-tree-render.json`):
+     all 100k paths open paint in 133 ms (p95 134; 67 ms with `preparePresortedFileTreeInput`), scroll frame p95
+     17.2 ms (60 Hz, no long task), 48 rows mounted; the lazy design paints its root in 33 ms (two frames) and adds an
+     opened directory in 0.2 ms of script (p95 0.4) before its next frame. Both meet the budget (300 ms, 20 ms). Lazy
+     stays the design because the cost is elsewhere: the full path list is 5.3 MB of JSON, a `ls-tree -r` of 46 ms and
+     a status overlay over 100k rows, against 0.8-4.7 KB and about 1 ms per opened directory. A "find any file" search
+     should be a daemon-side query (like `GET /files?q=`), not a client-side 100k list.
+415. **No long-lived `git cat-file --batch`.** The explorer reads no blob content; listings are `ls-tree` runs, about
+     2.4 ms each cold and none warm (the cache). A batch process would save about 2 ms per *cold* object read (the
+     future file preview), would need stdin allowlisted for `cat-file` and its own lifecycle next to the spawn
+     helper's supervision (#45, being reworked by the Effect session). Not worth it until a content view shows reads
+     dominating; revisit with the preview.
+
+### File explorer: Greptile review of PR #99 (2026-11-13)
+
+416. **Additive contracts for the review fixes.** `GitChangedFile.oldRawPath` (and so `ChangedFile`, `GitFileDiff`):
+     base64 of a rename or copy source that is not UTF-8, which `oldPath` (display form) cannot name. `TreeEntry` gains
+     `oldRawPath`, `renamedToRawPath` and `replaces` (#418). `treeDirIdentity(dir)` gives `r:<base64>` for a raw path and
+     `p:<path>` otherwise, for cache keys; `treeListingKey` hashes entries by it (and by `replaces`), so an entry named
+     `ZP8=` and one whose bytes are `64 ff` (base64 `ZP8=`) no longer hash alike. `worktree.changed.dirs` entries were
+     already unambiguous (`rawPath` present or not); clients key them with `treeDirIdentity` too. Nothing renamed or
+     removed.
+417. **A working-view listing is of one state: the file list's and its commit's** (Greptile P1 1). Before, after one
+     retry the route could combine a list git-core made of the worktree *now* (`of: 'now'`) with the HEAD of an older
+     summary, or a list made after a commit landed (still labelled with the summary, as git-core's full lists are)
+     with the old commit's tree: a newly committed file was in neither and vanished. Now (`DaemonCore.listTree`):
+     - the list is used only when git-core says it is of the summary it was asked for (`of: 'summary'`);
+     - HEAD is read *after* the list (`listTree` of `HEAD`: from the HEAD and ref files, no process when they can
+       tell) and must equal that summary's `headSha`; the list was read in between, so no commit landed under it, and
+       that HEAD read is also the listing used;
+     - otherwise a summary refresh runs (`refresher.current`, else a new refresh) and it is tried again, up to
+       `LIST_ATTEMPTS` (3) times; then **409 `conflict`** with `details: { retryable: true }`; a listing never mixes two
+       states. The web's tree queries retry exactly that 409 (`treeRetry`: 3 times, 200 ms doubling; the app's default
+       retries no 4xx), every other 4xx is final.
+     - The response's `stateHash` is that summary's; the composed listing is cached under it (and HEAD).
+     Tests (`tree-review.real-git.test.ts`, real git, a gate in a wrapped git-core): a commit lands before the list,
+     after the list, on every list (409); git-core lists a newer state than the daemon's summary (never labelled with
+     the older summary). All failed first. Warm cost: one HEAD read from files per request (re-measured below).
+418. **One row per name** (Greptile P1 2). A tracked file `d` deleted and a directory `d/` created (or a tracked
+     directory replaced by a file) gave two rows named `d`. Rule: the row that exists in the working copy wins (one
+     only in the working copy and not deleted first, then a live HEAD row, then HEAD's row) and carries
+     `replaces: <HEAD's kind>`. HEAD's side stays reachable by path: `GET /tree?path=d` of a directory that became a
+     file lists its deleted files. Both directions are in the differential test (`repl-f`, `repl-d`), a dedicated
+     real-git test and a unit test (also with the file count unknown).
+419. **Rename sources by their bytes** (Greptile P1 3). The working list's `oldPath` is a display string, so the
+     deleted row of a rename from a name that is not UTF-8 was keyed by the lossy text: the real source stayed
+     unchanged and a false deleted row appeared under the U+FFFD name. git-core now sets `oldRawPath` (#416) and the
+     overlay keys the source by it; rows carry `oldRawPath` / `renamedToRawPath`. Tested in git-core and the daemon
+     with a commit built by `git mktree` and a rename made in the index (no such name on disk, so it runs on APFS).
+420. **Directory deltas compare every field of a snapshot entry** (Greptile P1 4; extended by #433 to the working
+     list's rename pairs): status letters, rename source (as
+     `r:` raw or `p:` display), the worktree signature, and the HEAD and index object ids. Example of what was missed:
+     HEAD `A`, staged `B`, working `C`, then working back to `A`: status stays `MM` but the path leaves the working
+     list (`git diff HEAD`), so the row's marker and its directories' counts move with no status change. A content
+     edit of a modified file now names its ancestors (a few warm refetches; no git process on the daemon). Tests: the
+     A/B/C case; a table of transitions (unstaged and staged edits, MM, back to HEAD, unstage, rename and back, mode
+     change, untracked, untracked to ignored and back, a deleted directory and its restore); and a property test over
+     40 random operations: after each, every directory's listing is walked through the route before and after, and
+     the event's `dirs` must name every directory whose listing moved (or say `all`). Mutants without the signature,
+     the index id or any but the status letters are killed.
+421. **Raw and display directory identities are never confused** (Greptile P1 5). The web keyed directories by
+     `rawPath ?? path`, so the bytes `64 ff` (base64 `ZP8=`) and a directory literally named `ZP8=` shared a query,
+     a wanted count and event invalidations. Query keys, wanted counts and `dirs` effects use `treeDirIdentity`
+     (`r:` / `p:`), as does the contracts' listing key. The daemon's own keys are raw bytes (`bstrOf`), which were
+     already unambiguous, and `dirs` entries say raw or display by `rawPath`'s presence.
+422. **The web paging tests page** (Greptile P2 6). The fake daemon caps pages at 20 for a directory of 50; the tests
+     assert three requests with the cursors of the previous answers, a restart when the listing moves between page 1
+     and page 2 (restarted page, then a fresh first page) and that the result is the new listing. Mutants that drop the
+     cursor, ignore `restarted` or keep the restarted pages are killed.
+
+### File explorer: security review of PR #99 (2026-11-13; no P1, two P2, six P3)
+
+423. **Additive contracts for the security review.** `TreeListOptions.withEntries` (false: resolve commit, tree and
+     kind without decoding entries, P3-4); `GitCore.countTreeChildren` with `GitTreeChildCount` (files below each child
+     directory from one `ls-tree -r`, P3-3); `GIT_OBJECT_MISSING` (`'object_missing'`, the `details.reason` of a
+     `not_found` for an object a partial clone lacks, P3-6); `TreeResponse.skipped` (`{ invalidName, tooLong }`, entries
+     left out, P3-2); `treeEntryProblem(entry)`, which flags what `TreeEntrySchema` would reject (and a name
+     with `/`, which the schema accepts but which would collide with a nested path). Nothing renamed or removed.
+424. **Partial clones: listings never need blob sizes** (P2-1). `ls-tree -l` reads every blob's size; in a blobless
+     clone a git before 2.44 (no `GIT_NO_LAZY_FETCH`) starts a lazy fetch for a missing blob, `GIT_ALLOW_PROTOCOL=none`
+     blocks it, and the whole listing failed with 128. Now (`git-core/src/tree.ts` `readsSizes`, `lsTree`):
+     - below 2.44, in a repository whose config names a promisor (`remote.*.promisor = true` or
+       `extensions.partialClone`), `ls-tree` runs without `-l`;
+     - any `ls-tree -l` failing with a promisor message is run again without `-l`, and that repository is listed
+       without sizes from then on;
+     - with `GIT_NO_LAZY_FETCH` git prints `BAD` for a missing blob's size, which parses as null (as before).
+     Sizes are then null; nothing else changes. Tests: a real blobless clone (`--filter=blob:none`), with a wrapper that
+     unsets `GIT_NO_LAZY_FETCH` (git before 2.44: the fallback, remembered) and one that also reports 2.40 (no `-l` at
+     all); no spawn is a fetch.
+425. **The daemon's composed listings are bounded by bytes, one state per worktree** (P2-2; git-core's child counts
+     share git-core's own budget since #434). `TreeListingCache`: an
+     LRU bounded by an estimate of 64 MiB (UTF-16 strings plus 200 bytes per entry), a listing above it is served
+     and not kept (and evicts nothing else); a new summary drops the worktree's working-view listings of other
+     states, and an explicit refresh or removal drops all of them. Tree views (keyed by commit) stay in the LRU.
+     Before: 64 listings by count, each state change kept another copy of every open directory (the reviewer measured
+     0.62 GB with a 100k-entry directory open). Tests: the cache's bound and eviction, and a 3000-entry directory under
+     12 watcher-driven state changes keeps 2 listings and less than twice the first size.
+426. **Untracked paths whose type or mode changes are named in `dirs`** (P3-1). Already true since #420 (the basis
+     compares the snapshot's `sig`, which for an untracked path is its lstat signature with the mode); now tested
+     (`chmod +x` of a new script, an untracked file replaced by a symlink: `dirs` names the directory and the listing
+     shows the new kind and mode). The rule, for #411 and #420: **the basis covers every field a row renders**
+     (status, staged, unstaged, rename source and target, kind and mode, the counts on its directories).
+427. **Entries no client can take are skipped and counted** (P3-2). A tree written with `hash-object -t tree
+     --literally` can name entries `..` or `a/b`; a deep tree can have paths over 4096 characters. Such an entry
+     made `TreeResponseSchema` reject the whole page (`invalid_response`), so the directory could not be shown. The
+     daemon drops what `treeEntryProblem` flags (stricter than the schema: a name with `/` would collide with a nested
+     path) and says how many in `skipped: { invalidName, tooLong }`; `total` and the pages do not count them.
+     Availability only: nothing reads the working copy. Tested with a literally built tree and a 21-level chain.
+428. **One `ls-tree -r` for many deleted-only siblings; failures remembered** (P3-3; counts kept compactly and asked
+     for by name since #434). Up to 4 directories with only
+     deletions below are counted one by one (`countTreeFiles`); more with one `ls-tree -r` of the listed directory
+     counting by first component (`countTreeChildren`). Both share a failure memo in git-core per (common dir, tree):
+     an output above the cap for good (an immutable tree fails the same way), anything else for a minute,
+     cancellation never. Before: 2000 siblings cost 2000 processes (1.33 s in the interactive lane), and a capped
+     subtree was retried for every new state. Tests: 30 siblings cost one `ls-tree -r`; a capped and a missing tree
+     are not retried.
+429. **A page of a cached listing decodes nothing again** (P3-4). The tree view first resolves the commit and the
+     directory with `listTree({ withEntries: false })` (ref files and memoized tree objects; no entry decoding), then
+     looks the composed listing up; only a miss lists the entries. The working view did so already (#417). Tested: 8
+     pages of a 200-entry directory make one decoding call in each view.
+430. **Tree views of a ref name follow HEAD** (P3-5). On `dirs.all` (HEAD moved, or no `dirs`) the web refetches the
+     worktree's views of `HEAD` and of branches too, not only the working view; views of a full commit id never.
+431. **Partial clones say what is missing; paths are checked up front** (P3-6). In a treeless clone the commit has
+     no local tree: git-core answers `not_found` with `details.reason = GIT_OBJECT_MISSING` ("the repository does not
+     have the tree of commit … locally (a partial clone?)") instead of "commit not found", for the root tree, an
+     `ls-tree` of a missing tree and `ls-tree -r`; the daemon answers 404 with the same message and `details.reason`,
+     not "unknown ref". Nothing is fetched. The daemon also checks the directory (`dirKeyProblem`: no empty, `.` or
+     `..` component, also inside `rawPath`) before anything else, so an unborn HEAD answers 400 like every other
+     worktree (since #417 git-core already saw the path through the HEAD read; the check no longer depends on it).
+
+### File explorer: Greptile review of PR #99, round 3 (2026-11-13)
+
+432. **Additive contract: `countTreeChildren({ tree, names })`.** With `names` the answer holds only those children's
+     counts (the daemon asks for the deleted-only directories it checks, #434); without it, every child directory as
+     before. Nothing renamed or removed.
+433. **Rename pairs of the working list move directories too** (Greptile P1, round 3). The working list (`git diff HEAD
+     --find-renames`) pairs a deleted path with a path new in the index by content, so a pair can appear or go while
+     the summary entry of one side stays the same. Example: `src/a` deleted (not staged, ` D` throughout), a
+     different `dst/b` staged, then `dst/b` edited to `src/a`'s content: only `dst/b`'s entry moves, but `src`'s
+     listing gains `renamedTo` on its deleted row. Rule (`treeBasis.candidates`, `treeDelta`): a path is a rename
+     candidate when its status letters have `D` (a source) or an index `A`, `R`, `C` or a worktree `A` (a target), and
+     the old path of a rename or copy is one too. When any candidate's entry moved (or one appeared or went), the
+     directories of **every** candidate of both states are named. That is a superset of the pairs that can have
+     changed, with no list needed when the event is announced (the new state's list is often not built yet). HEAD
+     moving already sends `all`. Ignoring the previous state's candidates is an equivalent mutant: a path that is a
+     candidate only before has a changed entry, so it is named anyway.
+     Tests: the exact sequence and its reverse, with real git (`dirs` holds `src` and `dst`, and `src/a` gains and
+     loses `renamedTo`); a unit test; and the brute-force property test now has 60 random operations, including
+     making, breaking and remaking pairs (a staged new file takes a deleted file's content, changes away, gets it
+     back), comparing every directory's full listing before and after with the event's `dirs`. That property test
+     alone kills the mutant without the rule.
+434. **git-core's child counts are compact, inside the byte budget, and asked for by name** (Greptile P2, round 3).
+     - `countTreeChildren` kept one object per child directory per tree, up to 2000 trees, outside any byte bound. Now
+       one LRU in `TreeCache` holds the listings and the child counts together under the 64 MiB estimate.
+     - Child counts are stored compactly: the names (bytes) sorted and joined by NUL into one string, plus `Uint32Array`
+       offsets and counts. About 2 bytes per name character and 8 per child, against about 100 for an object.
+     - The answer holds only the `names` asked for (#432). The daemon asks for the deleted-only directories it checks;
+       without `names` every child is decoded for that answer and not stored.
+     - Tests:
+       - unit: 100k children compact and within bytes;
+       - 20 wide root trees under an 8 MiB budget evict the oldest, together with listings;
+       - an item above the budget is not kept and evicts nothing;
+       - a real 100k-child tree is counted once, accounted between 0.8 and 3 MB, and answers the asked names only;
+       - the daemon passes the names of the checked directories.
+     - Mutants killed: children unaccounted, no eviction, names ignored, the daemon asking for all, an off-by-one in
+       the binary search (it never ends), an oversized item kept.
+
 ## Effect runner scheduling and interruption (session, 2026-11-13; roadmap #47, step 30)
 
 440. **The runner's scheduler is `LaneSemaphore` (`packages/git-core/src/runner/scheduler.ts`), an Effect partitioned
@@ -4852,6 +5108,26 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
        added. "Unref'd sleeps ignoring the test clock" first survived too, because the real 500 ms fired while the test
        waited. The grace test now keeps the process answering through 2 × `ABORT_GRACE_MS` of real time while the test
        clock stands at `ABORT_GRACE_MS - 1`.
+
+### File explorer: Greptile review of PR #99, round 4 (2026-11-13)
+
+435. **An edit during a directory's first fetch is not lost** (Greptile P1). `flushTreeDirs` called
+     `invalidateQueries`. For a query with no data yet, react-query joins the request in flight instead of replacing it
+     (it only cancels a refetch over existing data). That request may answer the listing from before the edit, its
+     success clears the invalidation, and the working view keeps it for good (infinite `staleTime`). Now
+     `invalidateTrees` first cancels every matching query whose first fetch is in flight, then invalidates: the files
+     lists' pattern (`invalidateFileLists`, #42). It is used for the named directories and for `all` (working view,
+     `HEAD` and branch views).
+     - **Tests:** a gated fake daemon answers each request with the listing of the moment it started. The first request
+       is held, the event arrives, and the held request answers the old listing; the cache must end on the new one. Both
+       paths fail first; the refetch-over-data case was already right and is tested too.
+     - **Load more:** a load-more page in flight during an edit never wins over the refresh, in either order (old page
+       first, refresh first). The wanted count is recorded before the page request, so the refresh keeps the loaded
+       length.
+     - **Palette file search:** its key carries the list's `stateHash`, so a new state is a new query and no event
+       joins an old request.
+     - **Mutants killed:** no cancel; the named path joining; the `all` path joining; load-more overwriting a refresh;
+       the wanted count not recorded.
 
 ## Effect watch pipeline (session, 2026-11-13; roadmap #48, step 31)
 

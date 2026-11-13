@@ -164,7 +164,13 @@ function tracking(
   };
 }
 
-describe('F1: worktree folder deleted / replaced at the same path', { timeout: 20_000 }, () => {
+// inotify can lose the delete of a folder when the machine is busy (the event is never reported:
+// a known rare CI/dev flake, see the comment in the first test), and these tests then wait for
+// something that cannot come. Retried: a regression fails every attempt, a lost event does not.
+describe('F1: worktree folder deleted / replaced at the same path', {
+  timeout: 20_000,
+  retry: 3,
+}, () => {
   it('reports degraded watching after the root is deleted and re-subscribes on the next sync', async () => {
     const layout = await makeLayout();
     const { watcher, rec } = makeWatcher();

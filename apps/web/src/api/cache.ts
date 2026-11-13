@@ -31,6 +31,7 @@ import {
 } from './deltas.ts';
 import { inboxFilesParam } from './files.ts';
 import { type DiffQueryData, queryKeys, settleOvertaken } from './queries.ts';
+import { collectTreeDirs, flushTreeDirs, type TreeDirEffects } from './tree.ts';
 
 export interface ReviewPatch {
   projectId: string;
@@ -181,6 +182,11 @@ export interface EventEffects {
    * review: e.g. its review state): only the row is applied, no list moved.
    */
   rowOnly: Set<string>;
+  /**
+   * The file explorer's open directories to refresh (#9), from every `worktree.changed` of the
+   * batch (`dirs`, or the whole working view without it).
+   */
+  treeDirs: TreeDirEffects;
   everything: boolean;
 }
 
@@ -196,6 +202,7 @@ export function emptyEffects(): EventEffects {
     activity: new Set(),
     deltas: new Map(),
     rowOnly: new Set(),
+    treeDirs: new Map(),
     everything: false,
   };
 }
@@ -251,6 +258,8 @@ export function collectEventEffects(
       if (opts.reconnect) effects.everything = true;
       break;
     case 'worktree.changed':
+      // Explorer directories (#9): every event of the batch counts, before any shortcut below.
+      collectTreeDirs(effects.treeDirs, event);
       // The feed moves with the state, but the projects list may already hold the new hash (any
       // refetch refreshes it), so this is decided before the hash check below.
       if (event.activitySeq !== undefined) effects.activity.add(event.worktreeId);
@@ -604,5 +613,6 @@ export async function flushEffects(
   for (const { event, previous } of deltas) {
     tasks.push(refreshDeltaLists(queryClient, event, previous, inboxDone));
   }
+  tasks.push(flushTreeDirs(queryClient, effects.treeDirs));
   await Promise.all(tasks);
 }
