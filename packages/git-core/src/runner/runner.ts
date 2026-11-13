@@ -21,6 +21,7 @@ import {
   type HelperSpawnRequest,
   type ProcHandle,
   type ProcHandlers,
+  reapGroup,
 } from './helper-client.js';
 
 export interface GitRunnerOptions {
@@ -50,6 +51,8 @@ export interface HelperTestOptions {
   delayExitMs?: number;
   /** The helpers start this much later (a slow CI runner). */
   startDelayMs?: number;
+  /** This process's first group SIGKILL after a helper crash is lost (macOS: killpg racing a fork). */
+  missFirstGroupKill?: boolean;
   /** Replaces `HELPER_EXIT_WAIT_MS`. */
   exitWaitMs?: number;
   /** How long a retry waits for a crashed helper's SIGKILLed groups to disappear. */
@@ -877,6 +880,9 @@ function killTree(child: ChildProcess, signal: NodeJS.Signals = 'SIGKILL'): void
   if (USE_PROCESS_GROUP && child.pid !== undefined) {
     try {
       process.kill(-child.pid, signal);
+      // One SIGKILL to a group can miss a member forked at that moment (macOS): repeat it while
+      // the group is still there (DECISIONS #393).
+      if (signal === 'SIGKILL') void reapGroup(child.pid, { maxMs: 5_000 });
       return;
     } catch {
       // Group already gone, or not a group leader: fall back to the process itself.

@@ -23,7 +23,11 @@ import {
   gitHelperDisabledByEnv,
 } from '../src/index.js';
 import { currentCall, withCall } from '../src/runner/call-context.js';
-import { HELPER_MAX_ARGV, HELPER_MAX_REQUEST_FRAME } from '../src/runner/helper-client.js';
+import {
+  HELPER_MAX_ARGV,
+  HELPER_MAX_REQUEST_FRAME,
+  reapGroup,
+} from '../src/runner/helper-client.js';
 import { createFixture, type Fixture } from './helpers/fixture.js';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
@@ -57,6 +61,8 @@ beforeAll(() => {
     [
       '#!/bin/sh',
       'for last in "$@"; do :; done',
+      // A warm-up is always quick, whatever the mode (Greptile: a `hang` warm-up cost 30 s).
+      'if [ "$last" = warm ]; then FAKE_MODE=; fi',
       `rec="start${SEP}$$${SEP}$PPID${SEP}$#"`,
       `if [ "$#" -le 32 ]; then for a in "$@"; do rec="$rec${SEP}$a"; done; else rec="$rec${SEP}$last"; fi`,
       `printf '%s\\n' "$rec" >> "${log}"`,
@@ -68,8 +74,10 @@ beforeAll(() => {
       '  hang) sleep 30 ;;',
       "  stubborn) trap '' TERM; sleep 30 ;;",
       `  family) sh -c 'trap "" TERM; echo $$ > "${gates}/family.pid"; exec sleep 30' & sleep 30 ;;`,
-      `  once) if [ ! -e "${gates}/once.done" ]; then : > "${gates}/once.done"; sleep 30; fi; printf 'second run' ;;`,
+      `  once) if [ ! -e "${gates}/once.done" ]; then : > "${gates}/once.done"; sleep "\${FAKE_SLEEP:-30}"; fi; printf 'second run' ;;`,
       "  stream) printf 'first chunk'; sleep 30 ;;",
+      // The first run puts a child in its group and waits; the retry says so and ends.
+      `  orphan) if mkdir "${gates}/orphan.first" 2>/dev/null; then sleep "\${FAKE_SLEEP:-30}" & printf '%s' "$!" > "${gates}/orphan.first/child"; wait; fi; printf 'second run' ;;`,
       '  count) wc -c | tr -d " " ;;',
       '  argc) printf \'%s\' "$#" ;;',
       '  cksum) cksum ;;',
@@ -243,6 +251,15 @@ async function untilGone(what: string, pids: number[], groups: number[] = []): P
     what,
     50,
   );
+}
+
+/** SIGKILL for a group a failed test may leave behind (cleanup only). */
+function killGroupQuietly(pgid: number): void {
+  try {
+    process.kill(-pgid, 'SIGKILL');
+  } catch {
+    // gone
+  }
 }
 
 function alive(target: number): boolean {
@@ -1318,6 +1335,108 @@ describe.skipIf(!helperOn)('helper crashes', { timeout: 60_000 }, () => {
     await untilGone('the first git', [firstGit], [firstGit]);
     await runner.dispose();
   });
+
+  it("a crashed helper's git group dies even when the first group SIGKILL misses a member (macOS: killpg racing a fork)", async () => {
+    writeFileSync(log, '');
+    rmSync(path.join(gates, 'once.done'), { force: true });
+    // The child sleeps longer than any deadline here: a survivor cannot pass by ending on its own.
+    const runner = runnerWith(
+      { FAKE_MODE: 'once', FAKE_SLEEP: '120' },
+      { timeoutMs: 60_000, helperTest: { missFirstGroupKill: true } },
+    );
+    const run = runner.run(job('once'), { cwd: fx.root });
+    await until(() => starts().length === 1, 20_000, 'the first git');
+    const firstGit = starts()[0]?.pid as number;
+    onTestFinished(() => killGroupQuietly(firstGit));
+    await until(() => runner.helperChildPids().includes(firstGit), 20_000, 'the pid announced');
+    // Its `sleep` child is in its group: wait for it, so the miss leaves something behind.
+    await until(
+      () => processTable().some((p) => p.pgid === firstGit && p.pid !== firstGit && !p.zombie),
+      20_000,
+      'the child in the group',
+    );
+    process.kill(runner.helperPids()[0] as number, 'SIGKILL');
+    expect((await run).stdout.toString()).toBe('second run');
+    // The first SIGKILL to the group was lost; the group must die anyway.
+    await untilGone('the whole group of the first git', [firstGit], [firstGit]);
+    await runner.dispose();
+  });
+
+  it('the leader died alone and its child lives on in the group: a helper crash still kills the group (macOS CI evidence)', async () => {
+    writeFileSync(log, '');
+    rmSync(path.join(gates, 'orphan.first'), { recursive: true, force: true });
+    const runner = runnerWith({ FAKE_MODE: 'orphan', FAKE_SLEEP: '120' }, { timeoutMs: 60_000 });
+    const run = runner.run(job('orphan'), { cwd: fx.root });
+    const childFile = path.join(gates, 'orphan.first', 'child');
+    await until(
+      () => existsSync(childFile) && readFileSync(childFile, 'utf8') !== '',
+      20_000,
+      'the child',
+    );
+    const leader = starts()[0]?.pid as number;
+    onTestFinished(() => killGroupQuietly(leader));
+    const child = Number(readFileSync(childFile, 'utf8'));
+    await until(() => runner.helperChildPids().includes(leader), 20_000, 'the pid announced');
+    // The leader alone dies (the child keeps git's pipes open, so the run does not end).
+    process.kill(leader, 'SIGKILL');
+    await untilGone('the leader', [leader]);
+    expect(processTable().some((p) => p.pid === child && p.pgid === leader && !p.zombie)).toBe(
+      true,
+    );
+    process.kill(runner.helperPids()[0] as number, 'SIGKILL');
+    expect((await run).stdout.toString()).toBe('second run');
+    await untilGone('the orphaned child in the group', [child], [leader]);
+    await runner.dispose();
+  });
+
+  // A group that SIGKILL cannot end: a zombie whose living parent never reaps it, in a session of
+  // its own. Linux: whether macOS still counts a zombie-only group in kill(-pgid, 0) is not ours.
+  it.runIf(process.platform === 'linux')(
+    'reapGroup keeps SIGKILLing a group that is still there, then gives up with a warning naming it',
+    async () => {
+      const parent = spawn(
+        'python3',
+        [
+          '-c',
+          'import os, sys, time\npid = os.fork()\nif pid == 0:\n    os.setsid()\n    os._exit(0)\nprint(pid, flush=True)\ntime.sleep(30)',
+        ],
+        { stdio: ['ignore', 'pipe', 'ignore'] },
+      );
+      onTestFinished(() => {
+        parent.kill('SIGKILL');
+      });
+      let out = '';
+      parent.stdout?.on('data', (c: Buffer) => {
+        out += c.toString();
+      });
+      await until(() => /\d+\n/.test(out), 20_000, 'the zombie pid');
+      const zombie = Number(out.trim());
+      const warnings: string[] = [];
+      const gone = await reapGroup(zombie, {
+        maxMs: 300,
+        intervalMs: 20,
+        logger: {
+          debug: () => {},
+          info: () => {},
+          warn: (message: string, fields?: Record<string, unknown>) =>
+            warnings.push(`${message} ${JSON.stringify(fields)}`),
+          error: () => {},
+        },
+      });
+      expect(gone).toBe(false);
+      expect(warnings).toEqual([
+        `a git process group survived SIGKILL {"pgid":${zombie},"code":null}`,
+      ]);
+      // Once its parent is gone, the zombie is reaped and the same call says so.
+      parent.kill('SIGKILL');
+      await until(
+        () => !processTable().some((p) => p.pgid === zombie),
+        20_000,
+        'the zombie reaped',
+      );
+      expect(await reapGroup(zombie, { maxMs: 300 })).toBe(true);
+    },
+  );
 
   it('a helper that dies between announcing a spawn and its pid: no retry (git may be running), a clear error', async () => {
     writeFileSync(log, '');

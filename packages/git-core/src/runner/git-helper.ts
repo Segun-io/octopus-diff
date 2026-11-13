@@ -47,6 +47,8 @@ const MAX_ENV = 4_096;
 const STDERR_CAP = 64 * 1024;
 /** A finished process's group stays killable this long (the runner's post-abort SIGKILL). */
 const CLOSED_TTL_MS = 5_000;
+/** How long a SIGKILLed group is SIGKILLed again while it is still there. */
+const REAP_MS = 5_000;
 
 const REQ_SPAWN = 1;
 const REQ_STDIN = 2;
@@ -259,16 +261,42 @@ function resumeEntry(entry: Entry): void {
   entry.child.stderr?.resume();
 }
 
+function groupExists(pgid: number): boolean {
+  try {
+    process.kill(-pgid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
+
 function killGroup(entry: Entry, signal: NodeJS.Signals): void {
   if (USE_PROCESS_GROUP && entry.pid !== undefined) {
     try {
       process.kill(-entry.pid, signal);
+      if (signal === 'SIGKILL') reapLater(entry.pid, Date.now() + REAP_MS);
       return;
     } catch {
       // Group already gone, or not a group leader: fall back to the process itself.
     }
   }
   if (!entry.closed) entry.child.kill(signal);
+}
+
+/**
+ * One SIGKILL to a group can miss a member forked at that moment (macOS, DECISIONS #393): repeat it
+ * while the group is still there.
+ */
+function reapLater(pgid: number, deadline: number): void {
+  setTimeout(() => {
+    if (!groupExists(pgid) || Date.now() > deadline) return;
+    try {
+      process.kill(-pgid, 'SIGKILL');
+    } catch {
+      // gone meanwhile
+    }
+    reapLater(pgid, deadline);
+  }, 25).unref();
 }
 
 function detach(entry: Entry): void {
@@ -281,7 +309,13 @@ function detach(entry: Entry): void {
 
 function shutdown(code: number): never {
   shuttingDown = true;
-  for (const entry of entries.values()) killGroup(entry, 'SIGKILL');
+  // A few rounds, synchronously, before exiting: a SIGKILL can miss a member being forked.
+  let left = [...entries.values()];
+  for (let round = 0; round < 5 && left.length > 0; round++) {
+    if (round > 0) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+    for (const entry of left) killGroup(entry, 'SIGKILL');
+    left = left.filter((entry) => entry.pid !== undefined && groupExists(entry.pid));
+  }
   entries.clear();
   process.exit(code);
 }

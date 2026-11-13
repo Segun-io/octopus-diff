@@ -40,6 +40,8 @@ const STDIN_CHUNK = 64 * 1024;
  * runs no more code, so what can linger is only a process on its way out or a zombie.
  */
 const GROUP_GONE_WAIT_MS = 10_000;
+/** How long `reapGroup` keeps SIGKILLing a group that is still there. */
+const GROUP_REAP_MS = 10_000;
 /** A helper asked whether it is alive (PING) that has not answered (PONG) by then is SIGKILLed. */
 const PROBE_WAIT_MS = 3_000;
 /** The helper never sends larger frames (it splits output at 256 KiB). */
@@ -120,6 +122,7 @@ export interface HelperPoolOptions {
     crash?: string;
     delayExitMs?: number;
     startDelayMs?: number;
+    missFirstGroupKill?: boolean;
     groupGoneWaitMs?: number;
     probeWaitMs?: number;
   };
@@ -158,15 +161,43 @@ function parseJson(payload: Buffer): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-function killGroupDirect(pid: number, logger?: Logger): void {
-  if (process.platform === 'win32') return;
-  try {
-    process.kill(-pid, 'SIGKILL');
-  } catch (error) {
-    // ESRCH: already gone. Anything else would leave git running: say so.
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code !== 'ESRCH') logger?.warn('could not kill a git process group', { pid, code });
+export interface ReapOptions {
+  logger?: Logger;
+  /** Between two SIGKILLs while the group is still there. */
+  intervalMs?: number;
+  /** Give up (with a warning) after this long. */
+  maxMs?: number;
+  /** Tests: the first SIGKILL is lost (macOS: a `killpg` racing a fork misses the new child). */
+  skipFirst?: boolean;
+}
+
+/**
+ * SIGKILLs process group `pgid` until it is gone. One `killpg` can miss a member: on macOS CI a
+ * fake git's `sleep` child, forked while the group was being killed, outlived its dead leader in
+ * the group for good (DECISIONS #393). So the SIGKILL is repeated every `intervalMs` while
+ * `kill(-pgid, 0)` still finds the group; an ESRCH from a SIGKILL means gone only when that check
+ * agrees. A group that survives `maxMs` is logged with its errno. Resolves true once it is gone.
+ */
+export async function reapGroup(pgid: number, options: ReapOptions = {}): Promise<boolean> {
+  if (process.platform === 'win32') return true;
+  const deadline = Date.now() + (options.maxMs ?? GROUP_REAP_MS);
+  let lastCode: string | null = null;
+  let skip = options.skipFirst === true;
+  for (;;) {
+    if (skip) skip = false;
+    else {
+      try {
+        process.kill(-pgid, 'SIGKILL');
+      } catch (error) {
+        lastCode = (error as NodeJS.ErrnoException).code ?? null;
+      }
+    }
+    if (!groupExists(pgid)) return true;
+    if (Date.now() >= deadline) break;
+    await new Promise((resolve) => setTimeout(resolve, options.intervalMs ?? 25));
   }
+  options.logger?.warn('a git process group survived SIGKILL', { pgid, code: lastCode });
+  return false;
 }
 
 interface Request {
@@ -188,18 +219,6 @@ function groupExists(pid: number): boolean {
   } catch (error) {
     return (error as NodeJS.ErrnoException).code === 'EPERM';
   }
-}
-
-/** Resolves once none of the groups exists any more, or after `ms`. */
-async function groupsGone(pids: number[], ms: number): Promise<boolean> {
-  // No wait (tests): one look, right after the SIGKILL, when the groups still exist.
-  if (ms <= 0) return !pids.some(groupExists);
-  const deadline = Date.now() + ms;
-  while (pids.some(groupExists)) {
-    if (Date.now() > deadline) return false;
-    await new Promise((resolve) => setTimeout(resolve, 5));
-  }
-  return true;
 }
 
 /** One helper process. */
@@ -346,7 +365,7 @@ class HelperProcess {
         if (this.dead) {
           // The helper is gone; the group may still be (a crash between CLOSE and this kill).
           if (state.pid !== undefined && signal === 'SIGKILL') {
-            killGroupDirect(state.pid, this.options.logger);
+            void reapGroup(state.pid, { logger: this.options.logger });
           }
           return;
         }
@@ -481,10 +500,13 @@ class HelperProcess {
     for (const request of requests) {
       request.input = undefined;
       if (request.pid !== undefined) {
-        // A crashed helper cannot clean up: kill what it started, and retry only once it is gone.
-        const pid = request.pid;
-        killGroupDirect(pid, this.options.logger);
-        void groupsGone([pid], this.options.test?.groupGoneWaitMs ?? GROUP_GONE_WAIT_MS).then(() =>
+        // A crashed helper cannot clean up: kill what it started, until it is all gone, and retry
+        // once it is gone or after the bounded wait (a SIGKILLed process runs no more code).
+        const skipFirst = this.options.test?.missFirstGroupKill === true;
+        if (skipFirst && this.options.test) this.options.test.missFirstGroupKill = false;
+        const reaped = reapGroup(request.pid, { logger: this.options.logger, skipFirst });
+        const wait = this.options.test?.groupGoneWaitMs ?? GROUP_GONE_WAIT_MS;
+        void Promise.race([reaped, new Promise((resolve) => setTimeout(resolve, wait))]).then(() =>
           request.handlers.lost(reason, true),
         );
       } else {
