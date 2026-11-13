@@ -5842,3 +5842,7 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      Electron (the runtime exits, the app and its daemon keep running until the window is closed or Electron itself
      is signalled; the extraction dir then stays in /tmp). Closing the window, Quit, and a signal to Electron all stop
      the daemon. Candidates for phase E/D, logged in the phase B report.
+521. **`smoke-app.mjs`: "Try again" is clicked with a retry.** Now that CI runs phase A's smokes (#518), one flake
+     seen here (1 of 5 runs: the click on the failed screen's link threw while the screen was still swapping in) would
+     redden the job. The click is retried until the link is there (10 s); 6 of 6 runs green after the change. No
+     change to the app.

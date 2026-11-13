@@ -450,8 +450,17 @@ await scenario('repeated failures: the error screen with the log path', async ()
   );
   // "Try again" (an octopus-diff-desktop: link): the app starts a new series of attempts.
   const before = (daemonLog(d).match(/started the backend/g) ?? []).length;
-  await page.evaluate(
-    'document.querySelector(\'a[href="octopus-diff-desktop:retry"]\').click(); true',
+  // The failed screen can still be swapping in when its text first matches: retry the click
+  // until the link is there (a click on a page being replaced throws; seen once in 5 runs).
+  await until(
+    () =>
+      page
+        .evaluate(
+          '(() => { const a = document.querySelector(\'a[href="octopus-diff-desktop:retry"]\'); if (!a) return false; a.click(); return true; })()',
+        )
+        .catch(() => false),
+    10_000,
+    'the Try again link',
   );
   await until(
     () => (daemonLog(d).match(/started the backend/g) ?? []).length > before,
