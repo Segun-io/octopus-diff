@@ -109,6 +109,24 @@ export function useCommands(model: AppModel, resolvedTheme: 'light' | 'dark'): C
   const latest = useRef({ model, resolvedTheme, review, bulk });
   latest.current = { model, resolvedTheme, review, bulk };
   const pendingPlan = useRef<BulkPlan | null>(null);
+  /**
+   * `j` at the end of the loaded rows (#42): once its page is in, the step waits for the render
+   * that shows the new rows (`rows`: how many there were), so it steps through them, not through
+   * the rows of the render before (PR #97, second round). Dropped when its token is not current.
+   */
+  const pendingStep = useRef<{ current: () => boolean; rows: number } | null>(null);
+  useEffect(() => {
+    const step = pendingStep.current;
+    if (!step) return;
+    if (!step.current()) {
+      pendingStep.current = null;
+      return;
+    }
+    if (model.entries.length <= step.rows) return;
+    pendingStep.current = null;
+    const next = stepFile(model.entries, model.selectedKey, 1, model.visible);
+    if (next) actions.select(store, toFileRef(next.worktreeId, next.file));
+  }, [model.entries, model.selectedKey, model.visible, store]);
 
   return useMemo<Commands>(() => {
     /**
@@ -121,7 +139,23 @@ export function useCommands(model: AppModel, resolvedTheme: 'light' | 'dark'): C
     let navSeq = 0;
     const navSnapshot = () => {
       const s = store.getState();
-      return `${JSON.stringify(s.view)}\u0000${scopeKey(s.scope)}\u0000${s.selected ? fileRefKey(s.selected) : ''}`;
+      // What decides where a navigation lands: the view, the scope, the selection, and what the
+      // list shows and in which order (layout, the eye, the "from main" view, the sidebar's
+      // filters: `n` walks only the listed worktrees). PR #97, second round.
+      return JSON.stringify([
+        s.view,
+        scopeKey(s.scope),
+        s.selected ? fileRefKey(s.selected) : null,
+        s.fileListLayout,
+        s.showReviewed,
+        s.fromMainOnly,
+        s.originOpen,
+        s.filterFolders,
+        s.filterProjects,
+        s.filterWorktrees,
+        s.onlyDirty,
+        s.onlyUnreviewed,
+      ]);
     };
     const supersede = () => {
       navSeq++;
@@ -384,11 +418,18 @@ export function useCommands(model: AppModel, resolvedTheme: 'light' | 'dark'): C
         // The end of a partly loaded list (#42): the next page, then the step, unless the user
         // moved on meanwhile; a page that failed steps nowhere.
         const current = beginNav();
+        const rows = m.entries.length;
         void loadMoreFiles(queryClient, api, m.view.worktreeId, m.scope)
-          .then(() => {
-            if (!current()) return;
-            const now = latest.current.model;
-            select(stepFile(now.entries, now.selectedKey, 1, now.visible));
+          .then((data) => {
+            // The step itself runs once the new rows are rendered (`pendingStep`).
+            if (current() && (data?.files.length ?? 0) > rows) {
+              pendingStep.current = { current, rows };
+              const now = latest.current.model;
+              if (now.entries.length > rows) {
+                pendingStep.current = null;
+                select(stepFile(now.entries, now.selectedKey, 1, now.visible));
+              }
+            }
           })
           .catch(() => {
             if (current()) actions.notice(store, 'Could not load more files.');

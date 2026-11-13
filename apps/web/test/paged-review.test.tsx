@@ -7,7 +7,7 @@
  * jump) or whose load failed selects nothing (4). Every step goes through the app's own controls.
  */
 
-import { TEST_IDS } from '@octopus-diff/contracts';
+import { orderFiles, TEST_IDS } from '@octopus-diff/contracts';
 import { act, cleanup, fireEvent, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { filesPaging } from '../src/api/files.ts';
@@ -314,5 +314,125 @@ describe('navigations the user overtook select nothing (review 4)', () => {
       await new Promise((r) => setTimeout(r, 50));
     });
     expect(selectedPath(h.store)).toBe(list[PAGE + 1]?.path);
+  });
+});
+
+describe('a selection lookup belongs to its scope (review of PR #97, second round)', () => {
+  it('switching to a partly loaded scope without the file hands the selection over', async () => {
+    const h = await setup();
+    // A worktree whose working list has, as its last row after some Load more, a file that sorts
+    // after the file `add` creates (src/agent/…) and is not in its unstaged list (which is longer
+    // than a page).
+    const ids = h.backend
+      .listProjects()
+      .projects.flatMap((p) => p.worktrees.map((w) => w.worktree.id));
+    let pick: { id: string; rows: number; path: string } | null = null;
+    for (const id of ids) {
+      const work = listOf(h.backend, id);
+      const unstaged = new Set(
+        h.backend.listFiles(id, { kind: 'unstaged' }, { limit: 2000 }).files.map((f) => f.path),
+      );
+      for (const rows of [2 * PAGE, 3 * PAGE, 4 * PAGE, 5 * PAGE]) {
+        const f = work[rows - 1];
+        if (f && f.path > 'src/agent/' && !unstaged.has(f.path) && unstaged.size > PAGE) {
+          pick = { id, rows, path: f.path };
+          break;
+        }
+      }
+      if (pick) break;
+    }
+    if (!pick) throw new Error('no worktree fits the scenario');
+    const { id, rows, path } = pick;
+    if (id !== h.first) {
+      const row = screen
+        .getAllByTestId(TEST_IDS.worktreeItem)
+        .find((el) => el.dataset.worktreeId === id);
+      if (!row) throw new Error('no sidebar row');
+      await act(async () => {
+        fireEvent.click(row);
+      });
+    }
+    await waitFor(() => expect(loaded()).toBe(PAGE));
+    while (loaded() < rows) await loadMore(loaded() + PAGE);
+    expect(loaded()).toBe(rows);
+    await paletteOpen(path);
+    await waitFor(() => expect(selectedPath(h.store)).toBe(path));
+    // A new file pushes it past the loaded rows: the lookup loads through it (its record: found).
+    const lookups = h.requests.filter(isLookup).length;
+    await act(async () => {
+      h.backend.mutate(id, 'add');
+    });
+    await waitFor(() => expect(h.requests.filter(isLookup).length).toBeGreaterThan(lookups));
+    await waitFor(() => expect(loaded()).toBeGreaterThan(rows));
+    expect(selectedPath(h.store)).toBe(path);
+    // Another scope, partly loaded, without that file: the selection is handed over.
+    await act(async () => {
+      fireEvent.change(screen.getByTestId(TEST_IDS.scopeSelect), { target: { value: 'unstaged' } });
+    });
+    const unstaged = orderFiles(
+      h.backend.listFiles(id, { kind: 'unstaged' }, { limit: 2000 }).files,
+    );
+    await waitFor(() => expect(selectedPath(h.store)).toBe(unstaged[0]?.path));
+    expect(h.store.getState().selected?.worktreeId).toBe(id);
+  });
+});
+
+describe('keys of the paging code carry what they depend on (PR #97, second round)', () => {
+  it('j at the end of the loaded rows loads the next page and steps into it', async () => {
+    const h = await setup();
+    await waitFor(() => expect(loaded()).toBe(PAGE));
+    const list = listOf(h.backend, h.first);
+    await paletteOpen(list[PAGE - 1]?.path as string);
+    await waitFor(() => expect(selectedPath(h.store)).toBe(list[PAGE - 1]?.path));
+    await press(h.user, 'j');
+    await waitFor(() => expect(loaded()).toBe(2 * PAGE));
+    await waitFor(() => expect(selectedPath(h.store)).toBe(list[PAGE]?.path));
+  });
+
+  it('j at the end of the loaded rows: switching the layout drops the pending step', async () => {
+    const h = await setup();
+    await waitFor(() => expect(loaded()).toBe(PAGE));
+    const list = listOf(h.backend, h.first);
+    await paletteOpen(list[PAGE - 1]?.path as string);
+    await waitFor(() => expect(selectedPath(h.store)).toBe(list[PAGE - 1]?.path));
+    const release = h.hold(isPage);
+    await press(h.user, 'j');
+    await waitFor(() => expect(h.requests.some(isPage)).toBe(true));
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Tree view' }));
+    });
+    await screen.findByTestId('stub-tree');
+    release();
+    await waitFor(() => expect(loaded()).toBe(2 * PAGE));
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 50));
+    });
+    // The step was for the list the user saw before the switch.
+    expect(selectedPath(h.store)).toBe(list[PAGE - 1]?.path);
+  });
+
+  it("the palette's file search follows the list's state", async () => {
+    const h = await setup();
+    await waitFor(() => expect(loaded()).toBe(PAGE));
+    const list = listOf(h.backend, h.first);
+    const i = revertable(list, PAGE + 10);
+    const path = list[i]?.path as string;
+    await act(async () => {
+      fireEvent.keyDown(window, { key: 'k', ctrlKey: true });
+    });
+    const input = await screen.findByTestId(TEST_IDS.commandPaletteInput);
+    await act(async () => {
+      fireEvent.change(input, { target: { value: path } });
+    });
+    const items = () =>
+      screen
+        .queryAllByTestId(TEST_IDS.commandPaletteItem)
+        .filter((el) => el.dataset.kind === 'file' && el.textContent?.startsWith(`File${path}`));
+    await waitFor(() => expect(items()).toHaveLength(1));
+    // The file goes from the worktree while the palette is open: its result goes too.
+    await act(async () => {
+      h.backend.mutate(h.first, 'revert', path);
+    });
+    await waitFor(() => expect(items()).toHaveLength(0));
   });
 });

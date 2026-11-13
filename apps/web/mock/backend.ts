@@ -1511,7 +1511,10 @@ export class MockBackend {
         if (shown === 0) continue;
         const limit = bytesLeft > 0 ? Math.min(filesLimit, rowsLeft) : 0;
         const page = pageFileList(all, onlyUnreviewed ? { limit, unreviewed: true } : { limit }, {
-          listKey: fileListKey(`${summary.stateHash}\u0000${scopeKey(scope)}`, all),
+          listKey: fileListKey(
+            `${mw.worktree.id}\u0000${summary.stateHash}\u0000${scopeKey(scope)}`,
+            all,
+          ),
           defaultLimit: limit,
           maxBytes: Math.max(1, bytesLeft),
         });
@@ -1541,7 +1544,7 @@ export class MockBackend {
     const stateHash = this.summary(mp, mw).stateHash;
     const all = orderFiles(this.changedFiles(mp, mw, scope));
     const result = pageFileList(all, page, {
-      listKey: fileListKey(`${stateHash}\u0000${scopeKey(scope)}`, all),
+      listKey: fileListKey(`${worktreeId}\u0000${stateHash}\u0000${scopeKey(scope)}`, all),
       defaultLimit: FILES_UNPAGED_MAX,
       maxBytes: FILES_PAGE_MAX_BYTES,
     });

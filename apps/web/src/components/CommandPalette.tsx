@@ -60,10 +60,13 @@ export const PALETTE_FILES_MAX = 20;
  */
 function useFileSearch(worktreeId: string | null, text: string, enabled: boolean) {
   const api = useApi();
-  const scope = useAppModel().scope;
+  const model = useAppModel();
+  const scope = model.scope;
+  // Results are of one state of the list: an edit (a new `stateHash`) asks again (PR #97).
+  const state = model.files.data?.worktreeId === worktreeId ? model.files.data?.stateHash : null;
   const q = text.trim();
   return useQuery({
-    queryKey: ['file-search', worktreeId ?? '', scopeKey(scope), q],
+    queryKey: ['file-search', worktreeId ?? '', scopeKey(scope), state ?? '', q],
     queryFn: ({ signal }) =>
       api.listFiles(worktreeId ?? '', { scope, q, limit: PALETTE_FILES_MAX, signal }),
     enabled: enabled && worktreeId !== null && q.length > 0,

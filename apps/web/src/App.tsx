@@ -1,5 +1,5 @@
 import './zod-config.ts';
-import { type ApiClient, TEST_IDS } from '@octopus-diff/contracts';
+import { type ApiClient, type FilesResponse, scopeKey, TEST_IDS } from '@octopus-diff/contracts';
 import { type QueryClient, QueryClientProvider, useQueryClient } from '@tanstack/react-query';
 import {
   lazy,
@@ -24,6 +24,7 @@ import {
   createBrowserApiClient,
   createQueryClient,
   describeError,
+  queryKeys,
   useApi,
 } from './api/queries.ts';
 import { AddJobToast, useAddJobWatcher } from './components/AddJobStatus.tsx';
@@ -124,15 +125,19 @@ function useSelectionRepair() {
    * The lookup of a selection a partly loaded list does not hold (#42): which selection and list
    * state it is for, and whether it is still running. While it runs nothing repairs the selection
    * (its pages may be on their way); once it is done the effect runs again (`lookupsDone`) and a
-   * selection still missing is handed over (PR #97 review).
+   * selection still missing is handed over (PR #97 review). Its key is the worktree, the scope,
+   * the list's state and the selection: scopes share the worktree's `stateHash`, so a record of
+   * one scope must not stand for another (PR #97, second round).
    */
   const lookup = useRef<{ key: string; pending: boolean; found: boolean } | null>(null);
   const [lookupsDone, setLookupsDone] = useState(0);
   const { entries, visible, viewReady, selectedKey, view, openList, scope } = model;
   const listState = model.files.data?.stateHash ?? null;
+  // A selection is handed over by its place in the list: another scope is another list, so the
+  // place starts over there too (PR #97, second round).
   const viewKey =
     view.kind === 'worktree'
-      ? view.worktreeId
+      ? `${view.worktreeId}\u0000${scopeKey(scope)}`
       : view.kind === 'folder'
         ? `folder:${view.scanRootId}`
         : view.kind === 'project'
@@ -156,6 +161,12 @@ function useSelectionRepair() {
     // A partly loaded list (#42) may hold the selection further down (a refresh moved it past the
     // loaded files, or a jump selected it first): load through it once per state, then repair.
     const selected = store.getState().selected;
+    /** The list `data` (this view's) holds the selected file. */
+    const holds = (data: FilesResponse | undefined): boolean => {
+      if (!selected || !data) return false;
+      const wanted = fileRefKey(selected);
+      return data.files.some((f) => fileRefKey(toFileRef(selected.worktreeId, f)) === wanted);
+    };
     if (
       selected &&
       openList &&
@@ -163,7 +174,8 @@ function useSelectionRepair() {
       view.kind === 'worktree' &&
       selected.worktreeId === view.worktreeId
     ) {
-      const key = `${selectedKey}\u0000${listState}`;
+      const worktreeId = view.worktreeId;
+      const key = [worktreeId, scopeKey(scope), listState, selectedKey].join('\u0000');
       const running = lookup.current;
       if (running?.key !== key) {
         const mine: { key: string; pending: boolean; found: boolean } = {
@@ -172,8 +184,6 @@ function useSelectionRepair() {
           found: false,
         };
         lookup.current = mine;
-        const worktreeId = view.worktreeId;
-        const wanted = fileRefKey(selected);
         void locateFile(api, worktreeId, scope, selected)
           .then((index) =>
             index === null
@@ -181,8 +191,7 @@ function useSelectionRepair() {
               : ensureFiles(queryClient, api, worktreeId, scope, index + 1),
           )
           .then((data) => {
-            mine.found =
-              data?.files.some((f) => fileRefKey(toFileRef(worktreeId, f)) === wanted) ?? false;
+            mine.found = holds(data);
           })
           .catch(() => undefined)
           .finally(() => {
@@ -193,8 +202,15 @@ function useSelectionRepair() {
           });
         return;
       }
-      // Still on its way, or loaded and about to render: nothing to repair yet.
-      if (running.pending || running.found) return;
+      // Still on its way, or loaded and about to render (the cached list of this worktree and
+      // scope holds it): nothing to repair yet.
+      if (running.pending) return;
+      if (
+        running.found &&
+        holds(queryClient.getQueryData<FilesResponse>(queryKeys.files(worktreeId, scope)))
+      ) {
+        return;
+      }
     }
     const next = repairSelection(entries, selectedKey, lastIndex.current, visible);
     actions.select(store, next ? toFileRef(next.worktreeId, next.file) : null);
@@ -479,27 +495,35 @@ function useMoreFiles(): FileListMore | undefined {
    * (`filesPaging.retryDelaysMs`), then only the Retry button tries again. A new cursor (a
    * refresh, a page that did load) is a new page: nothing failed for it.
    */
-  const [failure, setFailure] = useState<{ cursor: string | null; tries: number } | null>(null);
+  const [failure, setFailure] = useState<{ page: string; tries: number } | null>(null);
   const worktreeId = model.view.kind === 'worktree' ? model.view.worktreeId : null;
   const scope = model.scope;
   const cursor = model.files.data?.nextCursor ?? null;
-  const failed = failure !== null && failure.cursor === cursor ? failure : null;
+  // The page a failure is of: the worktree, the scope, the list's state and the cursor (PR #97,
+  // second round: a record must not stand for another list).
+  const page = [
+    worktreeId ?? '',
+    scopeKey(scope),
+    model.files.data?.stateHash ?? '',
+    cursor ?? '',
+  ].join('\u0000');
+  const failed = failure !== null && failure.page === page ? failure : null;
   const load = useCallback(
     (manual: boolean) => {
       if (worktreeId === null) return;
-      const from = cursor;
+      const from = page;
       setLoading(true);
       void loadMoreFiles(queryClient, api, worktreeId, scope)
         .then(() => setFailure(null))
         .catch(() =>
           setFailure((f) => ({
-            cursor: from,
-            tries: !manual && f?.cursor === from ? f.tries + 1 : 1,
+            page: from,
+            tries: !manual && f?.page === from ? f.tries + 1 : 1,
           })),
         )
         .finally(() => setLoading(false));
     },
-    [queryClient, api, worktreeId, scope, cursor],
+    [queryClient, api, worktreeId, scope, page],
   );
   const onLoadMore = useCallback(() => load(false), [load]);
   const onRetry = useCallback(() => load(true), [load]);

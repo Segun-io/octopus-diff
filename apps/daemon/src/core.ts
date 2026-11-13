@@ -2089,7 +2089,13 @@ export class DaemonCore {
     const omitted = listed.untrackedOmitted;
     // Paged (#42): a slice of the cached list in the paging order, never a new git run. Without
     // `limit` (an older client) the first `FILES_UNPAGED_MAX` files, `truncated` when cut.
-    const { files, listKey } = this.#pageable(project, resolved, listed.files, stateHash);
+    const { files, listKey } = this.#pageable(
+      project,
+      worktreeId,
+      resolved,
+      listed.files,
+      stateHash,
+    );
     const result = pageFileList(files, page, {
       listKey,
       defaultLimit: FILES_UNPAGED_MAX,
@@ -2114,10 +2120,12 @@ export class DaemonCore {
   /**
    * A listed array ready to page (#42): in the paging order (sorted once per array, `#ordered`),
    * with `reviewed` attached (always over the whole list: marks it keeps alive are touched as
-   * before), and its list key for cursors: the state, the resolved scope and the order.
+   * before), and its list key for cursors: the worktree, the state, the resolved scope and the
+   * order (two worktrees can hold one state: a cursor of one is not one of the other, PR #97).
    */
   #pageable(
     project: ProjectEntry,
+    worktreeId: string,
     resolved: { scope: DiffScope; review: ReviewComputed | null },
     listed: readonly LabeledFile[],
     stateHash: string,
@@ -2127,7 +2135,7 @@ export class DaemonCore {
       memo = { ordered: orderFiles(listed), keys: new Map() };
       this.#ordered.set(listed, memo);
     }
-    const stateKey = `${stateHash}\u0000${scopeKey(resolved.scope)}`;
+    const stateKey = `${worktreeId}\u0000${stateHash}\u0000${scopeKey(resolved.scope)}`;
     let listKey = memo.keys.get(stateKey);
     if (listKey === undefined) {
       listKey = fileListKey(stateKey, memo.ordered);
@@ -2313,6 +2321,7 @@ export class DaemonCore {
           const summary = listed.summary ?? c.summary; // bare: no summary changes under it
           const { files, listKey } = this.#pageable(
             c.project,
+            c.entry.worktree.id,
             resolved,
             listed.files,
             listed.stateHash ?? summary.stateHash,
