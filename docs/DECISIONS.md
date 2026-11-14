@@ -6001,3 +6001,43 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      FUSE runtime here (no libfuse2); it is covered with a fake runtime.
 572. **Credits.** `apps/desktop/src/cli-shim.ts` is adapted from T3 Code's `DesktopCliShim.ts` (MIT): added to the `adapted`
      list in `scripts/credits/acknowledgements.json`, `pnpm credits` run, attribution in the file header.
+
+### Desktop phase C: independent security review of PR #110 (2026-11-13)
+
+574. **The startup refresh rewrites a launcher only when the app it runs is gone** (supersedes the "points elsewhere"
+     condition of #569). It used to retarget the command to whichever copy of the app started last: a downloaded AppImage
+     tried once took it over from the deb and broke it when deleted; two macOS copies flipped it back and forth. Now
+     `launcherApp(content)` reads the app file out of our own launcher (`app='…'` in the sh launchers, `if exist "…" goto run`
+     in the `.cmd`; the formats are unchanged, so every launcher already written keeps working) and `refresh()` writes only
+     when that file is `missing` (`lstat`: a dangling symlink, an unreadable path, or a launcher it cannot read the app from
+     count as "still there": leave it). The menu's Install (user intent) may still retarget a launcher whose app exists.
+575. **The AppImage launcher runs the CLI as a background child and handles INT, TERM and HUP.** A foreground child
+     deferred the trap (nothing stopped it) and SIGHUP skipped the EXIT trap (the mount and the extracted image, about
+     130 MB without FUSE, stayed). Now: `wait` on the child; `trap 'exit 129|130|143' HUP|INT|TERM`; one `cleanup` on EXIT
+     stops the CLI (TERM, KILL after about 5 s), stops the mounter (that unmounts) and removes the work dir. A background job
+     gets `/dev/null` for stdin in a shell without job control, so stdin is handed over on fd 3 (`exec 3<&0`, with a
+     `/dev/null` fallback when stdin is closed). Tested by running the real sh (dash here) with a fake runtime and sending the
+     signals: exit code, CLI gone, mounter gone, work dir empty, a TERM-ignoring CLI killed, stdin reaching the CLI.
+576. **A command that cannot be read is a conflict.** `FileFacts` gains `unreadable`: `lstat` failing for any reason but
+     ENOENT/ENOTDIR (a directory that cannot be searched) or a regular file that cannot be opened (execute-only, 0711). On
+     PATH it refuses like a foreign file (#563: cheaper to refuse than to guess); at the target it already refused. The
+     refusal text says "or one that could not be inspected". A directory, FIFO or socket stays `other` (not a command).
+     Cost: a PATH directory the user cannot search makes the install refuse, naming it.
+577. **Windows PATH entries must be absolute.** `pathCandidates` and `pathContainsDir` drop entries that are not a drive
+     letter plus a separator or UNC: `.`, `bin`, `..\x`, `C:foo` (drive-relative) and `\foo` (current-drive-relative) all
+     depend on the current directory or drive (SEC-03).
+578. **`readTop` opens safely.** `O_RDONLY | O_NOFOLLOW | O_NONBLOCK`, then `fstat` on the descriptor must say regular file.
+     Between `inspect`'s `lstat` and the open the path can become a symlink (not read through now) or a FIFO (a blocking open
+     would hang the app until something writes to it). Any failure is `unreadable`. The `fstat` check is tested with
+     `/dev/zero`, because `readSync` at an offset already fails on a pipe (ESPIPE) and hid it.
+579. **Test seams for the effects, and the vacuous tests replaced.** `createNodeShimFs({ ops })` can replace `linkSync`,
+     `lstatSync`, `renameSync`, `unlinkSync` and `writeFileSync`. New tests: a rename that fails after staging leaves no
+     staging file and the old launcher; a link that fails with EEXIST leaves no staging file and the existing file; the
+     no-hard-links fallback (link fails with EPERM) writes the file, never replaces a file, symlink, dangling symlink or
+     directory, and passes other errors on. The old read-only-directory test (it passed with the cleanup removed) is gone.
+     Each has a mutant.
+580. **The packaged-app e2e never runs the app with the real home.** `launchApp` / `runApp` build the environment with
+     `isolatedAppEnv(env, dirs)`: HOME, USERPROFILE, LOCALAPPDATA, APPDATA and the XDG directories under the run's temp root
+     (the app rewrites `~/.local/bin/octopus-diff` or `%LOCALAPPDATA%\octopus-diff\bin` at startup). Every launch goes through
+     those two functions, the tamper test's copies included. Unit-tested (`e2e/support/desktop-app-env.test.ts`).
+     `mutation-check.mjs` can now mutate a file under `e2e/` (`e2e:<path>`, with its vitest file in `e2e/support/`).

@@ -263,6 +263,10 @@ describe.runIf(posix)('readTop opens safely (PR #110 review)', () => {
     return { d, file };
   };
 
+  it('anything that is not a regular file is refused by its descriptor (a device reads fine at offset 0)', () => {
+    expect(() => readTop('/dev/zero')).toThrow(/not a regular file/);
+  });
+
   it('a FIFO neither blocks nor is read', () => {
     const { file } = fifo('pipe');
     expect(() => readTop(file)).toThrow();

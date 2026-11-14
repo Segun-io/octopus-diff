@@ -341,6 +341,41 @@ describe.runIf(posix)('the sh launcher, run for real', () => {
       }
     }
 
+    it('a CLI that ignores TERM is killed after a few seconds, and the work dir still goes', async () => {
+      const dir = mkdtempSync(path.join(root, 'stubborn-'));
+      const tmp = path.join(dir, 'tmp');
+      mkdirSync(tmp);
+      const { file, mount } = fakeAppImage(dir, 'mount');
+      const childPid = path.join(dir, 'child.pid');
+      writeFileSync(
+        path.join(mount, 'octopus-diff-desktop'),
+        `#!/bin/sh\ntrap '' TERM\necho $$ > ${shellWord(childPid)}\nwhile :; do sleep 1; done\n`,
+        { mode: 0o755 },
+      );
+      const launcher = path.join(dir, 'octopus-diff');
+      writeFileSync(
+        launcher,
+        renderLauncher({
+          kind: 'appimage',
+          appImage: file,
+          executable: 'octopus-diff-desktop',
+          entry: entryRel,
+        }),
+        { mode: 0o755 },
+      );
+      const run = spawn('/bin/sh', [launcher], {
+        env: { PATH: process.env.PATH ?? '/usr/bin:/bin', TMPDIR: tmp },
+        stdio: 'ignore',
+      });
+      const exited = new Promise<number | null>((done) => run.on('exit', (c) => done(c)));
+      await waitFor('the CLI to start', () => existsSync(childPid));
+      const cli = pidOf(childPid);
+      run.kill('SIGTERM');
+      expect(await exited).toBe(143);
+      await waitFor('the CLI to be killed', () => !alive(cli), 3000);
+      expect(readdirSync(tmp)).toEqual([]);
+    }, 20_000);
+
     it('stdin reaches the CLI (it runs in the background so it can be signalled)', () => {
       const dir = mkdtempSync(path.join(root, 'in-'));
       const { file, mount } = fakeAppImage(dir, 'mount');
@@ -893,5 +928,8 @@ describe('launcherApp: the app a launcher runs (what the startup refresh checks)
     expect(launcherApp('')).toBeNull();
     expect(launcherApp(`#!/bin/sh\n# ${MARKER}\napp=$(evil)\n`)).toBeNull();
     expect(launcherApp(`#!/bin/sh\n# ${MARKER}\napp='unterminated\n`)).toBeNull();
+    // Not ours: never read anything out of another file.
+    expect(launcherApp("#!/bin/sh\napp='/x/app'\n")).toBeNull();
+    expect(launcherApp('if exist "C:\\x.exe" goto run\r\n')).toBeNull();
   });
 });

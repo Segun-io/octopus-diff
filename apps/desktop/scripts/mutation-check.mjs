@@ -15,6 +15,12 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const desktopRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const e2eRoot = path.resolve(desktopRoot, '..', '..', 'e2e');
+
+// A mutation's file is under apps/desktop/src, or `e2e:<path under e2e/>` with its test as
+// `e2e:<name>` (e2e/support/<name>.test.ts, run from e2e/).
+const sourcePath = (file) =>
+  file.startsWith('e2e:') ? path.join(e2eRoot, file.slice(4)) : path.join(desktopRoot, 'src', file);
 
 /** [file, test file, description, from, to] */
 const MUTATIONS = [
@@ -599,6 +605,190 @@ const MUTATIONS = [
     'DesktopCliInstallResultSchema.parse(await options.shim.install()),',
     'await options.shim.install(),',
   ],
+  // --- PR #110 review (DECISIONS #574-): refresh, signals, unreadable commands, safe reads ---
+  [
+    'cli-shim-service.ts',
+    'cli-shim-service',
+    'refresh: retargets even though the app the launcher names still exists',
+    "if (named === null || deps.fs.inspect(named).kind !== 'missing') return 'skipped';",
+    "if (named === null) return 'skipped';",
+  ],
+  [
+    'cli-shim-service.ts',
+    'cli-shim-service',
+    'refresh: retargets a launcher it cannot read the app from',
+    "if (named === null || deps.fs.inspect(named).kind !== 'missing') return 'skipped';",
+    "if (named !== null && deps.fs.inspect(named).kind !== 'missing') return 'skipped';",
+  ],
+  [
+    'cli-shim.ts',
+    'cli-shim',
+    'launcherApp: reads the app out of a file that is not ours',
+    'if (!isOwnLauncher(content)) return null;',
+    '',
+  ],
+  [
+    'cli-shim.ts',
+    'cli-shim',
+    'AppImage launcher: SIGHUP not handled (skips the cleanup)',
+    `"trap 'exit 129' HUP",`,
+    `"true",`,
+  ],
+  [
+    'cli-shim.ts',
+    'cli-shim',
+    'AppImage launcher: SIGTERM not handled',
+    `"trap 'exit 143' TERM",`,
+    `"true",`,
+  ],
+  [
+    'cli-shim.ts',
+    'cli-shim',
+    'AppImage launcher: SIGINT not handled',
+    `"trap 'exit 130' INT",`,
+    `"true",`,
+  ],
+  [
+    'cli-shim.ts',
+    'cli-shim',
+    'AppImage launcher: the CLI is not stopped on exit',
+    `'cleanup() { stop "$child"; stop "$mounter"; rm -rf "$work"; }',`,
+    `'cleanup() { stop "$mounter"; rm -rf "$work"; }',`,
+  ],
+  [
+    'cli-shim.ts',
+    'cli-shim',
+    'AppImage launcher: the mount is not released on exit',
+    `'cleanup() { stop "$child"; stop "$mounter"; rm -rf "$work"; }',`,
+    `'cleanup() { stop "$child"; rm -rf "$work"; }',`,
+  ],
+  [
+    'cli-shim.ts',
+    'cli-shim',
+    'AppImage launcher: the work dir is left behind',
+    `'cleanup() { stop "$child"; stop "$mounter"; rm -rf "$work"; }',`,
+    `'cleanup() { stop "$child"; stop "$mounter"; }',`,
+  ],
+  [
+    'cli-shim.ts',
+    'cli-shim',
+    'AppImage launcher: the CLI runs in the foreground (a signal waits for it)',
+    '"$@" <&3 3<&- &`,',
+    '"$@" <&3 3<&-`,',
+  ],
+  [
+    'cli-shim.ts',
+    'cli-shim',
+    'AppImage launcher: the CLI loses stdin',
+    '"$@" <&3 3<&- &`,',
+    '"$@" &`,',
+  ],
+  [
+    'cli-shim.ts',
+    'cli-shim',
+    'AppImage launcher: a CLI that ignores TERM is never killed',
+    `'  if kill -0 "$1" 2>/dev/null; then kill -9 "$1" 2>/dev/null; fi',`,
+    `'  true',`,
+  ],
+  [
+    'cli-shim.ts',
+    'cli-shim',
+    'decide: a command that cannot be read on PATH is not a conflict',
+    "other.facts.kind === 'unreadable' ||",
+    'false ||',
+  ],
+  [
+    'cli-shim.ts',
+    'cli-shim',
+    'Windows PATH: relative entries searched',
+    'if (dir === null || !/^(?:[a-zA-Z]:[\\\\/]|[\\\\/]{2})/.test(dir)) return [];',
+    'if (dir === null) return [];',
+  ],
+  [
+    'cli-shim-fs.ts',
+    'cli-shim-fs',
+    'readTop: no check that the descriptor is a regular file',
+    'if (!fstatSync(fd).isFile()) throw new Error(`${file} is not a regular file`);',
+    '',
+  ],
+  [
+    'cli-shim-fs.ts',
+    'cli-shim-fs',
+    'readTop: a symlink is followed',
+    '(constants.O_NOFOLLOW ?? 0)',
+    '0',
+  ],
+  [
+    'cli-shim-fs.ts',
+    'cli-shim-fs',
+    'inspect: a path that cannot be looked at is "other"',
+    "(cheaper to refuse than to guess).\n      return { kind: 'unreadable' };",
+    "(cheaper to refuse than to guess).\n      return { kind: 'other' };",
+  ],
+  [
+    'cli-shim-fs.ts',
+    'cli-shim-fs',
+    'inspect: a file that cannot be read is "other"',
+    "} catch {\n      return { kind: 'unreadable' };",
+    "} catch {\n      return { kind: 'other' };",
+  ],
+  [
+    'cli-shim-fs.ts',
+    'cli-shim-fs',
+    'create: the staging file is left behind',
+    '} finally {\n        try {\n          ops.unlinkSync(staging);',
+    '} finally {\n        try {\n          void staging;',
+  ],
+  [
+    'cli-shim-fs.ts',
+    'cli-shim-fs',
+    'replaceOwn: the staging file is left behind when the rename fails',
+    '} catch (error) {\n        try {\n          ops.unlinkSync(staging);',
+    '} catch (error) {\n        try {\n          void staging;',
+  ],
+  [
+    'cli-shim-fs.ts',
+    'cli-shim-fs',
+    'create fallback (no hard links): overwrites what is there',
+    "ops.writeFileSync(file, content, { flag: 'wx', mode: 0o755 });",
+    "ops.writeFileSync(file, content, { flag: 'w', mode: 0o755 });",
+  ],
+  [
+    'cli-shim-fs.ts',
+    'cli-shim-fs',
+    'create fallback: an existing file is not reported as such',
+    "if ((fallback as NodeJS.ErrnoException).code === 'EEXIST') {",
+    'if (false) {',
+  ],
+  // the packaged-app e2e never runs the app with the real home
+  [
+    'e2e:desktop/support/packaged-app.ts',
+    'e2e:desktop-app-env',
+    'e2e: HOME is the real one',
+    '    HOME: home,\n',
+    '    HOME: env.HOME,\n',
+  ],
+  [
+    'e2e:desktop/support/packaged-app.ts',
+    'e2e:desktop-app-env',
+    'e2e: LOCALAPPDATA is the real one (Windows launcher directory)',
+    "    LOCALAPPDATA: join(home, 'AppData', 'Local'),\n",
+    '    LOCALAPPDATA: env.LOCALAPPDATA,\n',
+  ],
+  [
+    'e2e:desktop/support/packaged-app.ts',
+    'e2e:desktop-app-env',
+    'e2e: USERPROFILE is the real one',
+    '    USERPROFILE: home,\n',
+    '    USERPROFILE: env.USERPROFILE,\n',
+  ],
+  [
+    'e2e:desktop/support/packaged-app.ts',
+    'e2e:desktop-app-env',
+    'e2e: RUN_AS_NODE inherited by the app',
+    '  delete out.ELECTRON_RUN_AS_NODE;\n  return out;\n}\n\nfunction ensureHome',
+    '  return out;\n}\n\nfunction ensureHome',
+  ],
 ];
 
 let current = null;
@@ -613,15 +803,16 @@ process.on('SIGINT', () => {
 
 /** One vitest run of a test file: its exit status and the failed-test count it printed (or null). */
 function runTests(test) {
+  const inE2e = test.startsWith('e2e:');
   const result = spawnSync(
     process.execPath,
     [
       path.join(desktopRoot, '..', '..', 'node_modules', 'vitest', 'vitest.mjs'),
       'run',
-      `test/${test}.test.ts`,
+      inE2e ? `support/${test.slice(4)}.test.ts` : `test/${test}.test.ts`,
     ],
     {
-      cwd: desktopRoot,
+      cwd: inE2e ? e2eRoot : desktopRoot,
       encoding: 'utf8',
       env: { ...process.env, NO_COLOR: '1', FORCE_COLOR: '0' },
     },
@@ -652,7 +843,7 @@ for (const test of new Set(MUTATIONS.map((m) => m[1]))) {
 const survivors = [];
 let killed = 0;
 for (const [file, test, description, from, to] of MUTATIONS) {
-  const abs = path.join(desktopRoot, 'src', file);
+  const abs = sourcePath(file);
   const original = readFileSync(abs, 'utf8');
   const count = original.split(from).length - 1;
   if (count !== 1) {
