@@ -16,6 +16,8 @@ export interface MenuActions {
   undo(): void;
   showLog(): void;
   retryBackend(): void;
+  /** File → Install 'octopus-diff' Command… (docs/DESKTOP.md §3.2, roadmap #21). */
+  installCommand(): void;
 }
 
 export interface MenuInput {
@@ -129,6 +131,7 @@ export function buildMenuTemplate(input: MenuInput): MenuItemConstructorOptions[
     label: 'File',
     submenu: [
       { label: 'Add Folder…', accelerator: 'CommandOrControl+O', click: () => a.addFolder() },
+      { label: "Install 'octopus-diff' Command…", click: () => a.installCommand() },
       ...(mac
         ? ([{ type: 'separator' }, { role: 'close' }] as MenuItemConstructorOptions[])
         : ([

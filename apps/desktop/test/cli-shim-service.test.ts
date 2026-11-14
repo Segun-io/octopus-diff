@@ -432,3 +432,19 @@ describe('refresh (after an update moved the app)', () => {
     expect(fs.writes).toEqual([]);
   });
 });
+
+describe('concurrency', () => {
+  it('two installs at once (the menu and the bridge) run one after the other', async () => {
+    const { fs, shim } = setup();
+    const [a, b] = await Promise.all([shim.install(), shim.install()]);
+    expect([a.outcome, b.outcome].sort()).toEqual(['installed', 'unchanged']);
+    expect(fs.writes).toHaveLength(1);
+  });
+
+  it('a refresh at startup and an install at once write once', async () => {
+    const { fs, shim } = setup();
+    fs.files.set(TARGET, { kind: 'file', content: oldLauncher });
+    await Promise.all([shim.refresh(), shim.install()]);
+    expect(fs.writes).toHaveLength(1);
+  });
+});

@@ -253,54 +253,61 @@ export function createCliShim(deps: CliShimDeps): CliShim {
     }
   }
 
-  return {
-    async status() {
-      return statusOf(await assess());
-    },
+  async function install(): Promise<DesktopCliInstallResult> {
+    const a = await assess();
+    if (a.kind === 'unavailable') return result('unavailable', a.reason);
+    if (a.decision.action === 'refuse') return result('refused', refusal(a.decision.conflict));
+    let outcome: DesktopCliOutcome;
+    try {
+      const written = await write(a);
+      if (written.outcome === 'refused' && written.conflict) {
+        return result('refused', refusal(written.conflict));
+      }
+      outcome = written.outcome;
+    } catch (error) {
+      note(`could not write ${a.location.file}: ${errorText(error)}`);
+      return result('failed', `Could not write ${a.location.file}: ${errorText(error)}`);
+    }
+    const added = await ensureUserPath(a.location);
+    const after = await assess();
+    const onPath = after.kind === 'ready' ? after.onPath : a.onPath;
+    const lead =
+      outcome === 'installed'
+        ? `Installed the ${COMMAND_NAME} command at ${a.location.file}.`
+        : outcome === 'updated'
+          ? `Updated the ${COMMAND_NAME} command at ${a.location.file} to point at this app.`
+          : `The ${COMMAND_NAME} command at ${a.location.file} already points at this app.`;
+    return {
+      outcome,
+      status: statusOf(after),
+      message: `${lead}${added}${pathHint(a.location, onPath)}`,
+    };
+  }
 
-    async install() {
+  async function refresh(): Promise<'updated' | 'skipped'> {
+    try {
       const a = await assess();
-      if (a.kind === 'unavailable') return result('unavailable', a.reason);
-      if (a.decision.action === 'refuse') {
-        return result('refused', refusal(a.decision.conflict));
-      }
-      let outcome: DesktopCliOutcome;
-      try {
-        const written = await write(a);
-        if (written.outcome === 'refused' && written.conflict) {
-          return result('refused', refusal(written.conflict));
-        }
-        outcome = written.outcome;
-      } catch (error) {
-        note(`could not write ${a.location.file}: ${errorText(error)}`);
-        return result('failed', `Could not write ${a.location.file}: ${errorText(error)}`);
-      }
-      const added = await ensureUserPath(a.location);
-      const after = await assess();
-      const onPath = after.kind === 'ready' ? after.onPath : a.onPath;
-      const lead =
-        outcome === 'installed'
-          ? `Installed the ${COMMAND_NAME} command at ${a.location.file}.`
-          : outcome === 'updated'
-            ? `Updated the ${COMMAND_NAME} command at ${a.location.file} to point at this app.`
-            : `The ${COMMAND_NAME} command at ${a.location.file} already points at this app.`;
-      return {
-        outcome,
-        status: statusOf(after),
-        message: `${lead}${added}${pathHint(a.location, onPath)}`,
-      };
-    },
+      if (a.kind !== 'ready' || a.decision.action !== 'update') return 'skipped';
+      const written = await write(a);
+      return written.outcome === 'updated' ? 'updated' : 'skipped';
+    } catch (error) {
+      note(`could not refresh the ${COMMAND_NAME} command: ${errorText(error)}`);
+      return 'skipped';
+    }
+  }
 
-    async refresh() {
-      try {
-        const a = await assess();
-        if (a.kind !== 'ready' || a.decision.action !== 'update') return 'skipped';
-        const written = await write(a);
-        return written.outcome === 'updated' ? 'updated' : 'skipped';
-      } catch (error) {
-        note(`could not refresh the ${COMMAND_NAME} command: ${errorText(error)}`);
-        return 'skipped';
-      }
-    },
+  // The menu, the bridge and the startup refresh can overlap: one write at a time, so the second
+  // sees what the first wrote instead of racing it.
+  let queue: Promise<unknown> = Promise.resolve();
+  const exclusive = <T>(job: () => Promise<T>): Promise<T> => {
+    const run = queue.then(job, job);
+    queue = run.catch(() => undefined);
+    return run;
+  };
+
+  return {
+    status: async () => statusOf(await assess()),
+    install: () => exclusive(install),
+    refresh: () => exclusive(refresh),
   };
 }

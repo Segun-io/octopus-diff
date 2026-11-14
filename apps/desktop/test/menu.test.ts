@@ -17,6 +17,7 @@ function actions(): MenuActions {
     undo: vi.fn(),
     showLog: vi.fn(),
     retryBackend: vi.fn(),
+    installCommand: vi.fn(),
   };
 }
 
@@ -171,4 +172,26 @@ describe('the menu template', () => {
     expect(a.showLog).toHaveBeenCalledOnce();
     expect(a.retryBackend).toHaveBeenCalledOnce();
   });
+});
+
+describe('Install the command (roadmap #21)', () => {
+  it.each(PLATFORMS)(
+    '%s: File has "Install octopus-diff Command…", with no accelerator',
+    (platform) => {
+      const a = actions();
+      const file = buildMenuTemplate({
+        platform,
+        appName: 'octopus-diff',
+        dev: false,
+        actions: a,
+      }).find((m) => m.label === 'File');
+      const item = flattenMenu(Array.isArray(file?.submenu) ? file.submenu : []).find(
+        (i) => i.label === "Install 'octopus-diff' Command…",
+      );
+      expect(item, 'the item exists').toBeDefined();
+      expect(item?.accelerator).toBeUndefined();
+      clickItem(item);
+      expect(a.installCommand).toHaveBeenCalledTimes(1);
+    },
+  );
 });
