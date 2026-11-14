@@ -9,6 +9,7 @@ export * from './api.js';
 export * from './client.js';
 export * from './common.js';
 export * from './daemon.js';
+export * from './desktop.js';
 export * from './domain.js';
 export * from './events.js';
 export * from './forge.js';

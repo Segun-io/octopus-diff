@@ -5916,3 +5916,16 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      has no working sandbox and does not start. That is no loss: Electron does not validate the asar on Linux, so the
      test only ever recorded an outcome there. It now returns early on Linux (annotated) and runs, control included,
      on macOS and Windows only.
+
+## Desktop phase C: native integration (session, 2026-11-13; roadmap #20)
+
+530. **Contracts: `packages/contracts/src/desktop.ts` (additive).** The `DesktopBridge` interface and
+     `declare global { interface Window { octopusDesktop?: DesktopBridge } }`, as DESKTOP §3.4, plus three
+     browser-safe constants next to the types (`DESKTOP_EDITORS`, `DESKTOP_EDITOR_LABELS`, `DESKTOP_COMMANDS`; the web
+     and the main process share them, so the allowlists cannot drift). No zod schemas there: the main process owns the
+     IPC validation (`apps/desktop/src/ipc.ts`). Differences from the §3.4 table, all additive: `version: 1`;
+     `relPath` is optional (without it the call is about the worktree root, for the worktree menus);
+     `openInEditor(worktreeId, relPath?, { editor?, line? })` takes the editor as an option (default `vscode`) instead
+     of a bare `line`; actions resolve to `DesktopActionResult` (`{ ok: true }` or `{ ok: false, reason, message }`,
+     never a throw across IPC); `copyText` (the clipboard follow-up of #507) and `onCommand` (the menu hooks requested
+     in #495). `installCli`/`cliStatus` are left to #21, which adds them to the same interface.
