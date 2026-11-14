@@ -129,11 +129,22 @@ export class CdpPage {
     this.url = url;
   }
 
-  /** Evaluates `expression` in the page (promises awaited) and returns its JSON value. */
-  async evaluate<T = unknown>(expression: string): Promise<T> {
+  /**
+   * Evaluates `expression` in the page (promises awaited) and returns its JSON value. With
+   * `userGesture`, the page sees a user activation (what a click gives the bridge's actions).
+   */
+  async evaluate<T = unknown>(
+    expression: string,
+    options: { userGesture?: boolean } = {},
+  ): Promise<T> {
     const result = await this.#cdp.send(
       'Runtime.evaluate',
-      { expression, awaitPromise: true, returnByValue: true },
+      {
+        expression,
+        awaitPromise: true,
+        returnByValue: true,
+        userGesture: options.userGesture === true,
+      },
       this.sessionId,
     );
     const details = result.exceptionDetails as {
