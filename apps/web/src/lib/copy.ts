@@ -6,6 +6,7 @@
  * The fallback is adapted from T3 Code (MIT, Copyright (c) 2026 T3 Tools Inc.),
  * apps/web/src/hooks/useCopyToClipboard.ts `writeTextWithExecCommand` / `writeTextToClipboard`.
  */
+import { desktopBridge } from './desktop.ts';
 
 /** Copies with a hidden textarea and `execCommand('copy')`; restores focus afterwards. */
 export function copyWithExecCommand(text: string, doc: Document = document): boolean {
@@ -36,11 +37,20 @@ export function copyWithExecCommand(text: string, doc: Document = document): boo
 }
 
 /**
- * Writes `text` to the clipboard: the async API first, then the textarea fallback. Resolves to
+ * Writes `text` to the clipboard: the desktop app's bridge when there is one (no clipboard
+ * permission there, DECISIONS #507), then the async API, then the textarea fallback. Resolves to
  * whether the text was copied; never throws.
  */
 export async function copyText(text: string): Promise<boolean> {
   if (typeof document === 'undefined') return false;
+  const bridge = desktopBridge();
+  if (bridge) {
+    try {
+      if (await bridge.copyText(text)) return true;
+    } catch {
+      // Fall through to the browser's ways.
+    }
+  }
   const clipboard = typeof navigator === 'undefined' ? undefined : navigator.clipboard;
   if (clipboard?.writeText) {
     try {

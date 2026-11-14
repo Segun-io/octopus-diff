@@ -7,6 +7,7 @@ import {
   navigationPolicy,
   netErrorName,
   permissionPolicy,
+  TRAFFIC_LIGHTS,
   webPreferences,
   windowOpenPolicy,
   windowOptions,
@@ -137,6 +138,40 @@ describe('webPreferences / windowOptions (DESKTOP §5)', () => {
       expect(prefs.devTools).toBe(devTools);
       expect(prefs).not.toHaveProperty('preload');
     }
+  });
+
+  it('the preload (phase C bridge) changes nothing else: still sandboxed and isolated', () => {
+    const prefs = webPreferences(false, '/app/dist/preload.cjs');
+    expect(prefs.preload).toBe('/app/dist/preload.cjs');
+    expect({ ...prefs, preload: undefined }).toEqual({
+      ...webPreferences(false),
+      preload: undefined,
+    });
+    expect(prefs.sandbox).toBe(true);
+    expect(prefs.contextIsolation).toBe(true);
+    expect(prefs.nodeIntegration).toBe(false);
+  });
+
+  it('macOS gets the hidden inset title bar (the web draws a drag region); others the native frame', () => {
+    const mac = windowOptions({ bounds: null, devTools: false, title: 't', platform: 'darwin' });
+    expect(mac).toMatchObject({ titleBarStyle: 'hiddenInset' });
+    expect(mac.trafficLightPosition).toEqual({ x: TRAFFIC_LIGHTS.x, y: TRAFFIC_LIGHTS.y });
+    for (const platform of ['linux', 'win32'] as const) {
+      const other = windowOptions({ bounds: null, devTools: false, title: 't', platform });
+      expect(other, platform).not.toHaveProperty('titleBarStyle');
+      expect(other, platform).not.toHaveProperty('trafficLightPosition');
+    }
+  });
+
+  it('passes the preload path to the window', () => {
+    const w = windowOptions({
+      bounds: null,
+      devTools: false,
+      title: 't',
+      preload: '/app/dist/preload.cjs',
+    });
+    expect(w.webPreferences.preload).toBe('/app/dist/preload.cjs');
+    expect(w.webPreferences.sandbox).toBe(true);
   });
 
   it('builds the window: hidden until ready, minimum size, saved bounds when given', () => {

@@ -275,6 +275,19 @@ describe('screens', () => {
   });
 });
 
+describe('screens: the macOS title bar strip (hiddenInset, #20)', () => {
+  it('adds a drag strip only when asked, and keeps the screen script-free', () => {
+    const plain = screenHtml(startingScreen('x'));
+    const mac = screenHtml(startingScreen('x'), { titleBarInset: true });
+    expect(plain).not.toContain('app-region');
+    expect(mac).toContain('-webkit-app-region: drag');
+    expect(mac).not.toContain('<script');
+    expect(screenUrl(startingScreen('x'), { titleBarInset: true })).toContain(
+      encodeURIComponent('-webkit-app-region: drag'),
+    );
+  });
+});
+
 describe('page actions (scripts run in the web UI)', () => {
   class FakeElement {
     clicked = 0;

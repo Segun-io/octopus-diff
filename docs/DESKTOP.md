@@ -6,7 +6,8 @@
 > (2026-11-11, #24) are at the end of this file (§10). Phase A (#18, the shell MVP in `apps/desktop`) is done
 > (2026-11-13; `docs/reports/desktop-phase-a.md`, DECISIONS #486-#504). Phase B (#19, packaging) is implemented
 > (2026-11-13; `docs/reports/desktop-phase-b.md`, DECISIONS #508-#520): verified end to end on Linux x64 here; macOS and
-> Windows are verified by the CI `desktop` job.
+> Windows are verified by the CI `desktop` job. Phase C's native integration (#20, the `window.octopusDesktop` bridge) is
+> implemented (2026-11-13; `docs/reports/desktop-phase-c.md`, DECISIONS #530-#545); the CLI shim half of phase C is #21.
 
 ## 1. Goal and model
 
@@ -115,7 +116,7 @@ Settings button) writes a small launcher that runs the app's bundled CLI with `E
 **As built (phase C, #21; DECISIONS #560-#572; `docs/reports/desktop-cli-shim.md`).** `src/cli-shim.ts` (pure: quoting,
 launcher text, marker, location, target, PATH checks, the install/update/refuse decision), `cli-shim-service.ts` (the
 flow over injected effects: `status()`, `install()`, `refresh()`), `cli-shim-fs.ts` (the real filesystem and the Windows
-user-PATH editor), `cli-shim-ipc.ts` (the bridge's main-process handlers). The rules: a frozen marker on line 2 decides
+user-PATH editor), `cli-shim-ipc.ts` (the bridge's main-process handlers, behind the same sender check and zod as every bridge channel, #547). The rules: a frozen marker on line 2 decides
 what is ours; a file at the target that is not ours, or *any* other `octopus-diff` on the terminal's PATH, means nothing
 is written; symlinks are never followed; creation is exclusive and replacement re-checks the marker; the AppImage
 launcher mounts the AppImage file (`--appimage-mount`, extract without FUSE) and runs the CLI inside it; a dmg, a
@@ -147,23 +148,28 @@ the registry edit).
 
 ### 3.4 Preload bridge (`window.octopusDesktop`)
 
-A sandboxed CommonJS preload exposes a small, typed API through `contextBridge`. The type lives in
-`packages/contracts/src/desktop.ts` (types only, browser-safe; an additive `contracts:` commit).
+A sandboxed preload (`src/preload.ts`, bundled to CommonJS `dist/preload.cjs`, #531) exposes a small, typed API through
+`contextBridge`. The type lives in `packages/contracts/src/desktop.ts` (types and three constant lists, browser-safe;
+DECISIONS #530). Actions resolve to `{ ok: true }` or `{ ok: false, reason, message }`, never throw, and the ones that act
+on the OS need a user gesture (checked in the preload, #536). `relPath` is optional: without it the call is about the
+worktree root.
 
 | Method | Main-process behavior |
 |---|---|
 | `platform` | `'darwin' \| 'win32' \| 'linux'` (title bar layout) |
 | `pickFolder({ title, defaultPath })` | `dialog.showOpenDialog({ properties: ['openDirectory'] })` → path or null |
 | `revealPath(worktreeId, relPath)` | `shell.showItemInFolder`, only after the path is checked (below) |
-| `openPath(worktreeId, relPath)` | `shell.openPath` (default app), same check |
-| `openInEditor(worktreeId, relPath, line?)` | allowlisted editor URL schemes (`vscode://file/…`, `cursor://…`, `zed://…`) via `shell.openExternal` |
+| `openPath(worktreeId, relPath)` | `shell.openPath` (default app), same check, and never a program (#535; the documented deny list, #546) |
+| `openInEditor(worktreeId, relPath, { editor?, line? })` | allowlisted editor URL schemes (`vscode://file/…`, `cursor://file/…`, `zed://file/…`) via `shell.openExternal` (#537) |
 | `setBadge(count)` | dock badge / taskbar overlay / Unity count = unreviewed files |
 | `getPathForFile(file)` | `webUtils.getPathForFile` (drop a folder on the window to add it) |
-| `installCli()` / `cliStatus()` | the shim installer in §3.2 |
+| `copyText(text)` | Electron's `clipboard` (the permission stays denied, #540) |
+| `onCommand(listener)` | menu commands (`open-settings`, `refresh`, `undo`) to the page (#539) |
+| `installCli()` / `cliStatus()` | the shim installer in §3.2 (#21) |
 
 **Path check:** the main process never trusts a path from the renderer. It resolves `worktreeId` through the
 daemon API (`GET /api/projects`, with the token from the ready line), joins `relPath`, `realpath`s the result and
-refuses anything outside that worktree. No git involved.
+refuses anything outside that worktree. No git involved. Details (segments, Windows rules, missing worktrees): #534.
 
 ## 4. Repository layout and ownership
 
@@ -173,6 +179,12 @@ New stream **WS6 — desktop**, owning `apps/desktop/` (package `@octopus-diff/d
 apps/desktop/
   src/main.ts            app lifecycle, single-instance lock, menus, window state, security policy
   src/backend.ts         supervisor: spawn the CLI (RUN_AS_NODE), fd 3 ready line, stdin lifeline, restart/backoff
+  src/cli-shim.ts        install/inspect the `octopus-diff` launcher (marker, sh/cmd quoting, AppImage)
+  src/preload.ts         contextBridge (bundled to CJS dist/preload.cjs; sandboxed preloads can't be ESM, #531)
+  src/bridge.ts          the object the preload exposes (user-gesture gate), unit tested
+  src/ipc.ts             handlers: sender-origin check, zod validation, path check (ipc-channels.ts: channel names)
+  src/path-guard.ts, open-safety.ts, editor-url.ts, badge.ts, page-commands.ts, worktrees-api.ts
+                         the bridge's rules (phase C, #20); src/bridge-main.ts wires them to Electron
   src/cli-shim.ts        pure: the `octopus-diff` launcher (marker, sh/cmd quoting, AppImage), PATH checks, the decision
   src/cli-shim-service.ts, cli-shim-fs.ts, cli-shim-ipc.ts
                          the install flow over injected effects, the real fs + Windows user PATH, the bridge handlers (#21)
@@ -240,8 +252,9 @@ The daemon (WS2) and git-core (WS1) need **no changes**.
 - **Native module.** `@parcel/watcher` is a dependency of `apps/desktop`, so its platform package lands in
   `app.asar.unpacked/node_modules` (`asarUnpack`) and the bundled CLI resolves it from there. Each OS/arch build
   includes only its own prebuilt binary.
-- **Window chrome.** macOS: `titleBarStyle: 'hiddenInset'` plus a drag region in the web header. Windows/Linux:
-  native frame in v1 (`titleBarOverlay` later).
+- **Window chrome.** macOS: `titleBarStyle: 'hiddenInset'` plus a 32 px drag strip the web draws at the top
+  (`data-desktop-platform="darwin"` on `<html>`; nothing else is a drag region, #541). Windows/Linux: native frame in v1
+  (`titleBarOverlay` later).
 - **Menus.** Standard App/Edit/View/Window menus. Accelerators must **never** be bare letters: `j/k/n/r/s` stay
   the web UI's. Add `Cmd/Ctrl+O` (add folder: native dialog), `Cmd/Ctrl+,` (Settings route), `Cmd/Ctrl+R`
   (refresh data, not a page reload), and DevTools only in dev builds or behind a menu flag.
@@ -288,6 +301,7 @@ The daemon (WS2) and git-core (WS1) need **no changes**.
 | **A0. CLI hooks** (WS5 + lead, small) | `--ready-fd`, `--exit-with-stdin`, reusable bundle step, `ServeReadySchema` | CLI tests cover started/attached ready lines and stdin-EOF shutdown on all OSes in CI |
 | **A. Shell MVP** (1–2 sessions; **done 2026-11-13**) | `apps/desktop` scaffold, backend supervisor (spawn, ready line, attach/start, restart, shutdown), window loads `authUrl`, the §5 security baseline, single instance (a second launch focuses the window), window-state persistence, menus, shell-env PATH, git-missing screen, logs | `pnpm --filter @octopus-diff/desktop start` opens the app with the user's projects; with `octopus-diff serve` already running it attaches and quitting leaves that daemon up; otherwise `octopus-diff status` sees the app's daemon and quitting stops it; killing Electron leaves no orphan daemon; unit tests for the supervisor, nav policy, IPC validation |
 | **B. Packaging** (1 session; **implemented 2026-11-13**, Linux verified here, macOS/Windows in CI) | Shared CLI bundle in the app, electron-builder config, fuses, asarUnpack, icons, CI matrix, Playwright Electron smoke in `e2e/` | The AppImage runs on a clean Linux VM and the dmg on macOS (unsigned, with the right-click → Open workaround); smoke test green; the read-only proof harness passes against the packaged app |
+| **C. Native integration + CLI shim** (1 session, WS3 + WS6; **native integration implemented 2026-11-13**, #20; the shim is #21) | Native folder dialog, drag-to-add, reveal/open/open-in-editor with the path check, macOS title bar, unreviewed badge, external links; install the `octopus-diff` command (§3.2) | Every bridge method is covered by tests; the shim works from deb, dmg, NSIS and AppImage installs and never overwrites an npm install; the browser build is unchanged (existing e2e green) |
 | **C. Native integration + CLI shim** (1 session, WS3 + WS6; the CLI shim, #21, is implemented 2026-11-13) | Native folder dialog, drag-to-add, reveal/open/open-in-editor with the path check, macOS title bar, unreviewed badge, external links; install the `octopus-diff` command (§3.2) | Every bridge method is covered by tests; the shim works from deb, dmg, NSIS and AppImage installs and never overwrites an npm install; the browser build is unchanged (existing e2e green) |
 | **D. Windows + WSL** (1–2 sessions) | Windows app with a WSL-distro backend (§6); distro picker in Settings | From Windows, the app shows repos inside WSL with live updates |
 | **E. Release** (needs the user) | Signing, notarization, auto-update, name, first public release | The user signs off |

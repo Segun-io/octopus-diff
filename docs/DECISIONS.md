@@ -5917,6 +5917,107 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      test only ever recorded an outcome there. It now returns early on Linux (annotated) and runs, control included,
      on macOS and Windows only.
 
+## Desktop phase C: native integration (session, 2026-11-13; roadmap #20)
+
+530. **Contracts: `packages/contracts/src/desktop.ts` (additive).** The `DesktopBridge` interface and
+     `declare global { interface Window { octopusDesktop?: DesktopBridge } }`, as DESKTOP §3.4, plus three
+     browser-safe constants next to the types (`DESKTOP_EDITORS`, `DESKTOP_EDITOR_LABELS`, `DESKTOP_COMMANDS`; the web
+     and the main process share them, so the allowlists cannot drift). No zod schemas there: the main process owns the
+     IPC validation (`apps/desktop/src/ipc.ts`). Differences from the §3.4 table, all additive: `version: 1`;
+     `relPath` is optional (without it the call is about the worktree root, for the worktree menus);
+     `openInEditor(worktreeId, relPath?, { editor?, line? })` takes the editor as an option (default `vscode`) instead
+     of a bare `line`; actions resolve to `DesktopActionResult` (`{ ok: true }` or `{ ok: false, reason, message }`,
+     never a throw across IPC); `copyText` (the clipboard follow-up of #507) and `onCommand` (the menu hooks requested
+     in #495). `installCli`/`cliStatus` are left to #21, which adds them to the same interface.
+531. **The preload is `src/preload.ts` (ES module syntax), bundled to CommonJS** (`dist/preload.cjs`), not
+     `src/preload.cts`. In a `.cts` file TypeScript (with `verbatimModuleSyntax`) only allows `import x = require()`,
+     and esbuild cannot tree-shake through `require`: the preload pulled all of the contracts and zod in (926 KB).
+     With ESM imports and the contracts' `sideEffects: false` it is 3.9 KB. The output is the same CommonJS file
+     (sandboxed preloads cannot be ESM). `scripts/build.mjs` always builds it now; DESKTOP §4 updated.
+532. **Layout of the bridge (`apps/desktop/src`).** Pure, unit-tested modules: `ipc-channels.ts` (channel names, shared
+     by preload and main), `bridge.ts` (the object the preload exposes, over injected `ipcRenderer`/`webUtils`/user
+     activation), `ipc.ts` (the main-process handlers: sender check, zod, refusals as values), `path-guard.ts`,
+     `open-safety.ts`, `editor-url.ts`, `badge.ts`, `page-commands.ts`, `worktrees-api.ts`. Electron wiring:
+     `preload.ts` (contextBridge only) and `bridge-main.ts` (`installBridge`: `ipcMain` registration, shell, dialog,
+     clipboard, badge). `main.ts` changed in five small places (the preload path and platform in `windowOptions`, the
+     `installBridge` call, `pageCommand` for three menu items, the screens' strip, the badge cleared on screens).
+     **For #21** (`installCli`/`cliStatus`): add the channels to `ipc-channels.ts`, the methods to `bridge.ts`, and the
+     handlers in a separate module merged into `createBridgeHandlers`'s `invoke` map (they get the same sender check
+     and zod through its `handler` helper if it is exported then).
+533. **The sender check (DESKTOP §5).** Every handler first requires: the sender is our window's `webContents`
+     (by id), the frame is the main frame (`senderFrame.parent === null`; a gone frame is refused), and the frame's
+     http(s) origin equals the UI's origin while the UI is showing (the daemon's, or Vite's with `--renderer-url`;
+     **null while one of our `data:` screens shows, so nothing is accepted then**). Then zod on the exact argument
+     tuple (strict objects, no extra arguments). A refusal is a value (`{ ok: false, reason, message }`, `null` for
+     `pickFolder`, `false` for `copyText`), never a throw across IPC, and is logged as
+     `bridge: <method> refused (<reason>)`: no path, no URL, no token (tested; a mutant that logs more is killed).
+534. **The path check.** The worktree comes from the daemon (`GET /api/projects` with the ready line's token, per call,
+     no cache: a removed worktree is gone at once), never from the renderer. `relPath` must be plain `/`-separated
+     segments (no empty, `.`, `..`, NUL; on Windows also no `\`, `:` and no name Windows trims to nothing or `.`/`..`).
+     Both the root and the joined path are `realpath`ed and compared by whole segments (`path.relative`, another
+     drive is outside). `missing` worktrees are refused even when the path exists. Realpaths are compared exactly
+     (case-sensitively): on a case-insensitive filesystem an odd casing can only be refused, never let through.
+     A Windows worktree on a UNC path cannot be opened in an editor (no drive letter; refused as "failed").
+535. **`openPath` never runs a program** (beyond the plan, which only asked for the path check). `shell.openPath` on an
+     executable, a script with a registered interpreter, a `.lnk`/`.url`/`.desktop`/`.fileloc` launcher or a macOS
+     `.app` bundle runs it, and these files come from repositories (untrusted, often agent-written). Refused: one
+     extension list on every platform (Wine, Python launchers and the like register these types anywhere), app
+     bundles (folders included), files with an execute bit (macOS, Linux), anything neither file nor folder, and
+     Windows names whose trailing dots/spaces Windows strips (`a.exe.`). The message points to "Open in editor" and
+     "Reveal", which stay available. Reversible: the list is one constant (`UNSAFE_OPEN_EXTENSIONS`).
+536. **The preload requires a user gesture** for `pickFolder`, `revealPath`, `openPath`, `openInEditor` and `copyText`
+     (`navigator.userActivation.isActive`, read in the preload's isolated world, which page scripts cannot reach or
+     fake; a click or a key press gives it for a few seconds). Without one the call resolves to `no-user-gesture`
+     (or `null`/`false`) and the main process is not asked. Defence in depth against script injection in the page:
+     it cannot open dialogs, launch editors or fill the clipboard on its own. `setBadge` needs none (it follows data).
+537. **Editor URLs.** `vscode://file/<path>[:line]`, `cursor://file/…`, `zed://file/…`, built in the main process from
+     the checked realpath: every segment percent-encoded (a name cannot add a query, fragment or line), Windows as
+     `/C:/a/b`. `isAllowedEditorUrl` (the gate before `shell.openExternal`) requires one of the three schemes with
+     the `file` host and a non-empty path, and no query, fragment, credentials or port. The editor is a web pref
+     (`editor`, default VS Code, Settings → General → Editor, shown only inside the desktop app); the menus pass no
+     line yet (the API takes one). A missing editor makes `openExternal` reject: reported as "failed".
+538. **Badge.** macOS and Linux: `app.setBadgeCount` (Linux: Unity-style launchers only). Windows (no count badge): a
+     16 px amber overlay dot (the favicon's colour; BGRA, premultiplied) with "N unreviewed files" as its accessible
+     description. The web sends `titleCount ? unreviewedTotal : 0` (the existing "Unreviewed count in the tab title"
+     setting, whose description now mentions the badge) and 0 when it unmounts; the main process clears it whenever a
+     screen replaces the UI. Capped at 99,999.
+539. **Menu hooks (#495's request).** `onCommand` delivers `open-settings`, `refresh`, `undo` (`DESKTOP_COMMANDS`); the
+     preload accepts only those. The first subscription sends `commands-ready` (sender-checked); `PageCommands`
+     remembers it per `webContents` until the next main-frame navigation. Settings/Refresh/Undo then go over IPC
+     (Refresh is now the web's `refreshNow`, which also works with no worktree open; Undo is the editing undo in a
+     text field, else the web's bulk undo); a page that never subscribed (an older web build from an attached daemon
+     of another version) still gets phase A's scripts. Add Folder… keeps phase A's main-process flow (#496).
+540. **Clipboard (#507's follow-up).** The web's `copyText` tries the bridge's `copyText` (Electron's `clipboard` in the
+     main process, no permission needed) before `navigator.clipboard` and the `execCommand` fallback.
+     `RequestView`'s "copy the head branch" now uses `copyAndReport` like every other copy (fallbacks and the toast).
+     The permission handlers still deny everything, clipboard included.
+541. **macOS title bar** (supersedes #498 for macOS): `titleBarStyle: 'hiddenInset'`, `trafficLightPosition {14, 10}`.
+     The web draws a 32 px drag strip (`html[data-desktop-platform='darwin'] body::before`, `-webkit-app-region:
+     drag`) and pads `#root` below it, so **nothing else is a drag region**: no button, menu or dialog can lose clicks
+     to it (Electron drag regions ignore z-order). Our `data:` screens get the same strip. Windows and Linux keep the
+     native frame. Layout checked on Linux with the attribute forced (`smoke-app.mjs --screenshot`); the real macOS
+     window was **not** seen.
+542. **Adding: Browse… and dropping a folder** both lead to the existing add form, they add nothing by themselves.
+     Browse… (in the form, desktop only) opens the native dialog and moves the form's folder browser there; a folder
+     dropped on the window opens the add dialog at it (`addProjectPath` UI state, reset whenever the dialog closes).
+     A drop of a file or of several items says "Drop one folder to add it.". `navigateOnDragDrop` stays off.
+543. **Web menus.** Reveal (Finder / Explorer / file manager) / Open with default app (Open folder for a worktree) /
+     Open in <editor>: in the sidebar row and the Overview row menus (the worktree), and in the file list, tree and
+     diff header menus (the file; the diff header also has the worktree group). Disabled for deleted files and missing
+     worktrees; refusals show as the one-line notice. Without the bridge none of it renders (tested).
+544. **Verification tooling.** `smoke-app.mjs` checks the bridge in the real window (shape, `data-desktop-platform`,
+     the gesture gate, symlink / executable / validation / unknown-id / not-found refusals, the log lines without
+     paths) and, with `--screenshot`, also captures the macOS strip; the packaged-app spec checks the packaged preload
+     (shape, the macOS strip on macOS, refusals only: a success would act on the runner's desktop, and writing a
+     symlink into a fixture repository would trip the read-only proof). `mutation-check.mjs` has 29 new mutants (87
+     in all); two candidates were left out as equivalent (`trusted.origin === null` in the sender check, the `file`
+     host check behind the `<scheme>://file/` prefix).
+545. **Not verified here** (Linux x64 under WSLg only): macOS (the hidden inset title bar and traffic lights, the dock
+     badge, Finder reveal, the `.app` refusal on a real bundle), Windows (the overlay icon and its BGRA order,
+     Explorer, NTFS path rules, editor URLs with drive letters), the Linux launcher badge (no Unity launcher here),
+     any successful reveal/open/editor launch with a real editor installed, real drag-and-drop from a file manager
+     (unit and jsdom tests only), and the native menu items' clicks (their routing is unit tested). The CI `desktop`
+     job runs the packaged spec on macOS and Windows and is the first real test there.
 ## Desktop: the macOS window flake (session, 2026-11-14; packaged-app e2e on macOS CI)
 
 590. **What failed, and what is known.** `e2e/desktop/packaged-app.spec.ts` "the window shows projects added with
@@ -6160,3 +6261,56 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      cli-shim spec keeps its own temp home for the launcher it installs itself (that does not start the GUI app with a fake
      HOME). Unit tests: the switch (exact value, one log line, `refresh()` not called, nothing written), `main.ts` goes
      through `startupRefresh`, and the e2e environment; mutants for each. Not verified: the macOS job itself (CI will say).
+
+## Desktop phase C: merging #20 and #21 (2026-11-14)
+
+573. **The two phase C branches meet in the bridge.** `DesktopBridge` (`desktop.ts`) now `extends DesktopCliBridge`
+     (`desktop-cli.ts`), so the web feature-detects `installCli()` / `cliStatus()` like the other methods. The preload's
+     `bridge.ts` calls the two `DESKTOP_CLI_CHANNELS`; `cliStatus` answers `unavailable` and `installCli` answers `failed`
+     (a value, never a throw) when the main process fails or sends something that is not the contract's shape, and
+     `installCli` needs a click or key press like every other action that acts on the OS (it writes a file in the
+     home directory). The main process still validates the sender and the result (`cli-shim-ipc.ts`); the preload's
+     shape check is light on purpose (no zod in the 4 KB preload). A mutant removes the gesture check (`mutation-check`).
+     The Settings button for the command is web work and is not part of this change.
+
+### Desktop phase C: independent security review of PR #113 (2026-11-14)
+
+546. **`openPath`'s deny list is documented and complete for Windows** (medium). The review found Windows types that run
+     code and were let through: `chm` (help run by hh.exe, script included), `hlp`, `website`, `msu`, `theme` /
+     `themepack` / `deskthemepack` (ThemeBleed), `xbap`, `ins`, `isp`, `shb`, `shs`, `ws`, the Access types (`ade`,
+     `adp`, `mda`, `mde`, `accde`), `vsix`, `wsb`, `msh` / `mshxml`, `psc1`, `pyo`, `py3`. Files checked out by git carry
+     no Mark-of-the-Web, so Windows' "downloaded file" prompts do not protect them. `UNSAFE_OPEN_EXTENSION_GROUPS` now
+     holds: Microsoft's **Outlook Level-1 blocked-attachment list, complete**; Windows extras (theme packs, app and
+     extension packages, shell search/library files, PowerShell modules, Access databases and runtime files, `iso` /
+     `img` disk images that mount and autorun, OneNote containers, **macro-enabled Office files** (without
+     Mark-of-the-Web Office's internet-macro block does not apply), `mjs` / `cjs`, `py3`); scripts with registered
+     interpreters; macOS (bundles, Terminal launchers incl. `.term`, Automator and `.shortcut`, installers, AppleScript,
+     location files, configuration profiles, `.widget`, libraries); Linux (desktop launchers, AppImages, packages incl.
+     `flatpak` / `flatpakrepo`, binaries). Still a deny list on purpose (an allowlist would refuse the source files
+     people open; "Open in editor" stays for everything). Side effect, accepted: `.asp(x)`, `.cer` / `.crt` / `.der`,
+     `.tmp`, `.cab` no longer open with the default app. `test/open-safety.test.ts` holds its **own copy** of the
+     Level-1 list, the review's list and the extras, so dropping an extension from the source fails it; 21 mutants.
+547. **The command installer's channels use the bridge's guard** (low). #21's `cli-shim-ipc.ts` checked only the
+     frame's origin against the raw `uiOrigin` (not gated on the UI showing), not the window or the main frame, and threw
+     across IPC; that contradicted #532/#533 once the preload exposed `installCli` / `cliStatus`. `ipc.ts` now exports
+     `createGuard` (the sender check, zod on the exact argument tuple, refusals logged with the reason only), which
+     `createBridgeHandlers` and the new `createCliShimHandlers` both use; `bridge-main.ts` registers the CLI channels with
+     the same `trusted()` as every other channel (`main.ts` no longer registers them; `isTrustedSender` and
+     `registerCliShimIpc` are gone). A refusal, a result that breaks the contract or a shim that throws becomes a value
+     in the contract's shape (`cliStatus`: `{ state: 'unavailable', reason }`; `installCli`: `{ outcome: 'failed',
+     status: unavailable, message }`), never a throw. #21's four mutants of the old check were replaced by eight.
+548. **`pickFolder`'s `defaultPath` never reaches the network** (low, Windows). `AbsolutePathSchema` accepts anything
+     starting with `/`, so `//attacker.example/share` passed, and the Windows dialog would connect over SMB (an NTLM
+     hash leak) from a script within seconds of a click. The hint is now kept only if it is a local absolute path
+     (Windows: a drive path `^[A-Za-z]:[\\/]`, so `//`, `\\` and `\\?\` are out; elsewhere one leading `/`) **and then**
+     an existing directory (`stat` runs only after the path check, so a UNC path is never touched); otherwise it is
+     dropped and the dialog opens where the OS chooses. Tests inject `platform: 'win32'` and assert `stat` was never
+     called for the UNC forms; five mutants.
+549. **Test gaps closed** (the review's surviving mutants): a command listener receives exactly one argument, never the
+     IPC event (whose `sender` is `ipcRenderer`); the preload maps a malformed main-process answer to a refusal
+     (`isResult`) and `pickFolder` passes strings only; the 32 MiB clipboard limit and the 200-character dialog title
+     limit; a rejected `shell.openPath` becomes a `failed` value and is logged without the path. A test and a mutant
+     each. The equivalent mutants the review listed (the lexical `isInside` backstop, `relPath.length > 4096`, the
+     editor URL's userinfo/port checks, the command `typeof`) are not added.
+550. **The PR #110 merge left a stray diff3 marker in this file** (`||||||| 4756834`, with the PR #110 review heading
+     moved below it). Removed, and the heading put back before #574 where `main` has it; no entry text changed.

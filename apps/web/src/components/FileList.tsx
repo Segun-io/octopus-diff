@@ -19,6 +19,7 @@ import { useUi, useUiStore } from '../state/ui.tsx';
 import { CheckIcon, LineCounts, StatusIcon, statusLabel, WarningIcon } from './bits.tsx';
 import { ContextMenu, type MenuItem, useContextMenu } from './ContextMenu.tsx';
 import { fileCopyItems } from './copyMenu.ts';
+import { useDesktopMenu } from './desktopMenu.ts';
 import { ORIGIN_TEST_IDS, OriginGroupHeader } from './OriginGroupHeader.tsx';
 
 /** Row heights per density (mirrors `--od-row` in styles.css). */
@@ -156,8 +157,15 @@ export function FileList({
   );
   const worktreePath = (id: string) => groups.find((g) => g.worktree.id === id)?.worktree.path;
   const copy: CopyFn = (text, options) => void copyAndReport(store, text, options);
-  const menuItems = (entry: NavEntry): MenuItem[] =>
-    fileCopyItems(entry.file, worktreePath(entry.worktreeId), copy, menu.state?.position);
+  const desktopItems = useDesktopMenu();
+  const menuItems = (entry: NavEntry): MenuItem[] => [
+    ...fileCopyItems(entry.file, worktreePath(entry.worktreeId), copy, menu.state?.position),
+    ...desktopItems({
+      worktreeId: entry.worktreeId,
+      relPath: entry.file.path,
+      deleted: entry.file.status === 'deleted',
+    }),
+  ];
   const density = useUi((s) => s.density);
   const ROW_HEIGHT = ROW_HEIGHTS[density].row;
 

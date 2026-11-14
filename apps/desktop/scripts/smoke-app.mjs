@@ -195,11 +195,12 @@ async function cdp(debugPort, match) {
       waiting.set(n, resolve);
       ws.send(JSON.stringify({ id: n, method, params }));
     });
-  const evaluate = async (expression) => {
+  const evaluate = async (expression, { userGesture = false } = {}) => {
     const res = await send('Runtime.evaluate', {
       expression,
       awaitPromise: true,
       returnByValue: true,
+      userGesture,
     });
     if (res.result?.exceptionDetails) throw new Error(res.result.exceptionDetails.text);
     return res.result?.result?.value;
@@ -227,6 +228,111 @@ function makeRepo(name) {
   git('-C', repo, 'commit', '-q', '-m', 'init');
   writeFileSync(path.join(repo, 'hello.txt'), 'one\ntwo\n');
   return repo;
+}
+
+/**
+ * The window.octopusDesktop bridge (#20) in the real window. Only refusals and invisible calls:
+ * a successful reveal/open/editor/pick/copy would act on this machine's desktop.
+ */
+async function bridgeChecks(page, d, repo) {
+  writeFileSync(path.join(repo, 'run.sh'), '#!/bin/sh\n', { mode: 0o755 });
+  execFileSync('ln', ['-s', root, path.join(repo, 'link-out')]);
+  const shape = await page.evaluate(
+    'JSON.stringify({ t: typeof window.octopusDesktop, v: window.octopusDesktop?.version, p: window.octopusDesktop?.platform, frozen: Object.isFrozen(window.octopusDesktop), m: Object.keys(window.octopusDesktop ?? {}).sort() })',
+  );
+  const bridge = JSON.parse(shape);
+  check(
+    bridge.t === 'object' && bridge.v === 1 && bridge.p === process.platform,
+    `the bridge is there (version 1, platform ${bridge.p})`,
+  );
+  check(
+    bridge.m.join(',') ===
+      'cliStatus,copyText,getPathForFile,installCli,onCommand,openInEditor,openPath,pickFolder,platform,revealPath,setBadge,version',
+    `and has exactly the contract's members (${bridge.m.join(', ')})`,
+  );
+  check(
+    (await page.evaluate('typeof require + "/" + typeof process')) === 'undefined/undefined',
+    'still no Node.js in the page',
+  );
+  check(
+    (await page.evaluate('document.documentElement.dataset.desktopPlatform')) === process.platform,
+    'the web UI set data-desktop-platform on <html>',
+  );
+  const id = await page.evaluate(
+    `fetch('/api/projects', { headers: { authorization: 'Bearer ' + localStorage.getItem('octopus-diff.token') } }).then((r) => r.json()).then((j) => j.projects.flatMap((p) => p.worktrees).find((w) => w.worktree.path.endsWith('smoke-project'))?.worktree.id ?? null)`,
+  );
+  check(typeof id === 'string', `the project's worktree id (${id})`);
+  const call = (expr, userGesture = true) =>
+    page.evaluate(`window.octopusDesktop.${expr}.then((r) => JSON.stringify(r))`, { userGesture });
+  const reason = async (expr, userGesture = true) =>
+    JSON.parse(await call(expr, userGesture))?.reason;
+  check(
+    (await reason(`revealPath(${JSON.stringify(id)}, 'hello.txt')`, false)) === 'no-user-gesture',
+    'without a user gesture the preload refuses (and does not ask the main process)',
+  );
+  check(
+    (await call('copyText("x")', false)) === 'false' &&
+      (await call('pickFolder()', false)) === 'null',
+    'copyText and pickFolder need a gesture too',
+  );
+  // Before any call with a gesture: a gesture's activation lasts a few seconds.
+  const install = JSON.parse(await call('installCli()', false));
+  check(
+    install?.outcome === 'failed' && /click or a key press/.test(install?.message ?? ''),
+    'installCli without a user gesture is refused in the preload (nothing reaches the shim)',
+  );
+  check(
+    (await reason(`openPath(${JSON.stringify(id)}, 'link-out')`)) === 'outside-worktree',
+    'openPath: a symlink out of the worktree is refused (realpath check)',
+  );
+  check(
+    (await reason(`revealPath(${JSON.stringify(id)}, 'link-out/.gitconfig')`)) ===
+      'outside-worktree',
+    'revealPath: a path through that symlink is refused',
+  );
+  check(
+    (await reason(`openPath(${JSON.stringify(id)}, 'run.sh')`)) === 'unsafe-file',
+    'openPath: an executable is refused',
+  );
+  check(
+    (await reason(`openPath(${JSON.stringify(id)}, '../outside')`)) === 'invalid',
+    'openPath: ".." is refused by validation',
+  );
+  check(
+    (await reason(`openInEditor(${JSON.stringify(id)}, 'hello.txt', { editor: 'javascript' })`)) ===
+      'invalid',
+    'openInEditor: an editor outside the allowlist is refused',
+  );
+  check(
+    (await reason(`revealPath('ffffffffffffffff', 'hello.txt')`)) === 'unknown-worktree',
+    'an id the daemon does not list is refused',
+  );
+  check(
+    (await reason(`openPath(${JSON.stringify(id)}, 'nope.txt')`)) === 'not-found',
+    'a missing file is reported',
+  );
+  // The command installer's channels run on the bridge's guard (DECISIONS #547): the page gets
+  // the shim's own status in the contract's shape (read-only; a development run is `unavailable`).
+  const cli = JSON.parse(await call('cliStatus()'));
+  check(
+    typeof cli?.state === 'string' && cli.reason !== 'Not available from this page.',
+    `cliStatus answers the UI through the guard (${cli?.state}: ${cli?.reason ?? ''})`,
+  );
+  await page.evaluate('window.octopusDesktop.setBadge(3); true');
+  await sleep(300);
+  const logText = daemonLog(d);
+  check(
+    logText.includes('bridge: openPath refused (outside-worktree)') &&
+      logText.includes('bridge: openPath refused (unsafe-file)'),
+    'the refusals are logged with their reason',
+  );
+  check(
+    logText
+      .split('\n')
+      .filter((l) => l.includes('bridge:'))
+      .every((l) => !l.includes(root) && !l.includes('link-out')) && !logText.includes('#token='),
+    'and without the paths or the token',
+  );
 }
 
 // The exact scripts the menu runs (src/page-actions.ts), bundled from sources.
@@ -276,10 +382,7 @@ await scenario('started: the window shows the projects; quit stops the daemon', 
       'undefined/undefined/undefined',
     'no Node.js in the renderer',
   );
-  check(
-    (await page.evaluate('typeof window.octopusDesktop')) === 'undefined',
-    'no bridge yet (phase C)',
-  );
+  await bridgeChecks(page, d, repo);
   check(
     (await page.evaluate('window.open("file:///etc/passwd") === null')) === true,
     'window.open is denied',
@@ -324,6 +427,17 @@ await scenario('started: the window shows the projects; quit stops the daemon', 
     const shot = await page.send('Page.captureScreenshot', { format: 'png' });
     writeFileSync(screenshotFile, Buffer.from(shot.result.data, 'base64'));
     log(`info screenshot: ${screenshotFile}`);
+    // The macOS title bar strip (#20), forced on this platform to see its layout (no traffic
+    // lights here: only the web's 32 px drag strip and the padded UI below it).
+    await page.evaluate("document.documentElement.dataset.desktopPlatform = 'darwin'; true");
+    await sleep(200);
+    const mac = await page.send('Page.captureScreenshot', { format: 'png' });
+    const macFile = `${screenshotFile.replace(/\.png$/, '')}-darwin-strip.png`;
+    writeFileSync(macFile, Buffer.from(mac.result.data, 'base64'));
+    await page.evaluate(
+      `document.documentElement.dataset.desktopPlatform = ${JSON.stringify(process.platform)}; true`,
+    );
+    log(`info screenshot with the macOS strip forced: ${macFile}`);
   }
   page.close();
 

@@ -47,11 +47,25 @@ a:first-child { background: var(--accent); color: var(--bg); }
 @media (prefers-reduced-motion: reduce) { .spin { animation: none; } }
 `;
 
-export function screenHtml(screen: Screen): string {
+export interface ScreenOptions {
+  /**
+   * macOS `hiddenInset` (#20): a drag strip where the title bar was, so the window can still be
+   * moved while a screen shows (the web UI draws its own).
+   */
+  titleBarInset?: boolean;
+}
+
+const TITLE_BAR_STYLE =
+  '.drag { position: fixed; top: 0; left: 0; right: 0; height: 32px; -webkit-app-region: drag; }';
+
+export function screenHtml(screen: Screen, options: ScreenOptions = {}): string {
+  const style = options.titleBarInset ? `${STYLE}${TITLE_BAR_STYLE}` : STYLE;
   const parts = [
     '<!doctype html><html lang="en"><head><meta charset="utf-8">',
     `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'">`,
-    `<title>${escapeHtml(screen.title)}</title><style>${STYLE}</style></head><body><main>`,
+    `<title>${escapeHtml(screen.title)}</title><style>${style}</style></head><body>`,
+    options.titleBarInset ? '<div class="drag"></div>' : '',
+    '<main>',
     `<h1>${escapeHtml(screen.title)}</h1>`,
     ...screen.body.map((p) => `<p>${escapeHtml(p)}</p>`),
     ...(screen.code ?? []).map((c) => `<pre>${escapeHtml(c)}</pre>`),
@@ -66,8 +80,8 @@ export function screenHtml(screen: Screen): string {
   return parts.join('');
 }
 
-export function screenUrl(screen: Screen): string {
-  return `data:text/html;charset=utf-8,${encodeURIComponent(screenHtml(screen))}`;
+export function screenUrl(screen: Screen, options: ScreenOptions = {}): string {
+  return `data:text/html;charset=utf-8,${encodeURIComponent(screenHtml(screen, options))}`;
 }
 
 /** Whether the page showing is one of our screens (a `data:` page), not the web UI or anything else. */

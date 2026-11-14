@@ -1,8 +1,8 @@
 // Builds the desktop app into dist/ (docs/DESKTOP.md §4, §7):
 //
 //   dist/main.js   the main process (ESM; contracts and zod inlined; `electron` external)
-//   dist/preload.cjs  the preload (CommonJS: sandboxed preloads cannot be ESM), built only once
-//                  `src/preload.cts` exists (phase C, #20; phase A and B have none, DECISIONS #486)
+//   dist/preload.cjs  the preload (`src/preload.ts`, bundled to CommonJS: sandboxed preloads
+//                  cannot be ESM; phase C, #20, DECISIONS #531)
 //   dist/cli/      the CLI bundle (index.js, git-helper.js, web/) from apps/cli/scripts/bundle.mjs,
 //                  the same step that builds the npm tarball (reused, not forked). `@parcel/watcher`
 //                  resolves from apps/desktop/node_modules (a dependency of this package).
@@ -11,7 +11,6 @@
 //                                       builds web and cli first, both are devDependencies)
 //   node scripts/build.mjs --main-only  dist/main.js only (the dev loop runs the CLI from sources)
 //   node scripts/build.mjs --watch      --main-only, rebuilt on change (scripts/dev.mjs)
-import { existsSync } from 'node:fs';
 import { readFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -45,7 +44,7 @@ export async function mainBuildOptions() {
   };
 }
 
-export const preloadSource = path.join(desktopRoot, 'src', 'preload.cts');
+export const preloadSource = path.join(desktopRoot, 'src', 'preload.ts');
 
 export function preloadBuildOptions() {
   return {
@@ -64,7 +63,7 @@ export function preloadBuildOptions() {
 
 export async function buildMain() {
   await build(await mainBuildOptions());
-  if (existsSync(preloadSource)) await build(preloadBuildOptions());
+  await build(preloadBuildOptions());
 }
 
 /** Everything `pnpm build` produces here: dist/main.js (+ preload) and dist/cli/. */

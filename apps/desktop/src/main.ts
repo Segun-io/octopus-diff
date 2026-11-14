@@ -6,18 +6,19 @@
  * launch cover it).
  *
  * Read-only guarantee: nothing here runs git or touches a repository. The daemon does all git
- * work; "Add Folder…" sends the path to the daemon's API like `octopus-diff add`.
+ * work; "Add Folder…" sends the path to the daemon's API like `octopus-diff add`. The
+ * `window.octopusDesktop` bridge (#20) lives in `bridge-main.ts` / `ipc.ts`.
  */
 import { spawn } from 'node:child_process';
 import { readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import type { DesktopCommand } from '@octopus-diff/contracts';
 import {
   app,
   BrowserWindow,
   dialog,
-  ipcMain,
   Menu,
   type MessageBoxOptions,
   screen,
@@ -39,8 +40,9 @@ import {
   type TimersLike,
 } from './backend.js';
 import { backendCommand, cliBundleEntry } from './backend-command.js';
+import { installBridge } from './bridge-main.js';
 import { createNodeShimFs, createWindowsUserPath } from './cli-shim-fs.js';
-import { outcomeTitle, registerCliShimIpc } from './cli-shim-ipc.js';
+import { outcomeTitle } from './cli-shim-ipc.js';
 import { createCliShim, startupRefresh } from './cli-shim-service.js';
 import {
   addProject,
@@ -134,6 +136,7 @@ const timers: TimersLike = {
   now: () => Date.now(),
 };
 let backendStopped = false;
+let bridge: ReturnType<typeof installBridge> | null = null;
 let quitting = false;
 /** Set by any quit request, also one before the backend exists (main() checks it). */
 let quitRequested = false;
@@ -286,7 +289,15 @@ function createWindow(): BrowserWindow {
     screen.getAllDisplays().map((d) => d.workArea),
     { width: MIN_WIDTH, height: MIN_HEIGHT },
   );
-  const w = new BrowserWindow(windowOptions({ bounds, devTools: args.dev, title: APP_NAME }));
+  const w = new BrowserWindow(
+    windowOptions({
+      bounds,
+      devTools: args.dev,
+      title: APP_NAME,
+      preload: path.join(distDir, 'preload.cjs'),
+      platform: process.platform,
+    }),
+  );
   win = w;
   log.note('window: created');
   w.once('ready-to-show', () => {
@@ -365,7 +376,8 @@ function showScreen(s: Screen): void {
   uiLoad?.cancel();
   uiLoad = null;
   uiOrigin = null;
-  const url = screenUrl(s);
+  bridge?.clearBadge();
+  const url = screenUrl(s, { titleBarInset: process.platform === 'darwin' });
   showing = { kind: 'screen', url, title: s.title };
   const ticket = loads.begin();
   log.note(`window: showing the screen "${s.title}"`);
@@ -531,6 +543,11 @@ async function addFolder(): Promise<void> {
   await message({ type: 'error', message: 'Could not add the folder.', detail: result.message });
 }
 
+function pageCommand(command: DesktopCommand, fallbackScript: string): void {
+  if (bridge) bridge.command(command, fallbackScript);
+  else runInPage(fallbackScript);
+}
+
 async function installCommand(): Promise<void> {
   const result = await cliShim.install();
   const ok =
@@ -552,9 +569,10 @@ function installMenu(): void {
     dev: args.dev,
     actions: {
       addFolder: () => void addFolder(),
-      openSettings: () => runInPage(settingsScript(process.platform)),
-      refresh: () => runInPage(refreshScript()),
-      undo: () => runInPage(undoScript(process.platform)),
+      // Menu hooks (#20): over the bridge when the page subscribed, else phase A's scripts.
+      openSettings: () => pageCommand('open-settings', settingsScript(process.platform)),
+      refresh: () => pageCommand('refresh', refreshScript()),
+      undo: () => pageCommand('undo', undoScript(process.platform)),
       showLog: () => void shell.openPath(log.path),
       retryBackend,
       installCommand: () => void installCommand(),
@@ -567,14 +585,19 @@ function installMenu(): void {
 
 async function main(): Promise<void> {
   lockDownSession();
-  installMenu();
-  // The window's own IPC for the command installer (the preload that calls it comes with #20).
-  registerCliShimIpc({
-    ipcMain,
-    shim: cliShim,
-    uiOrigin: () => uiOrigin,
-    log: (text) => log.note(text),
+  bridge = installBridge({
+    window: () => win,
+    uiOrigin: () => (showing.kind === 'ui' ? uiOrigin : null),
+    daemon: () => {
+      const token = ready ? tokenFromAuthUrl(ready.authUrl) : null;
+      return ready && token ? { url: ready.url, token } : null;
+    },
+    runScript: runInPage,
+    log: (line) => log.note(line),
+    // installCli / cliStatus go through the bridge's guard too (DECISIONS #547).
+    cliShim,
   });
+  installMenu();
   createWindow();
 
   const shellPath = resolveShellPath({

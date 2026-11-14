@@ -274,6 +274,55 @@ test('the window shows projects added with `octopus-diff add`; read-only proof; 
         'navigator.permissions.query({ name: "geolocation" }).then((p) => p.state)',
       ),
     ).toBe('denied');
+    // The window.octopusDesktop bridge (#20) from the packaged preload: its shape, and refusals
+    // only (a successful reveal/open would act on the runner's desktop; writing a symlink or an
+    // executable into a fixture repository would trip the read-only proof). The rest of the rules
+    // are unit tested and run in the unpackaged smoke (apps/desktop/scripts/smoke-app.mjs).
+    const bridge = JSON.parse(
+      await page.evaluate<string>(
+        'JSON.stringify({ v: window.octopusDesktop?.version, p: window.octopusDesktop?.platform, m: Object.keys(window.octopusDesktop ?? {}).sort() })',
+      ),
+    ) as { v: number; p: string; m: string[] };
+    expect(bridge, 'the packaged preload exposes the bridge').toEqual({
+      v: 1,
+      p: process.platform,
+      m: [
+        'cliStatus',
+        'copyText',
+        'getPathForFile',
+        'installCli',
+        'onCommand',
+        'openInEditor',
+        'openPath',
+        'pickFolder',
+        'platform',
+        'revealPath',
+        'setBadge',
+        'version',
+      ],
+    });
+    expect(await page.evaluate('document.documentElement.dataset.desktopPlatform')).toBe(
+      process.platform,
+    );
+    if (process.platform === 'darwin') {
+      expect(
+        await page.evaluate('getComputedStyle(document.body, "::before").height'),
+        'the macOS title bar strip',
+      ).toBe('32px');
+    }
+    const worktreeId = projects[0]?.worktrees[0]?.worktree.id ?? '';
+    const refusal = (expr: string, userGesture = true) =>
+      page.evaluate<string | undefined>(
+        `window.octopusDesktop.${expr}.then((r) => r && r.reason)`,
+        { userGesture },
+      );
+    const id = JSON.stringify(worktreeId);
+    expect(await refusal(`revealPath(${id})`, false)).toBe('no-user-gesture');
+    expect(await refusal(`revealPath('ffffffffffffffff')`)).toBe('unknown-worktree');
+    expect(await refusal(`openPath(${id}, '../outside')`)).toBe('invalid');
+    expect(await refusal(`openInEditor(${id}, 'a', { editor: 'javascript' })`)).toBe('invalid');
+    expect(await refusal(`openPath(${id}, 'no-such-file-octopus-smoke')`)).toBe('not-found');
+    expect(daemonLog(dirs)).toContain('bridge: openPath refused (not-found)');
     if (process.env.OCTOPUS_DESKTOP_SCREENSHOT) {
       writeFileSync(process.env.OCTOPUS_DESKTOP_SCREENSHOT, await page.screenshot());
     }

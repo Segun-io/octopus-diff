@@ -8,6 +8,8 @@ import { LOOK_TONE, LOOK_WORD, lookOf } from '../../lib/forge.ts';
 import { checksTone, describeChecks } from '../../lib/request.ts';
 import { absoluteTime, relativeTime } from '../../lib/time.ts';
 import { describeStale } from '../../lib/wait.ts';
+import { copyAndReport } from '../../state/copy.ts';
+import { useUiStore } from '../../state/ui.tsx';
 import { ChangeRequestGlyph } from '../ChangeRequest.tsx';
 import { SegmentedTabs, tabPanelProps } from '../Tabs.tsx';
 import { SkeletonLines, StaleNote, WaitNote } from '../WaitNote.tsx';
@@ -37,6 +39,7 @@ export function RequestView({ worktreeId }: { worktreeId: string }) {
   const refresh = useRefreshChangeRequest(worktreeId);
   const waitSource = useForgeWaitSource(batch?.kind ?? 'github', entry?.project.forge?.host);
   const budget = useHostBudget(entry?.project.forge?.host, batch?.kind);
+  const store = useUiStore();
   if (!entry || !batch) {
     return (
       <div
@@ -141,7 +144,10 @@ export function RequestView({ worktreeId }: { worktreeId: string }) {
               type="button"
               className="font-sans text-faint hover:text-fg"
               title="Copy the head branch name"
-              onClick={() => void navigator.clipboard?.writeText(shown.headBranch).catch(() => {})}
+              data-testid="request-copy-head-branch"
+              // `copyText` falls back when the Clipboard API is refused (the desktop app denies
+              // the permission, DECISIONS #507) and reports the result like every other copy.
+              onClick={() => void copyAndReport(store, shown.headBranch, { what: 'branch name' })}
             >
               copy
             </button>

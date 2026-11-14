@@ -3,6 +3,7 @@
  * once here with its control; the dialog renders sections from this list. Daemon-side settings
  * (review default, overrides) and the Folders/Keyboard/About sections have bespoke panels.
  */
+import { DESKTOP_EDITOR_LABELS, DESKTOP_EDITORS } from '@octopus-diff/contracts';
 import type { Prefs } from '../state/prefs.ts';
 
 export type SettingsSectionId =
@@ -58,6 +59,8 @@ export interface PrefSelect {
   label: string;
   description: string;
   options: readonly { value: string; label: string }[];
+  /** Shown only inside the desktop app (`window.octopusDesktop`). */
+  desktopOnly?: boolean;
 }
 
 export type PrefItem = PrefToggle | PrefSelect;
@@ -87,7 +90,8 @@ export const GENERAL_ITEMS: readonly PrefItem[] = [
     kind: 'toggle',
     key: 'titleCount',
     label: 'Unreviewed count in the tab title',
-    description: 'Shows "(12) octopus-diff" while unreviewed files exist.',
+    description:
+      'Shows "(12) octopus-diff" while unreviewed files exist (in the desktop app, also the badge).',
   },
   {
     kind: 'toggle',
@@ -105,7 +109,20 @@ export const GENERAL_ITEMS: readonly PrefItem[] = [
       { value: 'tree', label: 'Tree' },
     ],
   },
+  {
+    kind: 'select',
+    key: 'editor',
+    label: 'Editor',
+    description: 'What "Open in editor" opens files with (desktop app).',
+    options: DESKTOP_EDITORS.map((value) => ({ value, label: DESKTOP_EDITOR_LABELS[value] })),
+    desktopOnly: true,
+  },
 ];
+
+/** The items to show: desktop-only ones only inside the desktop app. */
+export function visiblePrefItems(items: readonly PrefItem[], desktop: boolean): PrefItem[] {
+  return items.filter((item) => desktop || !(item.kind === 'select' && item.desktopOnly));
+}
 
 /** Appearance items that are plain prefs (theme is a bespoke picker). */
 export const APPEARANCE_ITEMS: readonly PrefItem[] = [

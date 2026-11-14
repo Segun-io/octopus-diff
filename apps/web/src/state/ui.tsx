@@ -90,6 +90,8 @@ export interface UiState extends Prefs {
   branchToggleFrom: DiffScope | null;
   helpOpen: boolean;
   addProjectOpen: boolean;
+  /** Where the add dialog opens (a folder dropped on the desktop app's window); null: as usual. */
+  addProjectPath: string | null;
   settingsOpen: boolean;
   settingsSection: SettingsSectionId;
   paletteOpen: boolean;
@@ -136,6 +138,7 @@ export const DEFAULT_UI_STATE: UiState = {
   branchToggleFrom: null,
   helpOpen: false,
   addProjectOpen: false,
+  addProjectPath: null,
   settingsOpen: false,
   settingsSection: 'general',
   paletteOpen: false,
@@ -248,6 +251,7 @@ export const actions = {
       paletteOpen: false,
       helpOpen: false,
       addProjectOpen: false,
+      addProjectPath: null,
     });
   },
   toggleCollapsed(store: UiStore, id: string) {

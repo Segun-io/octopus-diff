@@ -44,6 +44,7 @@ import { actions, useUiStore, type View } from '../state/ui.tsx';
 import { ChangeRequestChip } from './ChangeRequest.tsx';
 import { ContextMenu, useContextMenu } from './ContextMenu.tsx';
 import { separated, worktreeCopyItems } from './copyMenu.ts';
+import { useDesktopMenu } from './desktopMenu.ts';
 import { Mark } from './Mark.tsx';
 import { Pager, usePage } from './Pager.tsx';
 import {
@@ -469,6 +470,7 @@ function ProjectOverview({ group }: { group: ProjectGroup }) {
   const commands = useCommandsContext();
   const menu = useContextMenu<WorktreeRow>();
   const copy: CopyFn = (text, options) => void copyAndReport(store, text, options);
+  const desktopItems = useDesktopMenu();
   // The chosen tab survives moving between projects (compare the same list across repositories);
   // the pages start over (the lists below are keyed by project).
   const [tab, setTab] = useState<OverviewTab>('worktrees');
@@ -581,6 +583,10 @@ function ProjectOverview({ group }: { group: ProjectGroup }) {
                 }),
             },
             ...separated(worktreeCopyItems(menu.state.target.worktree, copy, menu.state.position)),
+            ...desktopItems({
+              worktreeId: menu.state.target.worktree.id,
+              deleted: menu.state.target.worktree.missing,
+            }),
           ]}
           position={menu.state.position}
           onClose={menu.close}

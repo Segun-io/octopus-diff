@@ -1,5 +1,6 @@
 import { SCAN_DEPTH_DEFAULT, SCAN_DEPTH_MAX, TEST_IDS } from '@octopus-diff/contracts';
 import { useEffect, useId, useRef, useState } from 'react';
+import { DESKTOP_TEST_IDS, useDesktop } from '../lib/desktop.ts';
 import { useUi } from '../state/ui.tsx';
 import { AddJobPanel, useAddFormPresence } from './AddJobStatus.tsx';
 import { FolderIcon, FolderPlusIcon, RepoIcon } from './bits.tsx';
@@ -56,10 +57,13 @@ export function AddProjectForm({
   onOpen,
   autoFocus = false,
   variant = onOpen ? 'dialog' : 'settings',
+  initialPath = null,
 }: {
   onOpen?: (target: OpenTarget) => void;
   autoFocus?: boolean;
   variant?: AddProjectFormVariant;
+  /** An absolute folder to show first (a folder dropped on the desktop app's window). */
+  initialPath?: string | null;
 }) {
   useAddFormPresence();
   const working = useUi((s) => s.addJob?.state === 'working');
@@ -70,6 +74,30 @@ export function AddProjectForm({
   const inputRef = useRef<HTMLInputElement>(null);
   const browser = useFolderBrowser({ text, setText, depth, onOpen });
   const { shown, activeRow, primary } = browser;
+  const bridge = useDesktop();
+  // An absolute folder to go to once the first listing is there (`goTo` needs its home and
+  // separator): the dropped folder, or one picked with Browse… before the listing arrived.
+  const pendingFolder = useRef<string | null>(initialPath);
+  useEffect(() => {
+    const folder = pendingFolder.current;
+    if (folder === null || !shown) return;
+    pendingFolder.current = null;
+    browser.goTo(folder);
+  });
+  const browse = async () => {
+    if (!bridge) return;
+    const picked = await bridge.pickFolder({
+      title: 'Choose a folder or a repository',
+      ...(browser.current?.path ? { defaultPath: browser.current.path } : {}),
+    });
+    if (picked === null) return;
+    pendingFolder.current = picked;
+    if (shown) {
+      pendingFolder.current = null;
+      browser.goTo(picked);
+    }
+    inputRef.current?.focus();
+  };
   /** The action that is not on the main button. */
   const secondary = primary === 'watch' ? 'add' : 'watch';
   const onboarding = variant === 'onboarding';
@@ -113,6 +141,18 @@ export function AddProjectForm({
               {place.label}
             </button>
           ))}
+          {bridge && (
+            <button
+              type="button"
+              data-testid={DESKTOP_TEST_IDS.browse}
+              className="od-btn od-btn-ghost text-muted"
+              title="Choose a folder with the system dialog"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => void browse()}
+            >
+              Browse…
+            </button>
+          )}
         </span>
       </div>
 
