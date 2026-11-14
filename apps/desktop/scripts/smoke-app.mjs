@@ -247,7 +247,7 @@ async function bridgeChecks(page, d, repo) {
   );
   check(
     bridge.m.join(',') ===
-      'copyText,getPathForFile,onCommand,openInEditor,openPath,pickFolder,platform,revealPath,setBadge,version',
+      'cliStatus,copyText,getPathForFile,installCli,onCommand,openInEditor,openPath,pickFolder,platform,revealPath,setBadge,version',
     `and has exactly the contract's members (${bridge.m.join(', ')})`,
   );
   check(

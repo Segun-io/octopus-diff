@@ -10,7 +10,6 @@
  * main process still checks everything itself (`ipc.ts`). Nothing here throws to the page.
  */
 import {
-  DESKTOP_CLI_CHANNELS,
   DESKTOP_COMMANDS,
   type DesktopActionResult,
   type DesktopBridge,
@@ -19,7 +18,7 @@ import {
   type DesktopCommand,
   type DesktopPlatform,
 } from '@octopus-diff/contracts';
-import { BRIDGE_CHANNELS, COMMAND_CHANNEL } from './ipc-channels.js';
+import { BRIDGE_CHANNELS, CLI_CHANNELS, COMMAND_CHANNEL } from './ipc-channels.js';
 
 export interface PreloadIpc {
   invoke(channel: string, ...args: unknown[]): Promise<unknown>;
@@ -125,7 +124,7 @@ export function createDesktopBridge(env: BridgeEnv): DesktopBridge {
     },
     async cliStatus() {
       try {
-        const result = await env.ipc.invoke(DESKTOP_CLI_CHANNELS.status);
+        const result = await env.ipc.invoke(CLI_CHANNELS.status);
         return isCliStatus(result) ? result : CLI_UNANSWERED;
       } catch {
         return CLI_UNANSWERED;
@@ -140,7 +139,7 @@ export function createDesktopBridge(env: BridgeEnv): DesktopBridge {
       // Writes a file in the user's home: only from a click or key press, like the other actions.
       if (!env.hasUserActivation()) return failed('Only available from a click or a key press.');
       try {
-        const result = await env.ipc.invoke(DESKTOP_CLI_CHANNELS.install);
+        const result = await env.ipc.invoke(CLI_CHANNELS.install);
         return isCliResult(result) ? result : failed('The desktop app did not answer.');
       } catch {
         return failed('The desktop app did not answer.');

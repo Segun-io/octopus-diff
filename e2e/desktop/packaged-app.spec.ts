@@ -267,8 +267,10 @@ test('the window shows projects added with `octopus-diff add`; read-only proof; 
       v: 1,
       p: process.platform,
       m: [
+        'cliStatus',
         'copyText',
         'getPathForFile',
+        'installCli',
         'onCommand',
         'openInEditor',
         'openPath',
