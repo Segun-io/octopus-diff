@@ -170,8 +170,8 @@ Review round (2026-11-14, same machine):
   - SIGKILL of `wsl.exe`: the daemon exited 50 ms later **and shut down gracefully** (`daemon.json` removed: the
     review's crash is gone).
 - `DISPLAY=:0 node apps/desktop/scripts/smoke-app.mjs`: **all scenarios passed**.
-- Not re-run in this round: `pnpm test:e2e` (the browser suite) and the packaged-app e2e. This round changed no
-  `apps/web` code and none of the bridge's members.
+- `pnpm test:e2e` (the browser suite): **110 passed** (3.2 min), one run; `07-readonly` passed this time.
+- Not re-run in this round: the packaged-app e2e (no change to the bridge's members or the packaged layout).
 
 ## Decisions
 
