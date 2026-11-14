@@ -1,7 +1,11 @@
 import { readFileSync } from 'node:fs';
 import { mkdir, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { ServeReadySchema } from '@octopus-diff/contracts';
+import {
+  formatServeReadyFrame,
+  SERVE_READY_FRAME_PREFIX,
+  ServeReadySchema,
+} from '@octopus-diff/contracts';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { run } from '../src/cli.js';
 import { formatBanner } from '../src/commands/serve.js';
@@ -87,6 +91,7 @@ describe('serve --ready-fd', () => {
       authUrl: 'http://127.0.0.1:45678/#token=tok123',
       pid: deps.pid,
       version: expect.any(String),
+      host: '127.0.0.1',
     });
     expect(deps.out.text).not.toContain('tok123');
     expect(deps.err.text).not.toContain('tok123');
@@ -157,6 +162,7 @@ describe('serve --ready-fd', () => {
       authUrl: 'http://127.0.0.1:5555/#token=existing-token',
       pid: 777,
       version: '1.2.3',
+      host: '127.0.0.1',
     });
     expect(deps.out.text).toContain('already running (pid 777)');
     expect(deps.out.text).not.toContain('existing-token');
@@ -206,6 +212,249 @@ describe('serve --ready-fd', () => {
     const deps = makeDeps(dirs, { loadStartDaemon: async () => fakeDaemon().startDaemon });
     expect(await run(['serve'], deps, { serve: { webRootCandidates: [webDir] } })).toBe(0);
     expect(deps.out.text).toContain('Open:   http://127.0.0.1:7428/#token=tok123');
+  });
+});
+
+/** A fake stdout ready channel (`--ready-stdout`): records each frame written. */
+function fakeStdoutChannel(failWith?: Error) {
+  const frames: string[] = [];
+  const state = { opened: 0, closed: 0 };
+  return {
+    frames,
+    state,
+    open: () => {
+      state.opened++;
+      return {
+        write: (frame: string) => {
+          if (failWith) throw failWith;
+          frames.push(frame);
+        },
+        close: () => {
+          state.closed++;
+        },
+      };
+    },
+  };
+}
+
+const NONCE = 'test-nonce_0123456789';
+
+describe('serve --ready-stdout (#22)', () => {
+  it('writes one framed started line on the stdout channel, and the token nowhere else', async () => {
+    const daemon = fakeDaemon();
+    const channel = fakeStdoutChannel();
+    const shutdown = shutdownSignal();
+    const deps = makeDeps(dirs, {
+      loadStartDaemon: async () => daemon.startDaemon,
+      waitForShutdown: shutdown.wait,
+      openStdoutReadyChannel: channel.open,
+    });
+    let framesAtReady = -1;
+    const done = run(['serve', '--ready-stdout', NONCE, '--port', '0'], deps, {
+      serve: {
+        webRootCandidates: [webDir],
+        onReady: () => {
+          framesAtReady = channel.frames.length;
+          shutdown.trigger('SIGTERM');
+        },
+      },
+    });
+    expect(await done).toBe(0);
+    expect(framesAtReady).toBe(1);
+    expect(channel.state).toEqual({ opened: 1, closed: 1 });
+    const ready = {
+      mode: 'started',
+      url: 'http://127.0.0.1:45678',
+      authUrl: 'http://127.0.0.1:45678/#token=tok123',
+      pid: deps.pid,
+      version: expect.any(String),
+      host: '127.0.0.1',
+    };
+    const frame = channel.frames[0] ?? '';
+    expect(frame.startsWith(`\n${SERVE_READY_FRAME_PREFIX}${NONCE} `)).toBe(true);
+    const json = JSON.parse(frame.slice(1 + SERVE_READY_FRAME_PREFIX.length + NONCE.length + 1));
+    expect(ServeReadySchema.parse(json)).toEqual(ready);
+    expect(frame).toBe(formatServeReadyFrame(NONCE, ServeReadySchema.parse(json)));
+    expect(deps.out.text).not.toContain('tok123');
+    expect(deps.err.text).not.toContain('tok123');
+    expect(deps.out.text).not.toContain(SERVE_READY_FRAME_PREFIX);
+    expect(deps.out.text).toContain('The access URL was sent in the ready frame on stdout.');
+    expect(daemon.closed).toBe(1);
+  });
+
+  it('attached: one framed attached line, exit 0, nothing started', async () => {
+    await writeRuntimeInfo(dirs.stateDir, {
+      pid: 777,
+      url: 'http://127.0.0.1:5555',
+      host: '127.0.0.1',
+      port: 5555,
+      version: '0.0.0',
+      startedAt: '2026-11-08T00:00:00.000Z',
+    });
+    await writeFile(path.join(dirs.stateDir, 'token'), 'existing-token\n', { mode: 0o600 });
+    const api = clientFactory((req) =>
+      isHealth(req.url, 'http://127.0.0.1:5555')
+        ? { body: healthFor(req.url, 'existing-token', { version: '1.2.3' }) }
+        : undefined,
+    );
+    const daemon = fakeDaemon();
+    const channel = fakeStdoutChannel();
+    const deps = makeDeps(dirs, {
+      loadStartDaemon: async () => daemon.startDaemon,
+      createApiClient: api.createApiClient,
+      isProcessAlive: (pid) => pid === 777,
+      openStdoutReadyChannel: channel.open,
+    });
+    expect(await run(['serve', '--ready-stdout', NONCE, '--exit-with-stdin'], deps)).toBe(0);
+    expect(daemon.calls).toHaveLength(0);
+    expect(channel.frames).toEqual([
+      formatServeReadyFrame(NONCE, {
+        mode: 'attached',
+        url: 'http://127.0.0.1:5555',
+        authUrl: 'http://127.0.0.1:5555/#token=existing-token',
+        pid: 777,
+        version: '1.2.3',
+        host: '127.0.0.1',
+      }),
+    ]);
+    expect(deps.out.text).toContain('already running (pid 777)');
+    expect(deps.out.text).not.toContain('existing-token');
+  });
+
+  async function runningDaemon(host: string) {
+    await writeRuntimeInfo(dirs.stateDir, {
+      pid: 777,
+      url: 'http://127.0.0.1:5555',
+      host,
+      port: 5555,
+      version: '0.0.0',
+      startedAt: '2026-11-08T00:00:00.000Z',
+    });
+    await writeFile(path.join(dirs.stateDir, 'token'), 'existing-token\n', { mode: 0o600 });
+    return clientFactory((req) =>
+      isHealth(req.url, 'http://127.0.0.1:5555')
+        ? { body: healthFor(req.url, 'existing-token', { version: '1.2.3' }) }
+        : undefined,
+    );
+  }
+
+  it('refuses to attach to a daemon bound elsewhere than an explicit --host (#22 review)', async () => {
+    const api = await runningDaemon('0.0.0.0');
+    const channel = fakeStdoutChannel();
+    const deps = makeDeps(dirs, {
+      createApiClient: api.createApiClient,
+      isProcessAlive: (pid) => pid === 777,
+      openStdoutReadyChannel: channel.open,
+    });
+    expect(
+      await run(
+        ['serve', '--ready-stdout', NONCE, '--exit-with-stdin', '--host', '127.0.0.1'],
+        deps,
+      ),
+    ).toBe(1);
+    expect(channel.frames).toEqual([]);
+    expect(deps.err.text).toContain('bound to 0.0.0.0, not to --host 127.0.0.1');
+    expect(deps.err.text).not.toContain('existing-token');
+  });
+
+  it('attaches when the explicit --host is the one the daemon is bound to', async () => {
+    const api = await runningDaemon('127.0.0.1');
+    const channel = fakeStdoutChannel();
+    const deps = makeDeps(dirs, {
+      createApiClient: api.createApiClient,
+      isProcessAlive: (pid) => pid === 777,
+      openStdoutReadyChannel: channel.open,
+    });
+    expect(await run(['serve', '--ready-stdout', NONCE, '--host', '127.0.0.1'], deps)).toBe(0);
+    expect(channel.frames).toHaveLength(1);
+    expect(channel.frames[0]).toContain('"host":"127.0.0.1"');
+  });
+
+  it('supervised: once stderr (or stdout) is a broken pipe, nothing more is written to it', async () => {
+    const daemon = fakeDaemon();
+    const channel = fakeStdoutChannel();
+    const broken = { stdout: false, stderr: false };
+    let end!: (reason: string) => void;
+    let watched = 0;
+    const deps = makeDeps(dirs, {
+      loadStartDaemon: async () => daemon.startDaemon,
+      waitForShutdown: () => new Promise<string>(() => {}),
+      watchStdin: () => ({
+        closed: new Promise<string>((resolve) => {
+          end = resolve;
+        }),
+        stop: () => undefined,
+      }),
+      openStdoutReadyChannel: channel.open,
+      watchBrokenPipes: () => {
+        watched++;
+        return { stdout: () => broken.stdout, stderr: () => broken.stderr };
+      },
+    });
+    const code = await run(['serve', '--ready-stdout', NONCE, '--exit-with-stdin'], deps, {
+      serve: {
+        webRootCandidates: [webDir],
+        onReady: () => {
+          // The app is gone: both pipes broke, then stdin's EOF arrives.
+          broken.stdout = true;
+          broken.stderr = true;
+          end('stdin closed');
+        },
+      },
+    });
+    expect(code).toBe(0);
+    expect(watched).toBe(1);
+    expect(deps.err.text).not.toContain('shutting down');
+    expect(daemon.closed).toBe(1);
+    await expect(stat(runtimeFilePath(dirs.stateDir))).rejects.toThrow();
+  });
+
+  it('unsupervised serve does not watch for broken pipes', async () => {
+    let watched = 0;
+    const deps = makeDeps(dirs, {
+      watchBrokenPipes: () => {
+        watched++;
+        return { stdout: () => false, stderr: () => false };
+      },
+    });
+    await run(['serve'], deps, { serve: { webRootCandidates: [webDir] } });
+    expect(watched).toBe(0);
+  });
+
+  it('stops the daemon and exits 1 when the frame cannot be written', async () => {
+    const daemon = fakeDaemon();
+    const channel = fakeStdoutChannel(new Error('EPIPE: broken pipe'));
+    const deps = makeDeps(dirs, {
+      loadStartDaemon: async () => daemon.startDaemon,
+      waitForShutdown: () => new Promise<string>(() => {}),
+      openStdoutReadyChannel: channel.open,
+    });
+    const code = await run(['serve', '--ready-stdout', NONCE], deps, {
+      serve: { webRootCandidates: [webDir] },
+    });
+    expect(code).toBe(1);
+    expect(daemon.closed).toBe(1);
+    expect(deps.err.text).toContain('could not write the ready frame to stdout: EPIPE');
+    expect(deps.err.text).not.toContain('tok123');
+  });
+
+  it('opens no fd channel with --ready-stdout', async () => {
+    const opened: number[] = [];
+    const channel = fakeStdoutChannel();
+    const shutdown = shutdownSignal();
+    const deps = makeDeps(dirs, {
+      waitForShutdown: shutdown.wait,
+      openReadyChannel: (fd) => {
+        opened.push(fd);
+        throw new Error('no');
+      },
+      openStdoutReadyChannel: channel.open,
+    });
+    await run(['serve', '--ready-stdout', NONCE], deps, {
+      serve: { webRootCandidates: [webDir], onReady: () => shutdown.trigger('SIGTERM') },
+    });
+    expect(opened).toEqual([]);
+    expect(channel.frames).toHaveLength(1);
   });
 });
 
@@ -379,6 +628,20 @@ describe('serve', () => {
     });
     expect(await run(['serve', '-o'], deps, { serve: { webRootCandidates: [webDir] } })).toBe(0);
     expect(deps.err.text).toContain('warning: could not open a browser');
+  });
+
+  it('in WSL, the port message says Windows programs share the ports (mirrored networking)', async () => {
+    const inUse = Object.assign(new Error('listen EADDRINUSE: address already in use'), {
+      code: 'EADDRINUSE',
+    });
+    const daemon = fakeDaemon({ fail: new Error('server failed', { cause: inUse }) });
+    const deps = makeDeps(dirs, {
+      loadStartDaemon: async () => daemon.startDaemon,
+      env: { HOME: dirs.home, WSL_DISTRO_NAME: 'Ubuntu', WSL_INTEROP: '/run/WSL/1_interop' },
+    });
+    expect(await run(['serve'], deps, { serve: { webRootCandidates: [webDir] } })).toBe(1);
+    expect(deps.err.text).toContain('port 7428 on 127.0.0.1 is already in use');
+    expect(deps.err.text).toContain('mirrored networking');
   });
 
   it('explains a port that is already in use', async () => {

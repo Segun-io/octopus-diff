@@ -17,11 +17,22 @@
  * shutdown output does not hit a broken pipe after a crash), else through pipes to `log.output`.
  * The ready line holds the token in `authUrl`: it is never logged.
  *
+ * The WSL backend (#22, DECISIONS #613) runs the same supervisor with the child being `wsl.exe`:
+ * `ready: { kind: 'stdout', nonce }` reads the ready line framed on stdout (`ready-frame.ts`; fds
+ * above 2 do not cross `wsl.exe`), stdout then goes to the log through the frame reader (never the
+ * frame), stderr still goes straight to the log fd. `wrapper: true` says that killing the child
+ * does not stop the daemon (terminating `wsl.exe` leaves the Linux process): every way out closes
+ * stdin first and gives the daemon `stopGraceMs` to see the EOF before the child is signalled.
+ * `loopbackOnly` refuses a ready line whose URL is not loopback (the window must load the daemon
+ * over the Windows loopback that WSL forwards, never a LAN address).
+ *
  * Pure and Electron-free: spawning, timers and the health probe are injected (unit tests drive a
  * fake child and a fake clock; `scripts/smoke-backend.mjs` runs it against the real CLI).
  */
+import { StringDecoder } from 'node:string_decoder';
 import type { ServeReady } from '@octopus-diff/contracts';
 import { ServeReadySchema } from '@octopus-diff/contracts';
+import { ReadyFrameReader } from './ready-frame.js';
 
 /** The fd the ready line arrives on (stdio index 3). */
 export const READY_FD = 3;
@@ -58,7 +69,18 @@ export interface ChildLike {
   once(event: 'error', listener: (error: Error) => void): unknown;
 }
 
-export type StdioLike = ['pipe', 'pipe' | number, 'pipe' | number, 'pipe'];
+export type StdioLike =
+  | ['pipe', 'pipe' | number, 'pipe' | number, 'pipe']
+  /** The stdout ready channel: no fd 3, stdout a pipe (it carries the frame). */
+  | ['pipe', 'pipe', 'pipe' | number];
+
+/**
+ * Where the ready line comes from: fd 3 (default), or framed on stdout with a nonce. A function
+ * gives every spawn attempt a fresh one (the WSL backend; `args` is then a function of it too).
+ */
+export type ReadyChannelOption =
+  | { kind: 'fd' }
+  | { kind: 'stdout'; nonce: string | (() => string) };
 
 export interface SpawnOptionsLike {
   env: Record<string, string | undefined>;
@@ -144,10 +166,27 @@ export interface BackendOptions {
   spawn: SpawnLike;
   /** The program: Electron's binary (`process.execPath`), run in Node mode. */
   command: string;
-  /** Everything after the program: the CLI entry and `serve` flags (see `serveArgs`). */
-  args: readonly string[];
+  /**
+   * Everything after the program: the CLI entry and `serve` flags (see `serveArgs`); or, per
+   * attempt, a function of that attempt's ready nonce (the stdout channel).
+   */
+  args: readonly string[] | ((attempt: { nonce: string | null }) => readonly string[]);
   /** The child's environment (PATH already resolved); `ELECTRON_RUN_AS_NODE=1` is added. */
   env: Record<string, string | undefined>;
+  /** Add `ELECTRON_RUN_AS_NODE=1` (default true; the WSL backend's child is `wsl.exe`). */
+  runAsNode?: boolean;
+  /** The ready channel (default fd 3). */
+  ready?: ReadyChannelOption;
+  /**
+   * The child is a launcher (`wsl.exe`) whose kill does not stop the daemon: only stdin's EOF
+   * does. A failed attempt then closes stdin and waits `stopGraceMs` before signalling.
+   */
+  wrapper?: boolean;
+  /**
+   * Refuse a ready line unless the daemon is bound to, and reached at, the literal `127.0.0.1`
+   * (`isLoopbackReady`): what the WSL backend asks for and what Windows' loopback reaches.
+   */
+  loopbackOnly?: boolean;
   cwd?: string;
   /** The app's own CLI version, compared with the ready line's. */
   appVersion: string;
@@ -161,10 +200,36 @@ export interface BackendOptions {
   policy?: Partial<BackendPolicy>;
 }
 
-/** stdin and fd 3 are always pipes; stdout/stderr are the log file's fd when there is one. */
-export function backendStdio(outputFd: number | null | undefined): StdioLike {
+/**
+ * stdin and fd 3 are always pipes; stdout/stderr are the log file's fd when there is one. With the
+ * stdout ready channel there is no fd 3 and stdout is a pipe (it carries the frame; the supervisor
+ * passes the rest to the log); stderr is still the log's fd.
+ */
+export function backendStdio(
+  outputFd: number | null | undefined,
+  channel: ReadyChannelOption['kind'] = 'fd',
+): StdioLike {
   const out = typeof outputFd === 'number' ? outputFd : 'pipe';
+  if (channel === 'stdout') return ['pipe', 'pipe', out];
   return ['pipe', out, out, 'pipe'];
+}
+
+/**
+ * The WSL backend's rule (review LOW 2): the daemon says it is bound to `127.0.0.1` (`host`, #620;
+ * a wildcard bind's `url` reads 127.0.0.1 too, so the URL alone proves nothing), `url` is http(s)
+ * on the literal `127.0.0.1` (not `localhost`, which may resolve to `::1`), and `authUrl` has the
+ * same origin.
+ */
+export function isLoopbackReady(ready: Pick<ServeReady, 'url' | 'authUrl' | 'host'>): boolean {
+  if (ready.host !== '127.0.0.1') return false;
+  try {
+    const url = new URL(ready.url);
+    const auth = new URL(ready.authUrl);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return false;
+    return url.hostname === '127.0.0.1' && auth.origin === url.origin;
+  } catch {
+    return false;
+  }
 }
 
 /** The `serve` arguments the app always passes (after the CLI entry), then the caller's extras. */
@@ -333,11 +398,19 @@ export class BackendSupervisor {
   #launch(): void {
     const attempt = this.#failures + 1;
     this.#setState({ kind: 'starting', attempt });
+    const readyOption = this.#o.ready;
+    const nonce =
+      readyOption?.kind === 'stdout'
+        ? typeof readyOption.nonce === 'function'
+          ? readyOption.nonce()
+          : readyOption.nonce
+        : null;
+    const argv = typeof this.#o.args === 'function' ? this.#o.args({ nonce }) : this.#o.args;
     let child: ChildLike;
     try {
-      child = this.#o.spawn(this.#o.command, this.#o.args, {
-        env: backendEnv(this.#o.env),
-        stdio: backendStdio(this.#o.outputFd),
+      child = this.#o.spawn(this.#o.command, argv, {
+        env: this.#o.runAsNode === false ? { ...this.#o.env } : backendEnv(this.#o.env),
+        stdio: backendStdio(this.#o.outputFd, this.#o.ready?.kind ?? 'fd'),
         windowsHide: true,
         cwd: this.#o.cwd,
       });
@@ -367,21 +440,24 @@ export class BackendSupervisor {
     this.#run = run;
     this.#o.log.note(`started the backend (pid ${child.pid ?? '?'}, attempt ${attempt})`);
 
-    child.stdout?.on('data', (chunk) => this.#o.log.output(chunk));
+    const frames = nonce !== null ? new ReadyFrameReader(nonce) : null;
+    if (!frames) child.stdout?.on('data', (chunk) => this.#o.log.output(chunk));
     child.stderr?.on('data', (chunk) => this.#o.log.output(chunk));
     // A closed pipe (the child already gone) must not crash the main process.
     child.stdin?.on('error', () => undefined);
     child.stdout?.on('error', () => undefined);
     child.stderr?.on('error', () => undefined);
 
-    const fd3 = child.stdio[READY_FD] as ReadableLike | null | undefined;
     const fd3End = () => {
       if (run.fd3Ended) return;
       run.fd3Ended = true;
       if (!run.settled && run.buffer !== '') this.#readyText(run);
       run.onFd3End?.();
     };
-    if (!fd3) {
+    const fd3 = frames ? null : (child.stdio[READY_FD] as ReadableLike | null | undefined);
+    if (frames) {
+      this.#readStdoutFrames(run, frames, fd3End);
+    } else if (!fd3) {
       run.fd3Ended = true;
       this.#o.log.note('the backend has no ready pipe (fd 3)');
     } else {
@@ -438,11 +514,57 @@ export class BackendSupervisor {
     });
   }
 
+  /** The stdout ready channel: frames out of the output, the rest to the log (never a frame). */
+  #readStdoutFrames(run: Run, frames: ReadyFrameReader, ended: () => void): void {
+    const stdout = run.child.stdout;
+    if (!stdout) {
+      run.fd3Ended = true;
+      this.#o.log.note('the backend has no stdout to read the ready line from');
+      return;
+    }
+    const decoder = new StringDecoder('utf8');
+    const take = (text: string) => {
+      const r = frames.push(text);
+      if (r.output !== '') this.#o.log.output(r.output);
+      if (r.foreign > 0) {
+        this.#o.log.note(`ignored ${r.foreign} ready frame(s) that are not this run's`);
+      }
+      if (run.settled) return;
+      if (r.tooLong) this.#attemptFailed(run, 'the ready line is too long');
+      else if (r.frame !== null) {
+        run.buffer = `${r.frame}\n`;
+        this.#readyText(run);
+      }
+      // An exit that was waiting for the line can be handled now.
+      if (run.settled) run.onFd3End?.();
+    };
+    stdout.on('data', (chunk) => take(typeof chunk === 'string' ? chunk : decoder.write(chunk)));
+    const end = () => {
+      const rest = decoder.end();
+      if (rest !== '') take(rest);
+      const tail = frames.end();
+      if (tail !== '') this.#o.log.output(tail);
+      ended();
+    };
+    let done = false;
+    const once = () => {
+      if (done) return;
+      done = true;
+      end();
+    };
+    stdout.on('end', once);
+    stdout.on('close', once);
+  }
+
   #readyText(run: Run): void {
     const parsed = parseReadyLine(run.buffer);
     run.buffer = '';
     if (!parsed.ok) {
       this.#attemptFailed(run, parsed.reason);
+      return;
+    }
+    if (this.#o.loopbackOnly && !isLoopbackReady(parsed.ready)) {
+      this.#attemptFailed(run, 'the daemon is not on a loopback address');
       return;
     }
     run.settled = true;
@@ -473,14 +595,31 @@ export class BackendSupervisor {
     this.#clearReadyTimer(run);
     this.#o.log.note(`backend failed to start: ${reason}`);
     run.failReason = reason;
-    if (!run.exited) {
+    if (run.exited) return;
+    // The lifeline first: a daemon (also one behind wsl.exe) sees EOF and shuts down.
+    try {
+      run.child.stdin?.end();
+    } catch {
+      // Already closed.
+    }
+    const t = this.#o.timers;
+    const handles: unknown[] = [];
+    const term = () => {
+      if (run.exited) return;
       run.child.kill('SIGTERM');
       // The exit handler takes it from here; make sure it comes.
-      const t = this.#o.timers.setTimeout(() => {
-        if (!run.exited) run.child.kill('SIGKILL');
-      }, this.#policy.killGraceMs);
-      void run.exit.then(() => this.#o.timers.clearTimeout(t));
-    }
+      handles.push(
+        t.setTimeout(() => {
+          if (!run.exited) run.child.kill('SIGKILL');
+        }, this.#policy.killGraceMs),
+      );
+    };
+    // Killing a wrapper (wsl.exe) does not stop the daemon: give the EOF time to get there.
+    if (this.#o.wrapper) handles.push(t.setTimeout(term, this.#policy.stopGraceMs));
+    else term();
+    void run.exit.then(() => {
+      for (const handle of handles) t.clearTimeout(handle);
+    });
   }
 
   #onExit(run: Run, code: number | null, signal: string | null): void {

@@ -1,4 +1,4 @@
-import { DESKTOP_CLI_CHANNELS } from '@octopus-diff/contracts';
+import { DESKTOP_CLI_CHANNELS, DESKTOP_WSL_CHANNELS } from '@octopus-diff/contracts';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { type BridgeEnv, createDesktopBridge } from '../src/bridge.js';
 import { BRIDGE_CHANNELS, COMMAND_CHANNEL } from '../src/ipc-channels.js';
@@ -224,6 +224,68 @@ describe('createDesktopBridge (the preload API)', () => {
       const junk = bad(async () => 42);
       expect((await junk.cliStatus()).state).toBe('unavailable');
       expect((await junk.installCli()).outcome).toBe('failed');
+    });
+  });
+
+  describe('the WSL backend (#22)', () => {
+    const status = {
+      available: true,
+      distros: [{ name: 'Ubuntu', state: 'running', version: 2, isDefault: true, system: false }],
+      selected: null,
+      active: null,
+    };
+    const setResult = {
+      ok: true,
+      message: 'Switching…',
+      status: { ...status, selected: 'Ubuntu' },
+    };
+    const withAnswers = () =>
+      createDesktopBridge(
+        env({
+          platform: 'win32',
+          ipc: {
+            invoke: async (channel, ...args) => {
+              rec.invoked.push([channel, args]);
+              return channel === DESKTOP_WSL_CHANNELS.status ? status : setResult;
+            },
+            send: () => undefined,
+            on: () => undefined,
+          },
+        }),
+      );
+
+    it('asks for the status and sets the distro on their channels (the name passed as is)', async () => {
+      const b = withAnswers();
+      expect(await b.wslStatus?.()).toEqual(status);
+      expect(await b.setWslDistro?.('Ubuntu')).toEqual(setResult);
+      expect(await b.setWslDistro?.(null)).toEqual(setResult);
+      expect(rec.invoked).toEqual([
+        [DESKTOP_WSL_CHANNELS.status, []],
+        [DESKTOP_WSL_CHANNELS.set, ['Ubuntu']],
+        [DESKTOP_WSL_CHANNELS.set, [null]],
+      ]);
+    });
+
+    it('does not switch without a click or key press (and does not even ask)', async () => {
+      active = false;
+      const b = withAnswers();
+      expect(await b.setWslDistro?.('Ubuntu')).toMatchObject({ ok: false });
+      expect(rec.invoked).toEqual([]);
+      // The status needs no gesture (Settings reads it on open).
+      expect(await b.wslStatus?.()).toEqual(status);
+    });
+
+    it('answers with a value, never a throw, when the main process fails or sends junk', async () => {
+      const bad = (invoke: BridgeEnv['ipc']['invoke']) =>
+        createDesktopBridge(env({ ipc: { invoke, send: () => undefined, on: () => undefined } }));
+      const rejecting = bad(async () => {
+        throw new Error('boom');
+      });
+      expect(await rejecting.wslStatus?.()).toMatchObject({ available: false, distros: [] });
+      expect(await rejecting.setWslDistro?.('Ubuntu')).toMatchObject({ ok: false });
+      const junk = bad(async () => ({ available: 'yes' }));
+      expect(await junk.wslStatus?.()).toMatchObject({ available: false, distros: [] });
+      expect(await junk.setWslDistro?.('Ubuntu')).toMatchObject({ ok: false });
     });
   });
 });

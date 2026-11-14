@@ -230,6 +230,7 @@ Each adapted file also carries an attribution comment.
   - `apps/web/src/components/CopyButton.tsx`: Copy feedback (copied state, check icon, anchored "Copied!" toast), modelled on useCopyToClipboard, DiffFilePathCopyButton and anchoredCopyToast.
   - `apps/web/src/lib/selectionPosition.ts`: Placement of the floating Copy bar next to the pointer, after resolveSelectionActionPosition in apps/web/src/lib/selectionActions.ts.
   - `apps/desktop/src/cli-shim.ts`: Adapted from apps/desktop/src/app/DesktopCliShim.ts: the shell and cmd quoting helpers, the Windows .cmd launcher layout (a goto instead of a parenthesized block, UTF-8 code page only for non-ASCII paths) and the AppImage launcher that mounts the image itself.
+  - `apps/desktop/src/wsl.ts`: Reading `wsl.exe --list --verbose` (UTF-16LE detected by NUL bytes, the "*" default marker), adapted from parseWslDistroList in apps/desktop/src/wsl/wslPathParsing.ts; the backend-in-a-distro approach (wsl.exe -d <distro>, a script on stdin) follows apps/desktop/src/wsl/DesktopWslEnvironment.ts.
   - The sidebar (folders, the Settled shelf, settling by hand), the folder picker and the command palette's browse mode are modelled on T3 Code's UI. The forge integration (remote recognition, CLI-login refinement for self-hosted hosts, the GitHub base-repository order, the merge request fields and PR glyphs) follows T3 Code's source-control packages.
 
 ## Inspiration (ideas only, no code)

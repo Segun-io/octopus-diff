@@ -11,6 +11,7 @@
  */
 import { spawn } from 'node:child_process';
 import { readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { rename, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -50,8 +51,16 @@ import {
   fetchHealth,
   gitStatus,
   tokenFromAuthUrl,
+  verifyDaemon,
   windowUrl,
 } from './daemon-api.js';
+import {
+  DESKTOP_SETTINGS_FILE,
+  type DesktopSettings,
+  parseDesktopSettings,
+  SettingsStore,
+  wslDistroToUse,
+} from './desktop-settings.js';
 import { noLogFile, openLogFile } from './log-file.js';
 import { buildMenuTemplate } from './menu.js';
 import { refreshScript, settingsScript, undoScript } from './page-actions.js';
@@ -66,6 +75,7 @@ import {
   windowOpenPolicy,
   windowOptions,
 } from './policy.js';
+import { newReadyNonce } from './ready-frame.js';
 import {
   failedScreen,
   gitMissingScreen,
@@ -77,9 +87,13 @@ import {
   screenUrl,
   startingScreen,
   versionNoticeTitle,
+  wslFailedScreen,
+  wslStartingScreen,
+  wslUnreachableScreen,
 } from './screens.js';
 import { defaultRunShell, resolveShellPath } from './shell-env.js';
 import { LoadSequence, UiLoad, uiWanted, urlForLog } from './ui-load.js';
+import { UiRequestGate } from './ui-request-gate.js';
 import {
   parseWindowState,
   restoreBounds,
@@ -87,12 +101,22 @@ import {
   WINDOW_STATE_FILE,
   type WindowState,
 } from './window-state.js';
+import { WSL_EXE } from './wsl.js';
+import {
+  listWslDistros,
+  prepareWslBackend,
+  type RunWsl,
+  type RunWslResult,
+  type WslPreflight,
+} from './wsl-backend.js';
 
 declare const __OCTOPUS_CLI_VERSION__: string;
 
 const APP_NAME = 'octopus-diff';
 /** git-core's MIN_GIT_VERSION, for the git-missing screen's text. */
 const MIN_GIT = '2.31';
+/** The CLI's `engines.node` (>= 24), checked in a WSL distro (#22). */
+const MIN_NODE = 24;
 const distDir = path.dirname(fileURLToPath(import.meta.url));
 const cliVersion = typeof __OCTOPUS_CLI_VERSION__ === 'string' ? __OCTOPUS_CLI_VERSION__ : '0.0.0';
 
@@ -140,6 +164,42 @@ let bridge: ReturnType<typeof installBridge> | null = null;
 let quitting = false;
 /** Set by any quit request, also one before the backend exists (main() checks it). */
 let quitRequested = false;
+
+// --- the backend's place: Windows or a WSL distro (#22, docs/DESKTOP.md §11) ---------------------
+
+/**
+ * The app's own settings (`desktop-settings.json` in userData; never the daemon's registry), saved
+ * one at a time (`SettingsStore`). Created in main() (userData is set by then).
+ */
+let settingsStore: SettingsStore | null = null;
+const settings = (): DesktopSettings => settingsStore?.current ?? { version: 1, wslDistro: null };
+/**
+ * WSL backend only: the window's requests are cancelled from the moment the backend leaves
+ * `ready` until `verifyDaemon` passed again (review LOW 3). Inert for this machine's backend.
+ */
+const uiGate = new UiRequestGate({
+  install: (listener) => {
+    const webRequest = session.defaultSession.webRequest;
+    if (!listener) {
+      webRequest.onBeforeRequest(null);
+      return;
+    }
+    webRequest.onBeforeRequest((details, callback) => callback({ cancel: listener(details.url) }));
+  },
+  blocked: (origin) =>
+    log.note(`window: requests to ${origin} are held until the daemon in WSL is verified`),
+});
+/** The distro the current backend runs in (null: this machine's own backend). */
+let backendDistro: string | null = null;
+/** The WSL preflight failed: its screen is up and "Try again" runs it again. */
+let wslFailure: Extract<WslPreflight, { ok: false }> | null = null;
+/** Each start or switch takes a number: an older preflight's answer is dropped. */
+let backendGeneration = 0;
+/** Builds the supervisor for this machine's backend (set in main() once PATH is resolved). */
+let makeLocalBackend: (() => BackendSupervisor) | null = null;
+/** A backend being stopped by a switch (quitting waits for it). */
+let switchStop: Promise<void> | null = null;
+let switching: Promise<void> = Promise.resolve();
 
 // Another instance runs for this userData: the lock request told it to focus its window
 // (`second-instance`); this one leaves before it opens (or rotates) the shared log.
@@ -194,6 +254,157 @@ function focusWindow(): void {
   if (win.isMinimized()) win.restore();
   win.show();
   win.focus();
+}
+
+const settingsFile = () => path.join(app.getPath('userData'), DESKTOP_SETTINGS_FILE);
+
+function readSettings(): DesktopSettings {
+  try {
+    return parseDesktopSettings(readFileSync(settingsFile(), 'utf8'));
+  } catch {
+    return parseDesktopSettings(null);
+  }
+}
+
+function saveSettings(next: DesktopSettings): Promise<void> {
+  if (!settingsStore) return Promise.reject(new Error('the settings are not loaded yet'));
+  return settingsStore.save(next);
+}
+
+/** `wsl.exe` with an argv array (no shell), `input` on stdin, a timeout; never throws (wsl-backend.ts). */
+const runWsl: RunWsl = (argv, options) =>
+  new Promise<RunWslResult>((resolve) => {
+    const out: Buffer[] = [];
+    const err: Buffer[] = [];
+    let size = 0;
+    const keep = (into: Buffer[]) => (chunk: Buffer) => {
+      if (size > 1024 * 1024) return;
+      size += chunk.length;
+      into.push(chunk);
+    };
+    const result = (code: number | null, error?: RunWslResult['error']): RunWslResult => ({
+      code,
+      stdout: Buffer.concat(out),
+      stderr: Buffer.concat(err),
+      ...(error ? { error } : {}),
+    });
+    let done = false;
+    let timer: NodeJS.Timeout | undefined;
+    const finish = (r: RunWslResult) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      resolve(r);
+    };
+    let child: ReturnType<typeof spawn>;
+    try {
+      child = spawn(WSL_EXE, [...argv], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+    } catch {
+      finish(result(null, 'spawn'));
+      return;
+    }
+    timer = setTimeout(() => {
+      child.kill();
+      finish(result(null, 'timeout'));
+    }, options.timeoutMs);
+    child.stdout?.on('data', keep(out));
+    child.stderr?.on('data', keep(err));
+    child.once('error', (error: NodeJS.ErrnoException) =>
+      finish(result(null, error.code === 'ENOENT' ? 'missing' : 'spawn')),
+    );
+    child.once('close', (code) => finish(result(code)));
+    child.stdin?.on('error', () => undefined);
+    child.stdin?.end(options.input ?? '');
+  });
+
+/** Starts the backend where the settings say: this machine, or (Windows) a WSL distro. */
+async function startBackend(): Promise<void> {
+  const generation = ++backendGeneration;
+  const distro = wslDistroToUse(settings(), process.platform);
+  backendDistro = distro;
+  wslFailure = null;
+  if (distro === null) {
+    uiGate.disable();
+    if (!makeLocalBackend) return;
+    backend = makeLocalBackend();
+    backend.start();
+    return;
+  }
+  uiGate.enable();
+  showScreen(wslStartingScreen(distro));
+  log.note(`backend: checking the WSL distro "${distro}"`);
+  if (args.stateDir || args.configDir) {
+    log.note('backend: --state-dir/--config-dir are Windows paths: not passed to the WSL backend');
+  }
+  const pre = await prepareWslBackend({
+    run: runWsl,
+    distro,
+    port: args.port,
+    minNode: MIN_NODE,
+    minGit: MIN_GIT,
+  });
+  // Quit, or another switch, while the distro was answering: start nothing.
+  if (generation !== backendGeneration || quitRequested) return;
+  if (!pre.ok) {
+    wslFailure = pre;
+    log.note(`backend: the WSL distro "${distro}" cannot run it (${pre.kind}): ${pre.reason}`);
+    showScreen(wslFailedScreen(distro, pre));
+    return;
+  }
+  log.note(
+    `backend: running serve in the WSL distro "${distro}" (octopus-diff ${pre.cliVersion ?? 'unknown'})`,
+  );
+  backend = new BackendSupervisor({
+    spawn: (cmd, argv, options) => spawn(cmd, argv, options) as unknown as ChildLike,
+    command: pre.command,
+    // A fresh nonce for every spawn attempt (a restart, Try again): review MEDIUM 1.
+    args: ({ nonce }) => pre.argsFor(nonce ?? newReadyNonce()),
+    env: { ...process.env },
+    runAsNode: false,
+    ready: { kind: 'stdout', nonce: newReadyNonce },
+    wrapper: true,
+    loopbackOnly: true,
+    appVersion: cliVersion,
+    log,
+    outputFd: log.fd,
+    timers,
+    probe: async (url) => (await fetchHealth(url, null)) !== null,
+    onState: render,
+  });
+  backend.start();
+}
+
+/** Stops the current backend (an owned daemon stops; an attached one stays) and starts it anew. */
+function restartBackendWhereChosen(): void {
+  switching = switching.then(async () => {
+    const old = backend;
+    backend = null;
+    ready = null;
+    backendGeneration++;
+    uiGate.close();
+    if (old) {
+      log.note('backend: switching where it runs; stopping the current one');
+      switchStop = old.stop();
+      await switchStop;
+      switchStop = null;
+    }
+    if (quitRequested) return;
+    // Not the old UI over a daemon that is gone: the starting screen until the new one is ready.
+    showScreen(startingScreen(APP_NAME));
+    await startBackend();
+  });
+}
+
+async function chooseBackend(distro: string | null): Promise<void> {
+  if (settings().wslDistro !== distro) {
+    try {
+      await saveSettings({ ...settings(), wslDistro: distro });
+    } catch (error) {
+      log.note(`could not save the app settings: ${String(error)}`);
+      return;
+    }
+  }
+  restartBackendWhereChosen();
 }
 
 // --- security policy (DESKTOP §5) ---------------------------------------------------------------
@@ -333,7 +544,9 @@ function createWindow(): BrowserWindow {
     w.setTitle(versionNoticeTitle(title, notice.daemon, notice.app));
   });
   // Show whatever the backend is doing now (a reopened window on macOS, or the first one).
-  render(backend?.state ?? { kind: 'idle' });
+  if (!backend && wslFailure && backendDistro)
+    showScreen(wslFailedScreen(backendDistro, wslFailure));
+  else render(backend?.state ?? { kind: 'idle' });
   return w;
 }
 
@@ -394,11 +607,19 @@ async function onScreenAction(action: ScreenAction): Promise<void> {
     await shell.openPath(log.path);
     return;
   }
+  if (action === 'use-windows') {
+    await chooseBackend(null);
+    return;
+  }
   retryBackend();
 }
 
 function retryBackend(): void {
-  if (!backend) return;
+  if (!backend) {
+    // The WSL preflight failed: check the distro again.
+    if (wslFailure) restartBackendWhereChosen();
+    return;
+  }
   const state = backend.state;
   if (state.kind === 'failed' || state.kind === 'restarting') {
     backend.retry();
@@ -415,7 +636,28 @@ async function showReady(r: ReadyInfo, force = false): Promise<void> {
     return;
   }
   const asked = Date.now();
-  const health = await fetchHealth(r.url, tokenFromAuthUrl(r.authUrl));
+  const token = tokenFromAuthUrl(r.authUrl);
+  const distro = backendDistro;
+  let health: Awaited<ReturnType<typeof fetchHealth>>;
+  if (distro !== null) {
+    // From Windows, through WSL's forwarding: it must be *this* daemon (the token's proof), not a
+    // Windows program on the same port, and it must be reachable at all (DESKTOP §11).
+    const check = token ? await verifyDaemon(r.url, token) : { kind: 'other' as const };
+    if (check.kind !== 'verified') {
+      log.note(
+        `window: the daemon in WSL is ${check.kind === 'other' ? 'not the one answering' : 'unreachable'} at ${r.url} from Windows`,
+      );
+      if (ready === r && win && isReadyFor(backend?.state, r)) {
+        showScreen(wslUnreachableScreen(distro, r.url));
+      }
+      return;
+    }
+    health = check.health;
+    // This very daemon holds the token: the window may talk to it again.
+    uiGate.verified();
+  } else {
+    health = await fetchHealth(r.url, token);
+  }
   const git = gitStatus(health);
   log.note(
     `window: daemon health ${health ? 'answered' : 'unavailable'} in ${Date.now() - asked} ms (git ${git})`,
@@ -469,10 +711,13 @@ async function showReady(r: ReadyInfo, force = false): Promise<void> {
 }
 
 function render(state: BackendState): void {
+  uiGate.backendState(state.kind);
   switch (state.kind) {
     case 'idle':
     case 'starting':
-      if (showing.kind !== 'ui') showScreen(startingScreen(APP_NAME));
+      if (showing.kind !== 'ui') {
+        showScreen(backendDistro ? wslStartingScreen(backendDistro) : startingScreen(APP_NAME));
+      }
       return;
     case 'restarting':
       // With the UI up, the web shows "offline" itself and reconnects; no screen in between.
@@ -483,9 +728,22 @@ function render(state: BackendState): void {
     case 'ready':
       void showReady(state.ready);
       return;
-    case 'failed':
-      showScreen(failedScreen(state.reason, state.failures, log.path));
+    case 'failed': {
+      const screen = failedScreen(state.reason, state.failures, log.path);
+      // A backend in WSL that keeps failing: also offer the way back to this machine's backend.
+      showScreen(
+        backendDistro
+          ? {
+              ...screen,
+              actions: [
+                ...(screen.actions ?? []),
+                { action: 'use-windows', label: 'Use the Windows backend' },
+              ],
+            }
+          : screen,
+      );
       return;
+    }
     case 'stopping':
     case 'stopped':
       return;
@@ -585,6 +843,14 @@ function installMenu(): void {
 
 async function main(): Promise<void> {
   lockDownSession();
+  settingsStore = new SettingsStore(settingsFile(), readSettings(), { writeFile, rename });
+  if (settings().wslDistro !== null) {
+    log.note(
+      process.platform === 'win32'
+        ? `settings: the backend runs in the WSL distro "${settings().wslDistro}"`
+        : 'settings: a WSL distro is set, but only the Windows app uses it (ignored)',
+    );
+  }
   bridge = installBridge({
     window: () => win,
     uiOrigin: () => (showing.kind === 'ui' ? uiOrigin : null),
@@ -596,6 +862,13 @@ async function main(): Promise<void> {
     log: (line) => log.note(line),
     // installCli / cliStatus go through the bridge's guard too (DECISIONS #547).
     cliShim,
+    wsl: {
+      list: () => listWslDistros(runWsl),
+      settings,
+      save: saveSettings,
+      active: () => (backend ? backendDistro : null),
+      apply: () => restartBackendWhereChosen(),
+    },
   });
   installMenu();
   createWindow();
@@ -631,20 +904,22 @@ async function main(): Promise<void> {
     extra: serveExtraArgs(args),
   });
 
-  backend = new BackendSupervisor({
-    spawn: (cmd, argv, options) => spawn(cmd, argv, options) as unknown as ChildLike,
-    command: command.command,
-    args: command.args,
-    env: { ...process.env, PATH: resolved.path },
-    ...(command.cwd ? { cwd: command.cwd } : {}),
-    appVersion: cliVersion,
-    log,
-    outputFd: log.fd,
-    timers,
-    probe: async (url) => (await fetchHealth(url, null)) !== null,
-    onState: render,
-  });
-  backend.start();
+  makeLocalBackend = () =>
+    new BackendSupervisor({
+      spawn: (cmd, argv, options) => spawn(cmd, argv, options) as unknown as ChildLike,
+      command: command.command,
+      args: command.args,
+      env: { ...process.env, PATH: resolved.path },
+      ...(command.cwd ? { cwd: command.cwd } : {}),
+      appVersion: cliVersion,
+      log,
+      outputFd: log.fd,
+      timers,
+      probe: async (url) => (await fetchHealth(url, null)) !== null,
+      onState: render,
+    });
+  // Not awaited: a WSL distro's preflight can take a while (a stopped distro boots first).
+  void startBackend();
   // After an update moved the app, point our own launcher (never another file) at it again.
   void startupRefresh(cliShim, process.env, (text) => log.note(text));
 }
@@ -661,6 +936,19 @@ app.on('activate', () => {
 
 app.on('before-quit', (event) => {
   quitRequested = true;
+  // A switch is stopping the previous backend: wait for it, then quit.
+  if (!backend && switchStop && !backendStopped) {
+    event.preventDefault();
+    if (quitting) return;
+    quitting = true;
+    win?.hide();
+    void switchStop.finally(() => {
+      backendStopped = true;
+      log.close();
+      app.quit();
+    });
+    return;
+  }
   if (backendStopped || !backend) return;
   event.preventDefault();
   if (quitting) return;

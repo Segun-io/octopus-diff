@@ -7,7 +7,10 @@
  * for them (Electron 45). The same actions are in the Help menu.
  */
 
-export type ScreenAction = 'retry' | 'show-log';
+import type { WslPreflight } from './wsl-backend.js';
+
+/** `use-windows` (#22): leave the WSL backend for the Windows one (clears the app's distro setting). */
+export type ScreenAction = 'retry' | 'show-log' | 'use-windows';
 
 export const SCREEN_ACTION_SCHEME = 'octopus-diff-desktop:';
 
@@ -93,7 +96,7 @@ export function isScreenPage(url: string): boolean {
 export function screenAction(url: string): ScreenAction | null {
   if (!url.startsWith(SCREEN_ACTION_SCHEME)) return null;
   const action = url.slice(SCREEN_ACTION_SCHEME.length);
-  return action === 'retry' || action === 'show-log' ? action : null;
+  return action === 'retry' || action === 'show-log' || action === 'use-windows' ? action : null;
 }
 
 export function startingScreen(appName: string): Screen {
@@ -160,4 +163,70 @@ export function versionNoticeTitle(
   appVersion: string,
 ): string {
   return `${pageTitle} — daemon ${daemonVersion} (app ${appVersion})`;
+}
+
+// --- the WSL backend (#22) ----------------------------------------------------------------------
+
+export function wslStartingScreen(distro: string): Screen {
+  return {
+    title: 'Starting octopus-diff in WSL…',
+    body: [`Starting the daemon in the WSL distro "${distro}" (a stopped distro boots first).`],
+    busy: true,
+  };
+}
+
+const WSL_ACTIONS: Screen['actions'] = [
+  { action: 'retry', label: 'Try again' },
+  { action: 'use-windows', label: 'Use the Windows backend' },
+  { action: 'show-log', label: 'Show the log' },
+];
+
+/**
+ * The WSL backend cannot start: what is missing in the distro and the commands to run there
+ * (selectable text: the app never installs anything), or why WSL itself did not answer.
+ */
+export function wslFailedScreen(
+  distro: string,
+  failure: Extract<WslPreflight, { ok: false }>,
+): Screen {
+  if (failure.kind === 'prerequisites' && failure.problems && failure.problems.length > 0) {
+    const body = [
+      `The app runs its backend inside the WSL distro "${distro}", and something it needs is missing there. Run these in a terminal of that distro (nothing is installed for you), then choose Try again:`,
+    ];
+    const code: string[] = [];
+    for (const problem of failure.problems) {
+      body.push(problem.text);
+      code.push(problem.commands.join('\n'));
+    }
+    return {
+      title: `"${distro}" is missing what octopus-diff needs`,
+      body,
+      code,
+      actions: WSL_ACTIONS,
+    };
+  }
+  return {
+    title: 'The WSL backend could not start',
+    body: [
+      failure.reason,
+      'Choose Try again, or go back to the backend that runs on Windows (Settings can switch to WSL again later).',
+    ],
+    actions: WSL_ACTIONS,
+  };
+}
+
+/**
+ * The daemon started in the distro but Windows cannot reach it on 127.0.0.1 (DESKTOP §11): WSL's
+ * localhost forwarding is off (NAT mode) or something else holds the port on Windows.
+ */
+export function wslUnreachableScreen(distro: string, url: string): Screen {
+  return {
+    title: 'Windows cannot reach the daemon in WSL',
+    body: [
+      `The daemon is running in "${distro}" at ${url}, but the app could not reach it from Windows, or something else answered there.`,
+      'WSL makes a loopback port inside the distro reachable on Windows by itself: with networkingMode=mirrored, or with the default NAT mode while localhostForwarding=true (the default). Check %UserProfile%\\.wslconfig, run wsl --shutdown, and try again. Also make sure no Windows program uses the same port.',
+    ],
+    code: ['[wsl2]', 'localhostForwarding=true', '# or: networkingMode=mirrored'],
+    actions: WSL_ACTIONS,
+  };
 }

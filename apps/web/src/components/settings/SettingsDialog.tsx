@@ -7,9 +7,9 @@ import {
   APPEARANCE_ITEMS,
   GENERAL_ITEMS,
   type PrefItem,
-  SETTINGS_SECTIONS,
   type SettingsSectionId,
   visiblePrefItems,
+  visibleSections,
 } from '../../settings/registry.ts';
 import { COMMANDS, GROUP_LABELS, SHORTCUTS } from '../../state/commandRegistry.ts';
 import type { Prefs } from '../../state/prefs.ts';
@@ -19,6 +19,7 @@ import { useTheme } from '../../theme/useTheme.ts';
 import { CloseIcon } from '../bits.tsx';
 import { Mark, Wordmark } from '../Mark.tsx';
 import { Select, SettingRow, Switch, Where } from './controls.tsx';
+import { DesktopSection } from './DesktopSection.tsx';
 import { FoldersSection } from './FoldersSection.tsx';
 import { ForgesSection } from './ForgesSection.tsx';
 import { ReviewSection } from './ReviewSection.tsx';
@@ -30,6 +31,8 @@ const Credits = lazy(() => import('./Credits.tsx').then((m) => ({ default: m.Cre
 export function SettingsDialog() {
   const store = useUiStore();
   const section = useUi((s) => s.settingsSection);
+  const desktop = useDesktop();
+  const sections = visibleSections(desktop !== null);
   const ref = useRef<HTMLDivElement>(null);
   const titleId = useId();
 
@@ -71,19 +74,16 @@ export function SettingsDialog() {
   const onNavKey = (event: React.KeyboardEvent) => {
     if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
     event.preventDefault();
-    const index = SETTINGS_SECTIONS.findIndex((s) => s.id === section);
+    const index = sections.findIndex((s) => s.id === section);
     const next =
-      SETTINGS_SECTIONS[
-        (index + (event.key === 'ArrowDown' ? 1 : -1) + SETTINGS_SECTIONS.length) %
-          SETTINGS_SECTIONS.length
-      ];
+      sections[(index + (event.key === 'ArrowDown' ? 1 : -1) + sections.length) % sections.length];
     if (next) {
       setSection(next.id);
       ref.current?.querySelector<HTMLElement>(`[data-section="${next.id}"]`)?.focus();
     }
   };
 
-  const current = SETTINGS_SECTIONS.find((s) => s.id === section) ?? SETTINGS_SECTIONS[0];
+  const current = sections.find((s) => s.id === section) ?? sections[0];
 
   return (
     // biome-ignore lint/a11y/noStaticElementInteractions: backdrop click closes the dialog
@@ -112,7 +112,7 @@ export function SettingsDialog() {
           <h2 id={titleId} className="px-2 pt-1 pb-2 text-sm font-semibold">
             Settings
           </h2>
-          {SETTINGS_SECTIONS.map((s) => (
+          {sections.map((s) => (
             <button
               key={s.id}
               type="button"
@@ -159,6 +159,7 @@ export function SettingsDialog() {
           {section === 'folders' && <FoldersSection />}
           {section === 'forges' && <ForgesSection />}
           {section === 'keyboard' && <KeyboardPanel />}
+          {section === 'desktop' && desktop && <DesktopSection bridge={desktop} />}
           {section === 'about' && <AboutPanel />}
         </div>
       </div>

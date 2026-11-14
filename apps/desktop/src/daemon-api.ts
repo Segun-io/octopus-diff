@@ -6,10 +6,12 @@
  * The token comes from the ready line's `authUrl` and stays in memory: it is sent as a header,
  * never logged.
  */
+import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import {
   ApiClientError,
   createApiClient,
   type HealthResponse,
+  healthProofMessage,
   SCAN_DEPTH_DEFAULT,
 } from '@octopus-diff/contracts';
 
@@ -57,6 +59,42 @@ export async function fetchHealth(
   } catch {
     return null;
   }
+}
+
+export type DaemonCheck =
+  | { kind: 'verified'; health: HealthResponse }
+  /** Something answered at the URL but did not prove it holds the token (another program). */
+  | { kind: 'other' }
+  | { kind: 'unreachable' };
+
+/**
+ * Whether the daemon at `url` is the one whose token we hold (#22: from Windows, a WSL daemon is
+ * reached through WSL's forwarding, and a Windows program on the same port would answer instead).
+ * The health check with a fresh challenge: the daemon answers with HMAC-SHA256(token, message),
+ * as `octopus-diff`'s `verifyDaemon` checks it (apps/cli). The token itself is never sent.
+ */
+export async function verifyDaemon(
+  url: string,
+  token: string,
+  fetchImpl: FetchLike = globalThis.fetch,
+  timeoutMs = 3_000,
+): Promise<DaemonCheck> {
+  const challenge = randomBytes(32).toString('hex');
+  const client = createApiClient({ baseUrl: url, fetch: withTimeout(fetchImpl, timeoutMs) });
+  let health: HealthResponse;
+  try {
+    health = await client.health({ challenge });
+  } catch {
+    return { kind: 'unreachable' };
+  }
+  const proof = health.proof;
+  if (proof === undefined || !/^[0-9a-f]{64}$/.test(proof)) return { kind: 'other' };
+  const expected = createHmac('sha256', token)
+    .update(healthProofMessage(challenge), 'utf8')
+    .digest();
+  return timingSafeEqual(expected, Buffer.from(proof, 'hex'))
+    ? { kind: 'verified', health }
+    : { kind: 'other' };
 }
 
 export type GitStatus = 'ok' | 'missing' | 'unknown';

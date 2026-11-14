@@ -17,8 +17,10 @@ import {
   type DesktopCliStatus,
   type DesktopCommand,
   type DesktopPlatform,
+  type DesktopWslSetResult,
+  type DesktopWslStatus,
 } from '@octopus-diff/contracts';
-import { BRIDGE_CHANNELS, CLI_CHANNELS, COMMAND_CHANNEL } from './ipc-channels.js';
+import { BRIDGE_CHANNELS, CLI_CHANNELS, COMMAND_CHANNEL, WSL_CHANNELS } from './ipc-channels.js';
 
 export interface PreloadIpc {
   invoke(channel: string, ...args: unknown[]): Promise<unknown>;
@@ -68,6 +70,35 @@ function isCliResult(value: unknown): value is DesktopCliInstallResult {
     typeof v.outcome === 'string' &&
     typeof v.message === 'string' &&
     isCliStatus(v.status)
+  );
+}
+
+const WSL_UNANSWERED: DesktopWslStatus = {
+  available: false,
+  reason: 'The desktop app did not answer.',
+  distros: [],
+  selected: null,
+  active: null,
+};
+
+function isWslStatus(value: unknown): value is DesktopWslStatus {
+  const v = value as { available?: unknown; distros?: unknown };
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    typeof v.available === 'boolean' &&
+    Array.isArray(v.distros)
+  );
+}
+
+function isWslSetResult(value: unknown): value is DesktopWslSetResult {
+  const v = value as { ok?: unknown; message?: unknown; status?: unknown };
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    typeof v.ok === 'boolean' &&
+    typeof v.message === 'string' &&
+    isWslStatus(v.status)
   );
 }
 
@@ -141,6 +172,29 @@ export function createDesktopBridge(env: BridgeEnv): DesktopBridge {
       try {
         const result = await env.ipc.invoke(CLI_CHANNELS.install);
         return isCliResult(result) ? result : failed('The desktop app did not answer.');
+      } catch {
+        return failed('The desktop app did not answer.');
+      }
+    },
+    async wslStatus() {
+      try {
+        const result = await env.ipc.invoke(WSL_CHANNELS.status);
+        return isWslStatus(result) ? result : WSL_UNANSWERED;
+      } catch {
+        return WSL_UNANSWERED;
+      }
+    },
+    async setWslDistro(distro) {
+      const failed = (message: string): DesktopWslSetResult => ({
+        ok: false,
+        message,
+        status: WSL_UNANSWERED,
+      });
+      // Restarts the backend: only from a click or key press, like the other actions.
+      if (!env.hasUserActivation()) return failed('Only available from a click or a key press.');
+      try {
+        const result = await env.ipc.invoke(WSL_CHANNELS.set, distro);
+        return isWslSetResult(result) ? result : failed('The desktop app did not answer.');
       } catch {
         return failed('The desktop app did not answer.');
       }

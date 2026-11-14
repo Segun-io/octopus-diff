@@ -15,6 +15,7 @@ import type { CliShim } from './cli-shim-service.js';
 import { COMMAND_CHANNEL, createBridgeHandlers } from './ipc.js';
 import { PageCommands } from './page-commands.js';
 import { listWorktrees } from './worktrees-api.js';
+import { createWslHandlers, type WslHandlerDeps } from './wsl-ipc.js';
 
 export interface BridgeHost {
   window(): BrowserWindow | null;
@@ -27,6 +28,8 @@ export interface BridgeHost {
   log(line: string): void;
   /** The command installer (#21): its two channels get the bridge's guard. */
   cliShim: CliShim;
+  /** The WSL backend choice (#22): its two channels get the bridge's guard too. */
+  wsl: Omit<WslHandlerDeps, 'platform' | 'trusted' | 'log'>;
 }
 
 export interface InstalledBridge {
@@ -90,7 +93,17 @@ export function installBridge(host: BridgeHost): InstalledBridge {
     log: host.log,
   });
   const cliHandlers = createCliShimHandlers({ shim: host.cliShim, trusted, log: host.log });
-  for (const [channel, handler] of Object.entries({ ...handlers.invoke, ...cliHandlers })) {
+  const wslHandlers = createWslHandlers({
+    ...host.wsl,
+    platform: process.platform,
+    trusted,
+    log: host.log,
+  });
+  for (const [channel, handler] of Object.entries({
+    ...handlers.invoke,
+    ...cliHandlers,
+    ...wslHandlers,
+  })) {
     ipcMain.handle(channel, (event, ...args) => handler(event, ...args));
   }
   for (const [channel, handler] of Object.entries(handlers.on)) {

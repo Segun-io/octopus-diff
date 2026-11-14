@@ -7,11 +7,12 @@ import {
   backendStdio,
   backoffDelay,
   DEFAULT_POLICY,
+  isLoopbackReady,
   isReadyFor,
   parseReadyLine,
   serveArgs,
 } from '../src/backend.js';
-import { FakeClock, fakeSpawn, readyLine, settle, TOKEN } from './fakes.js';
+import { FakeClock, fakeSpawn, fakeWslSpawn, readyLine, settle, TOKEN } from './fakes.js';
 
 function setup(over: Partial<BackendOptions> = {}) {
   const clock = new FakeClock();
@@ -565,5 +566,241 @@ describe('BackendSupervisor: attached', () => {
     await u.t.clock.advance(DEFAULT_POLICY.attachedPollMs * 5);
     expect(u.t.probes).toEqual([]);
     expect(u.t.spawner.calls).toHaveLength(1);
+  });
+});
+
+describe('BackendSupervisor: the WSL backend (wsl.exe child, stdout ready frame, #22)', () => {
+  const NONCE = 'wsl_nonce_0123456789abcdefghij';
+  /** A ready line as the CLI with `host` (#620) writes it for the WSL backend. */
+  const wslLine = (over: Record<string, unknown> = {}) => readyLine({ host: '127.0.0.1', ...over });
+
+  function wsl(over: Partial<BackendOptions> = {}) {
+    const spawner = fakeWslSpawn();
+    const t = setup({
+      spawn: spawner.spawn,
+      command: 'wsl.exe',
+      args: ['-d', 'Ubuntu', '--exec', '/usr/bin/env', 'PATH=/usr/bin', '/usr/bin/octopus-diff'],
+      env: { PATH: 'C:\\Windows\\System32', SystemRoot: 'C:\\Windows' },
+      runAsNode: false,
+      ready: { kind: 'stdout', nonce: NONCE },
+      wrapper: true,
+      loopbackOnly: true,
+      outputFd: 7,
+      ...over,
+    });
+    return { ...t, wsl: spawner };
+  }
+
+  it('spawns wsl.exe with three pipes-or-fds (no fd 3), stdout a pipe, no ELECTRON_RUN_AS_NODE', () => {
+    const t = wsl();
+    t.supervisor.start();
+    const call = t.wsl.last();
+    expect(call.command).toBe('wsl.exe');
+    expect(call.options.stdio).toEqual(['pipe', 'pipe', 7]);
+    expect(call.options.env).toEqual({ PATH: 'C:\\Windows\\System32', SystemRoot: 'C:\\Windows' });
+    expect(call.options.env).not.toHaveProperty('ELECTRON_RUN_AS_NODE');
+    expect(backendStdio(7, 'stdout')).toEqual(['pipe', 'pipe', 7]);
+    expect(backendStdio(null, 'stdout')).toEqual(['pipe', 'pipe', 'pipe']);
+  });
+
+  it('reads the frame from stdout; the banner goes to the log, the frame (token) never does', async () => {
+    const t = wsl();
+    t.supervisor.start();
+    t.wsl.last().child.frame(NONCE, wslLine());
+    await settle();
+    expect(t.supervisor.state).toMatchObject({
+      kind: 'ready',
+      ready: { mode: 'started', url: 'http://127.0.0.1:7428' },
+    });
+    expect(t.output.join('')).toContain('octopus-diff is running');
+    expect(t.allLogs()).not.toContain(TOKEN);
+    expect(t.supervisor.ownsDaemon).toBe(true);
+  });
+
+  it('a frame with another nonce is ignored (noted without its text); the real one counts', async () => {
+    const t = wsl();
+    t.supervisor.start();
+    const child = t.wsl.last().child;
+    child.frame(
+      'someone_else_0123456789abcd',
+      wslLine({ url: 'http://127.0.0.1:1', authUrl: `http://127.0.0.1:1/#token=${TOKEN}` }),
+    );
+    await settle();
+    expect(t.supervisor.state.kind).toBe('starting');
+    expect(t.notes.join('\n')).toContain("not this run's");
+    child.frame(NONCE, wslLine());
+    await settle();
+    expect(t.supervisor.state).toMatchObject({
+      kind: 'ready',
+      ready: { url: 'http://127.0.0.1:7428' },
+    });
+    expect(t.allLogs()).not.toContain(TOKEN);
+  });
+
+  it('refuses a ready line that is not on loopback (closes stdin first, then signals wsl.exe)', async () => {
+    const t = wsl();
+    t.supervisor.start();
+    const child = t.wsl.last().child;
+    child.frame(
+      NONCE,
+      wslLine({
+        url: 'http://192.168.1.5:7428',
+        authUrl: `http://192.168.1.5:7428/#token=${TOKEN}`,
+      }),
+    );
+    await settle();
+    expect(child.stdinEnded).toBe(true);
+    expect(child.linuxAlive).toBe(false);
+    expect(t.supervisor.state).toMatchObject({
+      kind: 'restarting',
+      reason: 'the daemon is not on a loopback address',
+    });
+    const ok = { url: 'http://127.0.0.1:1', authUrl: 'http://127.0.0.1:1/#t', host: '127.0.0.1' };
+    expect(isLoopbackReady(ok)).toBe(true);
+    // Only the literal 127.0.0.1 (review LOW 2): what the WSL backend asked for and Windows reaches.
+    expect(
+      isLoopbackReady({ ...ok, url: 'http://localhost:1', authUrl: 'http://localhost:1/#t' }),
+    ).toBe(false);
+    expect(isLoopbackReady({ ...ok, url: 'http://[::1]:1', authUrl: 'http://[::1]:1/#t' })).toBe(
+      false,
+    );
+    expect(isLoopbackReady({ ...ok, authUrl: 'http://127.0.0.1:2/#t' })).toBe(false);
+    expect(
+      isLoopbackReady({ ...ok, url: 'http://0.0.0.0:1', authUrl: 'http://0.0.0.0:1/#t' }),
+    ).toBe(false);
+    expect(isLoopbackReady({ url: 'file:///x', authUrl: 'file:///x', host: '127.0.0.1' })).toBe(
+      false,
+    );
+    // The bind address decides: a wildcard daemon's URL reads 127.0.0.1 too.
+    expect(isLoopbackReady({ ...ok, host: '0.0.0.0' })).toBe(false);
+    expect(isLoopbackReady({ ...ok, host: 'localhost' })).toBe(false);
+    expect(isLoopbackReady({ url: ok.url, authUrl: ok.authUrl })).toBe(false);
+  });
+
+  it('quit: closing stdin stops the Linux daemon; wsl.exe then exits and is never signalled', async () => {
+    const t = wsl();
+    t.supervisor.start();
+    const child = t.wsl.last().child;
+    child.frame(NONCE, wslLine());
+    await settle();
+    const stopped = t.supervisor.stop();
+    await settle();
+    await stopped;
+    expect(child.linuxAlive).toBe(false);
+    expect(child.kills).toEqual([]);
+    expect(t.supervisor.state.kind).toBe('stopped');
+  });
+
+  it('no ready frame in time: stdin closed first and the daemon gets stopGraceMs before wsl.exe is killed', async () => {
+    const t = wsl();
+    t.supervisor.start();
+    const child = t.wsl.last().child;
+    // A Linux process that ignores EOF for now (stuck starting): only the escalation is left.
+    child.ignoresEof = true;
+    await t.clock.advance(DEFAULT_POLICY.readyTimeoutMs);
+    expect(child.stdinEnded).toBe(true);
+    expect(child.kills).toEqual([]);
+    await t.clock.advance(DEFAULT_POLICY.stopGraceMs);
+    expect(child.kills).toEqual(['SIGTERM']);
+  });
+
+  it('no ready frame in time, the usual case: the EOF alone stops the daemon, no kill at all', async () => {
+    const t = wsl();
+    t.supervisor.start();
+    const child = t.wsl.last().child;
+    await t.clock.advance(DEFAULT_POLICY.readyTimeoutMs);
+    await settle();
+    expect(child.linuxAlive).toBe(false);
+    expect(child.kills).toEqual([]);
+    expect(t.supervisor.state).toMatchObject({ kind: 'restarting' });
+    await t.clock.advance(DEFAULT_POLICY.stopGraceMs + DEFAULT_POLICY.killGraceMs);
+    expect(child.kills).toEqual([]);
+  });
+
+  it('stop() escalation on a stuck daemon: SIGTERM to wsl.exe only after the grace; stdin was closed first', async () => {
+    const t = wsl();
+    t.supervisor.start();
+    const child = t.wsl.last().child;
+    child.frame(NONCE, wslLine());
+    await settle();
+    child.ignoresEof = true;
+    const stopped = t.supervisor.stop();
+    await settle();
+    expect(child.stdinEnded).toBe(true);
+    expect(child.kills).toEqual([]);
+    await t.clock.advance(DEFAULT_POLICY.stopGraceMs);
+    expect(child.kills).toEqual(['SIGTERM']);
+    await stopped;
+  });
+
+  it('wsl.exe exiting before stdout is drained still hands over the frame (attach run)', async () => {
+    const t = wsl();
+    t.supervisor.start();
+    const child = t.wsl.last().child;
+    child.frame(NONCE, wslLine({ mode: 'attached' }));
+    child.exit(0);
+    await settle();
+    expect(t.supervisor.state).toMatchObject({ kind: 'ready', ready: { mode: 'attached' } });
+    expect(t.supervisor.ownsDaemon).toBe(false);
+  });
+
+  it('an over-long frame fails the attempt (never logged)', async () => {
+    const t = wsl();
+    t.supervisor.start();
+    const child = t.wsl.last().child;
+    child.stdout.write(`\n\u001eoctopus-diff-ready ${NONCE} ${'x'.repeat(20_000)}`);
+    await settle();
+    expect(t.supervisor.state).toMatchObject({
+      kind: 'restarting',
+      reason: 'the ready line is too long',
+    });
+    expect(t.output.join('')).not.toContain('xxxx');
+  });
+
+  it('wsl.exe that exits with nothing (distro gone): a failure, retried with backoff', async () => {
+    const t = wsl();
+    t.supervisor.start();
+    t.wsl.last().child.exit(255);
+    await settle();
+    expect(t.supervisor.state).toMatchObject({
+      kind: 'restarting',
+      reason: 'the backend exited with code 255 before it was ready',
+    });
+    await t.clock.advance(DEFAULT_POLICY.backoffMs[0] ?? 0);
+    expect(t.wsl.calls).toHaveLength(2);
+  });
+
+  it('attached to a daemon bound to 0.0.0.0 (url 127.0.0.1): refused (review LOW 2)', async () => {
+    const t = wsl();
+    t.supervisor.start();
+    t.wsl.last().child.frame(NONCE, wslLine({ mode: 'attached', host: '0.0.0.0' }));
+    await settle();
+    expect(t.supervisor.state).toMatchObject({
+      kind: 'restarting',
+      reason: 'the daemon is not on a loopback address',
+    });
+  });
+
+  it('a fresh nonce for every attempt, in the argv and the reader (review MEDIUM 1)', async () => {
+    let n = 0;
+    const nonces = ['first_attempt_nonce_0123456789', 'second_attempt_nonce_012345678'];
+    const t = wsl({
+      ready: { kind: 'stdout', nonce: () => nonces[n++] ?? 'x'.repeat(32) },
+      args: ({ nonce }) => ['-d', 'Ubuntu', `--ready-stdout=${nonce}`],
+    });
+    t.supervisor.start();
+    expect(t.wsl.calls[0]?.args).toEqual(['-d', 'Ubuntu', `--ready-stdout=${nonces[0]}`]);
+    t.wsl.last().child.exit(1);
+    await settle();
+    await t.clock.advance(DEFAULT_POLICY.backoffMs[0] ?? 0);
+    expect(t.wsl.calls[1]?.args).toEqual(['-d', 'Ubuntu', `--ready-stdout=${nonces[1]}`]);
+    // The first attempt's nonce is not this attempt's.
+    const child = t.wsl.last().child;
+    child.frame(nonces[0] as string, wslLine());
+    await settle();
+    expect(t.supervisor.state.kind).toBe('starting');
+    child.frame(nonces[1] as string, wslLine());
+    await settle();
+    expect(t.supervisor.state.kind).toBe('ready');
   });
 });

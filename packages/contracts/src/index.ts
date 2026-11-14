@@ -11,6 +11,7 @@ export * from './common.js';
 export * from './daemon.js';
 export * from './desktop.js';
 export * from './desktop-cli.js';
+export * from './desktop-wsl.js';
 export * from './domain.js';
 export * from './events.js';
 export * from './forge.js';

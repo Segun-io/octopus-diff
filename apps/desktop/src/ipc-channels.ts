@@ -25,3 +25,9 @@ export const CLI_CHANNELS = {
   status: 'octopus-diff:cli-status',
   install: 'octopus-diff:cli-install',
 } as const;
+
+/** The WSL backend's channels (#22): the contract's `DESKTOP_WSL_CHANNELS` (checked by a test). */
+export const WSL_CHANNELS = {
+  status: 'octopus-diff:wsl-status',
+  set: 'octopus-diff:wsl-set',
+} as const;
