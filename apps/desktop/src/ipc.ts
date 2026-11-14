@@ -77,6 +77,29 @@ export interface BridgeDeps {
 
 const MAX_CLIPBOARD = 32 * 1024 * 1024;
 
+/**
+ * A path the folder dialog may start in without reaching the network: on Windows a drive path
+ * (`C:\` or `C:/`), never `//host/share`, `\\host\share` or a `\\?\` device path (Windows
+ * would connect over SMB and send the user's NTLM hash); elsewhere a single leading `/`.
+ */
+export function isLocalAbsolutePath(p: string, platform: NodeJS.Platform): boolean {
+  if (platform === 'win32') return /^[A-Za-z]:[\\/]/.test(p);
+  return p.startsWith('/') && !p.startsWith('//');
+}
+
+/** A local absolute path to an existing directory (`stat` only after the path check). */
+async function isLocalDirectory(
+  p: string,
+  deps: Pick<BridgeDeps, 'platform' | 'fs'>,
+): Promise<boolean> {
+  if (!isLocalAbsolutePath(p, deps.platform)) return false;
+  try {
+    return (await deps.fs.stat(p)).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
 const TargetArgs = z.tuple([IdSchema, RepoPathSchema.optional()]);
 const EditorArgs = z.tuple([
   IdSchema,
@@ -100,7 +123,7 @@ const BadgeArgs = z.tuple([z.number().int().min(0).max(Number.MAX_SAFE_INTEGER)]
 const CopyArgs = z.tuple([z.string().max(MAX_CLIPBOARD)]);
 const NoArgs = z.tuple([]);
 
-type InvokeHandler = (event: IpcEventLike, ...args: unknown[]) => Promise<unknown>;
+export type InvokeHandler = (event: IpcEventLike, ...args: unknown[]) => Promise<unknown>;
 type OnHandler = (event: IpcEventLike, ...args: unknown[]) => void;
 
 export interface BridgeHandlers {
@@ -112,7 +135,28 @@ export interface BridgeHandlers {
 
 const OK: DesktopActionResult = { ok: true };
 
-export function createBridgeHandlers(deps: BridgeDeps): BridgeHandlers {
+export interface Guard {
+  /** Logs a refusal (`bridge: <method> refused (<reason>)`, never a path) and returns it. */
+  note(method: string, refusal: Refusal): Refusal;
+  forbidden(method: string): Refusal;
+  invalid(method: string): Refusal;
+  /**
+   * An `ipcMain.handle` handler: the sender check, then zod on the exact argument tuple, then
+   * `run`; `fallback` turns a refusal into the method's return value (nothing throws to the page).
+   */
+  handler<T extends z.ZodType, R>(
+    method: string,
+    schema: T,
+    fallback: (refusal: Refusal) => R,
+    run: (args: z.infer<T>) => Promise<R>,
+  ): InvokeHandler;
+}
+
+/**
+ * The checks every bridge channel goes through, shared with the command installer's channels
+ * (`cli-shim-ipc.ts`, #547), so no channel has a weaker sender check.
+ */
+export function createGuard(deps: Pick<BridgeDeps, 'trusted' | 'log'>): Guard {
   const note = (method: string, refusal: Refusal): Refusal => {
     deps.log(`bridge: ${method} refused (${refusal.reason})`);
     return refusal;
@@ -120,21 +164,23 @@ export function createBridgeHandlers(deps: BridgeDeps): BridgeHandlers {
   const forbidden = (method: string) =>
     note(method, refuse('forbidden', 'Not available from this page.'));
   const invalid = (method: string) => note(method, refuse('invalid', 'Invalid arguments.'));
+  return {
+    note,
+    forbidden,
+    invalid,
+    handler(method, schema, fallback, run) {
+      return async (event, ...raw) => {
+        if (!senderAllowed(event, deps.trusted())) return fallback(forbidden(method));
+        const parsed = schema.safeParse(raw);
+        if (!parsed.success) return fallback(invalid(method));
+        return run(parsed.data);
+      };
+    },
+  };
+}
 
-  /** Sender check + zod, then `run`; `fallback` maps a refusal to the method's return type. */
-  function handler<T extends z.ZodType, R>(
-    method: string,
-    schema: T,
-    fallback: (refusal: Refusal) => R,
-    run: (args: z.infer<T>) => Promise<R>,
-  ): InvokeHandler {
-    return async (event, ...raw) => {
-      if (!senderAllowed(event, deps.trusted())) return fallback(forbidden(method));
-      const parsed = schema.safeParse(raw);
-      if (!parsed.success) return fallback(invalid(method));
-      return run(parsed.data);
-    };
-  }
+export function createBridgeHandlers(deps: BridgeDeps): BridgeHandlers {
+  const { note, forbidden, invalid, handler } = createGuard(deps);
 
   const asResult = (r: Refusal): DesktopActionResult => r;
 
@@ -159,8 +205,15 @@ export function createBridgeHandlers(deps: BridgeDeps): BridgeHandlers {
         PickFolderArgs,
         () => null,
         async ([options]) => {
+          const { defaultPath, ...rest } = options ?? {};
+          // A hint only: dropped unless it is a local absolute directory (checked in that order,
+          // so a UNC path is never touched, #548).
+          const start =
+            defaultPath !== undefined && (await isLocalDirectory(defaultPath, deps))
+              ? { defaultPath }
+              : {};
           try {
-            return await deps.pickFolder({ ...options });
+            return await deps.pickFolder({ ...rest, ...start });
           } catch {
             deps.log('bridge: pickFolder failed');
             return null;

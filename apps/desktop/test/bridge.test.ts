@@ -134,6 +134,37 @@ describe('createDesktopBridge (the preload API)', () => {
     expect(second).toEqual(['open-settings', 'refresh']);
   });
 
+  it('a listener gets the command only, never the IPC event (whose sender is ipcRenderer)', () => {
+    const b = createDesktopBridge(env());
+    const got: unknown[][] = [];
+    b.onCommand((...args: unknown[]) => got.push(args));
+    listeners.get(COMMAND_CHANNEL)?.({ sender: 'ipcRenderer' }, 'refresh');
+    expect(got).toEqual([['refresh']]);
+  });
+
+  it('a malformed answer from the main process is a refusal, not passed to the page', async () => {
+    for (const answer of ['yes', 42, null, {}, { ok: 'true' }, ['ok']]) {
+      const b = createDesktopBridge(
+        env({
+          ipc: { invoke: async () => answer, send: () => undefined, on: () => undefined },
+        }),
+      );
+      expect(await b.revealPath('0123456789abcdef'), JSON.stringify(answer)).toMatchObject({
+        ok: false,
+        reason: 'failed',
+      });
+      if (typeof answer !== 'string') {
+        expect(await b.pickFolder(), JSON.stringify(answer)).toBeNull();
+      }
+    }
+    const objectPath = createDesktopBridge(
+      env({
+        ipc: { invoke: async () => ({ path: '/x' }), send: () => undefined, on: () => undefined },
+      }),
+    );
+    expect(await objectPath.pickFolder()).toBeNull();
+  });
+
   it('a throwing listener does not stop the others', () => {
     const b = createDesktopBridge(env());
     const got: string[] = [];

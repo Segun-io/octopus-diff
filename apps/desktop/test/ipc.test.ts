@@ -358,10 +358,101 @@ describe('pickFolder / setBadge / copyText / commands-ready', () => {
   it('pickFolder passes the options and returns the path', async () => {
     const h = createBridgeHandlers(deps());
     expect(
-      await h.invoke[BRIDGE_CHANNELS.pickFolder]?.(event(), { title: 'Add', defaultPath: '/home' }),
+      await h.invoke[BRIDGE_CHANNELS.pickFolder]?.(event(), { title: 'Add', defaultPath: '/r' }),
     ).toBe('/home/me/code');
     expect(await h.invoke[BRIDGE_CHANNELS.pickFolder]?.(event())).toBe('/home/me/code');
-    expect(calls.picked).toEqual([{ title: 'Add', defaultPath: '/home' }, {}]);
+    expect(calls.picked).toEqual([{ title: 'Add', defaultPath: '/r' }, {}]);
+  });
+
+  it('pickFolder drops a defaultPath that is not an existing directory', async () => {
+    const h = createBridgeHandlers(deps());
+    for (const defaultPath of ['/nope', '/r/a.ts']) {
+      expect(
+        await h.invoke[BRIDGE_CHANNELS.pickFolder]?.(event(), { title: 'Add', defaultPath }),
+      ).toBe('/home/me/code');
+    }
+    expect(calls.picked).toEqual([{ title: 'Add' }, { title: 'Add' }]);
+  });
+
+  it('pickFolder on Windows: a UNC or device defaultPath is never touched (no SMB connection)', async () => {
+    const touched: string[] = [];
+    const fs = {
+      realpath: async (p: string) => p,
+      stat: async (p: string) => {
+        touched.push(p);
+        return { isDirectory: () => true, isFile: () => false, mode: 0o755 };
+      },
+    };
+    const h = createBridgeHandlers(deps({ platform: 'win32', fs }));
+    const pick = h.invoke[BRIDGE_CHANNELS.pickFolder];
+    for (const defaultPath of ['//attacker.example/share', '/attacker', '//?/C:/x']) {
+      expect(await pick?.(event(), { defaultPath }), defaultPath).toBe('/home/me/code');
+    }
+    // `\\host\share` and `\\?\C:\x` are not absolute paths at all: the call is invalid.
+    for (const defaultPath of ['\\\\attacker.example\\share', '\\\\?\\C:\\x']) {
+      expect(await pick?.(event(), { defaultPath }), defaultPath).toBeNull();
+    }
+    expect(touched).toEqual([]);
+    expect(calls.picked).toEqual([{}, {}, {}]);
+    expect(await pick?.(event(), { defaultPath: 'C:\\Users\\me' })).toBe('/home/me/code');
+    expect(await pick?.(event(), { defaultPath: 'D:/code' })).toBe('/home/me/code');
+    expect(touched).toEqual(['C:\\Users\\me', 'D:/code']);
+    expect(calls.picked.slice(3)).toEqual([
+      { defaultPath: 'C:\\Users\\me' },
+      { defaultPath: 'D:/code' },
+    ]);
+  });
+
+  it('pickFolder on Linux/macOS: a // defaultPath is dropped without a stat', async () => {
+    const touched: string[] = [];
+    const fs = {
+      realpath: async (p: string) => p,
+      stat: async (p: string) => {
+        touched.push(p);
+        return { isDirectory: () => true, isFile: () => false, mode: 0o755 };
+      },
+    };
+    for (const platform of ['linux', 'darwin'] as const) {
+      const h = createBridgeHandlers(deps({ platform, fs }));
+      expect(
+        await h.invoke[BRIDGE_CHANNELS.pickFolder]?.(event(), { defaultPath: '//host/share' }),
+      ).toBe('/home/me/code');
+    }
+    expect(touched).toEqual([]);
+    expect(calls.picked).toEqual([{}, {}]);
+  });
+
+  it('pickFolder: a title over 200 characters is invalid', async () => {
+    const h = createBridgeHandlers(deps());
+    const pick = h.invoke[BRIDGE_CHANNELS.pickFolder];
+    expect(await pick?.(event(), { title: 'x'.repeat(200) })).toBe('/home/me/code');
+    expect(await pick?.(event(), { title: 'x'.repeat(201) })).toBeNull();
+    expect(calls.picked).toEqual([{ title: 'x'.repeat(200) }]);
+  });
+
+  it('copyText takes at most 32 MiB', async () => {
+    const h = createBridgeHandlers(deps());
+    const copy = h.invoke[BRIDGE_CHANNELS.copyText];
+    const max = 32 * 1024 * 1024;
+    expect(await copy?.(event(), 'x'.repeat(max))).toBe(true);
+    expect(await copy?.(event(), 'x'.repeat(max + 1))).toBe(false);
+    expect(calls.clipboard.length).toBe(1);
+  });
+
+  it('openPath: a rejected shell.openPath is a refusal value, logged', async () => {
+    const h = createBridgeHandlers(
+      deps({
+        openPath: async () => {
+          throw new Error('spawn failed /r/img.png');
+        },
+      }),
+    );
+    expect(await h.invoke[BRIDGE_CHANNELS.openPath]?.(event(), ID, 'img.png')).toMatchObject({
+      ok: false,
+      reason: 'failed',
+    });
+    expect(calls.logs).toContain('bridge: openPath refused (failed)');
+    expect(calls.logs.join('\n')).not.toContain('/r/img.png');
   });
 
   it('setBadge takes a non-negative integer', async () => {

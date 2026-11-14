@@ -19,7 +19,6 @@ import {
   app,
   BrowserWindow,
   dialog,
-  ipcMain,
   Menu,
   type MessageBoxOptions,
   screen,
@@ -42,7 +41,7 @@ import {
 import { backendCommand, cliBundleEntry } from './backend-command.js';
 import { installBridge } from './bridge-main.js';
 import { createNodeShimFs, createWindowsUserPath } from './cli-shim-fs.js';
-import { outcomeTitle, registerCliShimIpc } from './cli-shim-ipc.js';
+import { outcomeTitle } from './cli-shim-ipc.js';
 import { createCliShim, startupRefresh } from './cli-shim-service.js';
 import {
   addProject,
@@ -501,15 +500,10 @@ async function main(): Promise<void> {
     },
     runScript: runInPage,
     log: (line) => log.note(line),
+    // installCli / cliStatus go through the bridge's guard too (DECISIONS #547).
+    cliShim,
   });
   installMenu();
-  // The command installer's IPC (the preload's bridge calls it: installCli / cliStatus).
-  registerCliShimIpc({
-    ipcMain,
-    shim: cliShim,
-    uiOrigin: () => uiOrigin,
-    log: (text) => log.note(text),
-  });
   createWindow();
 
   const shellPath = resolveShellPath({

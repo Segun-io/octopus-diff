@@ -10,6 +10,8 @@ import { realpath, stat } from 'node:fs/promises';
 import type { DesktopCommand } from '@octopus-diff/contracts';
 import { app, type BrowserWindow, clipboard, dialog, ipcMain, nativeImage, shell } from 'electron';
 import { badgePlan, overlayDotBitmap } from './badge.js';
+import { createCliShimHandlers } from './cli-shim-ipc.js';
+import type { CliShim } from './cli-shim-service.js';
 import { COMMAND_CHANNEL, createBridgeHandlers } from './ipc.js';
 import { PageCommands } from './page-commands.js';
 import { listWorktrees } from './worktrees-api.js';
@@ -23,6 +25,8 @@ export interface BridgeHost {
   /** Runs one of phase A's constant scripts in the page (the fallback for older web builds). */
   runScript(script: string): void;
   log(line: string): void;
+  /** The command installer (#21): its two channels get the bridge's guard. */
+  cliShim: CliShim;
 }
 
 export interface InstalledBridge {
@@ -55,12 +59,13 @@ export function installBridge(host: BridgeHost): InstalledBridge {
     win.setOverlayIcon(overlay, plan.description);
   };
 
+  const trusted = () => ({
+    webContentsId: host.window()?.webContents.id ?? null,
+    origin: host.uiOrigin(),
+  });
   const handlers = createBridgeHandlers({
     platform: process.platform,
-    trusted: () => ({
-      webContentsId: host.window()?.webContents.id ?? null,
-      origin: host.uiOrigin(),
-    }),
+    trusted,
     listWorktrees: async () => {
       const d = host.daemon();
       return d ? listWorktrees(d.url, d.token) : null;
@@ -84,7 +89,8 @@ export function installBridge(host: BridgeHost): InstalledBridge {
     commandsReady: (id) => pages.markReady(id),
     log: host.log,
   });
-  for (const [channel, handler] of Object.entries(handlers.invoke)) {
+  const cliHandlers = createCliShimHandlers({ shim: host.cliShim, trusted, log: host.log });
+  for (const [channel, handler] of Object.entries({ ...handlers.invoke, ...cliHandlers })) {
     ipcMain.handle(channel, (event, ...args) => handler(event, ...args));
   }
   for (const [channel, handler] of Object.entries(handlers.on)) {
