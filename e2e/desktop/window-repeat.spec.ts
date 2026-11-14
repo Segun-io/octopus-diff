@@ -36,10 +36,7 @@ import {
   withWindowDiagnostics,
 } from './support/packaged-app.js';
 
-// TEMPORARY (measurement on this branch only; reverted before handover): 10 launches on macOS.
-const REPEAT = Number(
-  process.env.OCTOPUS_DESKTOP_WINDOW_REPEAT ?? (process.platform === 'darwin' ? '10' : '0'),
-);
+const REPEAT = Number(process.env.OCTOPUS_DESKTOP_WINDOW_REPEAT ?? '0');
 
 test.describe.configure({ mode: 'serial' });
 
