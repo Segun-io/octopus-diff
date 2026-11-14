@@ -6332,8 +6332,9 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      and stderr to the Linux process, so `--ready-fd 3` cannot reach the app through it. The new option writes the
      same `ServeReady` JSON to stdout as `formatServeReadyFrame(nonce, ready)`: a newline, ASCII RS (0x1E),
      `octopus-diff-ready `, the nonce, a space, the JSON, a newline. The leading newline starts the frame on a line of
-     its own even after partial output; RS never appears in the CLI's text output; the per-run nonce (chosen by the
-     supervisor, 16-128 of `[A-Za-z0-9_-]`, on the command line: it is not a secret, it only tells this run's frame
+     its own even after partial output; RS never appears in the CLI's text output; the nonce (chosen by the
+     supervisor, 16-128 of `[A-Za-z0-9_-]`, on the command line; *per spawn attempt and hex since #624, it was per
+     preflight and base64url here*: it is not a secret, it only tells this run's frame
      from echoed or stray text) means a line with the prefix but another nonce is not the ready line. The frame is
      written with the same blocking `writeSync` as the fd channel (a few hundred bytes, one write); the banner then says
      "sent in the ready frame on stdout" and has no token. `--ready-fd` and `--ready-stdout` together are a usage
@@ -6357,7 +6358,7 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      `stopGraceMs` to see the EOF before `wsl.exe` is signalled; `stop()` already worked that way. Without `wrapper`
      a failed attempt also closes stdin before its SIGTERM (harmless for the Electron child, which exits on either).
      `loopbackOnly: true` refuses a ready line whose `url` is not on a loopback host or whose `authUrl` has another
-     origin. The fake `wsl.exe` child in the tests (`FakeWslChild`) ignores kills for the Linux process and stops it
+     origin (*tightened by #626: the bind `host` and `url` must both be the literal `127.0.0.1`*). The fake `wsl.exe` child in the tests (`FakeWslChild`) ignores kills for the Linux process and stops it
      only on stdin's EOF.
 614. **`wsl.exe` command lines: argv arrays, `--exec`, the probe script on stdin.** `wsl.exe -- <cmd>` hands the rest
      to the distro's default shell as one command line (T3 Code notes that it mangles quotes), so every call uses
@@ -6372,7 +6373,8 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      are Windows paths and are not passed (logged); `--port` is.
 615. **Networking: the daemon binds `127.0.0.1` inside the distro, explicitly, and Windows loads
      `http://127.0.0.1:<port>`.** `--host 127.0.0.1` on the command line overrides a `host` in the distro's config
-     file, so the app can never put the daemon on the LAN by accident. Reaching it from Windows: with
+     file, so the app can never put the daemon on the LAN by accident (*for a daemon it starts; attaching to one bound
+     elsewhere is refused since #622/#626*). Reaching it from Windows: with
      `networkingMode=mirrored`, Windows and the distro share loopback, so a socket bound to the distro's
      127.0.0.1 is reachable at Windows' 127.0.0.1 and (being loopback) from nowhere else; with the default NAT mode,
      `localhostForwarding=true` (the default) makes WSL relay Windows' loopback port to a socket bound to loopback (or
@@ -6450,3 +6452,60 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
 623. **The EADDRINUSE message under WSL** adds that with mirrored networking Windows programs (another octopus-diff
      too) share the distro's ports. That is the likely cause when a backend switch from Windows to WSL finds 7428
      taken.
+624. **A fresh hex nonce per spawn attempt, passed as `--ready-stdout=<nonce>` (review MEDIUM 1).** `newReadyNonce()` was
+     base64url, so it started with `-` one time in 64. `wslServeArgs` passed it as its own argument, and the CLI's
+     strict `parseArgs` rejects an option value that looks like an option ("argument is ambiguous", exit 2). The
+     nonce was also built once per preflight and reused by every restart and Try again, so that start could never
+     succeed. Now:
+     - the nonce is 48 lowercase hex characters (`randomBytes(24).toString('hex')`, still `ServeReadyNonceSchema`);
+     - the argv carries one `--ready-stdout=<nonce>` element;
+     - the supervisor takes `ready: { kind: 'stdout', nonce: () => string }` and `args: ({ nonce }) => argv`, so every
+       spawn attempt gets a fresh nonce in both the argv and the frame reader;
+     - `prepareWslBackend` returns `argsFor(nonce)` instead of one argv.
+
+     This corrects #612/#613 and DESKTOP §11, which said "per run": it was per preflight, and is now per attempt. A
+     desktop test runs the CLI's real parser (`run` from `octopus-diff` with `--help`) on the produced argv with a
+     nonce starting with `-` (exit 0), and on the old two-argument form (exit 2, "ambiguous").
+625. **`wsl.exe -l -v` parsing is bounded (review LOW 1).** `raw.replace(/\s+$/, '')` was quadratic on a line of
+     whitespace that does not end in whitespace (20k characters took 0.2 s, 80k took 3.4 s). `runWsl` caps output at
+     1 MiB, so a hostile `wsl.exe` output could freeze the main process for about two minutes. Now only the first
+     256 lines are split off, `trimEnd()` replaces the regex, and a line still longer than 512 characters after it is
+     skipped before any other parsing. The cap applies after `trimEnd()`, so a quadratic-regex mutant still meets the
+     500k-character test line and is killed by the time bound. Tests:
+     - a 500k-character line of spaces ending in `x`, and a row followed by 500k spaces, each under 250 ms;
+     - a 600-character row is skipped;
+     - only 255 rows of 300 are read.
+626. **The WSL backend accepts only a daemon bound to, and reached at, the literal `127.0.0.1` (review LOW 2).**
+     `isLoopbackReady` now requires `ready.host === '127.0.0.1'` (#620; a line without `host` is refused) and
+     `url`'s hostname to be exactly `127.0.0.1` (not `localhost`, not `[::1]`), with `authUrl` on the same origin.
+     With #622 (the CLI refusing to attach to a daemon bound elsewhere than `--host`), a daemon in the distro bound to
+     `0.0.0.0` is never used, whether it was started or attached. This replaces #613's "loopback host" wording (that
+     check accepted any loopback name and looked at `url` only) and makes #615's "never on the LAN" hold for attach
+     too.
+627. **In WSL mode the window's requests are held while the daemon is unverified (review LOW 3).** `verifyDaemon`
+     ran once per ready line. While the backend was `restarting`, the page kept reconnecting to the same origin with
+     `Authorization: Bearer <token>`, and a program that took the port on Windows in the meantime (NAT mode) would
+     have received it. `UiRequestGate` (`src/ui-request-gate.ts`, pure, over an injected `install`) is enabled only
+     for the WSL backend. It installs `session.webRequest.onBeforeRequest` and cancels every http(s) request of the
+     window from the moment the backend leaves `ready` (any other state, a backend switch) until `verifyDaemon`
+     passed again. `ready` alone does not open it. Screens are `data:` pages and the main process's own checks bypass
+     the session, so nothing else is affected. For this machine's backend it removes the listener; it is never
+     installed at all unless a distro is chosen. The first blocked request of each closed spell is logged (origin
+     only). **What remains** (DESKTOP §11):
+     - the moment between `verifyDaemon` and the load of `authUrl`;
+     - an attached daemon that died but has not yet been noticed by the health poll (up to ~10 s, the state is still
+       `ready`).
+
+     In both, a squatter on Windows' port could receive requests. **Follow-up, out of scope here:** check the owner
+     of the Windows listener (`GetExtendedTcpTable` → is it `wslrelay.exe`/the WSL service?) before trusting the
+     port, or move the UI to a custom scheme with its own transport.
+628. **Settings saves are serialized (review LOW 4).** `saveSettings` wrote a fixed `<file>.tmp`. Two quick choices
+     could interleave their write/rename pairs and leave memory and the file on different values. `SettingsStore`
+     (in `desktop-settings.ts`, over an injected `writeFile`/`rename`) chains saves on one promise. Each save writes
+     its own temp file (`<file>.<pid>-<n>.tmp`), renames it over the file and only then becomes `current`. A failed
+     save leaves `current` unchanged and does not block the next one.
+629. **Nits.** `isSafeDistroName` now rejects a double space, matching its doc ("single spaces inside"; a row with
+     one could not be split from the next column anyway). The EADDRINUSE hint for WSL is #623.
+630. **The mutation check gains `cli:` mutants** (`cli:<path under apps/cli/src>` with `cli:<test name>`, run in
+     `apps/cli`). The desktop's WSL backend depends on two CLI rules: the broken-pipe guard and the attach host
+     check. They are mutated there against the CLI's own unit tests.

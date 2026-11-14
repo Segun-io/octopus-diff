@@ -374,7 +374,7 @@ The supervisor (#18) and the launcher written by the shim (§3.2) must therefore
 
 ## 11. Phase D: the backend inside WSL (as built, #22)
 
-DECISIONS #610-#619; report `docs/reports/desktop-phase-d.md`.
+DECISIONS #610-#619 and the PR #114 review's #620-#630; report `docs/reports/desktop-phase-d.md`.
 
 **Opt-in.** Settings → Desktop app → "Where the backend runs" (Windows only) lists the distros from `wsl.exe -l -v`
 (not docker-desktop and other tools' own). The choice is stored by the app in `<userData>/desktop-settings.json`
@@ -387,9 +387,11 @@ DECISIONS #610-#619; report `docs/reports/desktop-phase-d.md`.
    login shell for its PATH, then reports `octopus-diff`, its version and `--ready-stdout` support, `node`, `git` and
    `/usr/bin/env`. Anything missing → a screen with what to run in the distro (nothing is ever installed), Try again,
    **Use the Windows backend**, Show the log.
-3. `serve`: `wsl.exe -d <distro> --cd ~ --exec /usr/bin/env PATH=<login PATH> <octopus-diff> serve --ready-stdout
-   <nonce> --exit-with-stdin --no-open --host 127.0.0.1`, supervised by the same `BackendSupervisor` with the stdout
-   ready channel, `wrapper: true` and `loopbackOnly: true`.
+3. `serve`: `wsl.exe -d <distro> --cd ~ --exec /usr/bin/env PATH=<login PATH> <octopus-diff> serve
+   --ready-stdout=<nonce> --exit-with-stdin --no-open --host 127.0.0.1`. It is supervised by the same
+   `BackendSupervisor` with the stdout ready channel, `wrapper: true` and `loopbackOnly: true`. The nonce is 48 hex
+   characters and **fresh for every spawn attempt** (restarts and Try again included). It is written in the `=` form
+   because the CLI's parser rejects a separate value starting with `-` (#624).
 
 ```
 Electron main (Windows)                          wsl.exe (Windows)            the distro (Linux)
@@ -406,15 +408,23 @@ Electron main (Windows)                          wsl.exe (Windows)            th
 the first whole line that starts with the prefix *and* this run's nonce; every frame-like line is kept out of the log;
 everything else goes to the log as it comes.
 
+**Bounded parsing.** `wsl.exe -l -v` output is read at most 256 lines deep. Each line is `trimEnd()`ed, and one still
+longer than 512 characters is skipped, so hostile output cannot freeze the main process (#625).
+
 **No orphan.** Terminating `wsl.exe` is assumed **not** to stop the Linux process (the worst case; the fake child in the
 unit tests behaves that way). The lifeline is what stops it: on quit, on a failed start and on a restart the supervisor
 closes stdin first and waits `stopGraceMs` before it signals `wsl.exe`. If the app crashes, Windows closes its pipe ends,
-`wsl.exe` relays the EOF, and the daemon shuts down; its stderr still has the log handle. The CLI ignores EPIPE on
-stdout once the stdout channel is open, so a vanished reader cannot crash that shutdown. Verified with a real
+`wsl.exe` relays the EOF, and the daemon shuts down. When `wsl.exe` itself is killed, the review measured stdin's EOF,
+then SIGHUP, and **both** output pipes broken. A supervised `serve` (`--exit-with-stdin` or `--ready-stdout`)
+therefore remembers EPIPE on stdout *and* stderr and drops later writes to a broken one. Its shutdown completes
+(exit 0, `daemon.json` removed) instead of crashing on its first log line (#621). Verified with a real
 `wsl.exe` here (smoke, opt-in): stdin EOF across `wsl.exe` stops the daemon, and so does SIGKILLing `wsl.exe` itself.
 
 **Networking (mirrored vs NAT).** The daemon binds `127.0.0.1` inside the distro (explicitly: a `host` in the
-distro's config file cannot widen it). With `networkingMode=mirrored` Windows and the distro share loopback, so Windows
+distro's config file cannot widen it). The app accepts only a ready line that says so: `host` (the bind address, #620)
+must be the literal `127.0.0.1`, and so must `url`'s host. The CLI refuses to attach to a daemon bound elsewhere than
+the `--host` it was given. A `--host 0.0.0.0` daemon, whose URL also reads 127.0.0.1, is therefore never used
+(#622, #626). With `networkingMode=mirrored` Windows and the distro share loopback, so Windows
 reaches it at `127.0.0.1:<port>` and nothing off the machine can. With the default NAT mode and
 `localhostForwarding=true` (the default), WSL relays Windows' loopback port into the VM; the relay listens on Windows'
 loopback only. The daemon sees a loopback peer and `Host: 127.0.0.1:<port>`, so its Host/Origin checks and the token flow
@@ -423,9 +433,25 @@ token (not a Windows program on the same port); otherwise it shows "Windows cann
 `.wslconfig` lines to check. With `localhostForwarding=false` in NAT mode it cannot work, by design (no LAN binding
 as a fallback).
 
+**Requests held while unverified (#627).** In WSL mode the session cancels every http(s) request of the window from
+the moment the backend leaves `ready` until the proof passes again (`UiRequestGate`). So the page's own reconnects,
+which carry `Authorization: Bearer`, cannot reach whatever holds the port during a restart. With this machine's
+backend the listener is not installed. **Remaining risk, mainly in NAT mode:** Windows' `127.0.0.1:<port>` belongs to
+whoever listens there: WSL's relay, or a local program that took the port. The app checks the daemon's proof; it
+does not check who owns the listener. Two short windows are left:
+- between the proof and the load;
+- while an attached daemon has died but the health poll has not noticed yet (up to about 10 s).
+
+In both, a squatter could see requests, including the token on the next authenticated call. Mirrored mode has no
+relay: the distro's own socket holds the port, so a Windows program could only take it after the daemon released it,
+and the gate covers the restart. Follow-up: check the listener's owning process (`GetExtendedTcpTable`).
+
 **Attach.** `serve` in the distro attaches to a daemon already running for the distro's state dir (the user's own
 `octopus-diff serve` in a WSL terminal), exactly as on the other platforms; `octopus-diff add .` in that distro talks
 to the app's daemon.
+
+**Settings.** `desktop-settings.json` is written through `SettingsStore`: one save at a time, a unique temp file per
+save, memory updated after the rename (#628).
 
 **Not verified here** (see the report): the Windows app itself with a distro chosen (the CI Windows runner has no WSL
 distro, and this session must not launch the Windows app), NAT mode, localized `wsl.exe` output (fixtures are
