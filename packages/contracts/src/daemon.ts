@@ -92,3 +92,21 @@ export const ServeReadySchema = z.object({
   version: z.string().min(1),
 });
 export type ServeReady = z.infer<typeof ServeReadySchema>;
+
+/**
+ * `serve --ready-stdout <nonce>` (desktop phase D, #22): the same ready line, framed on **stdout**
+ * for a supervisor that cannot pass an extra descriptor (`wsl.exe` drops every fd above 2). The frame
+ * is `"\n" + SERVE_READY_FRAME_PREFIX + nonce + " " + JSON + "\n"`: it starts on a line of its own
+ * (the leading newline ends any partial line before it), its first byte is ASCII RS (0x1E, which
+ * none of the CLI's text output contains), and it carries the nonce the supervisor chose for this
+ * run, so a line with the prefix but another nonce (echoed output, a stray copy) is not the ready
+ * line. The JSON is a `ServeReady`; it holds the token, so the reader must not log the frame.
+ */
+export const SERVE_READY_FRAME_PREFIX = '\u001eoctopus-diff-ready ';
+
+/** The supervisor's per-run nonce: 16-128 URL-safe characters (it travels on a command line). */
+export const ServeReadyNonceSchema = z.string().regex(/^[A-Za-z0-9_-]{16,128}$/);
+
+export function formatServeReadyFrame(nonce: string, ready: ServeReady): string {
+  return `\n${SERVE_READY_FRAME_PREFIX}${nonce} ${JSON.stringify(ready)}\n`;
+}

@@ -6314,3 +6314,17 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      editor URL's userinfo/port checks, the command `typeof`) are not added.
 550. **The PR #110 merge left a stray diff3 marker in this file** (`||||||| 4756834`, with the PR #110 review heading
      moved below it). Removed, and the heading put back before #574 where `main` has it; no entry text changed.
+
+## Desktop phase D: the Windows app with its backend inside WSL (session, 2026-11-14; roadmap #22)
+
+610. **WSL is opt-in and inert unless a distro is chosen.** The Windows app keeps phase A-C's backend (the bundled CLI
+     under Electron's Node) by default. Only when the app's own config (`desktop-settings.json` in `userData`, never the
+     daemon's registry) names a distro does the app run `serve` inside it through `wsl.exe`. The packaged-app spec on
+     Windows CI has no distro and no config, so it runs exactly the phase C code path.
+611. **`contracts:` additive: `desktop-wsl.ts` and a stdout ready frame in `daemon.ts`.** `desktop-wsl.ts` holds
+     `DESKTOP_WSL_CHANNELS` (`octopus-diff:wsl-status`, `octopus-diff:wsl-set`), `DesktopWslDistroSchema`,
+     `DesktopWslStatusSchema`, `DesktopWslSetResultSchema` and `DesktopWslBridge { wslStatus(); setWslDistro() }`;
+     `DesktopBridge` now `extends … Partial<DesktopWslBridge>`, so the two methods are optional (an older app has neither;
+     the web feature-detects them, nothing existing changes meaning). `daemon.ts` gains `SERVE_READY_FRAME_PREFIX`
+     (`"\u001eoctopus-diff-ready "`), `ServeReadyNonceSchema` (16-128 of `[A-Za-z0-9_-]`) and `formatServeReadyFrame`,
+     shared by the CLI (writer) and the supervisor (reader) so both sides cannot drift. `ServeReadySchema` is unchanged.
