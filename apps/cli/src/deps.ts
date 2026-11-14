@@ -51,6 +51,15 @@ export interface ReadyChannel {
   close(): void;
 }
 
+/**
+ * Which of the process's output pipes broke (EPIPE: the supervisor that read them is gone). A
+ * supervised `serve` stops writing to a broken one instead of crashing on it (#22 review).
+ */
+export interface BrokenPipes {
+  stdout(): boolean;
+  stderr(): boolean;
+}
+
 /** Watches stdin for the end of the supervisor's lifeline (`--exit-with-stdin`). */
 export interface StdinWatch {
   /** Resolves (never rejects) with a reason when stdin ends, errors or closes. */
@@ -91,6 +100,11 @@ export interface CliDeps {
    * `close()` leaves stdout open.
    */
   openStdoutReadyChannel: () => ReadyChannel;
+  /**
+   * Supervised runs (`--exit-with-stdin`, `--ready-stdout`): from now on an EPIPE on stdout or
+   * stderr is remembered instead of thrown (see `watchBrokenPipes`).
+   */
+  watchBrokenPipes: () => BrokenPipes;
   /** Starts watching stdin for EOF/close/error (`--exit-with-stdin`). */
   watchStdin: () => StdinWatch;
   isProcessAlive: (pid: number) => boolean;
@@ -234,16 +248,40 @@ export function openReadyChannel(fd: number): ReadyChannel {
 /**
  * The real `openStdoutReadyChannel` (#22): the frame is written to fd 1 with the same blocking
  * write as `openReadyChannel` (one `write` of a few hundred bytes, so it is not interleaved with
- * other output; the frame's leading newline starts it on a line of its own anyway). The reader
- * is a supervisor that may vanish (`wsl.exe` killed, the app crashed): a broken stdout pipe must
- * not crash the daemon halfway through its shutdown, so EPIPE on `process.stdout` is ignored from
- * here on (stdin's EOF is what stops it).
+ * other output; the frame's leading newline starts it on a line of its own anyway). A broken
+ * stdout is `watchBrokenPipes`' business (serve starts it for every supervised run).
  */
 export function openStdoutReadyChannel(): ReadyChannel {
-  process.stdout.on('error', (error: NodeJS.ErrnoException) => {
-    if (error.code !== 'EPIPE') throw error;
-  });
   return { write: (line) => writeAllSync(1, line), close: () => undefined };
+}
+
+interface ErrorSource {
+  on(event: 'error', listener: (error: NodeJS.ErrnoException) => void): unknown;
+}
+
+const BROKEN_PIPE_CODES = new Set(['EPIPE', 'ERR_STREAM_DESTROYED']);
+
+/**
+ * The real `watchBrokenPipes`. The reader of a supervised `serve`'s stdout and stderr may vanish
+ * (`wsl.exe` killed, the app crashed: the Linux process then sees stdin's EOF, SIGHUP, and both
+ * pipes broken). An unhandled EPIPE on either would crash the daemon halfway through the shutdown
+ * that stdin's EOF started (exit 1, `daemon.json` left behind), so it is remembered instead and
+ * serve drops later writes to that stream. Any other error still throws.
+ */
+export function watchBrokenPipes(
+  streams: { stdout: ErrorSource; stderr: ErrorSource } = {
+    stdout: process.stdout,
+    stderr: process.stderr,
+  },
+): BrokenPipes {
+  const broken = { stdout: false, stderr: false };
+  for (const name of ['stdout', 'stderr'] as const) {
+    streams[name].on('error', (error) => {
+      if (!BROKEN_PIPE_CODES.has(error?.code ?? '')) throw error;
+      broken[name] = true;
+    });
+  }
+  return { stdout: () => broken.stdout, stderr: () => broken.stderr };
 }
 
 function writeAllSync(fd: number, line: string): void {
@@ -307,6 +345,7 @@ export function defaultDeps(): CliDeps {
     waitForShutdown: processShutdownSignal(onForcedExit),
     openReadyChannel,
     openStdoutReadyChannel,
+    watchBrokenPipes: () => watchBrokenPipes(),
     watchStdin: () => watchStdin(),
     isProcessAlive,
     runProgram: createRunProgram(process.env, process.platform),

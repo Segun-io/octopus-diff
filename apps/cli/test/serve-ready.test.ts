@@ -329,6 +329,22 @@ describe.skipIf(!built)('built CLI: serve --ready-stdout (#22)', () => {
   );
 
   it(
+    'closed stderr AND stdout readers (wsl.exe killed): EOF on stdin still shuts down cleanly, exit 0',
+    async () => {
+      const served = serve(['--ready-stdout', nonce, '--exit-with-stdin'], { fd: false });
+      await readyFrame(served, nonce);
+      expect(await exists(daemonJson())).toBe(true);
+      served.child.stderr?.destroy();
+      served.child.stdout?.destroy();
+      // The shutdown writes "stdin closed, shutting down…" to the broken stderr.
+      served.child.stdin?.end();
+      expect(await withinMs(served.exit, 15_000, 'exit after EOF')).toBe(0);
+      expect(await exists(daemonJson())).toBe(false);
+    },
+    TIMEOUT,
+  );
+
+  it(
     'a closed stdout reader does not crash the daemon: EOF on stdin still shuts it down cleanly',
     async () => {
       const served = serve(['--ready-stdout', nonce, '--exit-with-stdin'], { fd: false });

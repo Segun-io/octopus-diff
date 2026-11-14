@@ -6430,3 +6430,23 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      daemon from a loopback one. `host` is the bind address the daemon records in `daemon.json` (started: the
      daemon's own; attached: the running daemon's recorded one). Optional, so older CLIs' lines still parse; nothing
      existing changes.
+621. **A supervised `serve` survives broken stdout and stderr pipes (review MEDIUM 2).** Through a real `wsl.exe` the
+     reviewer measured that killing `wsl.exe` gives the Linux process stdin's EOF, then SIGHUP, and breaks *both*
+     output pipes. #612 ignored EPIPE on stdout only, so the shutdown's first stderr line ("stdin closed, shutting
+     down…") crashed the daemon (exit 1, `daemon.json` left behind). Now every supervised run (`--exit-with-stdin` or
+     `--ready-stdout`) calls the new `CliDeps.watchBrokenPipes()`. Its real form listens for `error` on
+     `process.stdout` and `process.stderr`, remembers `EPIPE`/`ERR_STREAM_DESTROYED` and rethrows anything else.
+     `runServe` wraps `deps.stdout`/`deps.stderr` (the logger writes through the latter) so writes to a broken one are
+     dropped. A terminal `serve` is unchanged. The SIGHUP that follows the EOF is a second shutdown request
+     arriving after the first one already won the race, so it does not force an exit. Built-CLI test: destroy the
+     stderr and stdout readers, end stdin, expect exit 0 and `daemon.json` gone (it failed with exit 1 on the old
+     build first).
+622. **Attach honours an explicit `--host` in supervised runs (review LOW 2).** A daemon started with
+     `--host 0.0.0.0` records `url: http://127.0.0.1:<port>` (`baseUrlFor`), so the app's loopback rule on `url`
+     alone could attach to a LAN-reachable daemon while asking for 127.0.0.1 itself. With a ready channel and an
+     explicit `--host` that differs from the running daemon's recorded `info.host`, `serve` now refuses to attach
+     (exit 1, a message naming both, no token). A terminal `serve` keeps attaching as before. The ready line also
+     carries `host` (#620): the daemon's bind address, started or attached.
+623. **The EADDRINUSE message under WSL** adds that with mirrored networking Windows programs (another octopus-diff
+     too) share the distro's ports. That is the likely cause when a backend switch from Windows to WSL finds 7428
+     taken.

@@ -264,6 +264,7 @@ export function makeDeps(dirs: TempDirs, overrides: Partial<CliDeps> = {}): Test
     openStdoutReadyChannel: () => {
       throw new Error('this test did not provide a stdout ready channel');
     },
+    watchBrokenPipes: () => ({ stdout: () => false, stderr: () => false }),
     watchStdin: () => ({ closed: new Promise<string>(() => {}), stop: () => {} }),
     isProcessAlive: () => false,
     runProgram: async () => ({ stdout: 'git version 2.53.0\n', stderr: '' }),

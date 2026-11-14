@@ -97,6 +97,15 @@ describe('parseCommandLine', () => {
     expect(plain.flags).not.toHaveProperty('readyStdout');
   });
 
+  it('a nonce that starts with "-" is taken in the --ready-stdout=<nonce> form (#22 review)', () => {
+    const nonce = '-leading-dash-nonce_0123';
+    expect(parseCommandLine(['serve', `--ready-stdout=${nonce}`])).toMatchObject({
+      flags: { readyStdout: nonce },
+    });
+    // The separate-argument form is ambiguous to parseArgs: that is why the app uses `=`.
+    expect(() => parseCommandLine(['serve', '--ready-stdout', nonce])).toThrow(/ambiguous/);
+  });
+
   it.each([
     [['serve', '--ready-stdout', 'short'], /--ready-stdout needs a nonce of 16-128/],
     [['serve', '--ready-stdout', 'a b c d e f g h i j'], /--ready-stdout needs a nonce/],

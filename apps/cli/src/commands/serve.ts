@@ -5,7 +5,7 @@ import {
   type ServeReady,
 } from '@octopus-diff/contracts';
 import type { ServeFlags } from '../args.js';
-import type { CliDeps, ReadyChannel } from '../deps.js';
+import type { BrokenPipes, CliDeps, Output, ReadyChannel } from '../deps.js';
 import {
   CliError,
   EXIT_FAILURE,
@@ -133,12 +133,37 @@ function openReadyChannel(flags: ServeFlags, deps: CliDeps): Ready | undefined {
   }
 }
 
+/** `out`, minus every write once `broken()` says its pipe is gone (a supervised run). */
+function dropWhenBroken(out: Output, broken: () => boolean): Output {
+  return {
+    write: (chunk) => {
+      if (broken()) return false;
+      return out.write(chunk);
+    },
+  };
+}
+
+/**
+ * A supervised run (`--exit-with-stdin` or `--ready-stdout`) outlives its reader when the
+ * supervisor dies: writes to a broken stdout/stderr are dropped from then on (#22 review).
+ */
+function superviseOutputs(flags: ServeFlags, deps: CliDeps): CliDeps {
+  if (!flags.exitWithStdin && flags.readyStdout === undefined) return deps;
+  const pipes: BrokenPipes = deps.watchBrokenPipes();
+  return {
+    ...deps,
+    stdout: dropWhenBroken(deps.stdout, pipes.stdout),
+    stderr: dropWhenBroken(deps.stderr, pipes.stderr),
+  };
+}
+
 export async function runServe(
   flags: ServeFlags,
-  deps: CliDeps,
+  rawDeps: CliDeps,
   version: string,
   hooks: ServeHooks = {},
 ): Promise<number> {
+  const deps = superviseOutputs(flags, rawDeps);
   const ctx = { env: deps.env, cwd: deps.cwd };
   const { paths, loaded } = await loadContext(flags, ctx);
   const settings = buildServeSettings(flags, loaded.config, paths, ctx, version);
@@ -155,6 +180,16 @@ export async function runServe(
   const running = await findRunningDaemon(paths.stateDir, deps);
   if (running?.verified && running.token) {
     const authUrl = authUrlFor(running.url, running.token);
+    if (ready && flags.host !== undefined && flags.host !== running.info.host) {
+      // The supervisor asked for this bind address (the desktop's WSL backend: 127.0.0.1); a
+      // daemon bound elsewhere (0.0.0.0: the LAN) is not what it asked for, even though its URL
+      // reads 127.0.0.1 (#22 review). Nothing secret is printed.
+      throw new CliError(
+        `a daemon already runs for this state directory (pid ${running.pid}) bound to ` +
+          `${running.info.host}, not to --host ${flags.host}; not attaching. Stop it, or run ` +
+          `serve without --host to use it.`,
+      );
+    }
     if (ready) {
       // The token goes to the supervisor on its fd only, never to stdout.
       deps.stdout.write(
@@ -166,6 +201,7 @@ export async function runServe(
         authUrl,
         pid: running.pid,
         version: running.health.version,
+        host: running.info.host,
       });
       if (failure) {
         err(failure);
@@ -244,7 +280,10 @@ export async function runServe(
           (other
             ? ` by another ${APP_NAME} daemon (${other.version}, different --state-dir?)`
             : '') +
-          '. Pass --port <n> (or --port 0 for any free port), or stop the program using it.',
+          '. Pass --port <n> (or --port 0 for any free port), or stop the program using it.' +
+          (wsl.wsl
+            ? ' In WSL with mirrored networking, Windows programs (another octopus-diff too) share these ports.'
+            : ''),
       );
     }
     if (hasErrorCode(error, 'EACCES')) {
@@ -284,6 +323,7 @@ export async function runServe(
       authUrl: handle.authUrl,
       pid: deps.pid,
       version,
+      host: handle.host,
     });
     if (failure) {
       // Nobody can learn where this daemon is: do not leave it running unseen.

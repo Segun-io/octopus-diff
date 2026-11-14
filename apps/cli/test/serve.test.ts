@@ -91,6 +91,7 @@ describe('serve --ready-fd', () => {
       authUrl: 'http://127.0.0.1:45678/#token=tok123',
       pid: deps.pid,
       version: expect.any(String),
+      host: '127.0.0.1',
     });
     expect(deps.out.text).not.toContain('tok123');
     expect(deps.err.text).not.toContain('tok123');
@@ -161,6 +162,7 @@ describe('serve --ready-fd', () => {
       authUrl: 'http://127.0.0.1:5555/#token=existing-token',
       pid: 777,
       version: '1.2.3',
+      host: '127.0.0.1',
     });
     expect(deps.out.text).toContain('already running (pid 777)');
     expect(deps.out.text).not.toContain('existing-token');
@@ -266,6 +268,7 @@ describe('serve --ready-stdout (#22)', () => {
       authUrl: 'http://127.0.0.1:45678/#token=tok123',
       pid: deps.pid,
       version: expect.any(String),
+      host: '127.0.0.1',
     };
     const frame = channel.frames[0] ?? '';
     expect(frame.startsWith(`\n${SERVE_READY_FRAME_PREFIX}${NONCE} `)).toBe(true);
@@ -311,10 +314,111 @@ describe('serve --ready-stdout (#22)', () => {
         authUrl: 'http://127.0.0.1:5555/#token=existing-token',
         pid: 777,
         version: '1.2.3',
+        host: '127.0.0.1',
       }),
     ]);
     expect(deps.out.text).toContain('already running (pid 777)');
     expect(deps.out.text).not.toContain('existing-token');
+  });
+
+  async function runningDaemon(host: string) {
+    await writeRuntimeInfo(dirs.stateDir, {
+      pid: 777,
+      url: 'http://127.0.0.1:5555',
+      host,
+      port: 5555,
+      version: '0.0.0',
+      startedAt: '2026-11-08T00:00:00.000Z',
+    });
+    await writeFile(path.join(dirs.stateDir, 'token'), 'existing-token\n', { mode: 0o600 });
+    return clientFactory((req) =>
+      isHealth(req.url, 'http://127.0.0.1:5555')
+        ? { body: healthFor(req.url, 'existing-token', { version: '1.2.3' }) }
+        : undefined,
+    );
+  }
+
+  it('refuses to attach to a daemon bound elsewhere than an explicit --host (#22 review)', async () => {
+    const api = await runningDaemon('0.0.0.0');
+    const channel = fakeStdoutChannel();
+    const deps = makeDeps(dirs, {
+      createApiClient: api.createApiClient,
+      isProcessAlive: (pid) => pid === 777,
+      openStdoutReadyChannel: channel.open,
+    });
+    expect(
+      await run(
+        ['serve', '--ready-stdout', NONCE, '--exit-with-stdin', '--host', '127.0.0.1'],
+        deps,
+      ),
+    ).toBe(1);
+    expect(channel.frames).toEqual([]);
+    expect(deps.err.text).toContain('bound to 0.0.0.0, not to --host 127.0.0.1');
+    expect(deps.err.text).not.toContain('existing-token');
+  });
+
+  it('attaches when the explicit --host is the one the daemon is bound to', async () => {
+    const api = await runningDaemon('127.0.0.1');
+    const channel = fakeStdoutChannel();
+    const deps = makeDeps(dirs, {
+      createApiClient: api.createApiClient,
+      isProcessAlive: (pid) => pid === 777,
+      openStdoutReadyChannel: channel.open,
+    });
+    expect(await run(['serve', '--ready-stdout', NONCE, '--host', '127.0.0.1'], deps)).toBe(0);
+    expect(channel.frames).toHaveLength(1);
+    expect(channel.frames[0]).toContain('"host":"127.0.0.1"');
+  });
+
+  it('supervised: once stderr (or stdout) is a broken pipe, nothing more is written to it', async () => {
+    const daemon = fakeDaemon();
+    const channel = fakeStdoutChannel();
+    const broken = { stdout: false, stderr: false };
+    let end!: (reason: string) => void;
+    let watched = 0;
+    const deps = makeDeps(dirs, {
+      loadStartDaemon: async () => daemon.startDaemon,
+      waitForShutdown: () => new Promise<string>(() => {}),
+      watchStdin: () => ({
+        closed: new Promise<string>((resolve) => {
+          end = resolve;
+        }),
+        stop: () => undefined,
+      }),
+      openStdoutReadyChannel: channel.open,
+      watchBrokenPipes: () => {
+        watched++;
+        return { stdout: () => broken.stdout, stderr: () => broken.stderr };
+      },
+    });
+    const code = await run(['serve', '--ready-stdout', NONCE, '--exit-with-stdin'], deps, {
+      serve: {
+        webRootCandidates: [webDir],
+        onReady: () => {
+          // The app is gone: both pipes broke, then stdin's EOF arrives.
+          broken.stdout = true;
+          broken.stderr = true;
+          end('stdin closed');
+        },
+      },
+    });
+    expect(code).toBe(0);
+    expect(watched).toBe(1);
+    expect(deps.err.text).not.toContain('shutting down');
+    expect(daemon.closed).toBe(1);
+    await expect(stat(runtimeFilePath(dirs.stateDir))).rejects.toThrow();
+  });
+
+  it('unsupervised serve does not watch for broken pipes', async () => {
+    let watched = 0;
+    const deps = makeDeps(dirs, {
+      watchBrokenPipes: () => {
+        watched++;
+        return { stdout: () => false, stderr: () => false };
+      },
+    });
+    await run(['serve'], deps, { serve: { webRootCandidates: [webDir] } });
+    expect(watched).toBe(0);
   });
 
   it('stops the daemon and exits 1 when the frame cannot be written', async () => {
@@ -524,6 +628,20 @@ describe('serve', () => {
     });
     expect(await run(['serve', '-o'], deps, { serve: { webRootCandidates: [webDir] } })).toBe(0);
     expect(deps.err.text).toContain('warning: could not open a browser');
+  });
+
+  it('in WSL, the port message says Windows programs share the ports (mirrored networking)', async () => {
+    const inUse = Object.assign(new Error('listen EADDRINUSE: address already in use'), {
+      code: 'EADDRINUSE',
+    });
+    const daemon = fakeDaemon({ fail: new Error('server failed', { cause: inUse }) });
+    const deps = makeDeps(dirs, {
+      loadStartDaemon: async () => daemon.startDaemon,
+      env: { HOME: dirs.home, WSL_DISTRO_NAME: 'Ubuntu', WSL_INTEROP: '/run/WSL/1_interop' },
+    });
+    expect(await run(['serve'], deps, { serve: { webRootCandidates: [webDir] } })).toBe(1);
+    expect(deps.err.text).toContain('port 7428 on 127.0.0.1 is already in use');
+    expect(deps.err.text).toContain('mirrored networking');
   });
 
   it('explains a port that is already in use', async () => {
