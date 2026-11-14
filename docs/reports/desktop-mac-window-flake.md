@@ -112,6 +112,12 @@ Ruled out from the code:
   - macOS timings: health answers in 150-350 ms, and the UI page commits 90-170 ms after the health answer.
   - Each repeat launch takes ~3 s with the light load and ~5 s with the main test's load.
 
+- **Final CI run on the handover commit (af068ed, run 43557908682):** every job green
+  except `lint · typecheck · test · build (Node 26)` on attempt 1. The failure was in
+  `apps/daemon/test/forge-details.test.ts`, "`git config branch.x.pushRemote` triggers an immediate lookup" (a
+  real-watcher test: `eventually: timed out`). That is code this work does not touch, and the same test passed on
+  Node 24 in the same run. A rerun of that job passed (attempt 2: success).
+
 ## Decisions
 
 All in DECISIONS #590-#596:
