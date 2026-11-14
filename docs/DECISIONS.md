@@ -6036,8 +6036,26 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      no-hard-links fallback (link fails with EPERM) writes the file, never replaces a file, symlink, dangling symlink or
      directory, and passes other errors on. The old read-only-directory test (it passed with the cleanup removed) is gone.
      Each has a mutant.
-580. **The packaged-app e2e never runs the app with the real home.** `launchApp` / `runApp` build the environment with
+580. **(Superseded by #581: the HOME redirection broke the macOS app.) The packaged-app e2e never runs the app with the real home.** `launchApp` / `runApp` build the environment with
      `isolatedAppEnv(env, dirs)`: HOME, USERPROFILE, LOCALAPPDATA, APPDATA and the XDG directories under the run's temp root
      (the app rewrites `~/.local/bin/octopus-diff` or `%LOCALAPPDATA%\octopus-diff\bin` at startup). Every launch goes through
      those two functions, the tamper test's copies included. Unit-tested (`e2e/support/desktop-app-env.test.ts`).
      `mutation-check.mjs` can now mutate a file under `e2e/` (`e2e:<path>`, with its vitest file in `e2e/support/`).
+581. **`OCTOPUS_DESKTOP_NO_CLI_REFRESH=1` is a test hook that turns the startup refresh off; the packaged e2e no longer fakes HOME**
+     (supersedes #580's approach). The macOS `desktop` job failed twice in a row at `packaged-app.spec.ts:141` ("timed out
+     after 60000 ms waiting for the web UI to be ready"): the daemon and the CLI worked, only the window's UI never became
+     ready. The one change in that path since the green run was #580's redirection of HOME, USERPROFILE, LOCALAPPDATA, APPDATA
+     and XDG_* for the launched app, which (by the likeliest reading; macOS cannot be run here) breaks Chromium's
+     Keychain / `~/Library` use. So the app's environment is left alone on every OS, and the one effect the e2e needs to
+     prevent, a rewrite of a developer's real launcher at startup (#574), is turned off by the app instead:
+     `startupRefresh(shim, env, log)` in `cli-shim-service.ts` (what `main.ts` calls; it never calls `refresh()` directly) does
+     nothing when `env.OCTOPUS_DESKTOP_NO_CLI_REFRESH === '1'` (exactly `1`; any other value is the normal refresh) and logs one
+     line saying so. It is safe-direction only: no value of any variable makes anything get written that the refresh would not
+     write anyway (it never creates a launcher and only retargets one whose app is gone), and the menu's Install and the
+     bridge ignore it. Documented in DESKTOP.md §3.2 as a test hook. In the e2e, `appLaunchEnv(env)` (replaces
+     `isolatedAppEnv` / `ensureHome`) adds the switch and still drops `ELECTRON_RUN_AS_NODE`; `launchApp` and `runApp` pass it, and
+     every GUI launch in `e2e/desktop` (the main flow, the refusals, the kill test, the tamper test and its control copy, the
+     cli-shim spec's app) goes through those two; a test reads the specs and fails if one starts the binary another way. The
+     cli-shim spec keeps its own temp home for the launcher it installs itself (that does not start the GUI app with a fake
+     HOME). Unit tests: the switch (exact value, one log line, `refresh()` not called, nothing written), `main.ts` goes
+     through `startupRefresh`, and the e2e environment; mutants for each. Not verified: the macOS job itself (CI will say).

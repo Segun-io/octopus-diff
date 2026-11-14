@@ -119,7 +119,7 @@ user-PATH editor), `cli-shim-ipc.ts` (the bridge's main-process handlers). The r
 what is ours; a file at the target that is not ours, or *any* other `octopus-diff` on the terminal's PATH, means nothing
 is written; symlinks are never followed; creation is exclusive and replacement re-checks the marker; the AppImage
 launcher mounts the AppImage file (`--appimage-mount`, extract without FUSE) and runs the CLI inside it; a dmg, a
-translocated app and a development run are refused; the startup refresh rewrites a launcher only when the app it names is gone (#574). Menu: File → Install 'octopus-diff' Command…; the app also rewrites
+translocated app and a development run are refused; the startup refresh rewrites a launcher only when the app it names is gone (#574). **Test hook:** with `OCTOPUS_DESKTOP_NO_CLI_REFRESH=1` in its environment the app skips that startup refresh (one log line); the packaged-app e2e sets it on every launch so a developer's real `~/.local/bin/octopus-diff` is never rewritten, without faking HOME (which breaks Chromium on macOS, #581). No value of any variable can make the app write a launcher; the menu's Install ignores it. Menu: File → Install 'octopus-diff' Command…; the app also rewrites
 its own stale launcher at startup. Verified here on Linux x64 (deb layout via `release/linux-unpacked`, a real AppImage
 by extraction); macOS, Windows, the dmg and the NSIS installer are verified only by CI's unit tests (and not at all for
 the registry edit).

@@ -1,7 +1,7 @@
 # desktop-cli-shim report
 
 Roadmap #21 (desktop phase C, the `octopus-diff` command from the app; part of #15), stream WS6. Branch `t3/6a038409`,
-2026-11-13. Not pushed, no PR. DECISIONS #560-#572 and, for the PR #110 review, #574-#580.
+2026-11-13. Not pushed, no PR. DECISIONS #560-#572 and, for the PR #110 review, #574-#581.
 
 ## Shipped
 
@@ -67,11 +67,11 @@ PATH edit and `.cmd` encoding; **#568** the bridge is contracts + IPC handlers n
 
 Each finding was fixed test first (the tests below were run red before the code changed; some failed only because the
 function did not exist yet, the signal and behaviour ones failed on the old behaviour). Committed locally in
-`desktop: PR #110 review round 1 …` and a follow-up; not pushed. DECISIONS #574-#580.
+`desktop: PR #110 review round 1 …` and a follow-up; not pushed. DECISIONS #574-#580 (the HOME redirection of #580 was replaced by #581, below).
 
 | # | Finding | Fix | Test that went red first |
 |---|---|---|---|
-| 1 | MEDIUM: startup refresh retargets to the last copy started; the packaged e2e used the real HOME | `launcherApp()` reads the app out of our launcher; `refresh()` writes only when that file is missing (#574). `isolatedAppEnv` puts HOME, USERPROFILE, LOCALAPPDATA, APPDATA, XDG_* under the run's temp root for every `launchApp`/`runApp`, the tamper-test copies included (#580) | `cli-shim-service.test.ts` "only when the app the launcher names is gone" (7 tests: app still exists, two copies, deleted AppImage, existing AppImage, older body, unreadable app, Windows `.cmd`; Install may still retarget), `cli-shim.test.ts` "launcherApp" (round trip incl. hostile and `%`/non-ASCII paths), `e2e/support/desktop-app-env.test.ts` (3) |
+| 1 | MEDIUM: startup refresh retargets to the last copy started; the packaged e2e used the real HOME | `launcherApp()` reads the app out of our launcher; `refresh()` writes only when that file is missing (#574). a packaged-e2e launch must never touch the real launcher: first done by redirecting HOME for the app (#580), **replaced by the `OCTOPUS_DESKTOP_NO_CLI_REFRESH=1` hook (#581, see the macOS CI round below)** | `cli-shim-service.test.ts` "only when the app the launcher names is gone" (7 tests: app still exists, two copies, deleted AppImage, existing AppImage, older body, unreadable app, Windows `.cmd`; Install may still retarget), `cli-shim.test.ts` "launcherApp" (round trip incl. hostile and `%`/non-ASCII paths), `e2e/support/desktop-app-env.test.ts` (now: the launch env carries the hook) |
 | 2 | AppImage launcher: no signal forwarding, SIGHUP skipped the EXIT trap | CLI in the background + `wait`; `trap` HUP/INT/TERM → 129/130/143; one `cleanup` (CLI stopped, TERM then KILL; mounter stopped; work dir removed); stdin passed on fd 3 (#575) | `cli-shim.test.ts` AppImage: SIGTERM, SIGHUP, SIGINT × mount and extract fallback (real `/bin/sh` = dash with a fake runtime: exit code, CLI gone, mounter gone, `$TMPDIR` empty), a TERM-ignoring CLI is killed, stdin reaches the CLI |
 | 3 | An unreadable `octopus-diff` on PATH was ignored | `FileFacts` `unreadable` (lstat failure other than ENOENT/ENOTDIR, a file that cannot be opened); a conflict on PATH (#576) | `decide` on PATH / at target; `cli-shim-fs.test.ts` execute-only 0711 file and a path under an unsearchable directory; service status/install refuse |
 | 4 | Windows relative PATH entries searched | only drive-letter and UNC entries (#577) | `pathCandidates` with `.;bin;C:foo;\foo;..\x` and the `/`/UNC spellings that stay |
