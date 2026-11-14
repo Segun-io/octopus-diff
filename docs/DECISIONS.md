@@ -5916,3 +5916,74 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      has no working sandbox and does not start. That is no loss: Electron does not validate the asar on Linux, so the
      test only ever recorded an outcome there. It now returns early on Linux (annotated) and runs, control included,
      on macOS and Windows only.
+
+## Desktop: the macOS window flake (session, 2026-11-14; packaged-app e2e on macOS CI)
+
+590. **What failed, and what is known.** `e2e/desktop/packaged-app.spec.ts` "the window shows projects added with
+     `octopus-diff add`…" failed on macOS runners in two shapes. **(a)** run 43549571166 (job 132308645529, a branch on
+     current main): the backend was ready (`status`, `add`, the projects API all worked within ~6 s), but for the next
+     60 s the window's only page was a `data:` screen (the error printed 60 characters of it, the same for every
+     screen, so which screen is unknown). **(b)** run 43542879523 (jobs 132287236484, 132289934396, PR #110's branch):
+     the page was on the daemon's origin but `data-ready` stayed false. (b) failed 2 of 2 while that branch gave the
+     app a fake `HOME`, and passed once it stopped (that branch's DECISIONS #581: on macOS a fake HOME breaks
+     Chromium's Keychain and `~/Library` access): a deterministic cause of its own, not this flake. On current main
+     the mac desktop job failed 1 of the 11 completed runs on 2026-11-13/14 (shape a); Linux and Windows never did.
+     No artifact or log says which screen (a) was on or why; the code allows these causes, in the order of the
+     evidence for them: (1) **a UI load that ended in `ERR_ABORTED` with nothing replacing it**: `showReady` dropped
+     every `ERR_ABORTED` as "superseded" (`isSupersededLoad`), logged nothing, and the starting screen stayed for good;
+     (2) **a UI navigation that never committed**: `loadURL` has no timeout, the window keeps the previous page, nothing
+     is logged; (3) **the git-missing screen** after a transient `git --version` failure in the daemon's first health
+     answer (`health()` reports `supported: false` for any error; a later health call, like the test's, re-probes and
+     succeeds); (4) **the failure screen** after a non-abort load error (logged, but no artifact had the log). Not
+     causes: the navigation guard (`will-navigate`/`will-frame-navigate` are not emitted for `loadURL`, and the daemon
+     does not redirect `/`), `second-instance` (the CLI runs as Node, not as a second app), `activate` (it only creates
+     a window when there is none), the token in the hash (the page strips it after the load).
+591. **"Superseded" is a load sequence number, not an error code.** Every load the window starts (screens and the UI)
+     takes a ticket from one `LoadSequence` (`apps/desktop/src/ui-load.ts`); a UI load's failure is dropped only when a
+     newer load began, whatever its code, and an `ERR_ABORTED` that nothing replaced is a failure like any other. The
+     unit test ("retries an ERR_ABORTED load that no newer load replaced") failed first against the old rule (the
+     module with `code === 'ERR_ABORTED'` as the superseded check: 1 failed, 15 passed), then passed. `isSupersededLoad`
+     is gone from `policy.ts`.
+592. **The window's lifecycle goes to `daemon.log`.** `[desktop …] window: …` lines: the window created, each screen
+     shown (its title), `did-navigate` (origin and HTTP status), main-frame `did-fail-load` (code and net error name),
+     `did-finish-load`, `render-process-gone`, `unresponsive`/`responsive`, `ready-to-show`, the first `show`, the
+     health check (answered or not, time, git status), `showReady`'s early returns, every UI load attempt and its end,
+     and `app: activate`. Only origins (`urlForLog`) and plain net error names (`netErrorName`) are logged, never a URL.
+     Not logged: `second-instance` and later shows, because `smoke-app` checks that a second launch leaves the shared
+     log byte for byte as it was (its first CI run on this branch caught both).
+593. **A window wait that times out says why.** `withWindowDiagnostics` (`e2e/desktop/support/packaged-app.ts`) wraps
+     the spec's page and `data-ready` waits; on failure the thrown error (so the CI log) carries: whether the app
+     process is alive; each page target's URL without query and fragment; for a `data:` screen its decoded text; for
+     any page its `readyState`, `visibilityState`, `hasFocus`, the app element's `data-ready` and visible text (CDP,
+     3 s limit per call); the last 40 `[desktop]` lines and the last 25 daemon lines of `daemon.log`; the last 15
+     lines of the app's stdout/stderr. All of it goes through `redact` (the token from `state/token`, and any
+     `token=` parameter). **`CdpPipe.page()` no longer prints the first 60 characters of every page URL**: for a UI
+     page that is `http://127.0.0.1:<port>/#token=` plus about 30 characters of the token, in a public CI log; it now
+     prints `pageUrlForLog` (no query, no fragment). On success the spec prints the window timeline (relative times)
+     and annotates whether the UI needed a retry. Unit tests: `e2e/support/desktop-diagnostics.test.ts` (here because
+     the e2e vitest config collects `support/**/*.test.ts` only).
+594. **UI load attempts and a commit watchdog.** `UiLoad` (`ui-load.ts`): a UI load whose page has not committed
+     (`did-navigate` to the UI's origin) within **20 s** is retried; a failed or stalled attempt is retried after
+     **1 s**, up to **3 attempts**, then the failure screen, whose "Try again" reloads (before: one attempt, and the
+     failure screen at once). After the commit the watchdog is off and a load error is only logged (the page is up and
+     handles its own errors). A slow but committed page is never reloaded. Healthy launches commit within ~0.1-0.3 s
+     of the load (Linux here, macOS CI), so 20 s is far from a false alarm. The watchdog's note includes the window's
+     state (visible, loading, page). `mutation-check.mjs` has 8 new mutants for these rules (all killed).
+595. **`window-repeat.spec.ts`: an opt-in measurement.** `OCTOPUS_DESKTOP_WINDOW_REPEAT=<n>` launches the packaged app
+     n times under the main test's load (read-only proof, agent simulator on live-agent, every project and scan root
+     added with the bundled CLI) and counts launches that never reached the UI, and those that needed a retry.
+     Skipped by default (and on Windows: it needs the acceptance fixtures). On this branch a temporary commit turned it
+     on for macOS (10 launches per job) to measure the flake before and after the change (#596), and was reverted.
+596. **Measured: the flake did not reproduce, before or after.** macOS CI on `fix/mac-window-flake` (workflow_dispatch,
+     then reruns of the mac desktop job only), each job = the main window test + 10 window-repeat launches = 11 launches.
+     **Baseline** (the logging, the old load behaviour): run 43551517012 attempt 1, run 43552538442 attempts 1-4: **5 of 5
+     jobs green, 55 of 55 launches reached the UI on the first load, no stall or abort note**. **With the fix**: run
+     43554882456 attempts 1-5: **5 of 5 green, 55 of 55 on the first attempt, no retry**. On macOS the UI page commits
+     ~0.1-0.2 s after the health answer, and the health check takes ~150-350 ms. So the root cause is **not proven**: with
+     0 in 55 the per-launch rate is below ~5% (rule of three) in both series, while main showed 1 failed job in 11, so
+     the trigger is rarer than a per-launch event or depends on something these runs did not have (a slower runner, an
+     image change, a cold Gatekeeper/XProtect scan of the freshly copied app; not shown). The change is kept because #591 is a
+     real hole whatever the trigger (a silent, unrecoverable starting screen), #594 recovers from causes (1), (2) and (4)
+     of #590 within ~21 s instead of never, and #592/#593 make the next occurrence name the screen and the window's
+     state. Cause (3), the git-missing screen after a transient `git --version` failure, is not changed: it would show
+     as `daemon health answered … (git missing)` and the screen's text in the next failure's diagnostics.
