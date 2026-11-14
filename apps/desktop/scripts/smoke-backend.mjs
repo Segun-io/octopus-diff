@@ -590,6 +590,11 @@ if (wslDistro && posix) {
       process.kill(wrapper, 'SIGKILL');
       await until(() => !alive(r.pid), 20_000, 'the daemon to exit after wsl.exe was killed');
       check(true, `the daemon exited ${Date.now() - t0} ms after wsl.exe was SIGKILLed`);
+      // Its stdout and stderr pipes broke with wsl.exe: the shutdown must still finish (#621).
+      check(
+        !existsSync(path.join(d.stateDir, 'daemon.json')),
+        'and shut down gracefully (daemon.json removed, no crash on the broken pipes)',
+      );
       await s.sup.stop();
     },
   );
