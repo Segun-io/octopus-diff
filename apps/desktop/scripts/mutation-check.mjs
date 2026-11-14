@@ -1,8 +1,9 @@
 // biome-ignore-all lint/suspicious/noTemplateCurlyInString: the mutations are source text that contains `${…}`.
 // Mutation check for the rules that must not regress silently: the security policy (DESKTOP §5),
 // the packaged-build argument rules, the menu accelerator rule, and the supervisor's lifecycle (stdin lifeline, RUN_AS_NODE,
-// restart/backoff, attach, shutdown escalation, token never logged), and the `octopus-diff` command's
-// marker, never-overwrite and quoting rules (cli-shim*.ts, roadmap #21).
+// restart/backoff, attach, shutdown escalation, token never logged), the UI load (superseded by sequence,
+// the commit watchdog, attempts), and the `octopus-diff` command's marker, never-overwrite and quoting rules
+// (cli-shim*.ts, roadmap #21).
 //
 //   node apps/desktop/scripts/mutation-check.mjs
 //
@@ -377,6 +378,112 @@ const MUTATIONS = [
     'no clamping to the display',
     'const x = Math.min(Math.max(b.x, best.x), best.x + best.width - width);',
     'const x = b.x;',
+  ],
+  // --- loading the UI into the window (DECISIONS #591, #594) ---
+  [
+    'ui-load.ts',
+    'ui-load',
+    'ERR_ABORTED taken for superseded (the macOS flake)',
+    '        // A newer load (a screen, a forced reload) replaced it: whatever the code, not a failure.\n        if (!this.#live()) return;',
+    "        if ((error as { code?: unknown } | null)?.code === 'ERR_ABORTED') return;\n        if (!this.#live()) return;",
+  ],
+  [
+    'ui-load.ts',
+    'ui-load',
+    'a superseded failure still retried',
+    '        if (this.#ticket !== ticket) return;\n        // A newer load',
+    '        // A newer load',
+  ],
+  [
+    'ui-load.ts',
+    'ui-load',
+    'no commit watchdog',
+    '      if (this.#ticket !== ticket || this.#committed || !this.#live()) return;\n      const state',
+    '      return;\n      const state',
+  ],
+  [
+    'ui-load.ts',
+    'ui-load',
+    'commit does not cancel the retry',
+    '    this.#committed = true;\n    this.#clearTimer();',
+    '    this.#committed = true;',
+  ],
+  [
+    'ui-load.ts',
+    'ui-load',
+    'a commit does not stop a watchdog that fires late',
+    'if (this.#ticket !== ticket || this.#committed || !this.#live()) return;',
+    'if (this.#ticket !== ticket || !this.#live()) return;',
+  ],
+  [
+    'ui-load.ts',
+    'ui-load',
+    'the watchdog ignores wanted() (quitting, closed window)',
+    'if (this.#ticket !== ticket || this.#committed || !this.#live()) return;',
+    'if (this.#ticket !== ticket || this.#committed) return;',
+  ],
+  [
+    'ui-load.ts',
+    'ui-load',
+    'the retry ignores a newer load or wanted()',
+    'if (this.#live()) this.#next();',
+    'this.#next();',
+  ],
+  [
+    'ui-load.ts',
+    'ui-load',
+    'a stale attempt resolving ends the current one',
+    '        if (this.#ticket !== ticket || !this.#live()) return;\n        this.#clearTimer();\n        this.#done = true;',
+    '        if (!this.#live()) return;\n        this.#clearTimer();\n        this.#done = true;',
+  ],
+  [
+    'ui-load.ts',
+    'ui-load',
+    'committed() of a superseded or cancelled load counts',
+    'if (!this.#live() || this.#committed) return;',
+    'if (this.#committed) return;',
+  ],
+  [
+    'ui-load.ts',
+    'ui-load',
+    'committed() twice counts twice',
+    'if (!this.#live() || this.#committed) return;',
+    'if (!this.#live()) return;',
+  ],
+  [
+    'ui-load.ts',
+    'ui-load',
+    'the UI still wanted while quitting',
+    'return !input.quitting && input.current === input.window && !input.destroyed;',
+    'return input.current === input.window && !input.destroyed;',
+  ],
+  [
+    'ui-load.ts',
+    'ui-load',
+    'failure screen on the first failed attempt',
+    'if (attempt >= this.#policy.maxAttempts) {',
+    'if (true) {',
+  ],
+  [
+    'ui-load.ts',
+    'ui-load',
+    'retries for ever',
+    'if (attempt >= this.#policy.maxAttempts) {',
+    'if (false) {',
+  ],
+  [
+    'ui-load.ts',
+    'ui-load',
+    'the load error message logged (holds the token)',
+    'const note = loadFailureNote(error);',
+    'const note = String(error);',
+  ],
+  [
+    'ui-load.ts',
+    'ui-load',
+    'urlForLog keeps the path and fragment',
+    "if (parsed.protocol === 'http:' || parsed.protocol === 'https:') return parsed.origin;",
+    "if (parsed.protocol === 'http:' || parsed.protocol === 'https:') return url;",
   ],
   // --- the `octopus-diff` command (roadmap #21, DECISIONS #560-): the marker and never-overwrite rules ---
   [

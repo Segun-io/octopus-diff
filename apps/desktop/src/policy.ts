@@ -103,7 +103,10 @@ export function loadFailureNote(error: unknown): string {
   return typeof code === 'string' && /^[A-Z][A-Z0-9_]{1,60}$/.test(code) ? code : 'unknown error';
 }
 
-/** A load that a newer navigation replaced (a screen swap, a reload): not a failure to report. */
-export function isSupersededLoad(error: unknown): boolean {
-  return (error as { code?: unknown } | null)?.code === 'ERR_ABORTED';
+/**
+ * A safe net error name from Electron (`did-fail-load`'s `errorDescription`, e.g. `ERR_ABORTED`), or
+ * null. Anything else is not logged.
+ */
+export function netErrorName(text: unknown): string | null {
+  return typeof text === 'string' && /^[A-Z][A-Z0-9_]{1,60}$/.test(text) ? text : null;
 }

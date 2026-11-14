@@ -32,6 +32,7 @@ import {
   startReadOnlyProof,
 } from '@octopus-diff/fixtures';
 import { expect, test } from '@playwright/test';
+import { failedUiAttempts, redact, windowTimeline } from './support/diagnostics.js';
 import {
   type AppDirs,
   alive,
@@ -45,6 +46,7 @@ import {
   packagedApp,
   runApp,
   until,
+  withWindowDiagnostics,
 } from './support/packaged-app.js';
 
 const IS_WIN = process.platform === 'win32';
@@ -219,22 +221,40 @@ test('the window shows projects added with `octopus-diff add`; read-only proof; 
       ).toBe(true);
     }
 
-    // The window: the daemon's UI with the projects, and the §5 security baseline.
-    const page = await run.cdp.page((url) => url.startsWith(origin), 60_000);
-    await page.waitFor(
-      `document.querySelector('[data-testid="${TEST_IDS.app}"]')?.getAttribute('data-ready') === 'true'`,
-      60_000,
-      'the web UI to be ready',
+    // The window: the daemon's UI with the projects, and the §5 security baseline. A wait that
+    // times out says what the window was on and what the app logged (DECISIONS #593).
+    const diagnosed = <T>(wait: () => Promise<T>) =>
+      withWindowDiagnostics(run, dirs, [daemon.token], wait);
+    const page = await diagnosed(() => run.cdp.page((url) => url.startsWith(origin), 60_000));
+    await diagnosed(() =>
+      page.waitFor(
+        `document.querySelector('[data-testid="${TEST_IDS.app}"]')?.getAttribute('data-ready') === 'true'`,
+        60_000,
+        'the web UI to be ready',
+      ),
     );
     // The sidebar is one flat, virtual list of worktree rows carrying `data-project-name`: rows
     // far down are not mounted, so the check is that the mounted rows are the added projects'.
-    const shown = await page.waitFor<string[]>(
-      `(() => { const rows = [...document.querySelectorAll('[data-testid="${TEST_IDS.worktreeItem}"]')]
-        .map((r) => r.getAttribute('data-project-name'));
-        return rows.length > 0 ? [...new Set(rows)] : null; })()`,
-      30_000,
-      'worktree rows in the sidebar',
+    const shown = await diagnosed(() =>
+      page.waitFor<string[]>(
+        `(() => { const rows = [...document.querySelectorAll('[data-testid="${TEST_IDS.worktreeItem}"]')]
+          .map((r) => r.getAttribute('data-project-name'));
+          return rows.length > 0 ? [...new Set(rows)] : null; })()`,
+        30_000,
+        'worktree rows in the sidebar',
+      ),
     );
+    // The window's lifecycle in the CI log, also when it passes: how often the UI load needed a
+    // second attempt (the macOS flake, DECISIONS #594) shows up here.
+    const timeline = windowTimeline(daemonLog(dirs));
+    console.log(
+      redact(`window timeline (${process.platform}):\n${timeline.join('\n')}`, [daemon.token]),
+    );
+    const retried = failedUiAttempts(timeline);
+    test.info().annotations.push({
+      type: 'ui load',
+      description: retried === 0 ? 'first attempt' : `${retried} failed attempt(s) before the UI`,
+    });
     expect(shown.length).toBeGreaterThan(0);
     for (const name of shown)
       expect(names, 'every row is a project added with the CLI').toContain(name);

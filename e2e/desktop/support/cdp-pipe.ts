@@ -10,6 +10,7 @@
  */
 import type { ChildProcess } from 'node:child_process';
 import type { Readable, Writable } from 'node:stream';
+import { pageUrlForLog } from './diagnostics.js';
 
 /** Spawn options' stdio for a child that should get the pipe on fds 3 and 4. */
 export const CDP_PIPE_STDIO = ['ignore', 'pipe', 'pipe', 'pipe', 'pipe'] as const;
@@ -20,7 +21,7 @@ interface Waiting {
   method: string;
 }
 
-interface TargetInfo {
+export interface TargetInfo {
   targetId: string;
   type: string;
   url: string;
@@ -101,7 +102,8 @@ export class CdpPipe {
     let seen: string[] = [];
     while (Date.now() < deadline) {
       const pages = (await this.targets()).filter((t) => t.type === 'page');
-      seen = pages.map((p) => p.url.slice(0, 60));
+      // Never the query or fragment: the UI's fragment holds the token, and CI logs are public.
+      seen = pages.map((p) => pageUrlForLog(p.url));
       const target = pages.find((t) => match(t.url));
       if (target) {
         const attached = await this.send('Target.attachToTarget', {
