@@ -99,6 +99,43 @@ Honest limits of this round: the signal behaviour was tested under dash with a f
 changes are still unrun on Windows. A user who runs the AppImage launcher in a terminal and presses Ctrl-C now gets the CLI
 stopped with SIGTERM (the background child ignores SIGINT in a non-interactive sh), not SIGINT.
 
+## PR #110 CI: the macOS `desktop` job (round 2, 2026-11-13)
+
+At head 57411ac Linux and Windows passed and macOS failed twice at `packaged-app.spec.ts:141` ("timed out after 60000 ms
+waiting for the web UI to be ready"): the daemon, `status` and `add` worked, only the window's UI never became ready. The one
+change in that path was round 1's redirection of HOME (and USERPROFILE, LOCALAPPDATA, APPDATA, XDG_*) for the launched app
+(#580), the likely cause being Chromium's Keychain / `~/Library` use on macOS. **I could not run macOS here: that cause is
+the best reading of the evidence, not something I reproduced; CI will say.** Fix (DECISIONS #581, which supersedes #580):
+
+- **App**: `OCTOPUS_DESKTOP_NO_CLI_REFRESH=1` turns the startup refresh off. `startupRefresh(shim, env, log)`
+  (`cli-shim-service.ts`; `main.ts` calls it and never `refresh()` directly) does nothing and logs one line when the variable is
+  exactly `1`; any other value is the normal refresh. Safe direction only: no value of any variable makes anything get written
+  that the refresh would not write anyway, and the menu's Install and the bridge ignore it. Documented as a test hook in
+  `docs/DESKTOP.md` §3.2.
+- **e2e**: `isolatedAppEnv` / `ensureHome` and their test are gone; `appLaunchEnv(env)` adds the switch and still drops
+  `ELECTRON_RUN_AS_NODE`; HOME is left alone on every OS. `launchApp` and `runApp` pass it. `e2e/support/desktop-app-env.test.ts`
+  asserts the env carries the switch (and that a caller cannot turn it off), that `launchApp`/`runApp` use `appLaunchEnv`, that no
+  spec or helper starts an `.executable` with a direct `spawn`, and that every other use of the binary is the Node-mode CLI
+  (`ELECTRON_RUN_AS_NODE`). Checked by reading the code: every GUI launch in `e2e/desktop` (main flow, refusals, kill test, the
+  tamper test and its control copy, the cli-shim spec's app) goes through those two functions. The cli-shim spec keeps its own temp
+  homes for the launcher it installs (no GUI app is started with a fake HOME there).
+- **Tests first** (red before the code): `cli-shim-service.test.ts` "the startup refresh and its test switch" (the constant; refresh
+  as before; with the switch `refresh()` is not called, nothing written, exactly one log line naming the variable; only `1`
+  counts; nothing in the environment makes a launcher get created or retargeted; `main.ts` goes through `startupRefresh`),
+  `desktop-app-env.test.ts` (`appLaunchEnv is not a function`).
+- **Mutants** (9 new, 4 old e2e ones replaced; `mutation-check.mjs` now 121): switch ignored, any value accepted, no log line, `main.ts`
+  calling `refresh()` directly, app launched without the switch, HOME redirected again, RUN_AS_NODE inherited, `launchApp` / `runApp`
+  passing the plain env.
+
+| Command | Result |
+|---|---|
+| `pnpm check` | **exit 0**: lint (4 warnings, all pre-existing; one I introduced, a comma operator in a test spy, was fixed), `credits:check`, typecheck, build, tests. Desktop 11 files, **269 passed**, 1 skipped (pre-existing); e2e vitest 14 |
+| `node apps/desktop/scripts/mutation-check.mjs` | **121 killed, 0 survived**, no BROKEN (re-run after the lint fix) |
+| rebuilt `release/` + `OCTOPUS_DESKTOP_APPIMAGE=<AppImage> DISPLAY=:0 pnpm exec playwright test -c playwright.desktop.config.ts` (real HOME) | **9 passed**, 13.2 s; `~/.local/bin/octopus-diff` does not exist afterwards |
+| the packaged Linux app by hand in a scratch HOME with a stale launcher (marker, app `/gone/app`) | with `OCTOPUS_DESKTOP_NO_CLI_REFRESH=1`: launcher byte-for-byte unchanged, `daemon.log` has "startup refresh of the octopus-diff command skipped (OCTOPUS_DESKTOP_NO_CLI_REFRESH=1)"; without it: "updated the octopus-diff command at …" and the launcher is retargeted. So the switch is what prevents the rewrite |
+
+Not verified: the macOS job (it is the only place the cause can be confirmed); the Windows job with this change.
+
 ## Contract changes
 
 Additive, own commit: `packages/contracts/src/desktop-cli.ts` (new) and `export * from './desktop-cli.js'` in

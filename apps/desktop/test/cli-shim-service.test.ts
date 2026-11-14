@@ -595,7 +595,13 @@ describe('the startup refresh and its test switch (DECISIONS #581)', () => {
   it('with OCTOPUS_DESKTOP_NO_CLI_REFRESH=1 refresh() is not even called, nothing is written, one line is logged', async () => {
     const { fs, shim } = stale();
     let called = 0;
-    const spy = { ...shim, refresh: async () => (called++, shim.refresh()) };
+    const spy = {
+      ...shim,
+      refresh: async () => {
+        called++;
+        return shim.refresh();
+      },
+    };
     const notes: string[] = [];
     expect(await startupRefresh(spy, { [NO_CLI_REFRESH_ENV]: '1' }, (t) => notes.push(t))).toBe(
       'disabled',
