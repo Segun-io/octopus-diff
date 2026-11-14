@@ -45,11 +45,15 @@ export type WslList = { ok: true; distros: WslDistro[] } | { ok: false; reason: 
 
 /** Text from a failed command for a screen: no control characters, short. */
 export function cleanOutput(bytes: Buffer): string {
-  return decodeWslText(bytes)
-    .replace(/\u001b\[[0-9;]*[A-Za-z]/g, '')
-    .replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, '')
-    .trim()
-    .slice(-300);
+  return (
+    decodeWslText(bytes)
+      // biome-ignore lint/suspicious/noControlCharactersInRegex: terminal colour codes are dropped
+      .replace(/\u001b\[[0-9;]*[A-Za-z]/g, '')
+      // biome-ignore lint/suspicious/noControlCharactersInRegex: control characters are dropped
+      .replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, '')
+      .trim()
+      .slice(-300)
+  );
 }
 
 export async function listWslDistros(run: RunWsl): Promise<WslList> {

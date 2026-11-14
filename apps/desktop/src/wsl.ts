@@ -117,6 +117,7 @@ function byFields(line: string): Row | null {
 export function parseWslList(output: Uint8Array | string): WslDistro[] {
   const text = typeof output === 'string' ? output : decodeWslText(output);
   const lines = text
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: stray NULs of a mis-decoded UTF-16
     .replace(/\u0000/g, '')
     .split(/\r?\n/)
     .filter((l) => l.trim() !== '');
@@ -216,6 +217,7 @@ export interface WslProbe {
 
 const PROBE_KEYS = ['path', 'home', 'cli', 'cliVersion', 'node', 'git', 'readyStdout', 'env'];
 
+// biome-ignore lint/suspicious/noControlCharactersInRegex: control characters are what it finds
 const hasControl = (value: string) => /[\u0000-\u001f\u007f]/.test(value);
 
 /** The probe's answers, or null when it did not finish (no `od:end`). */
