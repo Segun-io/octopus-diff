@@ -41,9 +41,13 @@ export function permissionPolicy(_permission: string): false {
   return false;
 }
 
-/** The `webPreferences` every window gets. `devTools` only in dev runs (`--dev`). */
-export function webPreferences(devTools: boolean) {
+/**
+ * The `webPreferences` every window gets. `devTools` only in dev runs (`--dev`). `preload` is the
+ * bridge (`dist/preload.cjs`, #20): a sandboxed, context-isolated preload changes none of the rest.
+ */
+export function webPreferences(devTools: boolean, preload?: string) {
   return {
+    ...(preload ? { preload } : {}),
     contextIsolation: true,
     sandbox: true,
     nodeIntegration: false,
@@ -65,7 +69,16 @@ export interface WindowOptionsInput {
   devTools: boolean;
   title: string;
   backgroundColor?: string;
+  /** The bridge's preload script (absolute path). */
+  preload?: string;
+  platform?: NodeJS.Platform;
 }
+
+/**
+ * Where macOS draws the traffic lights with `hiddenInset`: centred in the web's 32 px title bar strip
+ * (`--od-titlebar-height` in apps/web/src/styles.css; the buttons are 12 px tall plus a margin).
+ */
+export const TRAFFIC_LIGHTS = { x: 14, y: 10 } as const;
 
 export const MIN_WIDTH = 720;
 export const MIN_HEIGHT = 480;
@@ -73,9 +86,9 @@ export const DEFAULT_WIDTH = 1400;
 export const DEFAULT_HEIGHT = 900;
 
 /**
- * `BrowserWindow` options. No preload in phase A (the `window.octopusDesktop` bridge is #20). The
- * native frame on every platform: macOS `hiddenInset` needs a drag region in the web header first
- * (WS3, phase C), or the window could not be moved.
+ * `BrowserWindow` options. The preload is the `window.octopusDesktop` bridge (#20). macOS gets the
+ * `hiddenInset` title bar: the web UI draws a drag strip at the top (`data-desktop-platform`), and
+ * so do our screens. Windows and Linux keep the native frame (`titleBarOverlay` later).
  */
 export function windowOptions(input: WindowOptionsInput) {
   const bounds = input.bounds;
@@ -89,7 +102,10 @@ export function windowOptions(input: WindowOptionsInput) {
     show: false,
     backgroundColor: input.backgroundColor ?? '#0b0d12',
     autoHideMenuBar: false,
-    webPreferences: webPreferences(input.devTools),
+    ...(input.platform === 'darwin'
+      ? { titleBarStyle: 'hiddenInset' as const, trafficLightPosition: { ...TRAFFIC_LIGHTS } }
+      : {}),
+    webPreferences: webPreferences(input.devTools, input.preload),
   };
 }
 

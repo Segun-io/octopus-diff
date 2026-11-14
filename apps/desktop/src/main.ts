@@ -6,12 +6,14 @@
  * launch cover it).
  *
  * Read-only guarantee: nothing here runs git or touches a repository. The daemon does all git
- * work; "Add Folder…" sends the path to the daemon's API like `octopus-diff add`.
+ * work; "Add Folder…" sends the path to the daemon's API like `octopus-diff add`. The
+ * `window.octopusDesktop` bridge (#20) lives in `bridge-main.ts` / `ipc.ts`.
  */
 import { spawn } from 'node:child_process';
 import { readFileSync, renameSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import type { DesktopCommand } from '@octopus-diff/contracts';
 import {
   app,
   BrowserWindow,
@@ -36,6 +38,7 @@ import {
   type ReadyInfo,
 } from './backend.js';
 import { backendCommand } from './backend-command.js';
+import { installBridge } from './bridge-main.js';
 import {
   addProject,
   addScanRoot,
@@ -116,6 +119,7 @@ let uiOrigin: string | null = null;
 let showing: { kind: 'none' } | { kind: 'screen'; url: string } | { kind: 'ui'; authUrl: string } =
   { kind: 'none' };
 let backendStopped = false;
+let bridge: ReturnType<typeof installBridge> | null = null;
 let quitting = false;
 /** Set by any quit request, also one before the backend exists (main() checks it). */
 let quitRequested = false;
@@ -244,7 +248,15 @@ function createWindow(): BrowserWindow {
     screen.getAllDisplays().map((d) => d.workArea),
     { width: MIN_WIDTH, height: MIN_HEIGHT },
   );
-  const w = new BrowserWindow(windowOptions({ bounds, devTools: args.dev, title: APP_NAME }));
+  const w = new BrowserWindow(
+    windowOptions({
+      bounds,
+      devTools: args.dev,
+      title: APP_NAME,
+      preload: path.join(distDir, 'preload.cjs'),
+      platform: process.platform,
+    }),
+  );
   win = w;
   w.once('ready-to-show', () => {
     if (saved?.maximized && bounds) w.maximize();
@@ -279,7 +291,8 @@ function createWindow(): BrowserWindow {
 function showScreen(s: Screen): void {
   if (!win) return;
   uiOrigin = null;
-  const url = screenUrl(s);
+  bridge?.clearBadge();
+  const url = screenUrl(s, { titleBarInset: process.platform === 'darwin' });
   showing = { kind: 'screen', url };
   void win.loadURL(url).catch(() => undefined);
 }
@@ -409,6 +422,11 @@ async function addFolder(): Promise<void> {
   await message({ type: 'error', message: 'Could not add the folder.', detail: result.message });
 }
 
+function pageCommand(command: DesktopCommand, fallbackScript: string): void {
+  if (bridge) bridge.command(command, fallbackScript);
+  else runInPage(fallbackScript);
+}
+
 function installMenu(): void {
   const template = buildMenuTemplate({
     platform: process.platform,
@@ -416,9 +434,10 @@ function installMenu(): void {
     dev: args.dev,
     actions: {
       addFolder: () => void addFolder(),
-      openSettings: () => runInPage(settingsScript(process.platform)),
-      refresh: () => runInPage(refreshScript()),
-      undo: () => runInPage(undoScript(process.platform)),
+      // Menu hooks (#20): over the bridge when the page subscribed, else phase A's scripts.
+      openSettings: () => pageCommand('open-settings', settingsScript(process.platform)),
+      refresh: () => pageCommand('refresh', refreshScript()),
+      undo: () => pageCommand('undo', undoScript(process.platform)),
       showLog: () => void shell.openPath(log.path),
       retryBackend,
     },
@@ -430,6 +449,16 @@ function installMenu(): void {
 
 async function main(): Promise<void> {
   lockDownSession();
+  bridge = installBridge({
+    window: () => win,
+    uiOrigin: () => (showing.kind === 'ui' ? uiOrigin : null),
+    daemon: () => {
+      const token = ready ? tokenFromAuthUrl(ready.authUrl) : null;
+      return ready && token ? { url: ready.url, token } : null;
+    },
+    runScript: runInPage,
+    log: (line) => log.note(line),
+  });
   installMenu();
   createWindow();
 
