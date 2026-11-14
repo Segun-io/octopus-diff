@@ -5916,3 +5916,12 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      has no working sandbox and does not start. That is no loss: Electron does not validate the asar on Linux, so the
      test only ever recorded an outcome there. It now returns early on Linux (annotated) and runs, control included,
      on macOS and Windows only.
+
+## Desktop phase C: the `octopus-diff` command from the app (session, 2026-11-13; roadmap #21)
+
+560. **`contracts:` the CLI-shim bridge lives in its own file, `packages/contracts/src/desktop-cli.ts`.** Another session
+     creates `desktop.ts` (`DesktopBridge`, #20) at the same time, so this one adds a separate additive file and one
+     `export *` line in `index.ts` instead of editing `desktop.ts`. It holds `DESKTOP_CLI_CHANNELS` (the two IPC
+     channel names, shared by the preload and the main process), the zod schemas `DesktopCliStatusSchema` and
+     `DesktopCliInstallResultSchema`, and `DesktopCliBridge { installCli(); cliStatus() }`. #20's `DesktopBridge`
+     should `extends DesktopCliBridge`. Nothing existing changed.
