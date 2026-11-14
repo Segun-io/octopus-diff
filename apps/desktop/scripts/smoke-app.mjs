@@ -247,7 +247,9 @@ async function bridgeChecks(page, d, repo) {
   );
   check(
     bridge.m.join(',') ===
-      'cliStatus,copyText,getPathForFile,installCli,onCommand,openInEditor,openPath,pickFolder,platform,revealPath,setBadge,version',
+      // wslStatus / setWslDistro (#22): optional in the contract, present in this app on every OS
+      // (off Windows the main process answers "unavailable").
+      'cliStatus,copyText,getPathForFile,installCli,onCommand,openInEditor,openPath,pickFolder,platform,revealPath,setBadge,setWslDistro,version,wslStatus',
     `and has exactly the contract's members (${bridge.m.join(', ')})`,
   );
   check(
@@ -317,6 +319,14 @@ async function bridgeChecks(page, d, repo) {
   check(
     typeof cli?.state === 'string' && cli.reason !== 'Not available from this page.',
     `cliStatus answers the UI through the guard (${cli?.state}: ${cli?.reason ?? ''})`,
+  );
+  // The WSL channels (#22) run on the same guard; off Windows they never run wsl.exe.
+  const wsl = JSON.parse(await call('wslStatus()'));
+  check(
+    process.platform === 'win32'
+      ? typeof wsl?.available === 'boolean'
+      : wsl?.available === false && /Windows/.test(wsl?.reason ?? '') && wsl.distros.length === 0,
+    `wslStatus answers the UI through the guard (available ${wsl?.available}: ${wsl?.reason ?? ''})`,
   );
   await page.evaluate('window.octopusDesktop.setBadge(3); true');
   await sleep(300);

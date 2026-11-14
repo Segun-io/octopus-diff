@@ -298,7 +298,10 @@ test('the window shows projects added with `octopus-diff add`; read-only proof; 
         'platform',
         'revealPath',
         'setBadge',
+        // #22: optional in the contract, present in this app on every OS (only Windows uses them).
+        'setWslDistro',
         'version',
+        'wslStatus',
       ],
     });
     expect(await page.evaluate('document.documentElement.dataset.desktopPlatform')).toBe(
