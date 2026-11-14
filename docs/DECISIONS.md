@@ -6343,3 +6343,82 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      clean exit 0 with `daemon.json` removed). Tests: args (valid, short/space/newline/empty nonce, combined with
      `--ready-fd`), serve with fake deps (started, attached, write failure exits 1 and stops the daemon, no fd channel
      opened), and the built CLI (one frame, token only in it, attached, closed reader).
+613. **The supervisor gains a stdout ready channel, a wrapper mode and a loopback rule; nothing else about it
+     changes.** `BackendOptions.ready: { kind: 'stdout', nonce }` spawns with stdio `['pipe', 'pipe', <log fd>]` (no
+     fd 3; stdout must be a pipe because it carries the frame) and reads stdout through `ReadyFrameReader`
+     (`src/ready-frame.ts`): a frame is a whole line that *starts* with the prefix (in the middle of a line it is
+     output), only this run's nonce counts and only once, every frame-like line (ours, a second one, a foreign nonce)
+     is withheld from `daemon.log` (it may hold a token; foreign ones are noted by count), ordinary output streams to
+     the log as it comes except a line that could still become a frame, and a frame over 16 KiB fails the attempt like
+     an over-long fd 3 line. stderr still goes straight to the log's descriptor, so a crash of the app leaves the
+     daemon's shutdown output a place to go (#490). `runAsNode: false` leaves `ELECTRON_RUN_AS_NODE` out (the child is
+     `wsl.exe`). `wrapper: true` encodes the issue's worst case, "terminating `wsl.exe` does not stop the Linux
+     process": every way out closes stdin first, and a failed attempt (bad or missing ready line) now gives the daemon
+     `stopGraceMs` to see the EOF before `wsl.exe` is signalled; `stop()` already worked that way. Without `wrapper`
+     a failed attempt also closes stdin before its SIGTERM (harmless for the Electron child, which exits on either).
+     `loopbackOnly: true` refuses a ready line whose `url` is not on a loopback host or whose `authUrl` has another
+     origin. The fake `wsl.exe` child in the tests (`FakeWslChild`) ignores kills for the Linux process and stops it
+     only on stdin's EOF.
+614. **`wsl.exe` command lines: argv arrays, `--exec`, the probe script on stdin.** `wsl.exe -- <cmd>` hands the rest
+     to the distro's default shell as one command line (T3 Code notes that it mangles quotes), so every call uses
+     `--exec`, which runs the program with the arguments as given (checked here with a real `wsl.exe`: spaces, `"`,
+     `'`, `ü 名`, `--x` and `$HOME` arrive unchanged). The distro is its own argument after `-d` and must pass
+     `isSafeDistroName` (1-64 letters/digits/`_`, `.`, `-` and single spaces inside, never a leading `-`, no quotes,
+     slashes, shell or control characters). The probe runs `wsl.exe -d <distro> --cd ~ --exec /bin/sh -s` with its
+     fixed script on stdin (never on a command line). `serve` runs as `wsl.exe -d <distro> --cd ~ --exec /usr/bin/env
+     PATH=<the probe's PATH> <the probe's absolute octopus-diff> serve --ready-stdout <nonce> --exit-with-stdin
+     --no-open --host 127.0.0.1 [--port <n>]`: no Linux shell either; a CLI path that is not absolute or contains `=`
+     (env would read it as a variable) or a control character is refused. The desktop's `--state-dir`/`--config-dir`
+     are Windows paths and are not passed (logged); `--port` is.
+615. **Networking: the daemon binds `127.0.0.1` inside the distro, explicitly, and Windows loads
+     `http://127.0.0.1:<port>`.** `--host 127.0.0.1` on the command line overrides a `host` in the distro's config
+     file, so the app can never put the daemon on the LAN by accident. Reaching it from Windows: with
+     `networkingMode=mirrored`, Windows and the distro share loopback, so a socket bound to the distro's
+     127.0.0.1 is reachable at Windows' 127.0.0.1 and (being loopback) from nowhere else; with the default NAT mode,
+     `localhostForwarding=true` (the default) makes WSL relay Windows' loopback port to a socket bound to loopback (or
+     the wildcard) in the VM, and the relay listens on Windows' loopback only. Either way the connection arrives from
+     loopback with `Host: 127.0.0.1:<port>`, which the daemon's Host and Origin checks accept, and the token travels
+     only in the URL fragment as before. Two failure modes are handled: forwarding off (nothing answers) and another
+     Windows program on the same port (NAT mode: it answers instead). Before loading the UI the app verifies the
+     daemon with the health challenge (`verifyDaemon` in `daemon-api.ts`: HMAC-SHA256 of the token, as the CLI's
+     `verifyDaemon`, the token itself never sent); anything but `verified` shows "Windows cannot reach the daemon in
+     WSL" with the `.wslconfig` lines to check. T3 Code connects to the distro's IP instead ("unreliable wslhost
+     localhost forwarding"); we do not, because that address is on a virtual network other machines' traffic can be
+     routed to, and loopback forwarding is reliable on current WSL (verified here in mirrored mode).
+616. **Prerequisites are probed, explained, never installed.** The probe (POSIX sh, read-only) asks the user's login
+     shell for its PATH (`$SHELL -ilc`, stdin `/dev/null`, `timeout 15` when available; nvm and similar set PATH only
+     there, as on macOS, #496), then reports `octopus-diff` (`command -v`), its `--version`, whether its `serve --help`
+     lists `--ready-stdout`, `node --version`, `git --version` and `/usr/bin/env`, each as a line `RS "od:" key "=" value`
+     ending with `od:end=1`. `parseWslProbe` takes the first value per key, drops values with control characters and
+     returns null without `end`. `wslProblems` turns it into `cli-missing`, `cli-path`, `cli-old` (no
+     `--ready-stdout`), `node-missing`/`node-old` (< 24, the CLI's `engines`), `git-missing`/`git-old` (< 2.31,
+     git-core's minimum) and `env-missing`, each with a sentence and commands to copy (the CLI is not on npm yet, so
+     the instructions are the README's checkout-and-link). The screen (`wslFailedScreen`) has Try again, **Use the
+     Windows backend** (a new screen action, `use-windows`: a broken distro must not lock the user out of Settings)
+     and Show the log. The real probe was run in this machine's Ubuntu through `wsl.exe`: it resolved the zsh/mise
+     login PATH, found Node 26 and git 2.53, and reported `cli-missing` (no `octopus-diff` on that PATH), as expected.
+617. **`wsl.exe -l -v` parsing.** It writes UTF-16LE without a BOM to a pipe (the captured bytes are a test fixture),
+     UTF-8 with `WSL_UTF8=1`; `decodeWslText` detects UTF-16 by NULs in odd bytes (or a BOM) and drops a BOM. The
+     header is localized, so lines are not matched by words: the first line that is not a distro gives the column
+     starts, a row is cut at those columns only if the cuts fall on spaces, and otherwise it is split on runs of two or
+     more spaces from the right (version, state, name; a localized state may contain a space, `Wird ausgeführt`).
+     Version must be 1 or 2, `*` marks the default, the state maps to `running`/`stopped` from the English words and
+     is `other` (with its text) otherwise. Names failing `isSafeDistroName` and duplicates are dropped. `docker-desktop`,
+     `docker-desktop-data`, `rancher-desktop(-data)` and `podman-machine-*` are `system: true`: listed, never offered or
+     accepted. The German/Spanish fixtures are constructed from the known strings, not captured (this machine is
+     en-US).
+618. **The choice lives in `desktop-settings.json` in userData, applied by restarting the backend.** `{ version: 1,
+     wslDistro: string | null }`, zod strict, and anything else reads as the default (the Windows backend). It is used
+     only on Windows (`wslDistroToUse`); on macOS/Linux a stored distro is ignored and logged. Changing it from
+     Settings (`setWslDistro`, needs a user gesture in the preload; the main process re-lists the distros and accepts
+     only a listed, safe, non-system name or null) saves first and only then stops the current backend (an owned
+     daemon stops, an attached one stays) and starts the chosen one; a quit during the switch waits for the stop. The
+     Windows CI packaged-app spec has no such file, so it runs the phase C path unchanged.
+619. **The web's Settings gets a "Desktop app" section, only with the bridge.** `visibleSections(desktop)` inserts it
+     before About; `SETTINGS_SECTIONS` itself is unchanged, so the browser's list, the command palette and the e2e's
+     section order are exactly as before. It holds the **Install `octopus-diff` command** row (#21's follow-up:
+     `cliStatus()` on open, a button for `not-installed`/`outdated` only, the result's message shown as is, a conflict
+     names what is in the way and offers no button) and, only when `platform === 'win32'` and the bridge has both WSL
+     methods, the "Where the backend runs" picker (This PC, then the non-system distros; a stored distro that is gone
+     stays listed as "(not installed)"; a refusal keeps the stored choice). A native `<select>` like the other Settings
+     choices: the list is short, so no search.
