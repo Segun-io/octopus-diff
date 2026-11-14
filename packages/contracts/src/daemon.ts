@@ -90,6 +90,12 @@ export const ServeReadySchema = z.object({
   authUrl: z.url(),
   pid: z.number().int().positive(),
   version: z.string().min(1),
+  /**
+   * The address the daemon is bound to (`--host`, as recorded in `daemon.json`), added for #22:
+   * `url` names a client address (a wildcard bind is reached at 127.0.0.1), so only this field says
+   * whether the daemon also listens beyond loopback. Optional: CLIs before it do not send it.
+   */
+  host: z.string().min(1).optional(),
 });
 export type ServeReady = z.infer<typeof ServeReadySchema>;
 

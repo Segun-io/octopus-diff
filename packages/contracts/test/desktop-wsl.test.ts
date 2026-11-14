@@ -88,3 +88,15 @@ describe('desktop WSL contracts', () => {
     expect(DesktopWslSetResultSchema.parse(result)).toEqual(result);
   });
 });
+
+describe('ServeReady.host (#22 review)', () => {
+  it('is optional (older CLIs) and a non-empty string when present', async () => {
+    const { ServeReadySchema } = await import('../src/index.js');
+    expect(ServeReadySchema.parse(ready)).toEqual(ready);
+    expect(ServeReadySchema.parse({ ...ready, host: '0.0.0.0' })).toMatchObject({
+      host: '0.0.0.0',
+    });
+    expect(ServeReadySchema.safeParse({ ...ready, host: '' }).success).toBe(false);
+    expect(ServeReadySchema.safeParse({ ...ready, host: 7 }).success).toBe(false);
+  });
+});

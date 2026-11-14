@@ -6422,3 +6422,11 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      methods, the "Where the backend runs" picker (This PC, then the non-system distros; a stored distro that is gone
      stays listed as "(not installed)"; a refusal keeps the stored choice). A native `<select>` like the other Settings
      choices: the list is short, so no search.
+
+## Desktop phase D: the PR #114 review (session, 2026-11-14; roadmap #22)
+
+620. **`contracts:` additive: `ServeReady.host`, optional.** The ready line's `url` is a *client* address: `baseUrlFor`
+     rewrites a wildcard bind (`0.0.0.0`, `::`) to `127.0.0.1`/`[::1]`, so a supervisor could not tell a LAN-reachable
+     daemon from a loopback one. `host` is the bind address the daemon records in `daemon.json` (started: the
+     daemon's own; attached: the running daemon's recorded one). Optional, so older CLIs' lines still parse; nothing
+     existing changes.
