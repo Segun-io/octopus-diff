@@ -1,7 +1,9 @@
 // biome-ignore-all lint/suspicious/noTemplateCurlyInString: the mutations are source text that contains `${…}`.
 // Mutation check for the rules that must not regress silently: the security policy (DESKTOP §5),
-// the packaged-build argument rules, the menu accelerator rule, and the supervisor's lifecycle (stdin lifeline, RUN_AS_NODE,
-// restart/backoff, attach, shutdown escalation, token never logged).
+// the packaged-build argument rules, the menu accelerator rule, the supervisor's lifecycle (stdin lifeline, RUN_AS_NODE,
+// restart/backoff, attach, shutdown escalation, token never logged), and the window.octopusDesktop bridge (#20: the
+// sender check, zod, the worktree path check, openPath's program refusal, the editor URL allowlist, the preload's
+// user-gesture gate).
 //
 //   node apps/desktop/scripts/mutation-check.mjs
 //
@@ -370,6 +372,213 @@ const MUTATIONS = [
     'no clamping to the display',
     'const x = Math.min(Math.max(b.x, best.x), best.x + best.width - width);',
     'const x = b.x;',
+  ],
+  // --- the window.octopusDesktop bridge (#20) ---
+  // Not mutated: `trusted.origin === null` in senderAllowed and `parsed.host === 'file'` in
+  // isAllowedEditorUrl are implied by the origin comparison and the `<scheme>://file/` prefix check
+  // (equivalent mutants); they stay as explicit belts.
+  [
+    'ipc.ts',
+    'ipc',
+    'bridge: sender origin not checked',
+    'return origin !== null && origin === trusted.origin;',
+    'return origin !== null;',
+  ],
+  [
+    'ipc.ts',
+    'ipc',
+    'bridge: another window accepted',
+    'if (event.sender.id !== trusted.webContentsId) return false;',
+    '',
+  ],
+  [
+    'ipc.ts',
+    'ipc',
+    'bridge: subframes accepted',
+    'if (!frame || frame.parent !== null) return false;',
+    'if (!frame) return false;',
+  ],
+  [
+    'ipc.ts',
+    'ipc',
+    'bridge: handlers skip the sender check',
+    'if (!senderAllowed(event, deps.trusted())) return fallback(forbidden(method));',
+    '',
+  ],
+  [
+    'ipc.ts',
+    'ipc',
+    'bridge: handlers skip zod',
+    'const parsed = schema.safeParse(raw);\n      if (!parsed.success) return fallback(invalid(method));\n      return run(parsed.data);',
+    'return run(raw as never);',
+  ],
+  [
+    'ipc.ts',
+    'ipc',
+    'bridge: any editor name',
+    'editor: z.enum(DESKTOP_EDITORS).optional(),',
+    'editor: z.string().optional() as never,',
+  ],
+  [
+    'ipc.ts',
+    'ipc',
+    'bridge: commands-ready from any sender',
+    "        if (!senderAllowed(event, deps.trusted())) {\n          forbidden('commandsReady');\n          return;\n        }\n",
+    '',
+  ],
+  [
+    'ipc.ts',
+    'ipc',
+    'bridge: openPath runs programs',
+    "if (unsafe) return note('openPath', unsafe);",
+    '',
+  ],
+  [
+    'ipc.ts',
+    'ipc',
+    'bridge: editor URL not allowlisted',
+    'if (url === null || !isAllowedEditorUrl(url)) {',
+    'if (url === null) {',
+  ],
+  [
+    'ipc.ts',
+    'ipc',
+    'bridge: refusals log the message (paths)',
+    'deps.log(`bridge: ${method} refused (${refusal.reason})`);',
+    'deps.log(`bridge: ${method} refused (${refusal.reason}) ${JSON.stringify(refusal)} ${JSON.stringify(arguments)}`);',
+  ],
+  [
+    'path-guard.ts',
+    'path-guard',
+    'path check: realpath not checked (symlink escapes)',
+    "  if (!isInside(root, real, platform)) {\n    return refuse('outside-worktree', 'The path leads outside its worktree (a symlink).');\n  }\n",
+    '',
+  ],
+  [
+    'path-guard.ts',
+    'path-guard',
+    'path check: string prefix instead of segments',
+    "return rel !== '..' && !rel.startsWith(`..${p.sep}`);",
+    "return !target.startsWith(root) ? false : rel !== '..' || true;",
+  ],
+  [
+    'path-guard.ts',
+    'path-guard',
+    'path check: another drive counts as inside',
+    '  if (p.isAbsolute(rel)) return false;\n',
+    '',
+  ],
+  [
+    'path-guard.ts',
+    'path-guard',
+    "path check: '..' segments allowed",
+    "if (segment === '' || segment === '.' || segment === '..') return null;",
+    "if (segment === '') return null;",
+  ],
+  [
+    'path-guard.ts',
+    'path-guard',
+    'path check: Windows backslash and colon allowed',
+    'if (/[\\\\:]/.test(segment)) return null;',
+    '',
+  ],
+  [
+    'path-guard.ts',
+    'path-guard',
+    'path check: missing worktrees used',
+    "if (worktree.missing) return refuse('missing-worktree', 'The worktree is gone from disk.');",
+    '',
+  ],
+  [
+    'path-guard.ts',
+    'path-guard',
+    'path check: worktree root not realpathed',
+    '    root = await fs.realpath(worktree.path);',
+    '    root = worktree.path;',
+  ],
+  [
+    'open-safety.ts',
+    'path-guard',
+    'openPath: executable types allowed',
+    'if (UNSAFE_OPEN_EXTENSIONS.has(extensionOf(target.path, platform))) return unsafe;',
+    '',
+  ],
+  [
+    'open-safety.ts',
+    'path-guard',
+    'openPath: execute bit ignored',
+    "if (target.kind === 'file' && platform !== 'win32' && (target.mode & 0o111) !== 0) return unsafe;",
+    '',
+  ],
+  [
+    'open-safety.ts',
+    'path-guard',
+    'openPath: Windows trailing dots not trimmed',
+    "if (platform === 'win32') name = name.replace(/[. ]+$/, '');",
+    '',
+  ],
+  [
+    'open-safety.ts',
+    'path-guard',
+    'openPath: sockets and devices allowed',
+    "if (target.kind === 'other') return unsafe;",
+    '',
+  ],
+  [
+    'editor-url.ts',
+    'editor-url',
+    'editor URL: any scheme',
+    'const editor = DESKTOP_EDITORS.find((e) => url.startsWith(`${e}://file/`));\n  if (!editor) return false;',
+    "const editor = url.split(':')[0] ?? '';",
+  ],
+  [
+    'editor-url.ts',
+    'editor-url',
+    'editor URL: query and fragment allowed',
+    "    parsed.search === '' &&\n    parsed.hash === '' &&\n    !url.includes('?') &&\n    !url.includes('#') &&\n",
+    '',
+  ],
+  [
+    'editor-url.ts',
+    'editor-url',
+    'editor URL: segments not encoded',
+    "  return `/${rest.map(encodeURIComponent).join('/')}`;\n}",
+    "  return `/${rest.join('/')}`;\n}",
+  ],
+  [
+    'bridge.ts',
+    'bridge',
+    'preload: actions without a user gesture',
+    'const action = async (channel: string, args: unknown[]): Promise<DesktopActionResult> => {\n    if (!env.hasUserActivation()) return NO_GESTURE;',
+    'const action = async (channel: string, args: unknown[]): Promise<DesktopActionResult> => {',
+  ],
+  [
+    'bridge.ts',
+    'bridge',
+    'preload: pickFolder without a user gesture',
+    '    async pickFolder(options) {\n      if (!env.hasUserActivation()) return null;',
+    '    async pickFolder(options) {',
+  ],
+  [
+    'bridge.ts',
+    'bridge',
+    'preload: copyText without a user gesture',
+    '    async copyText(text) {\n      if (!env.hasUserActivation()) return false;',
+    '    async copyText(text) {',
+  ],
+  [
+    'bridge.ts',
+    'bridge',
+    'preload: any command delivered',
+    'if (!(DESKTOP_COMMANDS as readonly string[]).includes(command)) return;',
+    '',
+  ],
+  [
+    'policy.ts',
+    'policy',
+    'preload: hiddenInset everywhere',
+    "...(input.platform === 'darwin'",
+    '...(input.platform !== undefined',
   ],
 ];
 

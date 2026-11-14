@@ -131,6 +131,17 @@ describe('resolveWorktreeTarget (the path check)', () => {
     expect(await resolve(ID, 'nope.txt')).toMatchObject({ ok: false, reason: 'not-found' });
   });
 
+  it('refuses a worktree the daemon reports missing even if its path exists', async () => {
+    const result = await resolveWorktreeTarget({
+      worktreeId: ID,
+      relPath: 'README.md',
+      worktrees: [{ id: ID, path: root, missing: true, bare: false }],
+      platform: 'linux',
+      fs: nodeFs,
+    });
+    expect(result).toMatchObject({ ok: false, reason: 'missing-worktree' });
+  });
+
   it('says not-ready when the daemon could not be asked', async () => {
     expect(
       await resolveWorktreeTarget({

@@ -327,6 +327,24 @@ describe('revealPath / openPath / openInEditor', () => {
     expect(calls.external).toEqual([]);
   });
 
+  it('the allowlist is checked in front of openExternal (a URL with an empty path)', async () => {
+    // The filesystem root as a worktree: `vscode://file/` has no path, so it fails the allowlist.
+    const h = createBridgeHandlers(
+      deps({
+        fs: {
+          realpath: async (p) => p,
+          stat: async () => ({ isDirectory: () => true, isFile: () => false, mode: 0o755 }),
+        },
+        listWorktrees: async () => [{ id: ID, path: '/', missing: false, bare: false }],
+      }),
+    );
+    expect(await h.invoke[BRIDGE_CHANNELS.openInEditor]?.(event(), ID)).toMatchObject({
+      ok: false,
+      reason: 'failed',
+    });
+    expect(calls.external).toEqual([]);
+  });
+
   it('logs the refusal reason, never the path', async () => {
     const h = createBridgeHandlers(deps());
     await h.invoke[BRIDGE_CHANNELS.openPath]?.(event(), ID, 'link');
