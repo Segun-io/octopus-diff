@@ -12,8 +12,10 @@ import { type ChildProcess, execFileSync, spawn, spawnSync } from 'node:child_pr
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, symlinkSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
+import { TEST_IDS } from '@octopus-diff/contracts';
 import { REPO_ROOT } from '../../support/env.js';
 import { CDP_PIPE_STDIO, CdpPipe } from './cdp-pipe.js';
+import { formatDiagnostics, type PageProbe, wrapWithDiagnostics } from './diagnostics.js';
 
 export const DESKTOP_APP_ENV = 'OCTOPUS_DESKTOP_APP';
 const RELEASE_DIR = join(REPO_ROOT, 'apps', 'desktop', 'release');
@@ -290,4 +292,103 @@ export async function until<T>(
 /** Short name for logs: `octopus-diff-desktop` / `octopus-diff.exe` / `octopus-diff`. */
 export function appLabel(app: PackagedApp): string {
   return basename(app.executable);
+}
+
+/** Rejects after `ms` (a hung app must not hang the diagnostics too). */
+function within<T>(promise: Promise<T>, ms: number, what: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`${what}: no answer within ${ms} ms`)), ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error: unknown) => {
+        clearTimeout(timer);
+        reject(error instanceof Error ? error : new Error(String(error)));
+      },
+    );
+  });
+}
+
+const PAGE_PROBE = `(() => {
+  const app = document.querySelector('[data-testid="${TEST_IDS.app}"]');
+  return {
+    readyState: document.readyState,
+    visibilityState: document.visibilityState,
+    hasFocus: document.hasFocus(),
+    appReady: app ? app.getAttribute('data-ready') : null,
+    text: (document.body ? document.body.innerText : '').slice(0, 800),
+  };
+})()`;
+
+/**
+ * What the window shows right now, and what the app and the daemon logged (diagnostics.ts): for the
+ * error of a window wait that timed out. Never throws; the token is redacted.
+ */
+export async function windowDiagnostics(
+  run: AppRun,
+  dirs: AppDirs,
+  secrets: readonly (string | null | undefined)[],
+): Promise<string> {
+  let pages: PageProbe[] | { error: string };
+  try {
+    const targets = (await within(run.cdp.targets(), 5_000, 'Target.getTargets')).filter(
+      (t) => t.type === 'page',
+    );
+    pages = [];
+    for (const target of targets) {
+      const probe: PageProbe = { url: target.url };
+      try {
+        const attached = await within(
+          run.cdp.send('Target.attachToTarget', { targetId: target.targetId, flatten: true }),
+          3_000,
+          'Target.attachToTarget',
+        );
+        const sessionId = attached.sessionId as string;
+        const result = await within(
+          run.cdp.send(
+            'Runtime.evaluate',
+            { expression: PAGE_PROBE, returnByValue: true },
+            sessionId,
+          ),
+          3_000,
+          'Runtime.evaluate',
+        );
+        probe.state = (result.result as { value?: PageProbe['state'] } | undefined)?.value ?? {};
+        await within(run.cdp.send('Target.detachFromTarget', { sessionId }), 2_000, 'detach').catch(
+          () => undefined,
+        );
+      } catch (error) {
+        probe.probeError = error instanceof Error ? error.message : String(error);
+      }
+      pages.push(probe);
+    }
+  } catch (error) {
+    pages = { error: error instanceof Error ? error.message : String(error) };
+  }
+  return formatDiagnostics({
+    pages,
+    log: daemonLog(dirs),
+    output: run.output(),
+    secrets,
+    appAlive: run.child.exitCode === null && run.child.signalCode === null,
+  });
+}
+
+/**
+ * Runs a window wait; when it fails, the thrown error carries `windowDiagnostics` (so the CI log
+ * shows what the window was on, and why).
+ */
+export async function withWindowDiagnostics<T>(
+  run: AppRun,
+  dirs: AppDirs,
+  secrets: readonly (string | null | undefined)[],
+  wait: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await wait();
+  } catch (error) {
+    throw wrapWithDiagnostics(error, await windowDiagnostics(run, dirs, secrets), secrets);
+  }
 }

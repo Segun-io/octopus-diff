@@ -129,6 +129,17 @@ the registry edit).
 
 - Load `authUrl` from the ready line. `apps/web/src/api/token.ts` already moves the fragment into `localStorage`
   and strips it, so **the web build needs no auth changes**.
+- **Loading it** (`apps/desktop/src/ui-load.ts`, DECISIONS #590-#600): every load of the window (a screen or the UI)
+  takes a ticket from one sequence, and a failed UI load counts as "superseded" only when a newer load began, never
+  because its code is `ERR_ABORTED`. A UI load whose page has not committed (no `did-navigate` to the UI's origin)
+  within 20 s is retried. A failed or stalled attempt is retried after 1 s, up to 3 attempts, then the error screen
+  ("Try again"). Once the page has committed, the web UI shows its own loading and offline states. Quitting
+  cancels a UI load in progress: no attempt runs against the daemon being stopped.
+- **The window's lifecycle is in `daemon.log`** (`[desktop …] window: …`): screens shown, navigations (origin and
+  HTTP status), failed and finished loads, the health check (time, git status), UI load attempts, the renderer
+  going away or hanging, and the first show. Only origins and net error names are logged, never a URL (the
+  fragment holds the token). When a window wait in `e2e/desktop` times out, its error carries the window's pages
+  (no query or fragment), the text of a screen page, these lines and the daemon's last lines, all redacted.
 - Electron's storage is separate from the user's browsers, so the token never reaches a browser profile.
 - Prefs live in origin-scoped `localStorage`, so the port matters. The daemon normally sits on `DEFAULT_PORT` (7428),
   so prefs persist across launches. If 7428 is taken by something else and the CLI falls back to another port, that run
