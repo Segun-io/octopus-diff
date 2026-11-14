@@ -125,7 +125,12 @@ function useRunAction(onRetry?: () => void) {
   const queryClient = useQueryClient();
   return async (job: AddJob, action: AddJobAction) => {
     if (action.id === 'open' && action.view) {
-      store.setState({ addJob: null, addProjectOpen: false, settingsOpen: false });
+      store.setState({
+        addJob: null,
+        addProjectOpen: false,
+        addProjectPath: null,
+        settingsOpen: false,
+      });
       commands.openView(action.view);
       return;
     }

@@ -9,7 +9,13 @@
  *             collapse state. Later additive fields (`pinned`, `folderStart`, `settle`,
  *             `settledOpen`, `fromMainOnly`, `activityOpen`, `lastWorktree`) need no version bump: `normalizePrefs` fills their defaults.
  */
-import { type DiffScope, type ScopeKind, scopeFromQueryFields } from '@octopus-diff/contracts';
+import {
+  DESKTOP_EDITORS,
+  type DesktopEditor,
+  type DiffScope,
+  type ScopeKind,
+  scopeFromQueryFields,
+} from '@octopus-diff/contracts';
 import type { SettleOverride } from '../lib/model.ts';
 import { normalizeThemePrefs, type ThemePrefs } from '../theme/registry.ts';
 
@@ -53,6 +59,8 @@ export interface Prefs {
   activityOpen: boolean;
   /** The worktree that was open last: where the app lands on the next load (`''`: none yet). */
   lastWorktree: string;
+  /** Desktop app only: the editor "Open in editor" uses (its URL scheme, DESKTOP §3.4). */
+  editor: DesktopEditor;
 }
 
 export const DEFAULT_PREFS: Prefs = {
@@ -74,6 +82,7 @@ export const DEFAULT_PREFS: Prefs = {
   settledOpen: false,
   activityOpen: false,
   lastWorktree: '',
+  editor: 'vscode',
 };
 
 function stringList(value: unknown): string[] {
@@ -140,6 +149,7 @@ export function normalizePrefs(raw: unknown): Prefs {
       typeof v.lastWorktree === 'string' && v.lastWorktree.length <= 256
         ? v.lastWorktree
         : DEFAULT_PREFS.lastWorktree,
+    editor: oneOf(v.editor, DESKTOP_EDITORS) ?? DEFAULT_PREFS.editor,
   };
 }
 

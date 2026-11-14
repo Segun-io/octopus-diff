@@ -42,6 +42,7 @@ import {
 import { ContextMenu, useContextMenu } from '../ContextMenu.tsx';
 import { CopyButton } from '../CopyButton.tsx';
 import { COPY_TEST_IDS, fileCopyItems, separated, worktreeCopyItems } from '../copyMenu.ts';
+import { useDesktopMenu } from '../desktopMenu.ts';
 import { SkeletonLines, WaitNote } from '../WaitNote.tsx';
 import { ActivityStrip } from './ActivityStrip.tsx';
 import { ImageDiff } from './ImageDiff.tsx';
@@ -235,6 +236,7 @@ export function DiffPane() {
   const oldPath = file?.oldPath && file.oldPath !== selected?.path ? file.oldPath : null;
   const pathTexts = selected ? fileCopyTexts({ path: selected.path }, '') : null;
   const copy: CopyFn = (text, options) => void copyAndReport(store, text, options);
+  const desktopItems = useDesktopMenu();
   const worktree = row?.worktree;
   const projectName = row?.project.name;
   const defaultBranch = row?.project.defaultBranch;
@@ -405,6 +407,11 @@ export function DiffPane() {
                   },
                 ]
               : []),
+            ...desktopItems({
+              worktreeId: selected.worktreeId,
+              relPath: selected.path,
+              deleted: status === 'deleted',
+            }),
             ...(row ? separated(worktreeCopyItems(row.worktree, copy, menu.state.position)) : []),
           ]}
           position={menu.state.position}

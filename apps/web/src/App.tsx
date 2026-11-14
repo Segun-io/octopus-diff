@@ -43,6 +43,13 @@ import { OriginGroupHeader } from './components/OriginGroupHeader.tsx';
 import { Sidebar } from './components/Sidebar.tsx';
 import { UntrackedOmittedNotice } from './components/UntrackedOmittedNotice.tsx';
 import { SkeletonLines, StaleNote, WaitNote } from './components/WaitNote.tsx';
+import {
+  useDesktop,
+  useDesktopBadge,
+  useDesktopCommands,
+  useDesktopPlatform,
+  useFolderDrop,
+} from './lib/desktop.ts';
 import { useFaviconDot } from './lib/favicon.ts';
 import { fileRefKey, toFileRef } from './lib/fileRef.ts';
 import {
@@ -615,10 +622,22 @@ function AppShell({ eventSourceFactory }: { eventSourceFactory?: EventSourceFact
   const layout = useUi((s) => s.fileListLayout);
   const selected = useUi((s) => s.selected);
   const titleCount = useUi((s) => s.titleCount);
+  const addProjectPath = useUi((s) => s.addProjectPath);
 
   useApplyTheme();
   useDocumentTitle(model.unreviewedTotal, titleCount);
   useFaviconDot(titleCount && model.unreviewedTotal > 0);
+  // The desktop app (window.octopusDesktop; nothing in a browser): title bar, badge, menu
+  // commands, and a folder dropped on the window opens the add dialog at it.
+  const desktop = useDesktop();
+  useDesktopPlatform(desktop);
+  useDesktopBadge(desktop, titleCount ? model.unreviewedTotal : 0);
+  useDesktopCommands(desktop, commands);
+  useFolderDrop(
+    desktop,
+    (folder) => store.setState({ addProjectOpen: true, addProjectPath: folder }),
+    (text) => actions.notice(store, text),
+  );
   useServerEvents(eventSourceFactory);
   useAddJobWatcher();
   const focusWorktree =
@@ -826,12 +845,14 @@ function AppShell({ eventSourceFactory }: { eventSourceFactory?: EventSourceFact
         {addProjectOpen && (
           <Dialog
             title="Add repositories"
-            onClose={() => store.setState({ addProjectOpen: false })}
+            onClose={() => store.setState({ addProjectOpen: false, addProjectPath: null })}
           >
             <AddProjectForm
+              key={addProjectPath ?? ''}
+              initialPath={addProjectPath}
               autoFocus
               onOpen={(view) => {
-                store.setState({ addProjectOpen: false });
+                store.setState({ addProjectOpen: false, addProjectPath: null });
                 commands.openView(view);
               }}
             />

@@ -1,6 +1,7 @@
 import { TEST_IDS } from '@octopus-diff/contracts';
 import { lazy, Suspense, useCallback, useEffect, useId, useRef } from 'react';
 import { useHealthQuery, useSettingsSupport } from '../../api/settings.ts';
+import { useDesktop } from '../../lib/desktop.ts';
 import { useEscapeToClose } from '../../lib/useEscape.ts';
 import {
   APPEARANCE_ITEMS,
@@ -8,6 +9,7 @@ import {
   type PrefItem,
   SETTINGS_SECTIONS,
   type SettingsSectionId,
+  visiblePrefItems,
 } from '../../settings/registry.ts';
 import { COMMANDS, GROUP_LABELS, SHORTCUTS } from '../../state/commandRegistry.ts';
 import type { Prefs } from '../../state/prefs.ts';
@@ -165,11 +167,12 @@ export function SettingsDialog() {
 }
 
 function PrefsPanel({ items }: { items: readonly PrefItem[] }) {
+  const desktop = useDesktop() !== null;
   return (
     <div>
       <Where kind="device" />
       <div className="mt-2">
-        {items.map((item) => (
+        {visiblePrefItems(items, desktop).map((item) => (
           <PrefControl key={item.key} item={item} />
         ))}
       </div>

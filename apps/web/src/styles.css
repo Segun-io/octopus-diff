@@ -90,6 +90,39 @@ body,
   height: 100%;
 }
 
+/*
+ * The desktop app on macOS (`data-desktop-platform`, set from window.octopusDesktop): the window
+ * has a hidden inset title bar, so the page draws a draggable strip where it was and the traffic
+ * lights sit in it (apps/desktop/src/policy.ts TRAFFIC_LIGHTS). Nothing else is draggable, so no
+ * button, menu or dialog can lose its clicks to the drag region. Browsers never get the attribute.
+ */
+:root {
+  --od-titlebar-height: 0px;
+}
+
+html[data-desktop-platform="darwin"] {
+  --od-titlebar-height: 32px;
+}
+
+html[data-desktop-platform="darwin"] #root {
+  box-sizing: border-box;
+  padding-top: var(--od-titlebar-height);
+}
+
+html[data-desktop-platform="darwin"] body::before {
+  content: "";
+  box-sizing: border-box;
+  position: fixed;
+  top: 0;
+  right: 0;
+  left: 0;
+  height: var(--od-titlebar-height);
+  background: var(--od-surface);
+  border-bottom: 1px solid var(--od-line);
+  -webkit-app-region: drag;
+  app-region: drag;
+}
+
 body {
   margin: 0;
   background: var(--od-canvas);

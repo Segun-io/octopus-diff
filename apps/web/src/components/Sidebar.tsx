@@ -16,6 +16,7 @@ import { useAppModel } from '../state/model.tsx';
 import { actions, useUi, useUiStore, type View } from '../state/ui.tsx';
 import { ContextMenu, type MenuItem, useContextMenu } from './ContextMenu.tsx';
 import { separated, worktreeCopyItems } from './copyMenu.ts';
+import { useDesktopMenu } from './desktopMenu.ts';
 import { useFolderStart } from './FolderBrowser.tsx';
 import { Wordmark } from './Mark.tsx';
 import { SidebarFilter } from './SidebarFilter.tsx';
@@ -186,6 +187,7 @@ export function Sidebar() {
   });
 
   const copy: CopyFn = (text, options) => void copyAndReport(store, text, options);
+  const desktopItems = useDesktopMenu();
   // The folder and project headers are gone; their Overviews open from the worktree's menu.
   const menuItems = (t: MenuTarget): MenuItem[] => {
     const { row } = t;
@@ -218,6 +220,7 @@ export function Sidebar() {
         ? policyItems({ kind: 'branch', projectId: row.project.id, branch }, `branch ${branch}`)
         : []),
       ...separated(worktreeCopyItems(row.worktree, copy, menu.state?.position)),
+      ...desktopItems({ worktreeId: id, deleted: row.worktree.missing }),
     ];
   };
 

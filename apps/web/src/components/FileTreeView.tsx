@@ -11,6 +11,7 @@ import { copyAndReport } from '../state/copy.ts';
 import { useUiStore } from '../state/ui.tsx';
 import { ContextMenu, type MenuItem } from './ContextMenu.tsx';
 import { fileCopyItems } from './copyMenu.ts';
+import { useDesktopMenu } from './desktopMenu.ts';
 
 export interface FileTreeViewProps {
   entries: readonly NavEntry[];
@@ -45,6 +46,7 @@ export function FileTreeView({
   worktreePathOf,
 }: FileTreeViewProps) {
   const store = useUiStore();
+  const desktopItems = useDesktopMenu();
   const byPath = useMemo(() => new Map(entries.map((e) => [e.file.path, e])), [entries]);
   const latest = useRef({ byPath, onSelect, selectedKey });
   latest.current = { byPath, onSelect, selectedKey };
@@ -109,12 +111,22 @@ export function FileTreeView({
           : worktreePathOf?.(entries[0]?.worktreeId ?? '');
         // A directory row copies its own path; a file row its path, old path, name, absolute path.
         const file = entry?.file ?? { path: item.path.replace(/\/$/, '') };
-        const items: MenuItem[] = fileCopyItems(
-          file,
-          root,
-          (text, options) => void copyAndReport(store, text, options),
-          at,
-        ).filter((i) => item.kind === 'file' || i.id !== 'copy-name');
+        const worktreeId = entry?.worktreeId ?? entries[0]?.worktreeId;
+        const items: MenuItem[] = [
+          ...fileCopyItems(
+            file,
+            root,
+            (text, options) => void copyAndReport(store, text, options),
+            at,
+          ).filter((i) => item.kind === 'file' || i.id !== 'copy-name'),
+          ...(worktreeId
+            ? desktopItems({
+                worktreeId,
+                relPath: file.path,
+                deleted: entry?.file.status === 'deleted',
+              })
+            : []),
+        ];
         return (
           <ContextMenu
             items={items}
