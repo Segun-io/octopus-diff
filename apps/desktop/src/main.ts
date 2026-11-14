@@ -72,7 +72,7 @@ import {
   versionNoticeTitle,
 } from './screens.js';
 import { defaultRunShell, resolveShellPath } from './shell-env.js';
-import { LoadSequence, type UiLoad, urlForLog } from './ui-load.js';
+import { LoadSequence, UiLoad, urlForLog } from './ui-load.js';
 import {
   parseWindowState,
   restoreBounds,
@@ -401,36 +401,31 @@ async function showReady(r: ReadyInfo, force = false): Promise<void> {
   showing = { kind: 'ui', authUrl: r.authUrl };
   if (notice) win.setTitle(versionNoticeTitle(APP_NAME, notice.daemon, notice.app));
   const w = win;
-  const ticket = loads.begin();
-  log.note(`window: loading the UI from ${urlForLog(target)}`);
-  // Observation only (the behaviour is unchanged): a UI page that has not committed after 20 s.
-  const stall = setTimeout(() => {
-    if (!loads.isCurrent(ticket) || win !== w || w.isDestroyed()) return;
-    if (httpOrigin(w.webContents.getURL()) === uiOrigin) return;
-    log.note(
-      `window: no UI page within 20000 ms (window ${w.isVisible() ? 'visible' : 'not visible'}, ` +
-        `${w.webContents.isLoading() ? 'loading' : 'not loading'}, on ${pageForLog(w)})`,
-    );
-  }, 20_000);
-  await w.loadURL(target).then(
-    () => log.note('window: the UI loaded'),
-    (error: unknown) => {
-      const note = loadFailureNote(error);
-      if (note === 'ERR_ABORTED' || win !== w) {
-        const replaced = !loads.isCurrent(ticket) || win !== w;
-        log.note(
-          `window: the UI load ended (${note}; ${replaced ? 'a newer load replaced it' : 'nothing replaced it'})`,
-        );
-        return;
-      }
-      // The page never loaded (the daemon died after its ready line, the dev server is not up yet):
-      // nothing would reconnect, so say so and let "Try again" reload. Only the code is logged: the
-      // message holds the URL, and the URL the token.
+  uiLoad?.cancel();
+  // Attempts, a commit watchdog and "superseded" by load sequence, not by error code (ui-load.ts).
+  // The page never loading (the daemon died after its ready line, the dev server is not up yet)
+  // ends on the failure screen, whose "Try again" reloads. Only error codes are logged: the
+  // message holds the URL, and the URL the token.
+  const load: UiLoad = new UiLoad(target, {
+    load: (url) => w.loadURL(url),
+    loads,
+    timers,
+    note: (line) => log.note(line),
+    wanted: () => win === w && !w.isDestroyed(),
+    describe: () =>
+      w.isDestroyed()
+        ? 'the window is closed'
+        : `window ${w.isVisible() ? 'visible' : 'not visible'}, ` +
+          `${w.webContents.isLoading() ? 'loading' : 'not loading'}, on ${pageForLog(w)}`,
+    giveUp: (note, attempts) => {
+      if (uiLoad === load) uiLoad = null;
       log.note(`the window could not load the UI: ${note}`);
-      showScreen(failedScreen(`The window could not load the UI (${note})`, 1, log.path));
+      showScreen(failedScreen(`The window could not load the UI (${note})`, attempts, log.path));
     },
-  );
-  clearTimeout(stall);
+  });
+  uiLoad = load;
+  log.note(`window: loading the UI from ${urlForLog(target)}`);
+  load.start();
 }
 
 function render(state: BackendState): void {
