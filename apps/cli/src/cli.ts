@@ -62,6 +62,10 @@ For supervisors (the desktop app):
                              "attached" when a daemon already runs for this state directory (then
                              serve exits 0). authUrl holds the token; with this option the
                              banner on stdout leaves the token out.
+      --ready-stdout <nonce> The same line on stdout instead, framed as a line of its own:
+                             RS (0x1e), "octopus-diff-ready <nonce> ", the JSON (for supervisors
+                             that cannot pass a descriptor, e.g. wsl.exe). nonce: 16-128 of
+                             [A-Za-z0-9_-], chosen by the supervisor per run.
       --exit-with-stdin      Shut down gracefully when stdin ends or closes (also when the parent
                              process dies). Without it stdin is not read.
 

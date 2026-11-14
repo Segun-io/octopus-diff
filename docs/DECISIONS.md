@@ -6328,3 +6328,18 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      the web feature-detects them, nothing existing changes meaning). `daemon.ts` gains `SERVE_READY_FRAME_PREFIX`
      (`"\u001eoctopus-diff-ready "`), `ServeReadyNonceSchema` (16-128 of `[A-Za-z0-9_-]`) and `formatServeReadyFrame`,
      shared by the CLI (writer) and the supervisor (reader) so both sides cannot drift. `ServeReadySchema` is unchanged.
+612. **`serve --ready-stdout <nonce>` (apps/cli, owned by WS5, requested by #22).** `wsl.exe` passes only stdin, stdout
+     and stderr to the Linux process, so `--ready-fd 3` cannot reach the app through it. The new option writes the
+     same `ServeReady` JSON to stdout as `formatServeReadyFrame(nonce, ready)`: a newline, ASCII RS (0x1E),
+     `octopus-diff-ready `, the nonce, a space, the JSON, a newline. The leading newline starts the frame on a line of
+     its own even after partial output; RS never appears in the CLI's text output; the per-run nonce (chosen by the
+     supervisor, 16-128 of `[A-Za-z0-9_-]`, on the command line: it is not a secret, it only tells this run's frame
+     from echoed or stray text) means a line with the prefix but another nonce is not the ready line. The frame is
+     written with the same blocking `writeSync` as the fd channel (a few hundred bytes, one write); the banner then says
+     "sent in the ready frame on stdout" and has no token. `--ready-fd` and `--ready-stdout` together are a usage
+     error. Because the reader of stdout may vanish (the app crashed, `wsl.exe` killed), EPIPE on `process.stdout` is
+     ignored once the stdout channel is open: stdin's EOF (`--exit-with-stdin`) is what stops the daemon, and a broken
+     stdout pipe must not crash its shutdown halfway (the built-CLI test closes the reader, then stdin, and expects a
+     clean exit 0 with `daemon.json` removed). Tests: args (valid, short/space/newline/empty nonce, combined with
+     `--ready-fd`), serve with fake deps (started, attached, write failure exits 1 and stops the daemon, no fd channel
+     opened), and the built CLI (one frame, token only in it, attached, closed reader).

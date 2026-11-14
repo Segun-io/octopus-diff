@@ -86,6 +86,11 @@ export interface CliDeps {
   waitForShutdown: () => Promise<string>;
   /** Opens `--ready-fd`; throws an Error if `fd` is not an open descriptor. */
   openReadyChannel: (fd: number) => ReadyChannel;
+  /**
+   * `--ready-stdout` (#22): a channel that writes the ready frame to stdout (blocking, whole);
+   * `close()` leaves stdout open.
+   */
+  openStdoutReadyChannel: () => ReadyChannel;
   /** Starts watching stdin for EOF/close/error (`--exit-with-stdin`). */
   watchStdin: () => StdinWatch;
   isProcessAlive: (pid: number) => boolean;
@@ -213,20 +218,7 @@ export function openReadyChannel(fd: number): ReadyChannel {
   }
   let closed = false;
   return {
-    write(line) {
-      const data = Buffer.from(line, 'utf8');
-      let offset = 0;
-      const deadline = Date.now() + READY_WRITE_BUDGET_MS;
-      while (offset < data.length) {
-        try {
-          offset += writeSync(fd, data, offset, data.length - offset);
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== 'EAGAIN' || Date.now() > deadline)
-            throw error;
-          Atomics.wait(sleepSignal, 0, 0, 5);
-        }
-      }
-    },
+    write: (line) => writeAllSync(fd, line),
     close() {
       if (closed) return;
       closed = true;
@@ -237,6 +229,35 @@ export function openReadyChannel(fd: number): ReadyChannel {
       }
     },
   };
+}
+
+/**
+ * The real `openStdoutReadyChannel` (#22): the frame is written to fd 1 with the same blocking
+ * write as `openReadyChannel` (one `write` of a few hundred bytes, so it is not interleaved with
+ * other output; the frame's leading newline starts it on a line of its own anyway). The reader
+ * is a supervisor that may vanish (`wsl.exe` killed, the app crashed): a broken stdout pipe must
+ * not crash the daemon halfway through its shutdown, so EPIPE on `process.stdout` is ignored from
+ * here on (stdin's EOF is what stops it).
+ */
+export function openStdoutReadyChannel(): ReadyChannel {
+  process.stdout.on('error', (error: NodeJS.ErrnoException) => {
+    if (error.code !== 'EPIPE') throw error;
+  });
+  return { write: (line) => writeAllSync(1, line), close: () => undefined };
+}
+
+function writeAllSync(fd: number, line: string): void {
+  const data = Buffer.from(line, 'utf8');
+  let offset = 0;
+  const deadline = Date.now() + READY_WRITE_BUDGET_MS;
+  while (offset < data.length) {
+    try {
+      offset += writeSync(fd, data, offset, data.length - offset);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EAGAIN' || Date.now() > deadline) throw error;
+      Atomics.wait(sleepSignal, 0, 0, 5);
+    }
+  }
 }
 
 /**
@@ -285,6 +306,7 @@ export function defaultDeps(): CliDeps {
       openBrowser(url, { platform: process.platform, isWsl, stateDir, env: process.env }),
     waitForShutdown: processShutdownSignal(onForcedExit),
     openReadyChannel,
+    openStdoutReadyChannel,
     watchStdin: () => watchStdin(),
     isProcessAlive,
     runProgram: createRunProgram(process.env, process.platform),

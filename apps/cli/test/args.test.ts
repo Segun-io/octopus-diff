@@ -84,6 +84,34 @@ describe('parseCommandLine', () => {
     expect(plain.flags).not.toHaveProperty('exitWithStdin');
   });
 
+  it('parses --ready-stdout <nonce> (#22)', () => {
+    const nonce = 'n0nce_N0NCE-abcdef';
+    expect(parseCommandLine(['serve', '--ready-stdout', nonce, '--exit-with-stdin'])).toMatchObject(
+      {
+        command: 'serve',
+        flags: { readyStdout: nonce, exitWithStdin: true },
+      },
+    );
+    const plain = parseCommandLine(['serve']);
+    if (plain.command !== 'serve') throw new Error('unreachable');
+    expect(plain.flags).not.toHaveProperty('readyStdout');
+  });
+
+  it.each([
+    [['serve', '--ready-stdout', 'short'], /--ready-stdout needs a nonce of 16-128/],
+    [['serve', '--ready-stdout', 'a b c d e f g h i j'], /--ready-stdout needs a nonce/],
+    [['serve', '--ready-stdout', `${'a'.repeat(16)}\n`], /--ready-stdout needs a nonce/],
+    [['serve', '--ready-stdout', ''], /--ready-stdout needs a nonce/],
+    [['serve', '--ready-stdout'], /--ready-stdout/],
+    [
+      ['serve', '--ready-stdout', 'a'.repeat(16), '--ready-fd', '3'],
+      /--ready-fd and --ready-stdout cannot be combined/,
+    ],
+  ])('rejects %j', (argv, message) => {
+    expect(() => parseCommandLine(argv)).toThrow(UsageError);
+    expect(() => parseCommandLine(argv)).toThrow(message);
+  });
+
   it.each([
     [['serve', '--ready-fd', '0'], /--ready-fd must be a file descriptor of 3 or more/],
     [['serve', '--ready-fd', '2'], /--ready-fd must be a file descriptor of 3 or more/],

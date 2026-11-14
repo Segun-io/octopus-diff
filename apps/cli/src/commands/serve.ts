@@ -1,4 +1,9 @@
-import { APP_NAME, type DaemonHandle, type ServeReady } from '@octopus-diff/contracts';
+import {
+  APP_NAME,
+  type DaemonHandle,
+  formatServeReadyFrame,
+  type ServeReady,
+} from '@octopus-diff/contracts';
 import type { ServeFlags } from '../args.js';
 import type { CliDeps, ReadyChannel } from '../deps.js';
 import {
@@ -37,8 +42,11 @@ export function formatBanner(
   home: string,
   webRoot: string | null,
   lanUrls: readonly string[] = [],
-  /** With `--ready-fd` the token travels on that fd only: no `#token=` URL on stdout. */
-  readyFd?: number,
+  /**
+   * With `--ready-fd` the token travels on that fd only, with `--ready-stdout` in the ready frame
+   * only (`'stdout'`): no `#token=` URL in the banner.
+   */
+  readyFd?: number | 'stdout',
 ): string {
   if (readyFd !== undefined) {
     const lines = [
@@ -49,7 +57,9 @@ export function formatBanner(
       `  State:  ${oneLine(tildify(handle.stateDir, home))}`,
       `  Web UI: ${webRoot ? oneLine(tildify(webRoot, home)) : 'not found (API only; run `pnpm build`)'}`,
       '',
-      `  The access URL was sent on file descriptor ${readyFd}.`,
+      readyFd === 'stdout'
+        ? '  The access URL was sent in the ready frame on stdout.'
+        : `  The access URL was sent on file descriptor ${readyFd}.`,
       '',
     ];
     return `${lines.join('\n')}\n`;
@@ -89,10 +99,35 @@ export function formatReadyLine(ready: ServeReady): string {
   return `${JSON.stringify(ready)}\n`;
 }
 
-function openReadyChannel(flags: ServeFlags, deps: CliDeps): ReadyChannel | undefined {
+/** The supervisor's ready channel: `--ready-fd <n>`, or stdout with `--ready-stdout <nonce>`. */
+interface Ready {
+  channel: ReadyChannel;
+  /** Where it goes, for messages (never the token). */
+  where: string;
+  /** What is written: one JSON line, or that line framed for stdout. */
+  format(ready: ServeReady): string;
+  /** For the banner. */
+  banner: number | 'stdout';
+}
+
+function openReadyChannel(flags: ServeFlags, deps: CliDeps): Ready | undefined {
+  const nonce = flags.readyStdout;
+  if (nonce !== undefined) {
+    return {
+      channel: deps.openStdoutReadyChannel(),
+      where: 'stdout',
+      format: (ready) => formatServeReadyFrame(nonce, ready),
+      banner: 'stdout',
+    };
+  }
   if (flags.readyFd === undefined) return undefined;
   try {
-    return deps.openReadyChannel(flags.readyFd);
+    return {
+      channel: deps.openReadyChannel(flags.readyFd),
+      where: `file descriptor ${flags.readyFd}`,
+      format: formatReadyLine,
+      banner: flags.readyFd,
+    };
   } catch (error) {
     throw new CliError(`--ready-fd ${flags.readyFd}: ${errorMessage(error)}`);
   }
@@ -125,7 +160,7 @@ export async function runServe(
       deps.stdout.write(
         `${APP_NAME} is already running (pid ${running.pid}) with this state directory.\n`,
       );
-      const failure = sendReady(ready, flags.readyFd, {
+      const failure = sendReady(ready, {
         mode: 'attached',
         url: running.url,
         authUrl,
@@ -199,7 +234,7 @@ export async function runServe(
     handle = await startDaemon(options);
   } catch (error) {
     stdin?.stop();
-    ready?.close();
+    ready?.channel.close();
     const host = options.host ?? '';
     const port = options.port ?? 0;
     if (hasErrorCode(error, 'EADDRINUSE')) {
@@ -238,12 +273,12 @@ export async function runServe(
 
   const lan = lanAuthUrls(handle.host, handle.port, handle.token, deps.networkInterfaces());
   deps.stdout.write(
-    formatBanner(handle, version, paths.home, options.webRoot ?? null, lan, flags.readyFd),
+    formatBanner(handle, version, paths.home, options.webRoot ?? null, lan, ready?.banner),
   );
   let exitCode = EXIT_OK;
   let proceed = true;
   if (ready) {
-    const failure = sendReady(ready, flags.readyFd, {
+    const failure = sendReady(ready, {
       mode: 'started',
       url: handle.url,
       authUrl: handle.authUrl,
@@ -286,18 +321,15 @@ export async function runServe(
  * Writes the ready line and closes the channel. Returns a message (never containing the token)
  * when the line could not be delivered, e.g. the supervisor already closed its end.
  */
-function sendReady(
-  channel: ReadyChannel,
-  fd: number | undefined,
-  ready: ServeReady,
-): string | undefined {
+function sendReady(target: Ready, ready: ServeReady): string | undefined {
+  const what = target.banner === 'stdout' ? 'the ready frame' : 'the ready line';
   try {
-    channel.write(formatReadyLine(ready));
+    target.channel.write(target.format(ready));
     return undefined;
   } catch (error) {
-    return `could not write the ready line to file descriptor ${fd}: ${errorMessage(error)}`;
+    return `could not write ${what} to ${target.where}: ${errorMessage(error)}`;
   } finally {
-    channel.close();
+    target.channel.close();
   }
 }
 

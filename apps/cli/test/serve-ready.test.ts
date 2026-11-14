@@ -9,7 +9,11 @@ import { existsSync } from 'node:fs';
 import { mkdir, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { type ServeReady, ServeReadySchema } from '@octopus-diff/contracts';
+import {
+  SERVE_READY_FRAME_PREFIX,
+  type ServeReady,
+  ServeReadySchema,
+} from '@octopus-diff/contracts';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { makeTempDirs, type TempDirs } from './helpers.js';
 
@@ -252,6 +256,88 @@ describe.skipIf(!built)('built CLI: serve --ready-fd', () => {
       expect(served.stdout()).not.toContain('is running');
       expect(await exists(daemonJson())).toBe(false);
       expect(await served.readyFd).toBe('');
+    },
+    TIMEOUT,
+  );
+});
+
+/** The frame on stdout (`--ready-stdout`), parsed, or fail with the child's output. */
+async function readyFrame(served: Served, nonce: string): Promise<ServeReady> {
+  const head = `${SERVE_READY_FRAME_PREFIX}${nonce} `;
+  const line = await withinMs(
+    new Promise<string>((resolve) => {
+      const poll = setInterval(() => {
+        const found = served
+          .stdout()
+          .split('\n')
+          .find((l) => l.startsWith(head));
+        if (found !== undefined && served.stdout().includes(`${found}\n`)) {
+          clearInterval(poll);
+          resolve(found);
+        }
+      }, 25);
+    }),
+    15_000,
+    `the ready frame\n${served.stderr()}`,
+  );
+  return ServeReadySchema.parse(JSON.parse(line.slice(head.length)));
+}
+
+describe.skipIf(!built)('built CLI: serve --ready-stdout (#22)', () => {
+  const nonce = 'built-cli-nonce_0123456789abcdef';
+
+  it(
+    'frames one started line on stdout, no fd 3 needed, and EOF on stdin still stops it',
+    async () => {
+      const served = serve(['--ready-stdout', nonce, '--exit-with-stdin'], { fd: false });
+      const ready = await readyFrame(served, nonce);
+      expect(ready.mode).toBe('started');
+      expect(ready.pid).toBe(served.child.pid);
+      const secret = await token();
+      expect(ready.authUrl).toBe(`${ready.url}/#token=${encodeURIComponent(secret)}`);
+      expect((await fetch(`${ready.url}/api/health`)).status).toBe(200);
+      // Exactly one frame; the token appears in it and nowhere else.
+      const lines = served.stdout().split('\n');
+      expect(lines.filter((l) => l.startsWith(SERVE_READY_FRAME_PREFIX))).toHaveLength(1);
+      expect(lines.filter((l) => l.includes(secret))).toHaveLength(1);
+      expect(served.stderr()).not.toContain(secret);
+      expect(served.argv.join(' ')).not.toContain(secret);
+      expect(served.stdout()).toContain('sent in the ready frame on stdout');
+
+      served.child.stdin?.end();
+      expect(await withinMs(served.exit, 15_000, 'exit after EOF')).toBe(0);
+      expect(await exists(daemonJson())).toBe(false);
+    },
+    TIMEOUT,
+  );
+
+  it(
+    'attached: a second run frames an attached line and exits 0',
+    async () => {
+      const first = serve(['--ready-stdout', nonce, '--exit-with-stdin'], { fd: false });
+      const started = await readyFrame(first, nonce);
+      const other = 'second-run-nonce_abcdefghijklmnop';
+      const second = serve(['--ready-stdout', other, '--exit-with-stdin'], { fd: false });
+      const attached = await readyFrame(second, other);
+      expect(await withinMs(second.exit, 15_000, 'second exit')).toBe(0);
+      expect(attached).toMatchObject({ mode: 'attached', url: started.url, pid: started.pid });
+      expect(second.stdout()).not.toContain(nonce);
+      first.child.stdin?.end();
+      expect(await withinMs(first.exit, 15_000, 'first exit')).toBe(0);
+    },
+    TIMEOUT * 2,
+  );
+
+  it(
+    'a closed stdout reader does not crash the daemon: EOF on stdin still shuts it down cleanly',
+    async () => {
+      const served = serve(['--ready-stdout', nonce, '--exit-with-stdin'], { fd: false });
+      await readyFrame(served, nonce);
+      served.child.stdout?.destroy();
+      served.child.stdin?.end();
+      expect(await withinMs(served.exit, 15_000, 'exit after EOF')).toBe(0);
+      expect(served.stderr()).toContain('stdin closed, shutting down');
+      expect(await exists(daemonJson())).toBe(false);
     },
     TIMEOUT,
   );

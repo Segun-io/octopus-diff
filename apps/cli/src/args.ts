@@ -1,5 +1,5 @@
 import { type ParseArgsOptionsConfig, parseArgs } from 'node:util';
-import { SCAN_DEPTH_MAX } from '@octopus-diff/contracts';
+import { SCAN_DEPTH_MAX, ServeReadyNonceSchema } from '@octopus-diff/contracts';
 import { LogLevelSchema } from './config.js';
 import { UsageError } from './errors.js';
 
@@ -31,6 +31,11 @@ export interface ServeFlags extends GlobalFlags, AddressFlags {
   webRoot?: string;
   /** File descriptor (>= 3) that receives the one-line JSON ready message (`ServeReady`). */
   readyFd?: number;
+  /**
+   * `--ready-stdout <nonce>` (#22): the ready line goes to stdout, framed with this nonce
+   * (`formatServeReadyFrame`), for supervisors that cannot pass a descriptor (`wsl.exe`).
+   */
+  readyStdout?: string;
   /** Shut down gracefully when stdin ends (a supervisor's lifeline; works on Windows). */
   exitWithStdin?: boolean;
 }
@@ -194,11 +199,17 @@ function parseServe(args: readonly string[]): ParsedCommand {
       poll: { type: 'boolean' },
       'web-root': { type: 'string' },
       'ready-fd': { type: 'string' },
+      'ready-stdout': { type: 'string' },
       'exit-with-stdin': { type: 'boolean' },
     },
     true,
   );
   if (values.help) return { command: 'help', topic: 'serve' };
+  const fd = readyFd(values);
+  const stdoutNonce = readyStdout(values);
+  if (fd !== undefined && stdoutNonce !== undefined) {
+    throw new UsageError('--ready-fd and --ready-stdout cannot be combined (one ready channel)');
+  }
   return {
     command: 'serve',
     flags: defined({
@@ -213,7 +224,8 @@ function parseServe(args: readonly string[]): ParsedCommand {
       watch: bool(values, 'watch'),
       poll: bool(values, 'poll'),
       webRoot: nonEmpty(values, 'web-root'),
-      readyFd: readyFd(values),
+      readyFd: fd,
+      readyStdout: stdoutNonce,
       exitWithStdin: bool(values, 'exit-with-stdin'),
     }),
   };
@@ -233,6 +245,18 @@ function readyFd(values: Values): number | undefined {
     );
   }
   return fd;
+}
+
+/** `--ready-stdout <nonce>`: 16-128 characters of `[A-Za-z0-9_-]` (`ServeReadyNonceSchema`). */
+function readyStdout(values: Values): string | undefined {
+  const raw = str(values, 'ready-stdout');
+  if (raw === undefined) return undefined;
+  if (!ServeReadyNonceSchema.safeParse(raw).success) {
+    throw new UsageError(
+      '--ready-stdout needs a nonce of 16-128 characters (letters, digits, "_" and "-")',
+    );
+  }
+  return raw;
 }
 
 function parseAdd(args: readonly string[]): ParsedCommand {
