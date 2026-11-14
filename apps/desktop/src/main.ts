@@ -72,7 +72,7 @@ import {
   versionNoticeTitle,
 } from './screens.js';
 import { defaultRunShell, resolveShellPath } from './shell-env.js';
-import { LoadSequence, UiLoad, urlForLog } from './ui-load.js';
+import { LoadSequence, UiLoad, uiWanted, urlForLog } from './ui-load.js';
 import {
   parseWindowState,
   restoreBounds,
@@ -411,7 +411,7 @@ async function showReady(r: ReadyInfo, force = false): Promise<void> {
     loads,
     timers,
     note: (line) => log.note(line),
-    wanted: () => win === w && !w.isDestroyed(),
+    wanted: () => uiWanted({ quitting, current: win, window: w, destroyed: w.isDestroyed() }),
     describe: () =>
       w.isDestroyed()
         ? 'the window is closed'
@@ -588,6 +588,9 @@ app.on('before-quit', (event) => {
   event.preventDefault();
   if (quitting) return;
   quitting = true;
+  // No more UI load attempts: the daemon is being stopped and the window hidden (PR #112 review).
+  uiLoad?.cancel();
+  uiLoad = null;
   saveWindowState();
   win?.hide();
   void backend.stop().finally(() => {

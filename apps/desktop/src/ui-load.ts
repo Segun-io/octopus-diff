@@ -195,3 +195,21 @@ export function urlForLog(url: string): string {
   if (parsed.protocol === 'http:' || parsed.protocol === 'https:') return parsed.origin;
   return `a ${parsed.protocol} URL`;
 }
+
+export interface UiWantedInput {
+  /** The app is quitting (`before-quit`): the daemon is being stopped, the window hidden. */
+  quitting: boolean;
+  /** The app's window now (`win`), and the window this UI load is for. */
+  current: unknown;
+  window: unknown;
+  destroyed: boolean;
+}
+
+/**
+ * `UiLoad`'s `wanted`: this window still wants the UI. Not once the app is quitting: the watchdog or a
+ * retry timer must not load against the daemon being stopped, nor put the failure screen into the
+ * hidden window (PR #112 review).
+ */
+export function uiWanted(input: UiWantedInput): boolean {
+  return !input.quitting && input.current === input.window && !input.destroyed;
+}
