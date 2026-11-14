@@ -48,7 +48,38 @@ docs/DESKTOP.md §11 describes the design.
   added to `adapted` in `scripts/credits/acknowledgements.json`; `pnpm credits` regenerated `CREDITS.md` and the
   web's credits JSON.
 
+## PR #114 review fixes (2026-11-14)
+
+Each fix began with a test that failed on the code before it: the CLI tests against the pre-review build, the desktop
+tests against the pre-review `src`. The exceptions are the two 500k-character parse tests, which hang there on the
+quadratic regex, the bug itself. DECISIONS #620-#630.
+
+- **MEDIUM 1, a WSL start that failed about 1 time in 64** (#624). The nonce is now hex (it never starts with `-`).
+  The argv carries `--ready-stdout=<nonce>`, and the nonce is **fresh for every spawn attempt**: the supervisor takes
+  `nonce: () => string` and `args: ({ nonce }) => argv`, and the preflight returns `argsFor(nonce)`. A desktop test
+  runs the CLI's real parser on the produced argv with a nonce starting with `-` (exit 0), and on the old form (exit
+  2, "ambiguous"). The backend smoke runs the real CLI with such a nonce.
+- **MEDIUM 2, the daemon crashing mid-shutdown when `wsl.exe` is killed** (#621). A supervised `serve` remembers EPIPE
+  on stdout *and* stderr (`CliDeps.watchBrokenPipes`) and drops later writes, the logger's included. Built-CLI test:
+  close both readers, then stdin → exit 0 and `daemon.json` removed. It failed with exit 1 on the old build. The
+  real-`wsl.exe` smoke now also checks that `daemon.json` is gone after `wsl.exe` is SIGKILLed.
+- **LOW 1, quadratic parse** (#625): 256 lines at most, `trimEnd()`, lines over 512 characters skipped. Each
+  500k-character test case runs under 250 ms.
+- **LOW 2, attach to a LAN-bound daemon** (#620, #622, #626). The ready line carries the bind `host` (a `contracts:`
+  commit). The CLI refuses to attach when an explicit `--host` differs from the running daemon's. The WSL backend
+  accepts only `host` and `url` on the literal `127.0.0.1`.
+- **LOW 3, the token after the one-time check** (#627). `UiRequestGate` holds every http(s) request of the window,
+  in WSL mode only, from leaving `ready` until `verifyDaemon` passes again. The remaining windows and the listener-
+  owner follow-up are in Known gaps and DESKTOP §11.
+- **LOW 4, concurrent settings saves** (#628): `SettingsStore` chains the saves, uses a unique temp file per save, and
+  updates memory after the rename.
+- **Nits** (#629, #623): double spaces in distro names are refused; a WSL-specific hint on EADDRINUSE.
+- **Mutation check** (#630): it can mutate `apps/cli/src` too; 22 new mutants (6 of them in the CLI).
+
 ## Verification
+
+First round (before the review):
+
 
 All run on 2026-11-14 in this worktree (WSL2 Ubuntu on Windows, mirrored networking, Node 26.13, Electron 45.3.2).
 
@@ -116,6 +147,32 @@ All run on 2026-11-14 in this worktree (WSL2 Ubuntu on Windows, mirrored network
 
   Nothing was installed and nothing on the host was changed.
 
+Review round (2026-11-14, same machine):
+
+- `pnpm check`: **exit 0**.
+  - contracts: 151 passed
+  - forge: 101 passed (5 skipped)
+  - fixtures: 59 passed
+  - web: 551 passed
+  - git-core: 556 passed (1 skipped)
+  - daemon: 610 passed (4 skipped)
+  - e2e support: 27 passed
+  - cli: **197 passed**, including the built-CLI `serve-ready` suite (16; its new broken-pipe test failed with exit 1
+    on the pre-review build first)
+  - desktop: **475 passed** (1 skipped)
+  - scripts: 34 passed
+- `node apps/desktop/scripts/mutation-check.mjs`: **261 killed, 0 survived (of 261)**.
+  - The previous run had 260 killed and 1 survivor: "settings: memory not updated after a save". The test's second
+    choice equalled the default; it now uses distinct values, and the mutant was checked by hand to fail 2 tests.
+- `OCTOPUS_SMOKE_WSL_DISTRO=Ubuntu node apps/desktop/scripts/smoke-backend.mjs`: **all scenarios passed**.
+  - The stdout scenario now uses a nonce that starts with `-` in the `=` form.
+  - Real `wsl.exe`: from Windows, the health URL answered 200, and stdin EOF stopped the daemon in 22 ms.
+  - SIGKILL of `wsl.exe`: the daemon exited 50 ms later **and shut down gracefully** (`daemon.json` removed: the
+    review's crash is gone).
+- `DISPLAY=:0 node apps/desktop/scripts/smoke-app.mjs`: **all scenarios passed**.
+- Not re-run in this round: `pnpm test:e2e` (the browser suite) and the packaged-app e2e. This round changed no
+  `apps/web` code and none of the bridge's members.
+
 ## Decisions
 
 DECISIONS #610-#619 (docs/DECISIONS.md, "Desktop phase D"). In short:
@@ -130,6 +187,9 @@ DECISIONS #610-#619 (docs/DECISIONS.md, "Desktop phase D"). In short:
 - `wsl -l -v` parsing (#617).
 - Settings in the app's userData, switching by restart (#618).
 - The web's Desktop app section (#619).
+- The review: the bind host in the ready line (#620), the broken-pipe guard (#621), attach honouring `--host` (#622),
+  the WSL port hint (#623), the per-attempt hex nonce (#624), bounded parsing (#625), the literal 127.0.0.1 (#626),
+  the request gate (#627), serialized saves (#628), the nits (#629) and CLI mutants (#630).
 
 ## Contract changes
 
@@ -141,11 +201,21 @@ Additive only, in `209a5bd contracts: …`:
 - `desktop.ts`: `DesktopBridge extends … Partial<DesktopWslBridge>` (two optional methods).
 - `index.ts` exports the new file.
 
+Review round: `3fe99bc contracts: ServeReady.host` (optional, the daemon's bind address).
+
 ## Dependencies
 
 None added or removed. `pnpm credits` was run for the new `adapted` entry (T3 Code, `apps/desktop/src/wsl.ts`).
 
 ## Known gaps
+
+- **Token exposure that remains** (#627). The request gate closes the restart window. Two short windows remain:
+  between `verifyDaemon` and the load of `authUrl`, and while an attached daemon has died but the poll (about 10 s)
+  has not noticed yet. In both, a program that took Windows' port (mainly NAT mode, behind WSL's relay) could see a
+  request. The app does not check who owns the Windows listener. Follow-up: `GetExtendedTcpTable` →
+  `wslrelay.exe`/the WSL service, or a custom scheme.
+- The request gate is unit-tested; its `session.webRequest` wiring only runs with a distro chosen, so it has not run
+  in a real window (smoke-app runs this machine's backend, where the gate stays uninstalled).
 
 - **The Windows app itself with a distro chosen has not been run.** This session must not launch the Windows app, and
   CI's Windows runner has no WSL distro. The `main.ts` wiring has no unit tests (by design, like phases A-C):
