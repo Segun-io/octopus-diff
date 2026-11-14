@@ -32,7 +32,7 @@ import {
   startReadOnlyProof,
 } from '@octopus-diff/fixtures';
 import { expect, test } from '@playwright/test';
-import { redact, windowTimeline } from './support/diagnostics.js';
+import { failedUiAttempts, redact, windowTimeline } from './support/diagnostics.js';
 import {
   type AppDirs,
   alive,
@@ -250,7 +250,7 @@ test('the window shows projects added with `octopus-diff add`; read-only proof; 
     console.log(
       redact(`window timeline (${process.platform}):\n${timeline.join('\n')}`, [daemon.token]),
     );
-    const retried = timeline.filter((l) => l.includes('UI load attempt')).length;
+    const retried = failedUiAttempts(timeline);
     test.info().annotations.push({
       type: 'ui load',
       description: retried === 0 ? 'first attempt' : `${retried} failed attempt(s) before the UI`,

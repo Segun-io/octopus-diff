@@ -5987,3 +5987,34 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      of #590 within ~21 s instead of never, and #592/#593 make the next occurrence name the screen and the window's
      state. Cause (3), the git-missing screen after a transient `git --version` failure, is not changed: it would show
      as `daemon health answered … (git missing)` and the screen's text in the next failure's diagnostics.
+
+### The macOS window flake: review of PR #112 (2026-11-14; no blocking bug, four low findings, all fixed)
+
+597. **Quitting stops the UI load.** `before-quit` hid the window and awaited `backend.stop()`, but the `UiLoad` was
+     cancelled only on the window's `closed`: its 20 s watchdog or 1 s retry timer could fire during the shutdown, load
+     against the daemon being stopped, or `giveUp` and put the failure screen into the hidden window. Now
+     `before-quit` cancels it (`uiLoad?.cancel(); uiLoad = null` when `quitting` is set), and `UiLoad`'s `wanted` is
+     the pure `uiWanted({ quitting, current: win, window: w, destroyed })` (`ui-load.ts`), which is false once the app
+     quits. The test "not once the app is quitting" failed first against `uiWanted` without the `quitting` check
+     (1 failed, 24 passed). New UiLoad tests: a window not wanted when the watchdog fires (no failure, no retry, no
+     failure screen), or during the retry delay (no further attempt). The `before-quit` line itself is Electron
+     wiring and not unit tested; `smoke-app` and the packaged e2e cover the quit path.
+598. **Mutation check: every UiLoad guard is killed by a test.** The mutant "a committed page still reloaded by the
+     watchdog" is renamed "commit does not cancel the retry" (only the commit-during-retry-delay test kills it). New
+     mutants, each with the test that kills it: the watchdog's `#committed` check (a timers fake whose `clearTimeout`
+     does nothing, so the watchdog fires after the commit); the watchdog's `#live()` check (not wanted any more); the
+     retry timer's `#live()` check (a newer `loads.begin()` during the retry delay); the own-ticket check when an
+     attempt resolves (a stale attempt resolving late must not end the current one: its watchdog still runs and
+     retries); `committed()`'s `#live()` check (after a newer load or `cancel()`) and its double-commit check; and
+     `uiWanted`'s `quitting`. `node apps/desktop/scripts/mutation-check.mjs`: **73 killed, 0 survived (of 73)**.
+599. **The wrapped error's stack is redacted too.** `withWindowDiagnostics` redacted the message but rebuilt the stack
+     from `error.stack.split('\n').slice(1)`, so the later lines of a multi-line message (an evaluate exception's
+     description) were copied unredacted. The wrapping is now the pure `wrapWithDiagnostics` (`diagnostics.ts`): the
+     stack is the redacted message plus the original's frame lines only (`/^\s+at /`), and the whole stack goes
+     through `redact` again, since a message line can look like a frame. Test: a multi-line message with the token in
+     its later lines (one of them shaped like a frame); it failed first against the old stack rule.
+600. **Counting failed UI load attempts.** `failedUiAttempts` (`diagnostics.ts`) counts only `UI load attempt <n>
+     failed` lines, which `UiLoad` writes before each retry. The patterns `no UI page within` and `nothing replaced it`
+     matched only the baseline commit's observation lines (gone with the fix), and `could not load the UI` (the
+     give-up line) counted a final failure twice. `window-repeat.spec.ts` and the main spec's "ui load" annotation both
+     use it. Its test failed first against the old patterns.

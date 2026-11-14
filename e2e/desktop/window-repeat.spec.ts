@@ -22,7 +22,7 @@ import {
   startReadOnlyProof,
 } from '@octopus-diff/fixtures';
 import { expect, test } from '@playwright/test';
-import { redact, windowTimeline } from './support/diagnostics.js';
+import { failedUiAttempts, redact, windowTimeline } from './support/diagnostics.js';
 import {
   alive,
   appDirs,
@@ -110,10 +110,7 @@ test(`the window reaches the web UI, ${REPEAT} launches`, async () => {
         ),
       );
       const timeline = windowTimeline(daemonLog(dirs));
-      // A failed or stalled attempt (and, before the UI load fix, the lines that only observed one).
-      const attempts = timeline.filter((l) =>
-        /UI load attempt|no UI page within|nothing replaced it|could not load the UI/.test(l),
-      ).length;
+      const attempts = failedUiAttempts(timeline);
       if (attempts > 0) retried++;
       results.push(`launch ${i}: UI after ${Date.now() - t0} ms, ${attempts} failed attempt(s)`);
       if (attempts > 0) console.log(redact(timeline.join('\n'), [daemon.token]));

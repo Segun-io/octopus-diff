@@ -2,7 +2,7 @@
 
 The packaged-app e2e test "the window shows projects added with `octopus-diff add`…"
 (`e2e/desktop/packaged-app.spec.ts:141`) failed now and then on macOS CI. The backend was ready, but the window never
-showed the web UI. Branch `fix/mac-window-flake` (pushed only to run CI; no PR). DECISIONS #590-#596.
+showed the web UI. Branch `fix/mac-window-flake` (PR #112). DECISIONS #590-#600.
 
 ## Root cause
 
@@ -73,7 +73,7 @@ Ruled out from the code:
   - `apps/desktop/test/ui-load.test.ts` (16 tests) and a `netErrorName` test in `policy.test.ts`.
   - `e2e/support/desktop-diagnostics.test.ts` (10 tests).
   - `apps/desktop/scripts/mutation-check.mjs`: 8 new mutants.
-- Docs: DESKTOP.md §3.3 (loading the UI, the window log); DECISIONS #590-#596.
+- Docs: DESKTOP.md §3.3 (loading the UI, the window log); DECISIONS #590-#600.
 
 ## Verification
 
@@ -118,9 +118,38 @@ Ruled out from the code:
   real-watcher test: `eventually: timed out`). That is code this work does not touch, and the same test passed on
   Node 24 in the same run. A rerun of that job passed (attempt 2: success).
 
+## PR #112 review (independent; no blocking bug, four low findings, all fixed)
+
+1. **Quitting did not cancel the UI load** (DECISIONS #597). `before-quit` now cancels it, and `UiLoad`'s `wanted`
+   is the pure `uiWanted(...)`, which is false once the app quits. "not once the app is quitting" failed first
+   (1 failed, 24 passed). New tests cover a window that is not wanted when the watchdog fires or during the retry
+   delay.
+2. **Mutation-check gaps** (#598). One mutant is renamed ("commit does not cancel the retry"). New mutants, each
+   killed by a test:
+   - the watchdog's `#committed` check (a timers fake whose `clearTimeout` does nothing) and its `#live()` check;
+   - the retry timer's `#live()` check (a newer load during the retry delay);
+   - the own-ticket check on a resolved attempt (a stale attempt resolving late);
+   - `committed()`'s `#live()` check and its double-commit check;
+   - `uiWanted`'s `quitting`.
+3. **The wrapped error's stack copied later message lines unredacted** (#599). This is now `wrapWithDiagnostics`:
+   frame lines only, and the whole stack redacted. The test (a multi-line message with the token in it) failed
+   first.
+4. **Dead patterns in the failed-attempt count** (#600). This is now `failedUiAttempts`, which counts only
+   `UI load attempt <n> failed`. Its test failed first.
+
+Verification of the review fixes:
+- `apps/desktop` vitest: **132 passed, 1 skipped** (`ui-load.test.ts`: 25).
+- e2e unit tests: **21 passed**.
+- `node apps/desktop/scripts/mutation-check.mjs`: **73 killed, 0 survived (of 73)**.
+- `pnpm check`: **exit 0** in 2 min 9 s. Lint has the same 4 warnings in untouched daemon and web test files.
+- Packaged app on Linux here: `test:e2e:desktop` with `OCTOPUS_DESKTOP_WINDOW_REPEAT=2`: **5 passed** (2 of 2
+  repeat launches on the first attempt).
+- `smoke:backend` and `smoke:app`: all scenarios passed.
+- Not run on macOS CI: this round is committed locally only, not pushed.
+
 ## Decisions
 
-All in DECISIONS #590-#596:
+All in DECISIONS #590-#600:
 - #590: the symptom and the candidates.
 - #591: superseded by load sequence.
 - #592: the window log.
@@ -128,6 +157,7 @@ All in DECISIONS #590-#596:
 - #594: 3 attempts and a 20 s commit watchdog.
 - #595: the opt-in window-repeat spec.
 - #596: the measurements, and why the change stays without a proven cause.
+- #597-#600: the PR #112 review fixes (above).
 
 ## Contract changes
 

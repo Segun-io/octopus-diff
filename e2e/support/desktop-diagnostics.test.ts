@@ -2,6 +2,7 @@
 // DECISIONS #593). Here because the e2e vitest config only collects `support/**/*.test.ts`.
 import { describe, expect, it } from 'vitest';
 import {
+  failedUiAttempts,
   formatDiagnostics,
   htmlText,
   logTails,
@@ -9,6 +10,7 @@ import {
   redact,
   screenText,
   windowTimeline,
+  wrapWithDiagnostics,
 } from '../desktop/support/diagnostics.js';
 
 const TOKEN = 'tok_SECRET_abcdefghijklmnopqrstuvwxyz012345';
@@ -134,5 +136,40 @@ describe('formatDiagnostics', () => {
     });
     expect(text).toContain('pages: could not list them (pipe closed)');
     expect(text).toContain('(none)');
+  });
+});
+
+describe('wrapWithDiagnostics (PR #112 review: the stack copied the message unredacted)', () => {
+  it('redacts every line of a multi-line message, in the message and in the stack', () => {
+    const original = new Error(
+      `cdp-pipe: evaluate failed: TypeError: boom\n    at http://127.0.0.1:7428/#token=${TOKEN}\n  token ${TOKEN} again`,
+    );
+    const wrapped = wrapWithDiagnostics(original, '--- window diagnostics ---', [TOKEN]);
+    expect(wrapped.message).not.toContain(TOKEN);
+    expect(wrapped.stack).not.toContain(TOKEN);
+    expect(wrapped.message).toContain('--- window diagnostics ---');
+    // The original's own frames stay (where it failed).
+    expect(wrapped.stack).toMatch(/\n\s+at .*desktop-diagnostics\.test\.ts/);
+  });
+
+  it('wraps a non-Error too', () => {
+    const wrapped = wrapWithDiagnostics(`failed with ${TOKEN}`, 'diag', [TOKEN]);
+    expect(wrapped.message).toBe('failed with <redacted>\ndiag');
+  });
+});
+
+describe('failedUiAttempts (PR #112 review: dead patterns, the give-up line counted twice)', () => {
+  it('counts the per-attempt failure lines only', () => {
+    const lines = [
+      '   +100 ms window: loading the UI (attempt 1 of 3)',
+      '   +200 ms window: UI load attempt 1 failed (ERR_FAILED); trying again in 1000 ms',
+      '  +1200 ms window: loading the UI (attempt 2 of 3)',
+      '  +1300 ms window: UI load attempt 2 failed (ERR_FAILED); trying again in 1000 ms',
+      '  +2300 ms window: loading the UI (attempt 3 of 3)',
+      '  +2400 ms window: the UI did not load in 3 attempts (ERR_FAILED)',
+      '  +2400 ms the window could not load the UI: ERR_FAILED',
+    ];
+    expect(failedUiAttempts(lines)).toBe(2);
+    expect(failedUiAttempts(['   +1 ms window: the UI loaded (attempt 1)'])).toBe(0);
   });
 });

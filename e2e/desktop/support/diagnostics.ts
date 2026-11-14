@@ -153,3 +153,30 @@ export function formatDiagnostics(input: DiagnosticsInput): string {
   out.push(...(output.length > 0 && output[0] !== '' ? output.map((l) => `  ${l}`) : ['  (none)']));
   return redact(out.join('\n'), input.secrets);
 }
+
+/**
+ * UI load attempts that failed and were retried (`UI load attempt <n> failed …`), from
+ * `windowTimeline` lines. The give-up lines (`did not load in`, `could not load the UI`) are not
+ * counted again: a launch that gave up never reached the UI anyway.
+ */
+export function failedUiAttempts(lines: readonly string[]): number {
+  return lines.filter((l) => /UI load attempt \d+ failed/.test(l)).length;
+}
+
+/** The error a timed-out window wait throws: the original message and stack, redacted, + diagnostics. */
+export function wrapWithDiagnostics(
+  error: unknown,
+  diagnostics: string,
+  secrets: readonly (string | null | undefined)[],
+): Error {
+  const message = redact(error instanceof Error ? error.message : String(error), secrets);
+  const wrapped = new Error(`${message}\n${diagnostics}`);
+  if (error instanceof Error && error.stack) {
+    // The frames only: the lines after the first are the rest of a multi-line message just as often
+    // (an evaluate exception's description), and the whole stack is redacted again regardless,
+    // since a message line can look like a frame.
+    const frames = error.stack.split('\n').filter((l) => /^\s+at /.test(l));
+    wrapped.stack = redact(`${wrapped.message}\n${frames.join('\n')}`, secrets);
+  }
+  return wrapped;
+}

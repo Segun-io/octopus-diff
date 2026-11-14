@@ -15,7 +15,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { TEST_IDS } from '@octopus-diff/contracts';
 import { REPO_ROOT } from '../../support/env.js';
 import { CDP_PIPE_STDIO, CdpPipe } from './cdp-pipe.js';
-import { formatDiagnostics, type PageProbe, redact } from './diagnostics.js';
+import { formatDiagnostics, type PageProbe, wrapWithDiagnostics } from './diagnostics.js';
 
 export const DESKTOP_APP_ENV = 'OCTOPUS_DESKTOP_APP';
 const RELEASE_DIR = join(REPO_ROOT, 'apps', 'desktop', 'release');
@@ -382,12 +382,6 @@ export async function withWindowDiagnostics<T>(
   try {
     return await wait();
   } catch (error) {
-    const message = redact(error instanceof Error ? error.message : String(error), secrets);
-    const diagnostics = await windowDiagnostics(run, dirs, secrets);
-    const wrapped = new Error(`${message}\n${diagnostics}`);
-    if (error instanceof Error && error.stack) {
-      wrapped.stack = `${wrapped.message}\n${error.stack.split('\n').slice(1).join('\n')}`;
-    }
-    throw wrapped;
+    throw wrapWithDiagnostics(error, await windowDiagnostics(run, dirs, secrets), secrets);
   }
 }
