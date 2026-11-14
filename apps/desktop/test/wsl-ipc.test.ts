@@ -209,6 +209,28 @@ describe('setWslDistro', () => {
     expect(extra.saved).toEqual([]);
   });
 
+  it('a hostile name is refused even if the listing were to contain it (defence in depth)', async () => {
+    const hostile: WslList = {
+      ok: true,
+      distros: [
+        {
+          name: '--exec',
+          state: 'running',
+          stateText: 'Running',
+          version: 2,
+          isDefault: false,
+          system: false,
+        },
+      ],
+    };
+    const t = setup({ list: async () => hostile });
+    expect(await t.call(DESKTOP_WSL_CHANNELS.set, event(), '--exec')).toMatchObject({
+      ok: false,
+      message: 'That is not a WSL distro name.',
+    });
+    expect(t.saved).toEqual([]);
+  });
+
   it('off Windows or from a foreign sender: refused, nothing saved', async () => {
     const linux = setup({ platform: 'linux' });
     expect(await linux.call(DESKTOP_WSL_CHANNELS.set, event(), 'Ubuntu')).toMatchObject({

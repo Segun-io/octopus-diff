@@ -894,7 +894,8 @@ async function main(): Promise<void> {
       probe: async (url) => (await fetchHealth(url, null)) !== null,
       onState: render,
     });
-  await startBackend();
+  // Not awaited: a WSL distro's preflight can take a while (a stopped distro boots first).
+  void startBackend();
   // After an update moved the app, point our own launcher (never another file) at it again.
   void startupRefresh(cliShim, process.env, (text) => log.note(text));
 }

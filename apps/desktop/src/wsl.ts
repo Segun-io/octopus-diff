@@ -10,7 +10,7 @@
  * line; `serve` runs as `/usr/bin/env PATH=<probed PATH> <absolute CLI path> serve …`.
  *
  * Distro listing adapted in part from T3 Code (`apps/desktop/src/wsl/wslPathParsing.ts`,
- * `parseWslDistroList`, MIT, Copyright (c) 2025 T3 Tools Inc.): the UTF-16LE detection by NUL
+ * `parseWslDistroList`, MIT, Copyright (c) 2026 T3 Tools Inc.): the UTF-16LE detection by NUL
  * bytes and the "*" default marker. Ours also parses by the header's columns (localized headers and
  * states), checks names before they can reach a command line, and marks tool-owned distros.
  */

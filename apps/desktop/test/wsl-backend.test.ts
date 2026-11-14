@@ -155,6 +155,16 @@ describe('prepareWslBackend', () => {
     if (!r.ok) expect(r.problems?.map((p) => p.kind)).toEqual(['cli-missing', 'node-old']);
   });
 
+  it('only an old Node (the CLI is there): still prerequisites, no serve command', async () => {
+    const f = fakeRun((args) =>
+      args[0] === '--list' ? ok(LIST) : ok(answers({ node: 'v22.11.0' })),
+    );
+    const r = await prepareWslBackend({ ...base, run: f.run });
+    expect(r).toMatchObject({ ok: false, kind: 'prerequisites' });
+    if (!r.ok) expect(r.problems?.map((p) => p.kind)).toEqual(['node-old']);
+    expect(f.calls).toHaveLength(2);
+  });
+
   it('a probe that does not finish, times out or cannot start: probe-failed with a clean reason', async () => {
     const cut = fakeRun((args) =>
       args[0] === '--list'

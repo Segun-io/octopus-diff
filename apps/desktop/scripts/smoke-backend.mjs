@@ -8,7 +8,11 @@
 // Scenarios: started (status sees it, stdin EOF stops it, daemon.json removed) · attached (pid of
 // the running daemon; stopping the app leaves it up) · the attached daemon goes away (serve runs
 // again and starts one) · restart after the daemon is SIGKILLed · no orphan after the PARENT is
-// SIGKILLed (EOF on stdin) · git missing (health says unsupported).
+// SIGKILLed (EOF on stdin) · git missing (health says unsupported) · the stdout ready channel of
+// the WSL backend (#22: `serve --ready-stdout`, the frame never logged, the daemon proof) · and,
+// opt-in with OCTOPUS_SMOKE_WSL_DISTRO=<distro> on a WSL machine, the same through the REAL
+// `wsl.exe` (the ready frame over its stdout relay, the stdin lifeline across it, the daemon
+// reached from Windows on 127.0.0.1, and the daemon stopping after wsl.exe itself is killed).
 //
 // Skips (exit 0) without the Electron binary or without `dist/cli` (run `pnpm build`). Only temp
 // dirs (state, config, one scratch repo with its own git config); never the user's daemon.
@@ -83,7 +87,15 @@ await build({
   conditions: ['@octopus-diff/source'],
   logLevel: 'warning',
 });
-const { BackendSupervisor, serveArgs, fetchHealth, tokenFromAuthUrl } = await import(modulePath);
+const {
+  BackendSupervisor,
+  serveArgs,
+  fetchHealth,
+  tokenFromAuthUrl,
+  newReadyNonce,
+  verifyDaemon,
+  wslServeArgs,
+} = await import(modulePath);
 
 const timers = {
   setTimeout: (fn, ms) => setTimeout(fn, ms),
@@ -436,6 +448,152 @@ await scenario('git missing: the daemon reports no usable git', async () => {
   await s.sup.stop();
   check(!alive(r.pid), 'stopped');
 });
+
+/** A supervisor in the WSL backend's shape: the ready frame on stdout, a wrapper child, loopback only. */
+function stdoutSupervisor(d, { command, args, nonce, env = baseEnv }) {
+  const states = [];
+  const notes = [];
+  const output = [];
+  const sup = new BackendSupervisor({
+    spawn: (cmd, argv, options) => spawn(cmd, argv, options),
+    command,
+    args,
+    env,
+    runAsNode: false,
+    ready: { kind: 'stdout', nonce },
+    wrapper: true,
+    loopbackOnly: true,
+    appVersion: '0.0.0',
+    log: { output: (c) => output.push(String(c)), note: (line) => notes.push(line) },
+    outputFd: logFd(d),
+    timers,
+    probe: async (url) => (await fetchHealth(url, null)) !== null,
+    onState: (s) => states.push(s),
+    policy,
+  });
+  const ready = () =>
+    until(() => states.find((s) => s.kind === 'ready')?.ready, 60_000, 'a ready frame on stdout');
+  return { sup, states, notes, output, ready };
+}
+
+await scenario(
+  'stdout ready channel (#22): serve --ready-stdout, the frame never logged',
+  async () => {
+    const d = dirs('stdout');
+    const nonce = newReadyNonce();
+    const s = stdoutSupervisor(d, {
+      command: execPath,
+      args: [
+        cliEntry,
+        'serve',
+        '--ready-stdout',
+        nonce,
+        '--exit-with-stdin',
+        '--no-open',
+        '--host',
+        '127.0.0.1',
+        ...dirArgs(d),
+      ],
+      nonce,
+      env: { ...baseEnv, ELECTRON_RUN_AS_NODE: '1' },
+    });
+    s.sup.start();
+    const r = await s.ready();
+    leftovers.add(r.pid);
+    check(r.mode === 'started' && r.pid === s.sup.childPid, `started over stdout (pid ${r.pid})`);
+    const token = tokenFromAuthUrl(r.authUrl);
+    const logged = [...s.output, ...s.notes].join('\n');
+    check(token && !logged.includes(token), 'the token is in no log line');
+    check(logged.includes('is running'), 'the banner went to the log');
+    check(
+      (await verifyDaemon(r.url, token)).kind === 'verified',
+      'the daemon proves it holds the token',
+    );
+    await s.sup.stop();
+    check(!alive(r.pid), 'stdin EOF stopped it');
+  },
+);
+
+const wslDistro = process.env.OCTOPUS_SMOKE_WSL_DISTRO;
+if (wslDistro && posix) {
+  /** From Windows: an HTTP GET of the daemon's health (read-only), or null without powershell.exe. */
+  const windowsStatus = (url) => {
+    try {
+      return execFileSync(
+        'powershell.exe',
+        [
+          '-NoProfile',
+          '-NonInteractive',
+          '-Command',
+          `(Invoke-WebRequest -UseBasicParsing -TimeoutSec 5 '${url}/api/health').StatusCode`,
+        ],
+        { encoding: 'utf8', timeout: 30_000, stdio: ['ignore', 'pipe', 'ignore'] },
+      ).trim();
+    } catch {
+      return null;
+    }
+  };
+  const wslArgs = (d, nonce) => [
+    // Electron in Node mode inside the distro: env sets the variable there (wsl.exe passes none).
+    ...wslServeArgs({
+      distro: wslDistro,
+      path: process.env.PATH ?? '/usr/bin:/bin',
+      cli: '/usr/bin/env',
+      nonce,
+      port: 0,
+    }).slice(0, 7),
+    'ELECTRON_RUN_AS_NODE=1',
+    execPath,
+    cliEntry,
+    ...wslServeArgs({ distro: wslDistro, path: '/x', cli: '/x', nonce, port: 0 }).slice(8),
+    '--state-dir',
+    d.stateDir,
+    '--config-dir',
+    d.configDir,
+  ];
+  await scenario(
+    `real wsl.exe (${wslDistro}): ready frame over its stdout, lifeline over its stdin`,
+    async () => {
+      const d = dirs('wsl');
+      const nonce = newReadyNonce();
+      const s = stdoutSupervisor(d, { command: 'wsl.exe', args: wslArgs(d, nonce), nonce });
+      s.sup.start();
+      const r = await s.ready();
+      leftovers.add(r.pid);
+      check(r.mode === 'started', `started in ${wslDistro} through wsl.exe (daemon pid ${r.pid})`);
+      const token = tokenFromAuthUrl(r.authUrl);
+      check(![...s.output, ...s.notes].join('\n').includes(token), 'the token is in no log line');
+      const fromWindows = windowsStatus(r.url);
+      check(
+        fromWindows === null || fromWindows === '200',
+        fromWindows === null
+          ? 'from Windows: skipped (no powershell.exe)'
+          : `from Windows, ${r.url}/api/health answers ${fromWindows}`,
+      );
+      const t0 = Date.now();
+      await s.sup.stop();
+      await until(() => !alive(r.pid), 15_000, 'the daemon to exit after stdin EOF');
+      check(true, `stdin EOF crossed wsl.exe and stopped the daemon (${Date.now() - t0} ms)`);
+    },
+  );
+  await scenario(
+    `real wsl.exe (${wslDistro}): killing wsl.exe itself still ends the daemon`,
+    async () => {
+      const d = dirs('wsl-kill');
+      const nonce = newReadyNonce();
+      const s = stdoutSupervisor(d, { command: 'wsl.exe', args: wslArgs(d, nonce), nonce });
+      s.sup.start();
+      const r = await s.ready();
+      leftovers.add(r.pid);
+      const wrapper = s.sup.childPid;
+      const t0 = Date.now();
+      process.kill(wrapper, 'SIGKILL');
+      await until(() => !alive(r.pid), 20_000, 'the daemon to exit after wsl.exe was killed');
+      check(true, `the daemon exited ${Date.now() - t0} ms after wsl.exe was SIGKILLed`);
+      await s.sup.stop();
+    },
+  );
+}
 
 for (const pid of leftovers) {
   if (pid && alive(pid)) {

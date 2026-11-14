@@ -86,6 +86,22 @@ describe('ReadyFrameReader', () => {
     expect(r.output).not.toContain('xxxx');
   });
 
+  it('a whole over-long frame line in one chunk is reported too (and dropped)', () => {
+    const huge = `\n${SERVE_READY_FRAME_PREFIX}${NONCE} ${'x'.repeat(300)}\nafter\n`;
+    const r = feed([huge], NONCE, 200);
+    expect(r.tooLong).toBe(true);
+    expect(r.frames).toEqual([]);
+    expect(r.output).toBe('\nafter\n');
+    // Another run's over-long frame is dropped without failing this one.
+    const other = feed(
+      [`\n${SERVE_READY_FRAME_PREFIX}other_nonce_0123456789 ${'x'.repeat(300)}\n`],
+      NONCE,
+      200,
+    );
+    expect(other.tooLong).toBe(false);
+    expect(other.output).toBe('\n');
+  });
+
   it('streams ordinary partial lines without waiting for a newline, and long ones too', () => {
     const reader = new ReadyFrameReader(NONCE, 64);
     expect(reader.push('partial ').output).toBe('partial ');
