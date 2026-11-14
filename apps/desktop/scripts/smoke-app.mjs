@@ -275,6 +275,12 @@ async function bridgeChecks(page, d, repo) {
       (await call('pickFolder()', false)) === 'null',
     'copyText and pickFolder need a gesture too',
   );
+  // Before any call with a gesture: a gesture's activation lasts a few seconds.
+  const install = JSON.parse(await call('installCli()', false));
+  check(
+    install?.outcome === 'failed' && /click or a key press/.test(install?.message ?? ''),
+    'installCli without a user gesture is refused in the preload (nothing reaches the shim)',
+  );
   check(
     (await reason(`openPath(${JSON.stringify(id)}, 'link-out')`)) === 'outside-worktree',
     'openPath: a symlink out of the worktree is refused (realpath check)',
@@ -304,6 +310,13 @@ async function bridgeChecks(page, d, repo) {
   check(
     (await reason(`openPath(${JSON.stringify(id)}, 'nope.txt')`)) === 'not-found',
     'a missing file is reported',
+  );
+  // The command installer's channels run on the bridge's guard (DECISIONS #547): the page gets
+  // the shim's own status in the contract's shape (read-only; a development run is `unavailable`).
+  const cli = JSON.parse(await call('cliStatus()'));
+  check(
+    typeof cli?.state === 'string' && cli.reason !== 'Not available from this page.',
+    `cliStatus answers the UI through the guard (${cli?.state}: ${cli?.reason ?? ''})`,
   );
   await page.evaluate('window.octopusDesktop.setBadge(3); true');
   await sleep(300);

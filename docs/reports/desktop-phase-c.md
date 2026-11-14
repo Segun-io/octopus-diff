@@ -80,10 +80,40 @@ locally from `~/.cache/electron` for the smokes; nothing in the repository chang
 
 ## Notes for integration
 
-- **#21 (CLI shim) touches the same files.** Add `installCli` / `cliStatus` to `ipc-channels.ts`, `bridge.ts` and the
-  contracts interface, and their handlers in a separate module merged into `createBridgeHandlers` (#532). The main.ts
+- **#21 (CLI shim) is merged** (PR #110). Since the PR #113 review its two channels are built on the bridge's guard
+  (`createGuard` in `ipc.ts`) and registered by `bridge-main.ts`; `main.ts` passes `cliShim` to `installBridge` (#547). The main.ts
   edits here are small and local: the preload path and platform in `windowOptions`, the `installBridge` call at the
   top of `main()`, `pageCommand()` for Settings/Refresh/Undo, and `screenUrl(…, { titleBarInset })` + `clearBadge()`
   in `showScreen`. The menu template (`menu.ts`) was not changed.
 - The packaged spec's bridge block uses a new `userGesture` option of `PageSession.evaluate` (`cdp-pipe.ts`).
 - `smoke-app.mjs` needs `DISPLAY=:0` on WSL and the Chromium libraries next to the Electron binary (DESKTOP §2).
+
+## PR #113 review fixes (2026-11-14)
+
+An independent security review of PR #113 found no bypass of the sender check, the path guard or the editor URLs; it
+raised one medium, two lows and some surviving mutants. All fixed on this branch, failing tests first (DECISIONS
+#546-#550):
+
+| Finding | Fix | Tests / mutants |
+|---|---|---|
+| **Medium**: `openPath` let through Windows types that run code (`chm`, `hlp`, `website`, `msu`, `theme`, `themepack`, `deskthemepack`, `xbap`, `ins`, `isp`, `shb`, `shs`, `ws`, `ade`, `adp`, `mda`, `mde`, `accde`, `vsix`, `wsb`, `msh`, `mshxml`, `psc1`, `pyo`, `py3`) | `UNSAFE_OPEN_EXTENSION_GROUPS`: the complete Outlook Level-1 list, plus documented Windows, script, macOS and Linux groups (#546). Still a deny list | `test/open-safety.test.ts` keeps its own copy of the Level-1 list, the review's list and the extras (every extension, every platform, both cases); 21 mutants |
+| **Low**: `installCli` / `cliStatus` used #21's weaker check (origin only, raw `uiOrigin`, no window or frame check) and threw across IPC | Both channels go through `createGuard` (the same sender check and zod as every bridge channel) and return refusal values in the contract's shape (#547) | `test/cli-shim-ipc.test.ts` rewritten (7 sender cases, arguments, broken results, throwing shim); 8 mutants (sender check removed, window id not checked, subframe accepted, zod skipped, refusal throws, install failure throws, results not validated) |
+| **Low (Windows)**: `pickFolder`'s `defaultPath` accepted `//host/share` (SMB, NTLM leak) | Kept only when it is a local absolute path (Windows drive path; elsewhere a single `/`) and then an existing directory; `stat` only after the path check (#548) | UNC/device forms on an injected `win32` and `//` on Linux/macOS never reach `stat`; files and missing paths dropped; 5 mutants |
+| Test gaps | A listener gets only the command; malformed main-process answers; `pickFolder` strings only; 32 MiB clipboard and 200-char title limits; a rejected `shell.openPath` is a logged `failed` value (#549) | a test and a mutant each |
+
+Also fixed: the PR #110 merge had left a stray diff3 marker (`||||||| 4756834`) in `docs/DECISIONS.md`; removed, with
+the PR #110 review heading put back where `main` has it (#550). `smoke-app.mjs` now also checks that `cliStatus()`
+answers the page through the guard and that `installCli()` without a gesture is refused in the preload.
+
+Verification (same machine, `origin/main` already merged, nothing newer on `main` at the start):
+
+| Command | Result |
+|---|---|
+| `pnpm check` | **pass**, 1 min 52 s; lint: the 4 pre-existing warnings; credits up to date. Tests: contracts 145, forge 101 (+5 skipped), fixtures 59, web 538, git-core 556 (+1 skipped), daemon 611 (+3 skipped), e2e package 14, cli 174, **desktop 354 (+1 skipped)**, scripts 34 |
+| `pnpm --filter @octopus-diff/desktop run mutation-check` | **187 killed, 0 survived** (7 min 17 s). The first run left one survivor (`//` accepted on POSIX: no test yet), now tested and killed; #21's four mutants of the old check were replaced |
+| `smoke-app.mjs` (`DISPLAY=:0`, after the build `pnpm check` ran) | all 5 scenarios pass, 48 checks. One of the new checks failed on its first run because of the smoke itself: `installCli()` without a gesture ran right after a `cliStatus()` *with* one, and Chromium's user activation lasts a few seconds, so the preload correctly let it through (the dev-run shim answered `unavailable` and wrote nothing). The check now runs before any gesture call |
+
+Not re-run for these fixes: `pnpm test:e2e` (no web change) and the packaged-app spec (no packaging or preload change
+besides the module wiring, which `smoke-app.mjs` covers in the real window). Still not verified: macOS and Windows; the
+Windows `defaultPath` rule and the Windows-only extensions were tested with an injected platform on Linux, not against a
+real Windows dialog or shell.
