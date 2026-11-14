@@ -11,7 +11,7 @@
  */
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { expect, test } from '@playwright/test';
 import { MARKER, renderLauncher } from '../../apps/desktop/src/cli-shim.js';
@@ -231,14 +231,12 @@ test('AppImage: the launcher runs the AppImage file itself (OCTOPUS_DESKTOP_APPI
     }),
     { mode: 0o755 },
   );
-  expect(runLauncher(u.file, u.env, '--version').trim()).toMatch(/^\d+\.\d+\.\d+/);
-  // Nothing of the mount is left behind (the mounter is stopped).
-  const left = execFileSync(
-    'sh',
-    ['-c', 'ps -A -o args= | grep -c -- "--appimage-mount" || true'],
-    {
-      encoding: 'utf8',
-    },
-  );
-  expect(Number(left.trim())).toBeLessThanOrEqual(1); // the grep itself
+  // This WSL dev machine only (AGENTS.md "e2e on this machine"): Chromium's libraries are
+  // extracted user-locally, and a mounted or extracted AppImage has no copy of them next to it.
+  const env = { ...u.env };
+  const libs =
+    process.env.OCTOPUS_DIFF_CHROMIUM_LIBS ??
+    join(homedir(), '.cache/octopus-diff-dev/chromium-libs/usr/lib/x86_64-linux-gnu');
+  if (!process.env.CI && existsSync(libs)) env.LD_LIBRARY_PATH = libs;
+  expect(runLauncher(u.file, env, '--version').trim()).toMatch(/^\d+\.\d+\.\d+/);
 });

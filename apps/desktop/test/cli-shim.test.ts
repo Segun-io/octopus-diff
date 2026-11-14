@@ -239,6 +239,7 @@ describe.runIf(posix)('the sh launcher, run for real', () => {
         ['status', 'a b'],
         { APPIMAGE_EXTRACT_AND_RUN: '1' },
       );
+      expect(run.stderr, 'no noise from the polling loop').toBe('');
       expect(run.status).toBe(7);
       expect(run.stdout.split('\0')).toEqual([
         'node=1',
@@ -260,6 +261,7 @@ describe.runIf(posix)('the sh launcher, run for real', () => {
         { kind: 'appimage', appImage: file, executable: 'octopus-diff-desktop', entry: entryRel },
         ['status'],
       );
+      expect(run.stderr).toBe('');
       expect(run.status).toBe(7);
       expect(run.stdout.split('\0')[0]).toBe('node=1');
       expect(run.stdout.split('\0')[1]).toMatch(

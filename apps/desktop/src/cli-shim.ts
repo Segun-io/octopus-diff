@@ -126,6 +126,8 @@ function renderAppImage(target: { appImage: string; executable: string; entry: s
     'unset APPIMAGE_EXTRACT_AND_RUN',
     // The runtime stays mounted until killed; the trap unmounts it (background jobs ignore Ctrl-C).
     'work=$(mktemp -d) || exit 1',
+    // The file exists before the job starts (the redirection happens in the job, a moment later).
+    ': >"$work/mount"',
     '"$app" --appimage-mount >"$work/mount" 2>/dev/null &',
     'mounter=$!',
     `trap 'kill "$mounter" 2>/dev/null; rm -rf "$work"' EXIT`,
