@@ -69,11 +69,22 @@ OCTOPUS_DIFF_API=http://127.0.0.1:7431 pnpm --filter @octopus-diff/web dev     #
 | `src/backend-command.ts` | Bundle vs source command line |
 | `src/policy.ts` | Navigation, window-open and permission policy; window options (DESKTOP §5) |
 | `src/menu.ts` | Menu template and the accelerator rule (never a bare key) |
-| `src/page-actions.ts` | Menu actions that drive the web UI (Settings, Refresh, Undo) |
+| `src/page-actions.ts` | Phase A's menu scripts (Settings, Refresh, Undo), the fallback for a web build without the bridge |
 | `src/screens.ts` | Starting / error / git-missing screens (static `data:` pages) |
 | `src/shell-env.ts` | Login-shell PATH (macOS/Linux) |
 | `src/window-state.ts` | Saved window bounds, validated and clamped to the displays |
 | `src/daemon-api.ts` | Health (liveness, git check) and Add Folder through the daemon API |
 | `src/log-file.ts` | `daemon.log` (the daemon writes to it directly) |
 
-No preload and no IPC yet: the `window.octopusDesktop` bridge is phase C (#20).
+The `window.octopusDesktop` bridge (phase C, #20; DESKTOP §3.4, DECISIONS #530-#545):
+
+| File | What |
+|---|---|
+| `src/preload.ts` | The sandboxed preload (bundled to `dist/preload.cjs`): `contextBridge` only |
+| `src/bridge.ts` | The object it exposes; actions that act on the OS need a user gesture |
+| `src/ipc-channels.ts`, `src/ipc.ts` | Channel names; the main-process handlers (sender check, zod, refusals as values) |
+| `src/path-guard.ts` | The path check: worktree from the daemon, plain segments, realpath inside the worktree |
+| `src/open-safety.ts` | `openPath` never runs a program (executables, scripts, launchers, app bundles) |
+| `src/editor-url.ts` | `vscode://` / `cursor://` / `zed://` file URLs and their allowlist |
+| `src/badge.ts`, `src/page-commands.ts`, `src/worktrees-api.ts` | Badge plan, menu-command routing, `GET /api/projects` |
+| `src/bridge-main.ts` | Wires all of it to Electron (`ipcMain`, shell, dialog, clipboard, badge) |
