@@ -143,7 +143,7 @@ export function launchApp(
       '--remote-debugging-pipe',
       ...extra,
     ],
-    { env: ensureHome(isolatedAppEnv(env, dirs)), stdio: [...CDP_PIPE_STDIO] },
+    { env: appLaunchEnv(env), stdio: [...CDP_PIPE_STDIO] },
   );
   let output = '';
   child.stdout?.on('data', (c) => {
@@ -159,40 +159,17 @@ export function launchApp(
 }
 
 /**
- * The environment of a launch. The app starts the backend itself, so it must not inherit RUN_AS_NODE
- * from the test runner. And it never runs with the developer's real home: at startup it rewrites its
- * own `octopus-diff` launcher in `~/.local/bin` or `%LOCALAPPDATA%\\octopus-diff\\bin`, so HOME,
- * USERPROFILE, LOCALAPPDATA, APPDATA and the XDG directories all point under the run's temp root
- * (PR #110 review). `ensureHome` creates them.
+ * The environment of a GUI launch. The app starts the backend itself, so it must not inherit
+ * RUN_AS_NODE from the test runner. And it must not rewrite the developer's real `octopus-diff`
+ * launcher (`~/.local/bin`, `%LOCALAPPDATA%`) at startup (DECISIONS #574): the switch
+ * `OCTOPUS_DESKTOP_NO_CLI_REFRESH=1` turns that refresh off. HOME is NOT redirected: on macOS a
+ * fake HOME broke Chromium (Keychain, ~/Library) and the UI never became ready (PR #110 CI,
+ * DECISIONS #581). Every launch of the app goes through `launchApp` / `runApp`.
  */
-export function isolatedAppEnv(env: NodeJS.ProcessEnv, dirs: AppDirs): NodeJS.ProcessEnv {
-  const home = join(dirs.root, 'home');
-  const out: NodeJS.ProcessEnv = {
-    ...env,
-    HOME: home,
-    USERPROFILE: home,
-    LOCALAPPDATA: join(home, 'AppData', 'Local'),
-    APPDATA: join(home, 'AppData', 'Roaming'),
-    XDG_CONFIG_HOME: join(home, '.config'),
-    XDG_DATA_HOME: join(home, '.local', 'share'),
-    XDG_STATE_HOME: join(home, '.local', 'state'),
-  };
+export function appLaunchEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const out: NodeJS.ProcessEnv = { ...env, OCTOPUS_DESKTOP_NO_CLI_REFRESH: '1' };
   delete out.ELECTRON_RUN_AS_NODE;
   return out;
-}
-
-function ensureHome(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  for (const key of [
-    'HOME',
-    'LOCALAPPDATA',
-    'APPDATA',
-    'XDG_CONFIG_HOME',
-    'XDG_DATA_HOME',
-  ] as const) {
-    const dir = env[key];
-    if (dir) mkdirSync(dir, { recursive: true });
-  }
-  return env;
 }
 
 /** Runs a short-lived launch to completion (for the refusal checks). */
@@ -213,7 +190,7 @@ export function runApp(
       dirs.configDir,
       ...extra,
     ],
-    { env: ensureHome(isolatedAppEnv(env, dirs)), encoding: 'utf8', timeout: 30_000 },
+    { env: appLaunchEnv(env), encoding: 'utf8', timeout: 30_000 },
   );
   return {
     status: result.status,

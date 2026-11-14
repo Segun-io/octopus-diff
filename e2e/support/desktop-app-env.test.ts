@@ -1,61 +1,95 @@
 /**
- * The packaged-app e2e must never run the app with the developer's real home: the app rewrites its
- * `octopus-diff` launcher in `~/.local/bin` (or `%LOCALAPPDATA%`) at startup (PR #110 review).
+ * The packaged-app e2e must never let the app rewrite a developer's real `octopus-diff` launcher
+ * (the app refreshes it at startup, DECISIONS #574), and must not do so by faking HOME: on macOS
+ * a fake HOME breaks Chromium (Keychain, ~/Library) and the UI never becomes ready (PR #110 CI,
+ * DECISIONS #581). Instead every GUI launch carries `OCTOPUS_DESKTOP_NO_CLI_REFRESH=1`.
  */
-import { homedir } from 'node:os';
-import { join, sep } from 'node:path';
+import { readdirSync, readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { type AppDirs, isolatedAppEnv } from '../desktop/support/packaged-app.js';
+import { appLaunchEnv } from '../desktop/support/packaged-app.js';
 
-const dirs: AppDirs = {
-  root: join(sep, 'tmp', 'octopus-e2e', 'run'),
-  stateDir: join(sep, 'tmp', 'octopus-e2e', 'run', 'state'),
-  configDir: join(sep, 'tmp', 'octopus-e2e', 'run', 'config'),
-  appData: join(sep, 'tmp', 'octopus-e2e', 'run', 'appdata'),
-};
+const desktopDir = join(dirname(fileURLToPath(import.meta.url)), '..', 'desktop');
 
-describe('isolatedAppEnv', () => {
+describe('appLaunchEnv', () => {
   const real = {
     HOME: '/home/dev',
     USERPROFILE: 'C:\\Users\\dev',
     LOCALAPPDATA: 'C:\\Users\\dev\\AppData\\Local',
-    APPDATA: 'C:\\Users\\dev\\AppData\\Roaming',
     XDG_CONFIG_HOME: '/home/dev/.config',
-    XDG_DATA_HOME: '/home/dev/.local/share',
-    XDG_STATE_HOME: '/home/dev/.local/state',
     PATH: '/usr/bin',
     GIT_CONFIG_GLOBAL: '/tmp/x/gitconfig',
     ELECTRON_RUN_AS_NODE: '1',
   };
 
-  it('points every home-like variable at a directory under the run', () => {
-    const env = isolatedAppEnv(real, dirs);
+  it('carries the switch that stops the app rewriting a launcher', () => {
+    expect(appLaunchEnv(real).OCTOPUS_DESKTOP_NO_CLI_REFRESH).toBe('1');
+  });
+
+  it('leaves the home and everything else as it is, and drops RUN_AS_NODE, without changing its input', () => {
+    const input = { ...real };
+    const env = appLaunchEnv(input);
     for (const key of [
       'HOME',
       'USERPROFILE',
       'LOCALAPPDATA',
-      'APPDATA',
       'XDG_CONFIG_HOME',
-      'XDG_DATA_HOME',
-      'XDG_STATE_HOME',
+      'PATH',
+      'GIT_CONFIG_GLOBAL',
     ] as const) {
-      expect(env[key]?.startsWith(dirs.root), key).toBe(true);
-      expect(env[key], key).not.toBe(real[key]);
+      expect(env[key], key).toBe(real[key]);
     }
-    expect(env.HOME).not.toBe(homedir());
-  });
-
-  it('keeps everything else and drops RUN_AS_NODE, without changing its input', () => {
-    const input = { ...real };
-    const env = isolatedAppEnv(input, dirs);
-    expect(env.PATH).toBe('/usr/bin');
-    expect(env.GIT_CONFIG_GLOBAL).toBe('/tmp/x/gitconfig');
     expect('ELECTRON_RUN_AS_NODE' in env).toBe(false);
     expect(input).toEqual(real);
   });
 
-  it('the Windows launcher directory (%LOCALAPPDATA%\\octopus-diff\\bin) is under the run too', () => {
-    const env = isolatedAppEnv(real, dirs);
-    expect(join(env.LOCALAPPDATA ?? '', 'octopus-diff', 'bin').startsWith(dirs.root)).toBe(true);
+  it('overrides a caller that tries to turn the switch off', () => {
+    expect(
+      appLaunchEnv({ OCTOPUS_DESKTOP_NO_CLI_REFRESH: '0' }).OCTOPUS_DESKTOP_NO_CLI_REFRESH,
+    ).toBe('1');
+  });
+});
+
+describe('every packaged-app launch in e2e/desktop gets the switch', () => {
+  const files = [
+    ...readdirSync(desktopDir)
+      .filter((f) => f.endsWith('.ts'))
+      .map((f) => join(desktopDir, f)),
+    join(desktopDir, 'support', 'packaged-app.ts'),
+  ];
+
+  it('launchApp and runApp (the tamper-test copies and the cli-shim spec use them) pass appLaunchEnv', () => {
+    const source = readFileSync(join(desktopDir, 'support', 'packaged-app.ts'), 'utf8');
+    for (const name of ['launchApp', 'runApp']) {
+      const start = source.indexOf(`export function ${name}(`);
+      expect(start, name).toBeGreaterThan(-1);
+      const next = source.indexOf('\nexport ', start + 1);
+      const body = source.slice(start, next === -1 ? undefined : next);
+      expect(body, name).toContain('appLaunchEnv(env)');
+    }
+  });
+
+  it('nothing else starts the app binary as the app: no direct spawn of an `.executable` outside those two', () => {
+    for (const file of files) {
+      const text = readFileSync(file, 'utf8');
+      const stripped = file.endsWith(join('support', 'packaged-app.ts'))
+        ? text.replace(/export function (launchApp|runApp)\([\s\S]*?\n}\n/g, '')
+        : text;
+      const spawns = stripped.match(/\b(?:spawn|spawnSync)\(\s*[\w.]*executable/g) ?? [];
+      expect(spawns, file).toEqual([]);
+    }
+  });
+
+  it('the only other uses of the binary run it as Node (ELECTRON_RUN_AS_NODE), never as the GUI app', () => {
+    let seen = 0;
+    for (const file of files) {
+      const text = readFileSync(file, 'utf8');
+      for (const m of text.matchAll(/execFileSync\(\s*[\w.]*executable[\s\S]*?\)/g)) {
+        seen++;
+        expect(m[0], `${file}: ${m[0].slice(0, 60)}`).toContain('ELECTRON_RUN_AS_NODE');
+      }
+    }
+    expect(seen, 'the check looked at something').toBeGreaterThan(0);
   });
 });

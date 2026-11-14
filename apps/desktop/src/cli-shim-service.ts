@@ -322,3 +322,23 @@ export function createCliShim(deps: CliShimDeps): CliShim {
     refresh: () => exclusive(refresh),
   };
 }
+
+/**
+ * A test hook, in the safe direction only: with `OCTOPUS_DESKTOP_NO_CLI_REFRESH=1` the startup
+ * refresh does nothing. The packaged-app e2e sets it so a developer's real launcher is never
+ * touched (DECISIONS #581). No value of any variable makes anything get written that the refresh
+ * would not write anyway (it never creates a launcher, and only retargets one whose app is gone).
+ */
+export const NO_CLI_REFRESH_ENV = 'OCTOPUS_DESKTOP_NO_CLI_REFRESH';
+
+export async function startupRefresh(
+  shim: CliShim,
+  env: Readonly<Record<string, string | undefined>>,
+  log: (note: string) => void,
+): Promise<'updated' | 'skipped' | 'disabled'> {
+  if (env[NO_CLI_REFRESH_ENV] === '1') {
+    log(`startup refresh of the octopus-diff command skipped (${NO_CLI_REFRESH_ENV}=1)`);
+    return 'disabled';
+  }
+  return shim.refresh();
+}

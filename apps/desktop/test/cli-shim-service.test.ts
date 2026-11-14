@@ -2,15 +2,18 @@
  * The installer's flow (docs/DESKTOP.md §3.2, roadmap #21) with the filesystem, PATH and the
  * Windows user-PATH editor faked: status, install, update, refuse, the races, the messages, refresh.
  */
+import { readFileSync } from 'node:fs';
 import { DesktopCliInstallResultSchema, DesktopCliStatusSchema } from '@octopus-diff/contracts';
 import { describe, expect, it } from 'vitest';
 import { type FileFacts, MARKER, renderLauncher } from '../src/cli-shim.js';
 import {
   type CliShimDeps,
   createCliShim,
+  NO_CLI_REFRESH_ENV,
   ShimExistsError,
   type ShimFs,
   ShimNotOursError,
+  startupRefresh,
   type UserPathEditor,
 } from '../src/cli-shim-service.js';
 
@@ -567,5 +570,73 @@ describe('concurrency', () => {
     fs.files.set(TARGET, { kind: 'file', content: oldLauncher });
     await Promise.all([shim.refresh(), shim.install()]);
     expect(fs.writes).toHaveLength(1);
+  });
+});
+
+describe('the startup refresh and its test switch (DECISIONS #581)', () => {
+  const stale = () => {
+    const s = setup();
+    s.fs.files.set(TARGET, { kind: 'file', content: oldLauncher });
+    return s;
+  };
+
+  it('the switch is OCTOPUS_DESKTOP_NO_CLI_REFRESH', () => {
+    expect(NO_CLI_REFRESH_ENV).toBe('OCTOPUS_DESKTOP_NO_CLI_REFRESH');
+  });
+
+  it('without the switch it refreshes as before', async () => {
+    const { fs, shim } = stale();
+    const notes: string[] = [];
+    expect(await startupRefresh(shim, {}, (t) => notes.push(t))).toBe('updated');
+    expect(fs.writes).toHaveLength(1);
+    expect(notes).toEqual([]);
+  });
+
+  it('with OCTOPUS_DESKTOP_NO_CLI_REFRESH=1 refresh() is not even called, nothing is written, one line is logged', async () => {
+    const { fs, shim } = stale();
+    let called = 0;
+    const spy = { ...shim, refresh: async () => (called++, shim.refresh()) };
+    const notes: string[] = [];
+    expect(await startupRefresh(spy, { [NO_CLI_REFRESH_ENV]: '1' }, (t) => notes.push(t))).toBe(
+      'disabled',
+    );
+    expect(called).toBe(0);
+    expect(fs.writes).toEqual([]);
+    expect(fs.files.get(TARGET)).toEqual({ kind: 'file', content: oldLauncher });
+    expect(notes).toHaveLength(1);
+    expect(notes[0]).toContain(NO_CLI_REFRESH_ENV);
+  });
+
+  it('only the exact value 1 turns it off; anything else is the normal refresh', async () => {
+    for (const value of ['0', '', 'true', 'yes', ' 1', undefined]) {
+      const { fs, shim } = stale();
+      expect(
+        await startupRefresh(shim, { [NO_CLI_REFRESH_ENV]: value }, () => undefined),
+        String(value),
+      ).toBe('updated');
+      expect(fs.writes, String(value)).toHaveLength(1);
+    }
+  });
+
+  it('it is a safe-direction switch: nothing in the environment makes a launcher get created or retargeted', async () => {
+    // No launcher: refresh never creates one, whatever the environment says.
+    const none = setup();
+    expect(await startupRefresh(none.shim, { [NO_CLI_REFRESH_ENV]: '0' }, () => undefined)).toBe(
+      'skipped',
+    );
+    expect(none.fs.writes).toEqual([]);
+    // A launcher whose app still exists is left alone.
+    const live = stale();
+    live.fs.files.set('/old/place/app', { kind: 'file', content: 'binary' });
+    expect(await startupRefresh(live.shim, { [NO_CLI_REFRESH_ENV]: '0' }, () => undefined)).toBe(
+      'skipped',
+    );
+    expect(live.fs.writes).toEqual([]);
+  });
+
+  it('main.ts goes through startupRefresh, never calls refresh() itself (the switch would be bypassed)', () => {
+    const main = readFileSync(new URL('../src/main.ts', import.meta.url), 'utf8');
+    expect(main).toContain('startupRefresh(cliShim, process.env,');
+    expect(main).not.toMatch(/cliShim\.refresh\(/);
   });
 });
