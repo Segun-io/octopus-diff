@@ -16,6 +16,8 @@ import { randomBytes } from 'node:crypto';
 import {
   chmodSync,
   closeSync,
+  constants,
+  fstatSync,
   linkSync,
   lstatSync,
   mkdirSync,
@@ -38,9 +40,19 @@ import {
 /** How much of a file is read to look for the marker and to compare with the launcher text. */
 const READ_LIMIT = 64 * 1024;
 
-function readTop(file: string): string {
-  const fd = openSync(file, 'r');
+/**
+ * The top of a regular file. Opened `O_NOFOLLOW | O_NONBLOCK` and checked on the descriptor
+ * (`fstat`): between the `lstat` that said "regular file" and this open the path may have been
+ * swapped for a symlink (not read through) or a FIFO (an open that waits for a writer would hang
+ * the app; non-blocking it opens and is refused). PR #110 review.
+ */
+export function readTop(file: string): string {
+  const fd = openSync(
+    file,
+    constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0),
+  );
   try {
+    if (!fstatSync(fd).isFile()) throw new Error(`${file} is not a regular file`);
     const buffer = Buffer.alloc(READ_LIMIT);
     const n = readSync(fd, buffer, 0, READ_LIMIT, 0);
     return buffer.subarray(0, n).toString('utf8');
@@ -49,37 +61,49 @@ function readTop(file: string): string {
   }
 }
 
-function inspect(file: string): FileFacts {
-  let stat: ReturnType<typeof lstatSync>;
-  try {
-    stat = lstatSync(file);
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code === 'ENOENT' || code === 'ENOTDIR') return { kind: 'missing' };
-    // Something is there that cannot be looked at: not ours to touch.
-    return { kind: 'other' };
-  }
-  if (stat.isSymbolicLink()) return { kind: 'symlink' };
-  if (!stat.isFile()) return { kind: 'other' };
-  try {
-    return { kind: 'file', content: readTop(file) };
-  } catch {
-    return { kind: 'other' };
-  }
+/** The filesystem calls that can be replaced (tests: a failing rename or link). */
+export interface FsOps {
+  linkSync: typeof linkSync;
+  lstatSync: typeof lstatSync;
+  renameSync: typeof renameSync;
+  unlinkSync: typeof unlinkSync;
+  writeFileSync: typeof writeFileSync;
 }
 
 export interface NodeShimFsOptions {
   /** A suffix for staging files (tests); default: pid and random bytes, unique per call. */
   unique?: () => string;
+  ops?: Partial<FsOps>;
 }
 
 export function createNodeShimFs(options: NodeShimFsOptions = {}): ShimFs {
   const unique = options.unique ?? (() => `${process.pid}.${randomBytes(6).toString('hex')}`);
+  const ops: FsOps = { linkSync, lstatSync, renameSync, unlinkSync, writeFileSync, ...options.ops };
+
+  function inspect(file: string): FileFacts {
+    let stat: ReturnType<typeof lstatSync>;
+    try {
+      stat = ops.lstatSync(file);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === 'ENOENT' || code === 'ENOTDIR') return { kind: 'missing' };
+      // Something may be there that cannot be looked at (a directory that cannot be searched):
+      // not ours to touch, and on PATH a conflict (cheaper to refuse than to guess).
+      return { kind: 'unreadable' };
+    }
+    if (stat.isSymbolicLink()) return { kind: 'symlink' };
+    if (!stat.isFile()) return { kind: 'other' };
+    try {
+      return { kind: 'file', content: readTop(file) };
+    } catch {
+      return { kind: 'unreadable' };
+    }
+  }
 
   /** Writes `content` next to `file` in a staging file; the caller moves or deletes it. */
   function stage(file: string, content: string): string {
     const staging = `${file}.${unique()}.tmp`;
-    writeFileSync(staging, content, { flag: 'wx', mode: 0o755 });
+    ops.writeFileSync(staging, content, { flag: 'wx', mode: 0o755 });
     chmodSync(staging, 0o755); // the umask may have taken bits away
     return staging;
   }
@@ -97,13 +121,13 @@ export function createNodeShimFs(options: NodeShimFsOptions = {}): ShimFs {
         try {
           // A hard link fails with EEXIST when anything is at `file` (a symlink included, dangling
           // or not): it cannot replace a file that appeared since the check.
-          linkSync(staging, file);
+          ops.linkSync(staging, file);
         } catch (error) {
           const code = (error as NodeJS.ErrnoException).code;
           if (code === 'EEXIST') throw new ShimExistsError(file);
           // No hard links here (some filesystems, some Windows volumes): exclusive create instead.
           try {
-            writeFileSync(file, content, { flag: 'wx', mode: 0o755 });
+            ops.writeFileSync(file, content, { flag: 'wx', mode: 0o755 });
           } catch (fallback) {
             if ((fallback as NodeJS.ErrnoException).code === 'EEXIST') {
               throw new ShimExistsError(file);
@@ -113,7 +137,7 @@ export function createNodeShimFs(options: NodeShimFsOptions = {}): ShimFs {
         }
       } finally {
         try {
-          unlinkSync(staging);
+          ops.unlinkSync(staging);
         } catch {
           // already gone
         }
@@ -125,10 +149,10 @@ export function createNodeShimFs(options: NodeShimFsOptions = {}): ShimFs {
       if (now.kind !== 'file' || !isOwnLauncher(now.content)) throw new ShimNotOursError(file);
       const staging = stage(file, content);
       try {
-        renameSync(staging, file);
+        ops.renameSync(staging, file);
       } catch (error) {
         try {
-          unlinkSync(staging);
+          ops.unlinkSync(staging);
         } catch {
           // already gone
         }

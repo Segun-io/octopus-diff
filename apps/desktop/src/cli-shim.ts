@@ -124,14 +124,32 @@ function renderAppImage(target: { appImage: string; executable: string; entry: s
     ...SH_HEADER(target.appImage),
     // Extract-and-run would make the runtime start the app instead of mounting it.
     'unset APPIMAGE_EXTRACT_AND_RUN',
-    // The runtime stays mounted until killed; the trap unmounts it (background jobs ignore Ctrl-C).
     'work=$(mktemp -d) || exit 1',
+    'child=',
+    'mounter=',
+    // TERM, then KILL if it does not leave within about 5 s; the pid is not touched once it is gone.
+    'stop() {',
+    '  [ -n "$1" ] || return 0',
+    '  kill "$1" 2>/dev/null || return 0',
+    '  n=0',
+    '  while kill -0 "$1" 2>/dev/null && [ "$n" -lt 100 ]; do sleep 0.05; n=$((n + 1)); done',
+    '  if kill -0 "$1" 2>/dev/null; then kill -9 "$1" 2>/dev/null; fi',
+    '  wait "$1" 2>/dev/null',
+    '}',
+    // The CLI runs in the background so a signal can be handled while `wait` waits (a foreground
+    // child would defer the trap, and nothing would stop it). The runtime stays mounted until
+    // killed: stopping it unmounts. Every way out, SIGHUP included (it skips an EXIT trap unless it
+    // is trapped), ends here: the CLI is stopped, the mount is released, the work dir (the whole
+    // extracted image without FUSE) is removed.
+    'cleanup() { stop "$child"; stop "$mounter"; rm -rf "$work"; }',
+    'trap cleanup EXIT',
+    "trap 'exit 129' HUP",
+    "trap 'exit 130' INT",
+    "trap 'exit 143' TERM",
     // The file exists before the job starts (the redirection happens in the job, a moment later).
     ': >"$work/mount"',
     '"$app" --appimage-mount >"$work/mount" 2>/dev/null &',
     'mounter=$!',
-    `trap 'kill "$mounter" 2>/dev/null; rm -rf "$work"' EXIT`,
-    "trap 'exit 130' INT TERM",
     'mount=',
     'while kill -0 "$mounter" 2>/dev/null; do',
     // `read` succeeds only on a whole line: a half-written path is never taken for the mount.
@@ -144,7 +162,14 @@ function renderAppImage(target: { appImage: string; executable: string; entry: s
     `  (cd "$work" && "$app" --appimage-extract >/dev/null) || { echo "octopus-diff: could not open $app." >&2; exit 1; }`,
     '  mount="$work/squashfs-root"',
     'fi',
-    `"$mount"/${shellWord(target.executable)} "$mount"/${shellWord(target.entry)} "$@"`,
+    // A background job gets /dev/null for stdin in a shell without job control: hand it ours.
+    'if (exec 3<&0) 2>/dev/null; then exec 3<&0; else exec 3</dev/null; fi',
+    `"$mount"/${shellWord(target.executable)} "$mount"/${shellWord(target.entry)} "$@" <&3 3<&- &`,
+    'child=$!',
+    'wait "$child"',
+    'status=$?',
+    'child=',
+    'exit "$status"',
     '',
   ].join('\n');
 }
@@ -173,6 +198,39 @@ export function renderLauncher(target: LauncherTarget): string {
 export function isOwnLauncher(content: string): boolean {
   const lines = content.replace(/^﻿/, '').split(/\r?\n/, MARKER_SEARCH_LINES);
   return lines.some((line) => line === `# ${MARKER}` || line === `rem ${MARKER}`);
+}
+
+/** The word `shellWord` wrote at the start of `text`, up to the end of its line; null if it is anything else. */
+function parseShellWord(text: string): string | null {
+  let out = '';
+  let i = 0;
+  while (i < text.length && text[i] !== '\n') {
+    const quote = text[i];
+    if (quote !== "'" && quote !== '"') return null;
+    const end = text.indexOf(quote, i + 1);
+    if (end < 0) return null;
+    const part = text.slice(i + 1, end);
+    // `shellWord` only ever writes `"'"` as a double-quoted piece.
+    if (quote === '"' && /[$`\\]/.test(part)) return null;
+    out += part;
+    i = end + 1;
+  }
+  return out === '' ? null : out;
+}
+
+/**
+ * The file our launcher runs: the AppImage, or the app's binary (`app=…` in the sh launchers,
+ * `if exist "…" goto run` in the `.cmd`). Null when it is not our launcher or the text is not what
+ * `renderLauncher` writes (an older body, say). The startup refresh uses it: a launcher is only
+ * retargeted when this file is gone (DECISIONS #574).
+ */
+export function launcherApp(content: string): string | null {
+  if (!isOwnLauncher(content)) return null;
+  // The first `app=` line is the header's; the quoted path (it may hold a newline) comes after it.
+  const at = content.search(/^app=/m);
+  if (at >= 0) return parseShellWord(content.slice(at + 4));
+  const cmd = /^if exist "([^"\r\n]*)" goto run$/m.exec(content);
+  return cmd?.[1] ? cmd[1].replaceAll('%%', '%') : null;
 }
 
 // --- where it goes ----------------------------------------------------------------------------------
@@ -325,7 +383,10 @@ function pathEntries(pathValue: string, platform: NodeJS.Platform, env: Env): Pa
   if (platform === 'win32') {
     return pathValue.split(';').flatMap((raw) => {
       const dir = expandWindowsEntry(raw, env);
-      return dir === null ? [] : [{ dir, key: windowsKey(dir) }];
+      // A drive letter with a separator, or UNC: `.`, `bin`, `C:foo` and `\\foo` depend on the
+      // current directory or drive, which a repository must not be able to plant a command in.
+      if (dir === null || !/^(?:[a-zA-Z]:[\\/]|[\\/]{2})/.test(dir)) return [];
+      return [{ dir, key: windowsKey(dir) }];
     });
   }
   return pathValue.split(':').flatMap((dir) => {
@@ -400,8 +461,10 @@ export type FileFacts =
   | { kind: 'missing' }
   | { kind: 'file'; content: string }
   | { kind: 'symlink' }
-  /** A directory or anything else that is not a command. */
-  | { kind: 'other' };
+  /** A directory or anything else that is not a command (a FIFO, a socket). */
+  | { kind: 'other' }
+  /** Something is there that cannot be looked at or read (execute-only, a directory that cannot be searched). */
+  | { kind: 'unreadable' };
 
 export interface ShimFacts {
   /** The launcher text this app would write. */
@@ -433,6 +496,8 @@ export function decide(facts: ShimFacts): Decision {
   for (const other of facts.others) {
     const isCommand =
       other.facts.kind === 'symlink' ||
+      // Cheaper to refuse than to guess: a command we cannot read may well be npm's.
+      other.facts.kind === 'unreadable' ||
       (other.facts.kind === 'file' && !isOwnLauncher(other.facts.content));
     if (isCommand) return { action: 'refuse', conflict: { kind: 'on-path', path: other.path } };
   }

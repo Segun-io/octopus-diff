@@ -18,6 +18,7 @@ import {
   decide,
   type FileFacts,
   type LauncherLocation,
+  launcherApp,
   launcherLocation,
   pathCandidates,
   pathContainsDir,
@@ -97,6 +98,8 @@ type Assessment =
       location: LauncherLocation;
       desired: string;
       decision: Decision;
+      /** What is at the launcher's path. */
+      target: FileFacts;
       onPath: boolean;
     };
 
@@ -160,6 +163,7 @@ export function createCliShim(deps: CliShimDeps): CliShim {
       location,
       desired,
       decision,
+      target,
       onPath: await onPathOf(location, pathValue),
     };
   }
@@ -192,7 +196,7 @@ export function createCliShim(deps: CliShimDeps): CliShim {
     return conflict.kind === 'at-target'
       ? `${conflict.path} already exists and was not written by octopus-diff, so it was left alone. ` +
           'Move or delete it if you want the app to install its command there.'
-      : `An ${COMMAND_NAME} command is already installed at ${conflict.path} (for example from npm), ` +
+      : `An ${COMMAND_NAME} command is already installed at ${conflict.path} (for example from npm, or one that could not be inspected), ` +
           'so nothing was changed. It runs the same CLI; remove it first if you would rather use the app’s.';
   }
 
@@ -288,6 +292,13 @@ export function createCliShim(deps: CliShimDeps): CliShim {
     try {
       const a = await assess();
       if (a.kind !== 'ready' || a.decision.action !== 'update') return 'skipped';
+      // Only when the app the launcher runs is gone (moved, uninstalled, an AppImage deleted).
+      // Another copy of the app starting (an AppImage tried once, a second .app) must not take
+      // the command over, and two copies must not flip it back and forth: that is what the
+      // menu's Install is for (DECISIONS #574). A launcher whose app cannot be read from it is
+      // left alone for the same reason.
+      const named = a.target.kind === 'file' ? launcherApp(a.target.content) : null;
+      if (named === null || deps.fs.inspect(named).kind !== 'missing') return 'skipped';
       const written = await write(a);
       return written.outcome === 'updated' ? 'updated' : 'skipped';
     } catch (error) {

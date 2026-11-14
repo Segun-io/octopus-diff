@@ -155,6 +155,20 @@ describe('status', () => {
   });
 });
 
+describe('an octopus-diff on PATH that cannot be read (PR #110 review)', () => {
+  it('is a conflict: status and install refuse, naming it', async () => {
+    const { fs, shim } = setup({ pathValue: async () => '/opt/bin:/home/a/.local/bin' });
+    fs.files.set('/opt/bin/octopus-diff', { kind: 'unreadable' });
+    const status = await shim.status();
+    expect(status.state).toBe('conflict');
+    expect(status.conflict).toEqual({ kind: 'on-path', path: '/opt/bin/octopus-diff' });
+    const r = await shim.install();
+    expect(r.outcome).toBe('refused');
+    expect(r.message).toContain('/opt/bin/octopus-diff');
+    expect(fs.writes).toEqual([]);
+  });
+});
+
 describe('install', () => {
   it('writes a new launcher, creating the directory; says nothing about PATH when it is on it', async () => {
     const { fs, shim } = setup();
@@ -414,6 +428,113 @@ describe('refresh (after an update moved the app)', () => {
     b.fs.files.set('/usr/local/bin/octopus-diff', foreign);
     expect(await b.shim.refresh()).toBe('skipped');
     expect(b.fs.writes).toEqual([]);
+  });
+
+  describe('only when the app the launcher names is gone (PR #110 review)', () => {
+    // Another copy of the app starting (a downloaded AppImage tried once, a second .app) must not
+    // take the command over: that is what the menu's Install is for.
+    it('leaves a launcher alone while the app it runs still exists', async () => {
+      const { fs, shim } = setup();
+      fs.files.set(TARGET, { kind: 'file', content: oldLauncher });
+      fs.files.set('/old/place/app', { kind: 'file', content: 'binary' });
+      expect(await shim.refresh()).toBe('skipped');
+      expect(fs.writes).toEqual([]);
+      expect(fs.files.get(TARGET)).toEqual({ kind: 'file', content: oldLauncher });
+    });
+
+    it('does not flip back and forth between two copies that both exist', async () => {
+      const a = setup({ execPath: '/Applications/A.app/app', entry: '/Applications/A.app/entry' });
+      a.fs.files.set(TARGET, {
+        kind: 'file',
+        content: renderLauncher({
+          kind: 'direct',
+          executable: '/Applications/B.app/app',
+          entry: 'x',
+        }),
+      });
+      a.fs.files.set('/Applications/B.app/app', { kind: 'file', content: 'b' });
+      expect(await a.shim.refresh()).toBe('skipped');
+      expect(a.fs.writes).toEqual([]);
+    });
+
+    it('a launcher for an AppImage that was deleted is pointed at the app that runs now', async () => {
+      const { fs, shim } = setup();
+      fs.files.set(TARGET, {
+        kind: 'file',
+        content: renderLauncher({
+          kind: 'appimage',
+          appImage: '/home/a/Downloads/octopus-diff.AppImage',
+          executable: 'octopus-diff-desktop',
+          entry: 'resources/app.asar/dist/cli/index.js',
+        }),
+      });
+      expect(await shim.refresh()).toBe('updated');
+      expect(fs.writes).toEqual([{ op: 'replace', file: TARGET, content: desiredLinux }]);
+    });
+
+    it('while that AppImage exists the launcher stays', async () => {
+      const { fs, shim } = setup();
+      const content = renderLauncher({
+        kind: 'appimage',
+        appImage: '/home/a/Downloads/octopus-diff.AppImage',
+        executable: 'octopus-diff-desktop',
+        entry: 'resources/app.asar/dist/cli/index.js',
+      });
+      fs.files.set(TARGET, { kind: 'file', content });
+      fs.files.set('/home/a/Downloads/octopus-diff.AppImage', { kind: 'file', content: 'img' });
+      expect(await shim.refresh()).toBe('skipped');
+      expect(fs.writes).toEqual([]);
+    });
+
+    it('a launcher it cannot read the app from (an older body) is left alone', async () => {
+      const { fs, shim } = setup();
+      const content = `#!/bin/sh\n# ${MARKER}\nexec /old/app "$@"\n`;
+      fs.files.set(TARGET, { kind: 'file', content });
+      expect(await shim.refresh()).toBe('skipped');
+      expect(fs.writes).toEqual([]);
+    });
+
+    it('an app that cannot be looked at (unreadable) counts as still there', async () => {
+      const { fs, shim } = setup();
+      fs.files.set(TARGET, { kind: 'file', content: oldLauncher });
+      fs.files.set('/old/place/app', { kind: 'unreadable' });
+      expect(await shim.refresh()).toBe('skipped');
+    });
+
+    it('the menu’s Install may still retarget a launcher whose app exists (user intent)', async () => {
+      const { fs, shim } = setup();
+      fs.files.set(TARGET, { kind: 'file', content: oldLauncher });
+      fs.files.set('/old/place/app', { kind: 'file', content: 'binary' });
+      expect((await shim.install()).outcome).toBe('updated');
+      expect(fs.files.get(TARGET)).toEqual({ kind: 'file', content: desiredLinux });
+    });
+
+    it('Windows: the .cmd names its exe; present means stay, gone means retarget', async () => {
+      const win = (exists: boolean) => {
+        const userPath = new FakeUserPath();
+        const s = setup({
+          platform: 'win32',
+          env: { LOCALAPPDATA: 'C:\\L', PATH: 'C:\\Windows' },
+          homedir: 'C:\\Users\\a',
+          execPath: 'C:\\L\\Programs\\octopus-diff\\octopus-diff.exe',
+          entry: 'C:\\L\\Programs\\octopus-diff\\resources\\app.asar\\dist\\cli\\index.js',
+          userPath,
+          pathValue: async () => 'C:\\Windows',
+        });
+        s.fs.files.set('C:\\L\\octopus-diff\\bin\\octopus-diff.cmd', {
+          kind: 'file',
+          content: renderLauncher({
+            kind: 'windows',
+            executable: 'C:\\Old\\octopus-diff.exe',
+            entry: 'C:\\Old\\index.js',
+          }),
+        });
+        if (exists) s.fs.files.set('C:\\Old\\octopus-diff.exe', { kind: 'file', content: 'exe' });
+        return s;
+      };
+      expect(await win(true).shim.refresh()).toBe('skipped');
+      expect(await win(false).shim.refresh()).toBe('updated');
+    });
   });
 
   it('never throws (it runs at startup)', async () => {
