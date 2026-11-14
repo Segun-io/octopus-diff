@@ -360,16 +360,18 @@ describe('live activity feed (real git, #38)', { timeout: 90_000 }, () => {
     const settledCount = (x: Started) =>
       x.spawns().filter((l) => subcommand(l) !== 'config').length;
     expect(settledCount(a) - lastA).toBe(0);
-    // Only per-step COSTS are compared, never absolute totals: how many startup processes (a
-    // relist, a probe) a daemon spawned before the first step, and in which step they land,
-    // depends on the runner's speed (macOS CI saw totals of 19, 20 and 21 for the same steps), and
-    // says nothing about the snapshot. The last file step costs the same with and without the
-    // snapshot (steps 1 to 3 start from a settled count), and the commit step costs exactly one
-    // process more with it: the HEAD classification's `git log`.
-    const [, , a2 = 0, a3 = 0] = withSnapshot;
-    const [, , b2 = 0, b3 = 0] = without;
-    expect(a3 - a2).toBe(b3 - b2);
-    expect(lastA - a3 - (lastB - b3)).toBe(1);
+    // Absolute totals and single steps are not compared: how many startup processes (a relist, a
+    // probe) a daemon spawned, and in which step one lands, depends on the runner's speed (macOS CI
+    // saw totals of 19, 20 and 21, and one file step costing 4 against 5, for the same steps) and says
+    // nothing about the snapshot. What the snapshot must not do is add a process to EVERY file step,
+    // so the three file steps together (index 0 is the settled start) may differ by one straggler at
+    // most; a snapshot that spawned one process per step would differ by three. The commit's extra
+    // process is checked exactly below, by its own command line.
+    const [a0 = 0, , , a3 = 0] = withSnapshot;
+    const [b0 = 0, , , b3 = 0] = without;
+    expect(Math.abs(a3 - a0 - (b3 - b0))).toBeLessThanOrEqual(1);
+    expect(lastA - lastB).toBeGreaterThanOrEqual(0);
+    expect(lastA - lastB).toBeLessThanOrEqual(2);
     // The extra process is the HEAD classification's `git log`.
     // (The review state runs its own `log`s; only the classification's carries `--max-count`.)
     const logs = (x: Started) =>
