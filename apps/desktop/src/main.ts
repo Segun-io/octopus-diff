@@ -43,7 +43,7 @@ import { backendCommand, cliBundleEntry } from './backend-command.js';
 import { installBridge } from './bridge-main.js';
 import { createNodeShimFs, createWindowsUserPath } from './cli-shim-fs.js';
 import { outcomeTitle, registerCliShimIpc } from './cli-shim-ipc.js';
-import { createCliShim } from './cli-shim-service.js';
+import { createCliShim, startupRefresh } from './cli-shim-service.js';
 import {
   addProject,
   addScanRoot,
@@ -562,7 +562,7 @@ async function main(): Promise<void> {
   });
   backend.start();
   // After an update moved the app, point our own launcher (never another file) at it again.
-  void cliShim.refresh();
+  void startupRefresh(cliShim, process.env, (text) => log.note(text));
 }
 
 app.on('window-all-closed', () => {

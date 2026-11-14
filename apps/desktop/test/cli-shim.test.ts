@@ -5,8 +5,17 @@
  * (AppImage, mounted dmg), PATH checks and the install/update/refuse decision. The sh launchers are
  * also RUN here (POSIX only) against fake executables in hostile directory names.
  */
-import { spawnSync } from 'node:child_process';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { spawn, spawnSync } from 'node:child_process';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
@@ -19,6 +28,7 @@ import {
   type FileFacts,
   isOwnLauncher,
   type LauncherTarget,
+  launcherApp,
   launcherLocation,
   MARKER,
   pathCandidates,
@@ -213,7 +223,7 @@ describe.runIf(posix)('the sh launcher, run for real', () => {
             ? `    echo $$ > ${shellWord(pidfile)}; printf '%s\\n' ${shellWord(mount)}; exec sleep 30 ;;`
             : '    echo "FUSE missing" >&2; exit 1 ;;',
           '  --appimage-extract)',
-          `    mkdir squashfs-root && cp -R ${shellWord(`${mount}/`)}. squashfs-root/ && echo extracted > ../extracted ;;`,
+          `    mkdir squashfs-root && cp -R ${shellWord(`${mount}/`)}. squashfs-root/ && echo extracted > ${shellWord(path.join(dir, 'extracted'))} ;;`,
           'esac',
           '',
         ].join('\n'),
@@ -267,6 +277,129 @@ describe.runIf(posix)('the sh launcher, run for real', () => {
       expect(run.stdout.split('\0')[1]).toMatch(
         /squashfs-root\/resources\/app\.asar\/dist\/cli\/index\.js$/,
       );
+    });
+
+    /** A fake app that records its pid and then sleeps (`exec` keeps the pid). */
+    const sleepingApp = (file: string, pidfile: string): void => {
+      mkdirSync(path.dirname(file), { recursive: true });
+      writeFileSync(file, `#!/bin/sh\necho $$ > ${shellWord(pidfile)}\nexec sleep 30\n`, {
+        mode: 0o755,
+      });
+    };
+    const waitFor = async (what: string, condition: () => boolean, ms = 8000) => {
+      const deadline = Date.now() + ms;
+      while (!condition()) {
+        if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`);
+        await new Promise((r) => setTimeout(r, 25));
+      }
+    };
+    const pidOf = (file: string) => Number(readFileSync(file, 'utf8').trim());
+
+    // Findings of the PR #110 review: no signal forwarding, and SIGHUP skipped the EXIT trap.
+    for (const [signal, code] of [
+      ['SIGTERM', 143],
+      ['SIGHUP', 129],
+      ['SIGINT', 130],
+    ] as const) {
+      for (const mode of ['mount', 'extract-only'] as const) {
+        it(`${signal} (${mode}): the CLI is stopped, the mount and the work dir are cleaned up, exit ${code}`, async () => {
+          const dir = mkdtempSync(path.join(root, 'sig-'));
+          const tmp = path.join(dir, 'tmp');
+          mkdirSync(tmp);
+          const { file, mount, pidfile } = fakeAppImage(dir, mode);
+          const childPid = path.join(dir, 'child.pid');
+          sleepingApp(path.join(mount, 'octopus-diff-desktop'), childPid);
+          const launcher = path.join(dir, 'octopus-diff');
+          writeFileSync(
+            launcher,
+            renderLauncher({
+              kind: 'appimage',
+              appImage: file,
+              executable: 'octopus-diff-desktop',
+              entry: entryRel,
+            }),
+            { mode: 0o755 },
+          );
+          const run = spawn('/bin/sh', [launcher, 'serve'], {
+            env: { PATH: process.env.PATH ?? '/usr/bin:/bin', TMPDIR: tmp },
+            stdio: 'ignore',
+          });
+          const exited = new Promise<{ code: number | null; signal: string | null }>((done) =>
+            run.on('exit', (c, s) => done({ code: c, signal: s })),
+          );
+          await waitFor('the CLI to start', () => existsSync(childPid));
+          const cli = pidOf(childPid);
+          run.kill(signal);
+          const result = await exited;
+          expect(result, signal).toEqual({ code, signal: null });
+          await waitFor('the CLI to stop', () => !alive(cli));
+          if (mode === 'mount') {
+            await waitFor('the mounter to stop', () => !alive(pidOf(pidfile)));
+          }
+          expect(readdirSync(tmp), 'the work dir is removed').toEqual([]);
+        });
+      }
+    }
+
+    it('a CLI that ignores TERM is killed after a few seconds, and the work dir still goes', async () => {
+      const dir = mkdtempSync(path.join(root, 'stubborn-'));
+      const tmp = path.join(dir, 'tmp');
+      mkdirSync(tmp);
+      const { file, mount } = fakeAppImage(dir, 'mount');
+      const childPid = path.join(dir, 'child.pid');
+      writeFileSync(
+        path.join(mount, 'octopus-diff-desktop'),
+        `#!/bin/sh\ntrap '' TERM\necho $$ > ${shellWord(childPid)}\nwhile :; do sleep 1; done\n`,
+        { mode: 0o755 },
+      );
+      const launcher = path.join(dir, 'octopus-diff');
+      writeFileSync(
+        launcher,
+        renderLauncher({
+          kind: 'appimage',
+          appImage: file,
+          executable: 'octopus-diff-desktop',
+          entry: entryRel,
+        }),
+        { mode: 0o755 },
+      );
+      const run = spawn('/bin/sh', [launcher], {
+        env: { PATH: process.env.PATH ?? '/usr/bin:/bin', TMPDIR: tmp },
+        stdio: 'ignore',
+      });
+      const exited = new Promise<number | null>((done) => run.on('exit', (c) => done(c)));
+      await waitFor('the CLI to start', () => existsSync(childPid));
+      const cli = pidOf(childPid);
+      run.kill('SIGTERM');
+      expect(await exited).toBe(143);
+      await waitFor('the CLI to be killed', () => !alive(cli), 3000);
+      expect(readdirSync(tmp)).toEqual([]);
+    }, 20_000);
+
+    it('stdin reaches the CLI (it runs in the background so it can be signalled)', () => {
+      const dir = mkdtempSync(path.join(root, 'in-'));
+      const { file, mount } = fakeAppImage(dir, 'mount');
+      writeFileSync(path.join(mount, 'octopus-diff-desktop'), '#!/bin/sh\ncat\nexit 3\n', {
+        mode: 0o755,
+      });
+      const launcher = path.join(dir, 'octopus-diff');
+      writeFileSync(
+        launcher,
+        renderLauncher({
+          kind: 'appimage',
+          appImage: file,
+          executable: 'octopus-diff-desktop',
+          entry: entryRel,
+        }),
+        { mode: 0o755 },
+      );
+      const run = spawnSync('/bin/sh', [launcher], {
+        input: 'typed input\n',
+        encoding: 'utf8',
+        env: { PATH: process.env.PATH ?? '/usr/bin:/bin' },
+      });
+      expect(run.stdout).toBe('typed input\n');
+      expect(run.status).toBe(3);
     });
 
     it('says so (127) when the AppImage file is gone', () => {
@@ -710,5 +843,93 @@ describe('pathCandidates (which candidates to inspect)', () => {
       'C:\\L\\octopus-diff\\bin\\octopus-diff.com',
       'C:\\L\\octopus-diff\\bin\\octopus-diff.ps1',
     ]);
+  });
+});
+
+describe('pathCandidates: Windows relative entries (PR #110 review)', () => {
+  it('drops `.`, a bare name, a drive-relative path, a root-relative path and `..` entries', () => {
+    const list = pathCandidates({
+      platform: 'win32',
+      env: {},
+      pathValue: '.;bin;C:foo;\\foo;..\\x;"";C:\\npm',
+      target: 'C:\\L\\octopus-diff\\bin\\octopus-diff.cmd',
+    });
+    expect(list.length).toBeGreaterThan(0);
+    expect(list.every((f) => f.startsWith('C:\\npm\\'))).toBe(true);
+  });
+
+  it('keeps drive-letter and UNC entries, `/` spelled ones included', () => {
+    const list = pathCandidates({
+      platform: 'win32',
+      env: {},
+      pathValue: 'D:/tools;\\\\server\\share\\bin',
+      target: 'C:\\x\\octopus-diff.cmd',
+    });
+    expect(list).toContain('D:\\tools\\octopus-diff.exe');
+    expect(list).toContain('\\\\server\\share\\bin\\octopus-diff.exe');
+  });
+});
+
+describe('decide: a command that cannot be read is a conflict (PR #110 review)', () => {
+  const targetPath = '/home/a/.local/bin/octopus-diff';
+  const desired = `#!/bin/sh\n# ${MARKER}\nx\n`;
+
+  it('on PATH: refuse, naming it', () => {
+    expect(
+      decide({
+        desired,
+        targetPath,
+        target: { kind: 'missing' },
+        others: [{ path: '/opt/bin/octopus-diff', facts: { kind: 'unreadable' } }],
+      }),
+    ).toEqual({ action: 'refuse', conflict: { kind: 'on-path', path: '/opt/bin/octopus-diff' } });
+  });
+
+  it('at the target: refuse', () => {
+    expect(decide({ desired, targetPath, target: { kind: 'unreadable' }, others: [] })).toEqual({
+      action: 'refuse',
+      conflict: { kind: 'at-target', path: targetPath },
+    });
+  });
+});
+
+describe('launcherApp: the app a launcher runs (what the startup refresh checks)', () => {
+  const cases: [string, LauncherTarget][] = [
+    ['direct', direct],
+    ['AppImage', appImage],
+    ['Windows', windows],
+    [
+      'hostile sh path',
+      {
+        kind: 'direct',
+        executable: '/x/it\'s "q" $HOME `id`\nnew ünï 🐙/app',
+        entry: '/x/entry',
+      },
+    ],
+    [
+      'Windows with % and non-ASCII',
+      {
+        kind: 'windows',
+        executable: 'C:\\100%\\Zoë 日本\\octopus-diff.exe',
+        entry: 'C:\\100%\\Zoë\\index.js',
+      },
+    ],
+  ];
+  for (const [name, target] of cases) {
+    it(`${name}: reads back the file that is run`, () => {
+      const want = target.kind === 'appimage' ? target.appImage : target.executable;
+      expect(launcherApp(renderLauncher(target))).toBe(want);
+    });
+  }
+
+  it('null when it cannot tell (an older body, another file, nothing)', () => {
+    expect(launcherApp(`#!/bin/sh\n# ${MARKER}\nexec /old/app "$@"\n`)).toBeNull();
+    expect(launcherApp('#!/usr/bin/env node\n')).toBeNull();
+    expect(launcherApp('')).toBeNull();
+    expect(launcherApp(`#!/bin/sh\n# ${MARKER}\napp=$(evil)\n`)).toBeNull();
+    expect(launcherApp(`#!/bin/sh\n# ${MARKER}\napp='unterminated\n`)).toBeNull();
+    // Not ours: never read anything out of another file.
+    expect(launcherApp("#!/bin/sh\napp='/x/app'\n")).toBeNull();
+    expect(launcherApp('if exist "C:\\x.exe" goto run\r\n')).toBeNull();
   });
 });

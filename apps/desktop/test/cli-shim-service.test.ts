@@ -2,15 +2,18 @@
  * The installer's flow (docs/DESKTOP.md §3.2, roadmap #21) with the filesystem, PATH and the
  * Windows user-PATH editor faked: status, install, update, refuse, the races, the messages, refresh.
  */
+import { readFileSync } from 'node:fs';
 import { DesktopCliInstallResultSchema, DesktopCliStatusSchema } from '@octopus-diff/contracts';
 import { describe, expect, it } from 'vitest';
 import { type FileFacts, MARKER, renderLauncher } from '../src/cli-shim.js';
 import {
   type CliShimDeps,
   createCliShim,
+  NO_CLI_REFRESH_ENV,
   ShimExistsError,
   type ShimFs,
   ShimNotOursError,
+  startupRefresh,
   type UserPathEditor,
 } from '../src/cli-shim-service.js';
 
@@ -152,6 +155,20 @@ describe('status', () => {
     fs.files.set(TARGET, foreign);
     DesktopCliStatusSchema.parse(await shim.status());
     DesktopCliStatusSchema.parse(await setup({ isPackaged: false }).shim.status());
+  });
+});
+
+describe('an octopus-diff on PATH that cannot be read (PR #110 review)', () => {
+  it('is a conflict: status and install refuse, naming it', async () => {
+    const { fs, shim } = setup({ pathValue: async () => '/opt/bin:/home/a/.local/bin' });
+    fs.files.set('/opt/bin/octopus-diff', { kind: 'unreadable' });
+    const status = await shim.status();
+    expect(status.state).toBe('conflict');
+    expect(status.conflict).toEqual({ kind: 'on-path', path: '/opt/bin/octopus-diff' });
+    const r = await shim.install();
+    expect(r.outcome).toBe('refused');
+    expect(r.message).toContain('/opt/bin/octopus-diff');
+    expect(fs.writes).toEqual([]);
   });
 });
 
@@ -416,6 +433,113 @@ describe('refresh (after an update moved the app)', () => {
     expect(b.fs.writes).toEqual([]);
   });
 
+  describe('only when the app the launcher names is gone (PR #110 review)', () => {
+    // Another copy of the app starting (a downloaded AppImage tried once, a second .app) must not
+    // take the command over: that is what the menu's Install is for.
+    it('leaves a launcher alone while the app it runs still exists', async () => {
+      const { fs, shim } = setup();
+      fs.files.set(TARGET, { kind: 'file', content: oldLauncher });
+      fs.files.set('/old/place/app', { kind: 'file', content: 'binary' });
+      expect(await shim.refresh()).toBe('skipped');
+      expect(fs.writes).toEqual([]);
+      expect(fs.files.get(TARGET)).toEqual({ kind: 'file', content: oldLauncher });
+    });
+
+    it('does not flip back and forth between two copies that both exist', async () => {
+      const a = setup({ execPath: '/Applications/A.app/app', entry: '/Applications/A.app/entry' });
+      a.fs.files.set(TARGET, {
+        kind: 'file',
+        content: renderLauncher({
+          kind: 'direct',
+          executable: '/Applications/B.app/app',
+          entry: 'x',
+        }),
+      });
+      a.fs.files.set('/Applications/B.app/app', { kind: 'file', content: 'b' });
+      expect(await a.shim.refresh()).toBe('skipped');
+      expect(a.fs.writes).toEqual([]);
+    });
+
+    it('a launcher for an AppImage that was deleted is pointed at the app that runs now', async () => {
+      const { fs, shim } = setup();
+      fs.files.set(TARGET, {
+        kind: 'file',
+        content: renderLauncher({
+          kind: 'appimage',
+          appImage: '/home/a/Downloads/octopus-diff.AppImage',
+          executable: 'octopus-diff-desktop',
+          entry: 'resources/app.asar/dist/cli/index.js',
+        }),
+      });
+      expect(await shim.refresh()).toBe('updated');
+      expect(fs.writes).toEqual([{ op: 'replace', file: TARGET, content: desiredLinux }]);
+    });
+
+    it('while that AppImage exists the launcher stays', async () => {
+      const { fs, shim } = setup();
+      const content = renderLauncher({
+        kind: 'appimage',
+        appImage: '/home/a/Downloads/octopus-diff.AppImage',
+        executable: 'octopus-diff-desktop',
+        entry: 'resources/app.asar/dist/cli/index.js',
+      });
+      fs.files.set(TARGET, { kind: 'file', content });
+      fs.files.set('/home/a/Downloads/octopus-diff.AppImage', { kind: 'file', content: 'img' });
+      expect(await shim.refresh()).toBe('skipped');
+      expect(fs.writes).toEqual([]);
+    });
+
+    it('a launcher it cannot read the app from (an older body) is left alone', async () => {
+      const { fs, shim } = setup();
+      const content = `#!/bin/sh\n# ${MARKER}\nexec /old/app "$@"\n`;
+      fs.files.set(TARGET, { kind: 'file', content });
+      expect(await shim.refresh()).toBe('skipped');
+      expect(fs.writes).toEqual([]);
+    });
+
+    it('an app that cannot be looked at (unreadable) counts as still there', async () => {
+      const { fs, shim } = setup();
+      fs.files.set(TARGET, { kind: 'file', content: oldLauncher });
+      fs.files.set('/old/place/app', { kind: 'unreadable' });
+      expect(await shim.refresh()).toBe('skipped');
+    });
+
+    it('the menu’s Install may still retarget a launcher whose app exists (user intent)', async () => {
+      const { fs, shim } = setup();
+      fs.files.set(TARGET, { kind: 'file', content: oldLauncher });
+      fs.files.set('/old/place/app', { kind: 'file', content: 'binary' });
+      expect((await shim.install()).outcome).toBe('updated');
+      expect(fs.files.get(TARGET)).toEqual({ kind: 'file', content: desiredLinux });
+    });
+
+    it('Windows: the .cmd names its exe; present means stay, gone means retarget', async () => {
+      const win = (exists: boolean) => {
+        const userPath = new FakeUserPath();
+        const s = setup({
+          platform: 'win32',
+          env: { LOCALAPPDATA: 'C:\\L', PATH: 'C:\\Windows' },
+          homedir: 'C:\\Users\\a',
+          execPath: 'C:\\L\\Programs\\octopus-diff\\octopus-diff.exe',
+          entry: 'C:\\L\\Programs\\octopus-diff\\resources\\app.asar\\dist\\cli\\index.js',
+          userPath,
+          pathValue: async () => 'C:\\Windows',
+        });
+        s.fs.files.set('C:\\L\\octopus-diff\\bin\\octopus-diff.cmd', {
+          kind: 'file',
+          content: renderLauncher({
+            kind: 'windows',
+            executable: 'C:\\Old\\octopus-diff.exe',
+            entry: 'C:\\Old\\index.js',
+          }),
+        });
+        if (exists) s.fs.files.set('C:\\Old\\octopus-diff.exe', { kind: 'file', content: 'exe' });
+        return s;
+      };
+      expect(await win(true).shim.refresh()).toBe('skipped');
+      expect(await win(false).shim.refresh()).toBe('updated');
+    });
+  });
+
   it('never throws (it runs at startup)', async () => {
     const { fs, shim } = setup();
     fs.files.set(TARGET, { kind: 'file', content: oldLauncher });
@@ -446,5 +570,79 @@ describe('concurrency', () => {
     fs.files.set(TARGET, { kind: 'file', content: oldLauncher });
     await Promise.all([shim.refresh(), shim.install()]);
     expect(fs.writes).toHaveLength(1);
+  });
+});
+
+describe('the startup refresh and its test switch (DECISIONS #581)', () => {
+  const stale = () => {
+    const s = setup();
+    s.fs.files.set(TARGET, { kind: 'file', content: oldLauncher });
+    return s;
+  };
+
+  it('the switch is OCTOPUS_DESKTOP_NO_CLI_REFRESH', () => {
+    expect(NO_CLI_REFRESH_ENV).toBe('OCTOPUS_DESKTOP_NO_CLI_REFRESH');
+  });
+
+  it('without the switch it refreshes as before', async () => {
+    const { fs, shim } = stale();
+    const notes: string[] = [];
+    expect(await startupRefresh(shim, {}, (t) => notes.push(t))).toBe('updated');
+    expect(fs.writes).toHaveLength(1);
+    expect(notes).toEqual([]);
+  });
+
+  it('with OCTOPUS_DESKTOP_NO_CLI_REFRESH=1 refresh() is not even called, nothing is written, one line is logged', async () => {
+    const { fs, shim } = stale();
+    let called = 0;
+    const spy = {
+      ...shim,
+      refresh: async () => {
+        called++;
+        return shim.refresh();
+      },
+    };
+    const notes: string[] = [];
+    expect(await startupRefresh(spy, { [NO_CLI_REFRESH_ENV]: '1' }, (t) => notes.push(t))).toBe(
+      'disabled',
+    );
+    expect(called).toBe(0);
+    expect(fs.writes).toEqual([]);
+    expect(fs.files.get(TARGET)).toEqual({ kind: 'file', content: oldLauncher });
+    expect(notes).toHaveLength(1);
+    expect(notes[0]).toContain(NO_CLI_REFRESH_ENV);
+  });
+
+  it('only the exact value 1 turns it off; anything else is the normal refresh', async () => {
+    for (const value of ['0', '', 'true', 'yes', ' 1', undefined]) {
+      const { fs, shim } = stale();
+      expect(
+        await startupRefresh(shim, { [NO_CLI_REFRESH_ENV]: value }, () => undefined),
+        String(value),
+      ).toBe('updated');
+      expect(fs.writes, String(value)).toHaveLength(1);
+    }
+  });
+
+  it('it is a safe-direction switch: nothing in the environment makes a launcher get created or retargeted', async () => {
+    // No launcher: refresh never creates one, whatever the environment says.
+    const none = setup();
+    expect(await startupRefresh(none.shim, { [NO_CLI_REFRESH_ENV]: '0' }, () => undefined)).toBe(
+      'skipped',
+    );
+    expect(none.fs.writes).toEqual([]);
+    // A launcher whose app still exists is left alone.
+    const live = stale();
+    live.fs.files.set('/old/place/app', { kind: 'file', content: 'binary' });
+    expect(await startupRefresh(live.shim, { [NO_CLI_REFRESH_ENV]: '0' }, () => undefined)).toBe(
+      'skipped',
+    );
+    expect(live.fs.writes).toEqual([]);
+  });
+
+  it('main.ts goes through startupRefresh, never calls refresh() itself (the switch would be bypassed)', () => {
+    const main = readFileSync(new URL('../src/main.ts', import.meta.url), 'utf8');
+    expect(main).toContain('startupRefresh(cliShim, process.env,');
+    expect(main).not.toMatch(/cliShim\.refresh\(/);
   });
 });

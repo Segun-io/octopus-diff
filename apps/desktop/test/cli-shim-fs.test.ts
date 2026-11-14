@@ -2,8 +2,10 @@
  * The real effects of the command installer: the filesystem (never overwrites, never follows a
  * symlink, atomic) and the Windows user-PATH editor's scripts (run here with a fake PowerShell).
  */
+import { execFileSync } from 'node:child_process';
 import {
   chmodSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -21,9 +23,11 @@ import {
   createNodeShimFs,
   createWindowsUserPath,
   encodePowerShell,
+  type FsOps,
   parseUserPathOutput,
   powerShellExe,
   READ_USER_PATH_SCRIPT,
+  readTop,
   WRITE_USER_PATH_SCRIPT,
 } from '../src/cli-shim-fs.js';
 import { ShimExistsError, ShimNotOursError } from '../src/cli-shim-service.js';
@@ -135,20 +139,167 @@ describe('createNodeShimFs.replaceOwn', () => {
       expect(readFileSync(path.join(d, 'real'), 'utf8')).toBe(ours);
     }
   });
+});
 
-  it.runIf(posix)('does not leave a staging file when the directory is read-only', () => {
-    if (process.getuid?.() === 0) return; // root ignores the mode
+const eperm = () => Object.assign(new Error('EPERM: operation not permitted'), { code: 'EPERM' });
+const eexist = () => Object.assign(new Error('EEXIST: file exists'), { code: 'EEXIST' });
+
+describe('createNodeShimFs: nothing is left behind (PR #110 review)', () => {
+  it('replaceOwn: a rename that fails after staging removes the staging file and keeps the old launcher', () => {
     const d = fresh();
     const file = path.join(d, 'octopus-diff');
     writeFileSync(file, ours);
-    chmodSync(d, 0o555);
-    try {
-      expect(() => fs.replaceOwn(file, `${ours}# more\n`)).toThrow();
-      expect(readdirSync(d)).toEqual(['octopus-diff']);
-      expect(readFileSync(file, 'utf8')).toBe(ours);
-    } finally {
-      chmodSync(d, 0o755);
+    const failing = createNodeShimFs({
+      ops: {
+        renameSync: () => {
+          throw eperm();
+        },
+      },
+    });
+    expect(() => failing.replaceOwn(file, `${ours}# more\n`)).toThrow(/EPERM/);
+    expect(readdirSync(d)).toEqual(['octopus-diff']);
+    expect(readFileSync(file, 'utf8')).toBe(ours);
+  });
+
+  it('create: the staging file is removed when the link fails with EEXIST, and the existing file survives', () => {
+    const d = fresh();
+    const file = path.join(d, 'octopus-diff');
+    writeFileSync(file, 'npm shim');
+    const racing = createNodeShimFs({
+      ops: {
+        linkSync: () => {
+          throw eexist();
+        },
+      },
+    });
+    expect(() => racing.create(file, ours)).toThrow(ShimExistsError);
+    expect(readdirSync(d)).toEqual(['octopus-diff']);
+    expect(readFileSync(file, 'utf8')).toBe('npm shim');
+  });
+});
+
+describe('createNodeShimFs.create without hard links (PR #110 review)', () => {
+  const noLinks = () =>
+    createNodeShimFs({
+      ops: {
+        linkSync: () => {
+          throw eperm();
+        },
+      },
+    });
+
+  it('falls back to an exclusive create: the file is written, executable, no staging file left', () => {
+    const d = fresh();
+    const file = path.join(d, 'octopus-diff');
+    noLinks().create(file, ours);
+    expect(readFileSync(file, 'utf8')).toBe(ours);
+    if (posix) expect(statSync(file).mode & 0o777).toBe(0o755);
+    expect(readdirSync(d)).toEqual(['octopus-diff']);
+  });
+
+  it('never replaces a file that is there, a symlink, or a directory, and leaves no staging file', () => {
+    const d = fresh();
+    writeFileSync(path.join(d, 'file'), 'npm shim');
+    mkdirSync(path.join(d, 'dir'));
+    const names = ['file', 'dir'];
+    if (posix) {
+      symlinkSync(path.join(d, 'file'), path.join(d, 'link'));
+      symlinkSync(path.join(d, 'gone'), path.join(d, 'dangling'));
+      names.push('link', 'dangling');
     }
+    for (const name of names) {
+      expect(() => noLinks().create(path.join(d, name), ours), name).toThrow(ShimExistsError);
+    }
+    expect(readFileSync(path.join(d, 'file'), 'utf8')).toBe('npm shim');
+    expect(readdirSync(d).sort()).toEqual(names.sort());
+  });
+
+  it('another error from the fallback is passed on, with nothing left behind', () => {
+    const d = fresh();
+    const file = path.join(d, 'no-such-dir', 'octopus-diff');
+    expect(() => noLinks().create(file, ours)).toThrow();
+    expect(readdirSync(d)).toEqual([]);
+  });
+});
+
+describe('unreadable files are not "other" (PR #110 review)', () => {
+  const asRoot = process.getuid?.() === 0;
+
+  it.runIf(posix && !asRoot)('an execute-only file (0711) is unreadable', () => {
+    const d = fresh();
+    const file = path.join(d, 'octopus-diff');
+    writeFileSync(file, '#!/bin/sh\n', { mode: 0o711 });
+    chmodSync(file, 0o111);
+    expect(fs.inspect(file)).toEqual({ kind: 'unreadable' });
+  });
+
+  it.runIf(posix && !asRoot)(
+    'a path under a directory that cannot be searched is unreadable',
+    () => {
+      const d = fresh();
+      mkdirSync(path.join(d, 'locked'));
+      writeFileSync(path.join(d, 'locked', 'octopus-diff'), 'x');
+      chmodSync(path.join(d, 'locked'), 0o000);
+      try {
+        expect(fs.inspect(path.join(d, 'locked', 'octopus-diff'))).toEqual({ kind: 'unreadable' });
+      } finally {
+        chmodSync(path.join(d, 'locked'), 0o755);
+      }
+    },
+  );
+
+  it('a directory is still just "other"', () => {
+    const d = fresh();
+    mkdirSync(path.join(d, 'dir'));
+    expect(fs.inspect(path.join(d, 'dir'))).toEqual({ kind: 'other' });
+  });
+});
+
+describe.runIf(posix)('readTop opens safely (PR #110 review)', () => {
+  const fifo = (name: string) => {
+    const d = fresh();
+    const file = path.join(d, name);
+    execFileSync('mkfifo', [file]);
+    return { d, file };
+  };
+
+  it('anything that is not a regular file is refused by its descriptor (a device reads fine at offset 0)', () => {
+    expect(() => readTop('/dev/zero')).toThrow(/not a regular file/);
+  });
+
+  it('a FIFO neither blocks nor is read', () => {
+    const { file } = fifo('pipe');
+    expect(() => readTop(file)).toThrow();
+  });
+
+  it('a symlink is not read through, to a file or to a FIFO', () => {
+    const d = fresh();
+    writeFileSync(path.join(d, 'real'), ours);
+    symlinkSync(path.join(d, 'real'), path.join(d, 'link'));
+    expect(() => readTop(path.join(d, 'link'))).toThrow();
+    const { file } = fifo('pipe');
+    symlinkSync(file, path.join(d, 'to-fifo'));
+    expect(() => readTop(path.join(d, 'to-fifo'))).toThrow();
+  });
+
+  it('inspect: a regular file swapped for a symlink to a FIFO after the lstat is unreadable, not a hang', () => {
+    const d = fresh();
+    const real = path.join(d, 'octopus-diff');
+    writeFileSync(real, ours);
+    const stat = lstatSync(real); // what lstat saw: a regular file
+    const { file: pipe } = fifo('pipe');
+    rmSync(real);
+    symlinkSync(pipe, real);
+    const swapped = createNodeShimFs({
+      ops: { lstatSync: (() => stat) as unknown as FsOps['lstatSync'] },
+    });
+    expect(swapped.inspect(real)).toEqual({ kind: 'unreadable' });
+  });
+
+  it('a regular file is still read', () => {
+    const d = fresh();
+    writeFileSync(path.join(d, 'f'), ours);
+    expect(readTop(path.join(d, 'f'))).toBe(ours);
   });
 });
 
