@@ -35,9 +35,14 @@ export interface FrameChunk {
   tooLong: boolean;
 }
 
-/** A fresh nonce for one run: 32 URL-safe characters (24 random bytes). */
+/**
+ * A fresh nonce for one spawn attempt: 48 lowercase hex characters (24 random bytes). Hex, not
+ * base64url: a base64url nonce starts with `-` one time in 64, and the CLI's strict `parseArgs`
+ * rejects an option value that looks like an option (#22 review; the argv also uses
+ * `--ready-stdout=<nonce>` now).
+ */
 export function newReadyNonce(): string {
-  return randomBytes(24).toString('base64url');
+  return randomBytes(24).toString('hex');
 }
 
 export class ReadyFrameReader {

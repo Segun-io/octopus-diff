@@ -43,3 +43,46 @@ export function wslDistroToUse(
 ): string | null {
   return platform === 'win32' ? settings.wslDistro : null;
 }
+
+export interface SettingsFs {
+  writeFile(file: string, data: string): Promise<void>;
+  rename(from: string, to: string): Promise<void>;
+}
+
+/**
+ * The settings in memory and on disk, saved **one at a time** (review LOW 4): each save writes a
+ * temp file of its own (`<file>.<tag>-<n>.tmp`), renames it over the file, and only then becomes
+ * `current`. Two quick choices therefore end with memory and file on the same, last one; a
+ * failed save leaves `current` as it was and does not block the next.
+ */
+export class SettingsStore {
+  #current: DesktopSettings;
+  #chain: Promise<void> = Promise.resolve();
+  #seq = 0;
+  readonly #file: string;
+  readonly #fs: SettingsFs;
+  readonly #tag: string;
+
+  constructor(file: string, initial: DesktopSettings, fs: SettingsFs, tag = String(process.pid)) {
+    this.#file = file;
+    this.#current = initial;
+    this.#fs = fs;
+    this.#tag = tag;
+  }
+
+  get current(): DesktopSettings {
+    return this.#current;
+  }
+
+  save(next: DesktopSettings): Promise<void> {
+    const text = serializeDesktopSettings(next);
+    const run = this.#chain.then(async () => {
+      const tmp = `${this.#file}.${this.#tag}-${++this.#seq}.tmp`;
+      await this.#fs.writeFile(tmp, text);
+      await this.#fs.rename(tmp, this.#file);
+      this.#current = next;
+    });
+    this.#chain = run.catch(() => undefined);
+    return run;
+  }
+}

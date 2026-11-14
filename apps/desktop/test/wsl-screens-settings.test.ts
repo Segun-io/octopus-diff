@@ -4,6 +4,7 @@ import {
   DEFAULT_DESKTOP_SETTINGS,
   DESKTOP_SETTINGS_FILE,
   parseDesktopSettings,
+  SettingsStore,
   serializeDesktopSettings,
   wslDistroToUse,
 } from '../src/desktop-settings.js';
@@ -100,5 +101,80 @@ describe('WSL screens', () => {
       busy: true,
     });
     expect(screenHtml(wslStartingScreen('Ubuntu'))).toContain('Ubuntu');
+  });
+});
+
+describe('SettingsStore: saves one at a time, unique temp files (review LOW 4)', () => {
+  function fakeFs() {
+    const files = new Map<string, string>();
+    const log: string[] = [];
+    const gates: (() => void)[] = [];
+    let hold = false;
+    return {
+      files,
+      log,
+      hold: (v: boolean) => {
+        hold = v;
+      },
+      release: () => {
+        for (const g of gates.splice(0)) g();
+      },
+      fs: {
+        writeFile: async (file: string, data: string) => {
+          log.push(`write ${file}`);
+          if (hold) await new Promise<void>((resolve) => gates.push(resolve));
+          files.set(file, data);
+        },
+        rename: async (from: string, to: string) => {
+          log.push(`rename ${from}`);
+          const data = files.get(from);
+          if (data === undefined) throw new Error(`ENOENT ${from}`);
+          files.delete(from);
+          files.set(to, data);
+        },
+      },
+    };
+  }
+  const A = { version: 1 as const, wslDistro: 'Ubuntu' };
+  // Neither equals the default (wslDistro: null): a store that never updates `current` fails.
+  const B = { version: 1 as const, wslDistro: 'Debian' };
+
+  it('a second save waits for the first: memory and file end on the last choice', async () => {
+    const f = fakeFs();
+    const store = new SettingsStore('/u/desktop-settings.json', DEFAULT_DESKTOP_SETTINGS, f.fs);
+    f.hold(true);
+    const first = store.save(A);
+    const second = store.save(B);
+    await new Promise((r) => setTimeout(r, 0));
+    // Only the first write has started.
+    expect(f.log.filter((l) => l.startsWith('write'))).toHaveLength(1);
+    f.hold(false);
+    f.release();
+    await Promise.all([first, second]);
+    expect(store.current).toEqual(B);
+    expect(parseDesktopSettings(f.files.get('/u/desktop-settings.json'))).toEqual(B);
+    const tmps = f.log.filter((l) => l.startsWith('write')).map((l) => l.slice(6));
+    expect(new Set(tmps).size).toBe(2);
+    expect(tmps.every((t) => t.startsWith('/u/desktop-settings.json.') && t.endsWith('.tmp'))).toBe(
+      true,
+    );
+    expect([...f.files.keys()]).toEqual(['/u/desktop-settings.json']);
+  });
+
+  it('a failed save leaves memory as it was and does not block the next one', async () => {
+    const f = fakeFs();
+    let fail = true;
+    const store = new SettingsStore('/u/s.json', DEFAULT_DESKTOP_SETTINGS, {
+      ...f.fs,
+      rename: async (from, to) => {
+        if (fail) throw new Error('EACCES');
+        return f.fs.rename(from, to);
+      },
+    });
+    await expect(store.save(A)).rejects.toThrow('EACCES');
+    expect(store.current).toEqual(DEFAULT_DESKTOP_SETTINGS);
+    fail = false;
+    await store.save(B);
+    expect(store.current).toEqual(B);
   });
 });

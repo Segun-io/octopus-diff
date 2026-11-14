@@ -480,14 +480,14 @@ await scenario(
   'stdout ready channel (#22): serve --ready-stdout, the frame never logged',
   async () => {
     const d = dirs('stdout');
-    const nonce = newReadyNonce();
+    // A nonce that starts with "-" (review MEDIUM 1): the real CLI must take it in the = form.
+    const nonce = `-${newReadyNonce().slice(1)}`;
     const s = stdoutSupervisor(d, {
       command: execPath,
       args: [
         cliEntry,
         'serve',
-        '--ready-stdout',
-        nonce,
+        `--ready-stdout=${nonce}`,
         '--exit-with-stdin',
         '--no-open',
         '--host',

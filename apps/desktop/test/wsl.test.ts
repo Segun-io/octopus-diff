@@ -1,4 +1,5 @@
 /** #22: the pure WSL rules: `wsl.exe -l -v`, the prerequisite probe, the `wsl.exe` command lines. */
+import { type CliDeps, run as runCli } from 'octopus-diff';
 import { describe, expect, it } from 'vitest';
 import {
   decodeWslText,
@@ -152,6 +153,39 @@ describe('parseWslList', () => {
   });
 });
 
+describe('parseWslList on hostile output (review LOW 1)', () => {
+  it('a 500k-character line of spaces is parsed in linear time, and skipped', () => {
+    const line = `${' '.repeat(500_000)}x`;
+    const t0 = performance.now();
+    expect(parseWslList(`  NAME  STATE  VERSION\n${line}\n* Ubuntu  Running  2\n`)).toEqual([
+      expect.objectContaining({ name: 'Ubuntu' }),
+    ]);
+    expect(performance.now() - t0).toBeLessThan(250);
+  });
+
+  it('trailing whitespace of 500k characters after a row: still fast, row still read', () => {
+    const t0 = performance.now();
+    const list = parseWslList(`* Ubuntu  Running  2${' '.repeat(500_000)}\n`);
+    expect(performance.now() - t0).toBeLessThan(250);
+    expect(list).toEqual([expect.objectContaining({ name: 'Ubuntu', isDefault: true })]);
+  });
+
+  it('a row longer than 512 characters is skipped, not parsed', () => {
+    const long = `  Ubuntu  ${'Running '.repeat(80).trim()}  2`;
+    expect(long.length).toBeGreaterThan(512);
+    expect(parseWslList(`  NAME  STATE  VERSION\n${long}\n  Debian  Stopped  2\n`)).toEqual([
+      expect.objectContaining({ name: 'Debian' }),
+    ]);
+  });
+
+  it('only the first 256 lines are read', () => {
+    const rows = Array.from({ length: 300 }, (_, i) => `  d${i}  Stopped  2`).join('\n');
+    const list = parseWslList(`  NAME  STATE  VERSION\n${rows}\n`);
+    expect(list.length).toBe(255);
+    expect(list.at(-1)?.name).toBe('d254');
+  });
+});
+
 describe('isSystemDistro / isSafeDistroName', () => {
   it('marks the distros tools run for themselves', () => {
     for (const name of [
@@ -193,6 +227,7 @@ describe('isSystemDistro / isSafeDistroName', () => {
       'a\u0000b',
       'a\tb',
       'x'.repeat(65),
+      'My  Distro',
     ]) {
       expect(isSafeDistroName(bad), JSON.stringify(bad)).toBe(false);
     }
@@ -248,8 +283,7 @@ describe('wsl.exe command lines', () => {
       'PATH=/home/u/.nvm/versions/node/v24.1.0/bin:/usr/bin:/bin',
       '/home/u/.nvm/versions/node/v24.1.0/bin/octopus-diff',
       'serve',
-      '--ready-stdout',
-      nonce,
+      `--ready-stdout=${nonce}`,
       '--exit-with-stdin',
       '--no-open',
       '--host',
@@ -264,6 +298,31 @@ describe('wsl.exe command lines', () => {
         port: 0,
       }),
     ).toEqual(expect.arrayContaining(['--port', '0']));
+  });
+
+  it('serve: a nonce starting with "-" survives the real CLI parser (the --ready-stdout=<nonce> form)', async () => {
+    const nonce = `-${'a'.repeat(31)}`;
+    const args = wslServeArgs({
+      distro: 'Ubuntu',
+      path: '/usr/bin',
+      cli: '/usr/bin/octopus-diff',
+      nonce,
+      port: 0,
+    });
+    expect(args).toContain(`--ready-stdout=${nonce}`);
+    expect(args).not.toContain('--ready-stdout');
+    // What octopus-diff receives after `env PATH=… <cli>`: the CLI's own parser, with --help so it
+    // stops after parsing (an ambiguous option value exits 2 before that).
+    const tail = args.slice(args.indexOf('/usr/bin/octopus-diff') + 1);
+    const out: string[] = [];
+    const deps = {
+      stdout: { write: (t: string) => out.push(t) },
+      stderr: { write: (t: string) => out.push(t) },
+    } as unknown as CliDeps;
+    expect(await runCli([...tail, '--help'], deps)).toBe(0);
+    // The separate-argument form is exactly what failed 1 run in 64 (review MEDIUM 1).
+    expect(await runCli(['serve', '--ready-stdout', nonce, '--help'], deps)).toBe(2);
+    expect(out.join('')).toContain('ambiguous');
   });
 
   it('serve: hostile values are refused, never passed', () => {

@@ -32,7 +32,6 @@
 import { StringDecoder } from 'node:string_decoder';
 import type { ServeReady } from '@octopus-diff/contracts';
 import { ServeReadySchema } from '@octopus-diff/contracts';
-import { isLoopbackHost } from './args.js';
 import { ReadyFrameReader } from './ready-frame.js';
 
 /** The fd the ready line arrives on (stdio index 3). */
@@ -75,8 +74,13 @@ export type StdioLike =
   /** The stdout ready channel: no fd 3, stdout a pipe (it carries the frame). */
   | ['pipe', 'pipe', 'pipe' | number];
 
-/** Where the ready line comes from: fd 3 (default), or framed on stdout with this run's nonce. */
-export type ReadyChannelOption = { kind: 'fd' } | { kind: 'stdout'; nonce: string };
+/**
+ * Where the ready line comes from: fd 3 (default), or framed on stdout with a nonce. A function
+ * gives every spawn attempt a fresh one (the WSL backend; `args` is then a function of it too).
+ */
+export type ReadyChannelOption =
+  | { kind: 'fd' }
+  | { kind: 'stdout'; nonce: string | (() => string) };
 
 export interface SpawnOptionsLike {
   env: Record<string, string | undefined>;
@@ -162,8 +166,11 @@ export interface BackendOptions {
   spawn: SpawnLike;
   /** The program: Electron's binary (`process.execPath`), run in Node mode. */
   command: string;
-  /** Everything after the program: the CLI entry and `serve` flags (see `serveArgs`). */
-  args: readonly string[];
+  /**
+   * Everything after the program: the CLI entry and `serve` flags (see `serveArgs`); or, per
+   * attempt, a function of that attempt's ready nonce (the stdout channel).
+   */
+  args: readonly string[] | ((attempt: { nonce: string | null }) => readonly string[]);
   /** The child's environment (PATH already resolved); `ELECTRON_RUN_AS_NODE=1` is added. */
   env: Record<string, string | undefined>;
   /** Add `ELECTRON_RUN_AS_NODE=1` (default true; the WSL backend's child is `wsl.exe`). */
@@ -175,7 +182,10 @@ export interface BackendOptions {
    * does. A failed attempt then closes stdin and waits `stopGraceMs` before signalling.
    */
   wrapper?: boolean;
-  /** Refuse a ready line whose `url` is not on a loopback host, or whose `authUrl` is elsewhere. */
+  /**
+   * Refuse a ready line unless the daemon is bound to, and reached at, the literal `127.0.0.1`
+   * (`isLoopbackReady`): what the WSL backend asks for and what Windows' loopback reaches.
+   */
   loopbackOnly?: boolean;
   cwd?: string;
   /** The app's own CLI version, compared with the ready line's. */
@@ -204,13 +214,19 @@ export function backendStdio(
   return ['pipe', out, out, 'pipe'];
 }
 
-/** `url` is http(s) on a loopback host and `authUrl` has the same origin. */
-export function isLoopbackReady(ready: Pick<ServeReady, 'url' | 'authUrl'>): boolean {
+/**
+ * The WSL backend's rule (review LOW 2): the daemon says it is bound to `127.0.0.1` (`host`, #620;
+ * a wildcard bind's `url` reads 127.0.0.1 too, so the URL alone proves nothing), `url` is http(s)
+ * on the literal `127.0.0.1` (not `localhost`, which may resolve to `::1`), and `authUrl` has the
+ * same origin.
+ */
+export function isLoopbackReady(ready: Pick<ServeReady, 'url' | 'authUrl' | 'host'>): boolean {
+  if (ready.host !== '127.0.0.1') return false;
   try {
     const url = new URL(ready.url);
     const auth = new URL(ready.authUrl);
     if (url.protocol !== 'http:' && url.protocol !== 'https:') return false;
-    return isLoopbackHost(url.hostname) && auth.origin === url.origin;
+    return url.hostname === '127.0.0.1' && auth.origin === url.origin;
   } catch {
     return false;
   }
@@ -382,9 +398,17 @@ export class BackendSupervisor {
   #launch(): void {
     const attempt = this.#failures + 1;
     this.#setState({ kind: 'starting', attempt });
+    const readyOption = this.#o.ready;
+    const nonce =
+      readyOption?.kind === 'stdout'
+        ? typeof readyOption.nonce === 'function'
+          ? readyOption.nonce()
+          : readyOption.nonce
+        : null;
+    const argv = typeof this.#o.args === 'function' ? this.#o.args({ nonce }) : this.#o.args;
     let child: ChildLike;
     try {
-      child = this.#o.spawn(this.#o.command, this.#o.args, {
+      child = this.#o.spawn(this.#o.command, argv, {
         env: this.#o.runAsNode === false ? { ...this.#o.env } : backendEnv(this.#o.env),
         stdio: backendStdio(this.#o.outputFd, this.#o.ready?.kind ?? 'fd'),
         windowsHide: true,
@@ -416,8 +440,7 @@ export class BackendSupervisor {
     this.#run = run;
     this.#o.log.note(`started the backend (pid ${child.pid ?? '?'}, attempt ${attempt})`);
 
-    const readyOption = this.#o.ready;
-    const frames = readyOption?.kind === 'stdout' ? new ReadyFrameReader(readyOption.nonce) : null;
+    const frames = nonce !== null ? new ReadyFrameReader(nonce) : null;
     if (!frames) child.stdout?.on('data', (chunk) => this.#o.log.output(chunk));
     child.stderr?.on('data', (chunk) => this.#o.log.output(chunk));
     // A closed pipe (the child already gone) must not crash the main process.

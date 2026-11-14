@@ -78,7 +78,8 @@ export type WslPreflight =
       ok: true;
       distro: string;
       command: typeof WSL_EXE;
-      args: string[];
+      /** The `serve` command line for one spawn attempt's ready nonce (a fresh one each time). */
+      argsFor(nonce: string): string[];
       /** The distro's `octopus-diff --version`, for the log. */
       cliVersion: string | null;
     }
@@ -93,7 +94,6 @@ export interface PreflightInput {
   run: RunWsl;
   distro: string;
   port: number | null;
-  nonce: string;
   minNode: number;
   minGit: string;
 }
@@ -144,17 +144,22 @@ export async function prepareWslBackend(input: PreflightInput): Promise<WslPrefl
       problems,
     };
   }
+  const { path, cli } = probe;
+  // Checked once here, so a bad value fails the preflight (with a screen), not every attempt.
+  try {
+    wslServeArgs({ distro, path, cli, nonce: '0'.repeat(32), port: input.port });
+  } catch (error) {
+    return {
+      ok: false,
+      kind: 'probe-failed',
+      reason: `"${distro}" cannot run the backend: ${error instanceof Error ? error.message : String(error)}.`,
+    };
+  }
   return {
     ok: true,
     distro,
     command: WSL_EXE,
-    args: wslServeArgs({
-      distro,
-      path: probe.path,
-      cli: probe.cli,
-      nonce: input.nonce,
-      port: input.port,
-    }),
+    argsFor: (nonce) => wslServeArgs({ distro, path, cli, nonce, port: input.port }),
     cliVersion: probe.cliVersion,
   };
 }

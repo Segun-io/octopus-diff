@@ -63,8 +63,14 @@ export function isSystemDistro(name: string): boolean {
  * spaces inside; never a leading `-` (an option), no quotes, slashes, shell or control characters.
  */
 export function isSafeDistroName(name: string): boolean {
-  return /^[\p{L}\p{N}_](?:[\p{L}\p{N}_. -]{0,62}[\p{L}\p{N}_.-])?$/u.test(name);
+  return (
+    /^[\p{L}\p{N}_](?:[\p{L}\p{N}_. -]{0,62}[\p{L}\p{N}_.-])?$/u.test(name) && !name.includes('  ')
+  );
 }
+
+/** `wsl.exe -l -v` lines are short: longer ones are skipped, and only the first ones are read. */
+const MAX_LIST_LINES = 256;
+const MAX_LIST_LINE = 512;
 
 function stateOf(text: string): WslDistro['state'] {
   const t = text.toLowerCase();
@@ -116,16 +122,19 @@ function byFields(line: string): Row | null {
 /** The distros in `wsl.exe -l -v` output (bytes or decoded text); unparseable lines are skipped. */
 export function parseWslList(output: Uint8Array | string): WslDistro[] {
   const text = typeof output === 'string' ? output : decodeWslText(output);
+  // Bounded before any per-line work (review LOW 1: a regex on a 500k-character line froze the
+  // main process); no regex below scans more than MAX_LIST_LINE characters.
   const lines = text
+    .split('\n', MAX_LIST_LINES)
     // biome-ignore lint/suspicious/noControlCharactersInRegex: stray NULs of a mis-decoded UTF-16
-    .replace(/\u0000/g, '')
-    .split(/\r?\n/)
+    .map((l) => l.replace(/\u0000/g, ''))
     .filter((l) => l.trim() !== '');
   let cols: [number, number, number] | null = null;
   const out: WslDistro[] = [];
   const seen = new Set<string>();
   for (const raw of lines) {
-    const line = raw.replace(/\s+$/, '');
+    const line = raw.trimEnd();
+    if (line.length > MAX_LIST_LINE) continue;
     const isDefault = line.startsWith('*');
     const row = (cols && byColumns(line, cols)) ?? byFields(line);
     if (!row || (row.version !== '1' && row.version !== '2')) {
@@ -405,8 +414,8 @@ export function wslServeArgs(input: WslServeInput): string[] {
     `PATH=${input.path}`,
     input.cli,
     'serve',
-    '--ready-stdout',
-    input.nonce,
+    // One argument: a value starting with `-` would be "ambiguous" to the CLI's parseArgs.
+    `--ready-stdout=${input.nonce}`,
     '--exit-with-stdin',
     '--no-open',
     '--host',

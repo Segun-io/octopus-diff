@@ -140,4 +140,8 @@ describe('newReadyNonce', () => {
     expect(a).toMatch(/^[A-Za-z0-9_-]{32,128}$/);
     expect(a).not.toBe(b);
   });
+
+  it('is lowercase hex: it never starts with "-" (review MEDIUM 1: parseArgs would reject it)', () => {
+    for (let i = 0; i < 500; i++) expect(newReadyNonce()).toMatch(/^[0-9a-f]{48}$/);
+  });
 });

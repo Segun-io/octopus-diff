@@ -51,7 +51,7 @@ function fakeRun(script: (args: readonly string[]) => Awaited<ReturnType<RunWsl>
 
 const ok = (stdout: Buffer) => ({ code: 0, stdout, stderr: Buffer.alloc(0) });
 const NONCE = 'preflight_nonce_0123456789abc';
-const base = { distro: 'Ubuntu', port: null, nonce: NONCE, minNode: 24, minGit: '2.31' };
+const base = { distro: 'Ubuntu', port: null, minNode: 24, minGit: '2.31' };
 
 describe('listWslDistros', () => {
   it('runs wsl.exe --list --verbose and parses it', async () => {
@@ -100,36 +100,39 @@ describe('prepareWslBackend', () => {
     expect(f.calls).toHaveLength(2);
     expect(f.calls[1]?.args).toEqual(['-d', 'Ubuntu', '--cd', '~', '--exec', '/bin/sh', '-s']);
     expect(f.calls[1]?.input).toBe(WSL_PROBE_SCRIPT);
-    expect(r).toEqual({
+    expect(r.ok && r.argsFor(NONCE)).toEqual([
+      '-d',
+      'Ubuntu',
+      '--cd',
+      '~',
+      '--exec',
+      '/usr/bin/env',
+      'PATH=/home/u/.nvm/versions/node/v24.1.0/bin:/usr/bin:/bin',
+      '/home/u/.nvm/versions/node/v24.1.0/bin/octopus-diff',
+      'serve',
+      `--ready-stdout=${NONCE}`,
+      '--exit-with-stdin',
+      '--no-open',
+      '--host',
+      '127.0.0.1',
+    ]);
+    expect(r).toMatchObject({
       ok: true,
       distro: 'Ubuntu',
       command: 'wsl.exe',
-      args: [
-        '-d',
-        'Ubuntu',
-        '--cd',
-        '~',
-        '--exec',
-        '/usr/bin/env',
-        'PATH=/home/u/.nvm/versions/node/v24.1.0/bin:/usr/bin:/bin',
-        '/home/u/.nvm/versions/node/v24.1.0/bin/octopus-diff',
-        'serve',
-        '--ready-stdout',
-        NONCE,
-        '--exit-with-stdin',
-        '--no-open',
-        '--host',
-        '127.0.0.1',
-      ],
       cliVersion: '0.1.0',
     });
+    // One preflight, a command line per attempt: each with its own nonce.
+    expect(r.ok && r.argsFor('another_nonce_0123456789abc')).toContain(
+      '--ready-stdout=another_nonce_0123456789abc',
+    );
   });
 
   it('a distro with a space in its name is passed as one argument', async () => {
     const f = fakeRun((args) => (args[0] === '--list' ? ok(LIST) : ok(answers())));
     const r = await prepareWslBackend({ ...base, distro: 'My Distro', run: f.run });
     expect(f.calls[1]?.args.slice(0, 2)).toEqual(['-d', 'My Distro']);
-    expect(r.ok && r.args.slice(0, 2)).toEqual(['-d', 'My Distro']);
+    expect(r.ok && r.argsFor(NONCE).slice(0, 2)).toEqual(['-d', 'My Distro']);
   });
 
   it('a distro that is not listed, a system distro or a hostile name: refused before any probe', async () => {
@@ -205,6 +208,6 @@ describe('prepareWslBackend', () => {
   it('passes --port on', async () => {
     const f = fakeRun((args) => (args[0] === '--list' ? ok(LIST) : ok(answers())));
     const r = await prepareWslBackend({ ...base, port: 0, run: f.run });
-    expect(r.ok && r.args.slice(-2)).toEqual(['--port', '0']);
+    expect(r.ok && r.argsFor(NONCE).slice(-2)).toEqual(['--port', '0']);
   });
 });

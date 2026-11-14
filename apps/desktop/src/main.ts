@@ -58,7 +58,7 @@ import {
   DESKTOP_SETTINGS_FILE,
   type DesktopSettings,
   parseDesktopSettings,
-  serializeDesktopSettings,
+  SettingsStore,
   wslDistroToUse,
 } from './desktop-settings.js';
 import { noLogFile, openLogFile } from './log-file.js';
@@ -93,6 +93,7 @@ import {
 } from './screens.js';
 import { defaultRunShell, resolveShellPath } from './shell-env.js';
 import { LoadSequence, UiLoad, uiWanted, urlForLog } from './ui-load.js';
+import { UiRequestGate } from './ui-request-gate.js';
 import {
   parseWindowState,
   restoreBounds,
@@ -166,8 +167,28 @@ let quitRequested = false;
 
 // --- the backend's place: Windows or a WSL distro (#22, docs/DESKTOP.md §11) ---------------------
 
-/** The app's own settings (`desktop-settings.json` in userData; never the daemon's registry). */
-let settings: DesktopSettings = { version: 1, wslDistro: null };
+/**
+ * The app's own settings (`desktop-settings.json` in userData; never the daemon's registry), saved
+ * one at a time (`SettingsStore`). Created in main() (userData is set by then).
+ */
+let settingsStore: SettingsStore | null = null;
+const settings = (): DesktopSettings => settingsStore?.current ?? { version: 1, wslDistro: null };
+/**
+ * WSL backend only: the window's requests are cancelled from the moment the backend leaves
+ * `ready` until `verifyDaemon` passed again (review LOW 3). Inert for this machine's backend.
+ */
+const uiGate = new UiRequestGate({
+  install: (listener) => {
+    const webRequest = session.defaultSession.webRequest;
+    if (!listener) {
+      webRequest.onBeforeRequest(null);
+      return;
+    }
+    webRequest.onBeforeRequest((details, callback) => callback({ cancel: listener(details.url) }));
+  },
+  blocked: (origin) =>
+    log.note(`window: requests to ${origin} are held until the daemon in WSL is verified`),
+});
 /** The distro the current backend runs in (null: this machine's own backend). */
 let backendDistro: string | null = null;
 /** The WSL preflight failed: its screen is up and "Try again" runs it again. */
@@ -245,11 +266,9 @@ function readSettings(): DesktopSettings {
   }
 }
 
-async function saveSettings(next: DesktopSettings): Promise<void> {
-  const file = settingsFile();
-  await writeFile(`${file}.tmp`, serializeDesktopSettings(next));
-  await rename(`${file}.tmp`, file);
-  settings = next;
+function saveSettings(next: DesktopSettings): Promise<void> {
+  if (!settingsStore) return Promise.reject(new Error('the settings are not loaded yet'));
+  return settingsStore.save(next);
 }
 
 /** `wsl.exe` with an argv array (no shell), `input` on stdin, a timeout; never throws (wsl-backend.ts). */
@@ -301,26 +320,26 @@ const runWsl: RunWsl = (argv, options) =>
 /** Starts the backend where the settings say: this machine, or (Windows) a WSL distro. */
 async function startBackend(): Promise<void> {
   const generation = ++backendGeneration;
-  const distro = wslDistroToUse(settings, process.platform);
+  const distro = wslDistroToUse(settings(), process.platform);
   backendDistro = distro;
   wslFailure = null;
   if (distro === null) {
+    uiGate.disable();
     if (!makeLocalBackend) return;
     backend = makeLocalBackend();
     backend.start();
     return;
   }
+  uiGate.enable();
   showScreen(wslStartingScreen(distro));
   log.note(`backend: checking the WSL distro "${distro}"`);
   if (args.stateDir || args.configDir) {
     log.note('backend: --state-dir/--config-dir are Windows paths: not passed to the WSL backend');
   }
-  const nonce = newReadyNonce();
   const pre = await prepareWslBackend({
     run: runWsl,
     distro,
     port: args.port,
-    nonce,
     minNode: MIN_NODE,
     minGit: MIN_GIT,
   });
@@ -338,10 +357,11 @@ async function startBackend(): Promise<void> {
   backend = new BackendSupervisor({
     spawn: (cmd, argv, options) => spawn(cmd, argv, options) as unknown as ChildLike,
     command: pre.command,
-    args: pre.args,
+    // A fresh nonce for every spawn attempt (a restart, Try again): review MEDIUM 1.
+    args: ({ nonce }) => pre.argsFor(nonce ?? newReadyNonce()),
     env: { ...process.env },
     runAsNode: false,
-    ready: { kind: 'stdout', nonce },
+    ready: { kind: 'stdout', nonce: newReadyNonce },
     wrapper: true,
     loopbackOnly: true,
     appVersion: cliVersion,
@@ -361,6 +381,7 @@ function restartBackendWhereChosen(): void {
     backend = null;
     ready = null;
     backendGeneration++;
+    uiGate.close();
     if (old) {
       log.note('backend: switching where it runs; stopping the current one');
       switchStop = old.stop();
@@ -375,9 +396,9 @@ function restartBackendWhereChosen(): void {
 }
 
 async function chooseBackend(distro: string | null): Promise<void> {
-  if (settings.wslDistro !== distro) {
+  if (settings().wslDistro !== distro) {
     try {
-      await saveSettings({ ...settings, wslDistro: distro });
+      await saveSettings({ ...settings(), wslDistro: distro });
     } catch (error) {
       log.note(`could not save the app settings: ${String(error)}`);
       return;
@@ -632,6 +653,8 @@ async function showReady(r: ReadyInfo, force = false): Promise<void> {
       return;
     }
     health = check.health;
+    // This very daemon holds the token: the window may talk to it again.
+    uiGate.verified();
   } else {
     health = await fetchHealth(r.url, token);
   }
@@ -688,6 +711,7 @@ async function showReady(r: ReadyInfo, force = false): Promise<void> {
 }
 
 function render(state: BackendState): void {
+  uiGate.backendState(state.kind);
   switch (state.kind) {
     case 'idle':
     case 'starting':
@@ -819,11 +843,11 @@ function installMenu(): void {
 
 async function main(): Promise<void> {
   lockDownSession();
-  settings = readSettings();
-  if (settings.wslDistro !== null) {
+  settingsStore = new SettingsStore(settingsFile(), readSettings(), { writeFile, rename });
+  if (settings().wslDistro !== null) {
     log.note(
       process.platform === 'win32'
-        ? `settings: the backend runs in the WSL distro "${settings.wslDistro}"`
+        ? `settings: the backend runs in the WSL distro "${settings().wslDistro}"`
         : 'settings: a WSL distro is set, but only the Windows app uses it (ignored)',
     );
   }
@@ -840,7 +864,7 @@ async function main(): Promise<void> {
     cliShim,
     wsl: {
       list: () => listWslDistros(runWsl),
-      settings: () => settings,
+      settings,
       save: saveSettings,
       active: () => (backend ? backendDistro : null),
       apply: () => restartBackendWhereChosen(),

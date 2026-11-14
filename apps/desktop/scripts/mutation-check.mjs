@@ -21,8 +21,15 @@ const e2eRoot = path.resolve(desktopRoot, '..', '..', 'e2e');
 
 // A mutation's file is under apps/desktop/src, or `e2e:<path under e2e/>` with its test as
 // `e2e:<name>` (e2e/support/<name>.test.ts, run from e2e/).
+// `cli:<path under apps/cli/src>` with its test as `cli:<name>` (apps/cli/test/<name>.test.ts):
+// the CLI rules the desktop's WSL backend depends on (#22 review).
+const cliRoot = path.resolve(desktopRoot, '..', 'cli');
 const sourcePath = (file) =>
-  file.startsWith('e2e:') ? path.join(e2eRoot, file.slice(4)) : path.join(desktopRoot, 'src', file);
+  file.startsWith('e2e:')
+    ? path.join(e2eRoot, file.slice(4))
+    : file.startsWith('cli:')
+      ? path.join(cliRoot, 'src', file.slice(4))
+      : path.join(desktopRoot, 'src', file);
 
 /** [file, test file, description, from, to] */
 const MUTATIONS = [
@@ -1354,8 +1361,8 @@ const MUTATIONS = [
     'backend.ts',
     'backend',
     'WSL: authUrl on another origin accepted',
-    'return isLoopbackHost(url.hostname) && auth.origin === url.origin;',
-    'return isLoopbackHost(url.hostname);',
+    "return url.hostname === '127.0.0.1' && auth.origin === url.origin;",
+    "return url.hostname === '127.0.0.1';",
   ],
   [
     'backend.ts',
@@ -1382,8 +1389,8 @@ const MUTATIONS = [
     'wsl.ts',
     'wsl',
     'distro names may start with "-" (an option)',
-    'return /^[\\p{L}\\p{N}_](?:',
-    'return /^[\\p{L}\\p{N}_-](?:',
+    '/^[\\p{L}\\p{N}_](?:',
+    '/^[\\p{L}\\p{N}_-](?:',
   ],
   [
     'wsl.ts',
@@ -1521,6 +1528,155 @@ const MUTATIONS = [
     "return timingSafeEqual(expected, Buffer.from(proof, 'hex'))\n    ? { kind: 'verified', health }\n    : { kind: 'other' };",
     "return { kind: 'verified', health };",
   ],
+  // --- PR #114 review (#22): nonce, wsl -l -v caps, bind host, request gate, settings saves, CLI pipes ---
+  [
+    'ready-frame.ts',
+    'ready-frame',
+    'nonce: base64url again (starts with "-" 1 in 64)',
+    "return randomBytes(24).toString('hex');",
+    "return randomBytes(24).toString('base64url');",
+  ],
+  [
+    'wsl.ts',
+    'wsl',
+    'serve: the nonce as a separate argument (ambiguous to parseArgs)',
+    '`--ready-stdout=${input.nonce}`,',
+    "'--ready-stdout',\n    input.nonce,",
+  ],
+  [
+    'wsl.ts',
+    'wsl',
+    'wsl -l -v: the quadratic trailing-whitespace regex',
+    'const line = raw.trimEnd();',
+    "const line = raw.replace(/\\s+$/, '');",
+  ],
+  [
+    'wsl.ts',
+    'wsl',
+    'wsl -l -v: no line-length cap',
+    'if (line.length > MAX_LIST_LINE) continue;',
+    '',
+  ],
+  [
+    'wsl.ts',
+    'wsl',
+    'wsl -l -v: no line-count cap',
+    ".split('\\n', MAX_LIST_LINES)",
+    ".split('\\n')",
+  ],
+  ['wsl.ts', 'wsl', 'distro names may hold double spaces', "&& !name.includes('  ')", ''],
+  [
+    'backend.ts',
+    'backend',
+    'WSL: the bind host is not checked (a 0.0.0.0 daemon attached)',
+    "if (ready.host !== '127.0.0.1') return false;",
+    '',
+  ],
+  [
+    'backend.ts',
+    'backend',
+    'WSL: localhost / [::1] accepted for 127.0.0.1',
+    "return url.hostname === '127.0.0.1' && auth.origin === url.origin;",
+    'return auth.origin === url.origin;',
+  ],
+  [
+    'backend.ts',
+    'backend',
+    'WSL: one nonce for every attempt',
+    "const argv = typeof this.#o.args === 'function' ? this.#o.args({ nonce }) : this.#o.args;",
+    "const argv = typeof this.#o.args === 'function' ? this.#o.args({ nonce: 'x'.repeat(32) }) : this.#o.args;",
+  ],
+  [
+    'ui-request-gate.ts',
+    'ui-request-gate',
+    'gate: active without the WSL backend',
+    'if (!this.#enabled || this.#open) return false;',
+    'if (this.#open) return false;',
+  ],
+  [
+    'ui-request-gate.ts',
+    'ui-request-gate',
+    'gate: leaving ready does not close it',
+    "if (kind !== 'ready') this.close();",
+    '',
+  ],
+  [
+    'ui-request-gate.ts',
+    'ui-request-gate',
+    'gate: ready alone opens it (no proof needed)',
+    "if (kind !== 'ready') this.close();",
+    "if (kind !== 'ready') this.close();\n    else this.#open = true;",
+  ],
+  [
+    'ui-request-gate.ts',
+    'ui-request-gate',
+    'gate: the listener is installed twice',
+    '    if (this.#enabled) return;\n',
+    '',
+  ],
+  [
+    'desktop-settings.ts',
+    'wsl-screens-settings',
+    'settings: saves run concurrently',
+    'const run = this.#chain.then(async () => {',
+    'const run = Promise.resolve().then(async () => {',
+  ],
+  [
+    'desktop-settings.ts',
+    'wsl-screens-settings',
+    'settings: one fixed temp file',
+    'const tmp = `${this.#file}.${this.#tag}-${++this.#seq}.tmp`;',
+    'const tmp = `${this.#file}.tmp`;',
+  ],
+  [
+    'desktop-settings.ts',
+    'wsl-screens-settings',
+    'settings: memory not updated after a save',
+    '      this.#current = next;\n',
+    '',
+  ],
+  [
+    'cli:deps.ts',
+    'cli:broken-pipes',
+    'cli: EPIPE on stderr not watched',
+    "for (const name of ['stdout', 'stderr'] as const) {",
+    "for (const name of ['stdout'] as const) {",
+  ],
+  [
+    'cli:deps.ts',
+    'cli:broken-pipes',
+    'cli: every stream error swallowed',
+    "if (!BROKEN_PIPE_CODES.has(error?.code ?? '')) throw error;",
+    '',
+  ],
+  [
+    'cli:commands/serve.ts',
+    'cli:serve',
+    'cli: writes to a broken stderr not dropped',
+    'stderr: dropWhenBroken(deps.stderr, pipes.stderr),',
+    'stderr: deps.stderr,',
+  ],
+  [
+    'cli:commands/serve.ts',
+    'cli:serve',
+    'cli: supervised runs not guarded',
+    'if (!flags.exitWithStdin && flags.readyStdout === undefined) return deps;',
+    'return deps;',
+  ],
+  [
+    'cli:commands/serve.ts',
+    'cli:serve',
+    'cli: attaches to a daemon bound elsewhere than --host',
+    'if (ready && flags.host !== undefined && flags.host !== running.info.host) {',
+    'if (false) {',
+  ],
+  [
+    'cli:commands/serve.ts',
+    'cli:serve',
+    'cli: no bind host in the started ready line',
+    '      version,\n      host: handle.host,\n',
+    '      version,\n',
+  ],
 ];
 
 let current = null;
@@ -1536,15 +1692,16 @@ process.on('SIGINT', () => {
 /** One vitest run of a test file: its exit status and the failed-test count it printed (or null). */
 function runTests(test) {
   const inE2e = test.startsWith('e2e:');
+  const inCli = test.startsWith('cli:');
   const result = spawnSync(
     process.execPath,
     [
       path.join(desktopRoot, '..', '..', 'node_modules', 'vitest', 'vitest.mjs'),
       'run',
-      inE2e ? `support/${test.slice(4)}.test.ts` : `test/${test}.test.ts`,
+      inE2e ? `support/${test.slice(4)}.test.ts` : `test/${inCli ? test.slice(4) : test}.test.ts`,
     ],
     {
-      cwd: inE2e ? e2eRoot : desktopRoot,
+      cwd: inE2e ? e2eRoot : inCli ? cliRoot : desktopRoot,
       encoding: 'utf8',
       env: { ...process.env, NO_COLOR: '1', FORCE_COLOR: '0' },
     },
