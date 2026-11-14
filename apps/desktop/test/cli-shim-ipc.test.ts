@@ -118,6 +118,28 @@ describe('registerCliShimIpc', () => {
       ),
     ).rejects.toThrow();
   });
+
+  it('an install result that breaks the contract is an error too', async () => {
+    const handlers = new Map<string, Handler>();
+    registerCliShimIpc({
+      ipcMain: { handle: (c, h) => void handlers.set(c, h as Handler) },
+      shim: {
+        status: vi.fn(),
+        install: async () =>
+          ({ outcome: 'overwritten', status, message: 'x' }) as unknown as DesktopCliInstallResult,
+        refresh: vi.fn(),
+      },
+      uiOrigin: () => 'http://127.0.0.1:7428',
+      log: () => undefined,
+    });
+    await expect(
+      Promise.resolve().then(() =>
+        handlers.get(DESKTOP_CLI_CHANNELS.install)?.({
+          senderFrame: { url: 'http://127.0.0.1:7428/' },
+        }),
+      ),
+    ).rejects.toThrow();
+  });
 });
 
 describe('outcomeTitle', () => {
