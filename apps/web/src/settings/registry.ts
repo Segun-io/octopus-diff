@@ -13,7 +13,9 @@ export type SettingsSectionId =
   | 'folders'
   | 'forges'
   | 'keyboard'
-  | 'about';
+  | 'about'
+  /** Only inside the desktop app (`visibleSections`): the command installer, the WSL backend. */
+  | 'desktop';
 
 export interface SettingsSection {
   id: SettingsSectionId;
@@ -38,6 +40,27 @@ export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   { id: 'keyboard', label: 'Keyboard', description: 'Every shortcut, from the command registry.' },
   { id: 'about', label: 'About', description: 'Versions, the daemon and open-source credits.' },
 ];
+
+/**
+ * The desktop app's section (#21's follow-up, #22). Not in `SETTINGS_SECTIONS`, so the browser's
+ * list, the command palette and the e2e section order stay as they were.
+ */
+export const DESKTOP_SETTINGS_SECTION: SettingsSection = {
+  id: 'desktop',
+  label: 'Desktop app',
+  description: 'The octopus-diff command, and where the app runs its backend.',
+};
+
+/** The sections to list: the desktop app adds its own before About. */
+export function visibleSections(desktop: boolean): readonly SettingsSection[] {
+  if (!desktop) return SETTINGS_SECTIONS;
+  const about = SETTINGS_SECTIONS.findIndex((s) => s.id === 'about');
+  return [
+    ...SETTINGS_SECTIONS.slice(0, about),
+    DESKTOP_SETTINGS_SECTION,
+    ...SETTINGS_SECTIONS.slice(about),
+  ];
+}
 
 export type BooleanPrefKey = {
   [K in keyof Prefs]: Prefs[K] extends boolean ? K : never;

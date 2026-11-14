@@ -276,6 +276,20 @@ describe('copyText', () => {
   });
 });
 
+describe('the browser build (no bridge)', () => {
+  it('Settings lists no Desktop app section', async () => {
+    setup();
+    await ready();
+    fireEvent.click(screen.getByTestId(TEST_IDS.settingsOpenButton));
+    const dialog = await screen.findByTestId(TEST_IDS.settingsDialog);
+    const ids = within(dialog)
+      .getAllByTestId(TEST_IDS.settingsSection)
+      .map((s) => s.dataset.section);
+    expect(ids).not.toContain('desktop');
+    expect(ids).toHaveLength(7);
+  });
+});
+
 describe('the app with the bridge', () => {
   it('sets the platform on <html>, follows the unreviewed count with the badge', async () => {
     window.octopusDesktop = bridge;
@@ -384,6 +398,34 @@ describe('the app with the bridge', () => {
     act(() => bridge.send('open-settings'));
     const dialog = await screen.findByTestId(TEST_IDS.settingsDialog);
     expect(within(dialog).getByText('Editor')).toBeTruthy();
+  });
+
+  it('Settings has a Desktop app section with the command installer (#21 follow-up)', async () => {
+    window.octopusDesktop = bridge;
+    setup();
+    await ready();
+    act(() => bridge.send('open-settings'));
+    const dialog = await screen.findByTestId(TEST_IDS.settingsDialog);
+    const ids = within(dialog)
+      .getAllByTestId(TEST_IDS.settingsSection)
+      .map((s) => s.dataset.section);
+    expect(ids).toEqual([
+      'general',
+      'review',
+      'appearance',
+      'folders',
+      'forges',
+      'keyboard',
+      'desktop',
+      'about',
+    ]);
+    const desktop = within(dialog)
+      .getAllByTestId(TEST_IDS.settingsSection)
+      .find((s) => s.dataset.section === 'desktop') as HTMLElement;
+    fireEvent.click(desktop);
+    expect(await within(dialog).findByTestId('desktop-cli-status')).toBeTruthy();
+    // darwin: no WSL picker.
+    expect(within(dialog).queryByTestId('desktop-wsl-row')).toBeNull();
   });
 
   it('dropping a folder opens the add dialog at it', async () => {
