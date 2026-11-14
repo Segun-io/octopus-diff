@@ -34,6 +34,7 @@ import {
   type ChildLike,
   isReadyFor,
   type ReadyInfo,
+  type TimersLike,
 } from './backend.js';
 import { backendCommand } from './backend-command.js';
 import {
@@ -49,11 +50,11 @@ import { buildMenuTemplate } from './menu.js';
 import { refreshScript, settingsScript, undoScript } from './page-actions.js';
 import {
   httpOrigin,
-  isSupersededLoad,
   loadFailureNote,
   MIN_HEIGHT,
   MIN_WIDTH,
   navigationPolicy,
+  netErrorName,
   permissionPolicy,
   windowOpenPolicy,
   windowOptions,
@@ -71,6 +72,7 @@ import {
   versionNoticeTitle,
 } from './screens.js';
 import { defaultRunShell, resolveShellPath } from './shell-env.js';
+import { LoadSequence, type UiLoad, urlForLog } from './ui-load.js';
 import {
   parseWindowState,
   restoreBounds,
@@ -113,8 +115,19 @@ let backend: BackendSupervisor | null = null;
 let ready: ReadyInfo | null = null;
 /** The origin the window may navigate within (the daemon's, or the Vite server's); null on screens. */
 let uiOrigin: string | null = null;
-let showing: { kind: 'none' } | { kind: 'screen'; url: string } | { kind: 'ui'; authUrl: string } =
-  { kind: 'none' };
+let showing:
+  | { kind: 'none' }
+  | { kind: 'screen'; url: string; title: string }
+  | { kind: 'ui'; authUrl: string } = { kind: 'none' };
+/** Every load of the window (screens and the UI) takes a ticket: the newest is the wanted one. */
+const loads = new LoadSequence();
+/** The UI load in progress (attempts, the commit watchdog), if any. */
+let uiLoad: UiLoad | null = null;
+const timers: TimersLike = {
+  setTimeout: (fn, ms) => setTimeout(fn, ms),
+  clearTimeout: (handle) => clearTimeout(handle as NodeJS.Timeout),
+  now: () => Date.now(),
+};
 let backendStopped = false;
 let quitting = false;
 /** Set by any quit request, also one before the backend exists (main() checks it). */
@@ -135,7 +148,10 @@ if (primary && app.isPackaged && app.commandLine.hasSwitch('no-sandbox')) {
   );
 }
 if (primary) {
-  app.on('second-instance', () => focusWindow());
+  app.on('second-instance', () => {
+    log.note(`app: a second launch (window ${win ? 'open' : 'closed'})`);
+    focusWindow();
+  });
   void app.whenReady().then(main);
 }
 
@@ -246,11 +262,16 @@ function createWindow(): BrowserWindow {
   );
   const w = new BrowserWindow(windowOptions({ bounds, devTools: args.dev, title: APP_NAME }));
   win = w;
+  log.note('window: created');
   w.once('ready-to-show', () => {
+    log.note('window: ready to show');
     if (saved?.maximized && bounds) w.maximize();
     if (saved?.fullScreen && bounds) w.setFullScreen(true);
     w.show();
   });
+  w.on('show', () => log.note('window: shown'));
+  w.on('hide', () => log.note('window: hidden'));
+  watchPage(w);
   let saveTimer: NodeJS.Timeout | null = null;
   const saveSoon = () => {
     if (saveTimer) clearTimeout(saveTimer);
@@ -263,8 +284,11 @@ function createWindow(): BrowserWindow {
     saveWindowState();
   });
   w.on('closed', () => {
+    log.note('window: closed');
     if (win === w) win = null;
     showing = { kind: 'none' };
+    uiLoad?.cancel();
+    uiLoad = null;
   });
   w.on('page-title-updated', (event, title) => {
     if (!notice || showing.kind !== 'ui') return;
@@ -276,12 +300,54 @@ function createWindow(): BrowserWindow {
   return w;
 }
 
+/**
+ * The window's page lifecycle in the log (DECISIONS #592): what a stuck window was doing. Origins and
+ * error names only: never a URL (the UI's fragment holds the token).
+ */
+function watchPage(w: BrowserWindow): void {
+  const contents = w.webContents;
+  contents.on('did-navigate', (_event, url, httpResponseCode) => {
+    const code = httpResponseCode > 0 ? ` (HTTP ${httpResponseCode})` : '';
+    log.note(`window: navigated to ${urlForLog(url)}${code}`);
+    if (win === w && uiOrigin !== null && httpOrigin(url) === uiOrigin) uiLoad?.committed();
+  });
+  contents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+    if (!isMainFrame) return;
+    const name = netErrorName(errorDescription);
+    log.note(
+      `window: loading ${urlForLog(validatedURL)} failed (${errorCode}${name ? ` ${name}` : ''})`,
+    );
+  });
+  contents.on('did-finish-load', () => log.note(`window: ${pageForLog(w)} finished loading`));
+  contents.on('render-process-gone', (_event, details) =>
+    log.note(`window: the page's process is gone (${details.reason}, exit ${details.exitCode})`),
+  );
+  contents.on('unresponsive', () => log.note('window: the page is not responding'));
+  contents.on('responsive', () => log.note('window: the page responds again'));
+}
+
+/** The page on show, for the log: the screen's title, else `urlForLog`. */
+function pageForLog(w: BrowserWindow): string {
+  if (w.isDestroyed()) return 'a closed window';
+  const url = w.webContents.getURL();
+  if (showing.kind === 'screen' && url === showing.url) return `the screen "${showing.title}"`;
+  return urlForLog(url);
+}
+
 function showScreen(s: Screen): void {
   if (!win) return;
+  uiLoad?.cancel();
+  uiLoad = null;
   uiOrigin = null;
   const url = screenUrl(s);
-  showing = { kind: 'screen', url };
-  void win.loadURL(url).catch(() => undefined);
+  showing = { kind: 'screen', url, title: s.title };
+  const ticket = loads.begin();
+  log.note(`window: showing the screen "${s.title}"`);
+  void win.loadURL(url).catch((error: unknown) => {
+    if (loads.isCurrent(ticket)) {
+      log.note(`window: the screen "${s.title}" did not load (${loadFailureNote(error)})`);
+    }
+  });
 }
 
 async function onScreenAction(action: ScreenAction): Promise<void> {
@@ -306,32 +372,67 @@ function retryBackend(): void {
 async function showReady(r: ReadyInfo, force = false): Promise<void> {
   ready = r;
   notice = r.versionMismatch ? { daemon: r.version, app: cliVersion } : null;
-  if (!win) return;
+  if (!win) {
+    log.note('window: the daemon is ready, no window open');
+    return;
+  }
+  const asked = Date.now();
   const health = await fetchHealth(r.url, tokenFromAuthUrl(r.authUrl));
+  const git = gitStatus(health);
+  log.note(
+    `window: daemon health ${health ? 'answered' : 'unavailable'} in ${Date.now() - asked} ms (git ${git})`,
+  );
   // The daemon may have left `ready` while the health request was out (a restart or failure screen
   // is up then): this answer is for a daemon that is gone, and must not load over that screen.
-  if (ready !== r || !win || !isReadyFor(backend?.state, r)) return;
-  if (gitStatus(health) === 'missing') {
+  if (ready !== r || !win || !isReadyFor(backend?.state, r)) {
+    log.note('window: the daemon left ready during the health check; the UI is not loaded');
+    return;
+  }
+  if (git === 'missing') {
     log.note('the daemon has no usable git: showing the git-missing screen');
     showScreen(gitMissingScreen(process.platform, MIN_GIT));
     return;
   }
   // The same daemon came back (a restart on the same port and token): the page reconnects itself.
-  if (!force && showing.kind === 'ui' && showing.authUrl === r.authUrl) return;
+  if (!force && showing.kind === 'ui' && showing.authUrl === r.authUrl) {
+    log.note('window: the same daemon is back; the page reconnects itself');
+    return;
+  }
   const target = windowUrl(r.authUrl, args.rendererUrl);
   uiOrigin = httpOrigin(target);
   showing = { kind: 'ui', authUrl: r.authUrl };
   if (notice) win.setTitle(versionNoticeTitle(APP_NAME, notice.daemon, notice.app));
   const w = win;
-  await w.loadURL(target).catch((error: unknown) => {
-    if (isSupersededLoad(error) || win !== w) return;
-    // The page never loaded (the daemon died after its ready line, the dev server is not up yet):
-    // nothing would reconnect, so say so and let "Try again" reload. Only the code is logged: the
-    // message holds the URL, and the URL the token.
-    const note = loadFailureNote(error);
-    log.note(`the window could not load the UI: ${note}`);
-    showScreen(failedScreen(`The window could not load the UI (${note})`, 1, log.path));
-  });
+  const ticket = loads.begin();
+  log.note(`window: loading the UI from ${urlForLog(target)}`);
+  // Observation only (the behaviour is unchanged): a UI page that has not committed after 20 s.
+  const stall = setTimeout(() => {
+    if (!loads.isCurrent(ticket) || win !== w || w.isDestroyed()) return;
+    if (httpOrigin(w.webContents.getURL()) === uiOrigin) return;
+    log.note(
+      `window: no UI page within 20000 ms (window ${w.isVisible() ? 'visible' : 'not visible'}, ` +
+        `${w.webContents.isLoading() ? 'loading' : 'not loading'}, on ${pageForLog(w)})`,
+    );
+  }, 20_000);
+  await w.loadURL(target).then(
+    () => log.note('window: the UI loaded'),
+    (error: unknown) => {
+      const note = loadFailureNote(error);
+      if (note === 'ERR_ABORTED' || win !== w) {
+        const replaced = !loads.isCurrent(ticket) || win !== w;
+        log.note(
+          `window: the UI load ended (${note}; ${replaced ? 'a newer load replaced it' : 'nothing replaced it'})`,
+        );
+        return;
+      }
+      // The page never loaded (the daemon died after its ready line, the dev server is not up yet):
+      // nothing would reconnect, so say so and let "Try again" reload. Only the code is logged: the
+      // message holds the URL, and the URL the token.
+      log.note(`the window could not load the UI: ${note}`);
+      showScreen(failedScreen(`The window could not load the UI (${note})`, 1, log.path));
+    },
+  );
+  clearTimeout(stall);
 }
 
 function render(state: BackendState): void {
@@ -471,11 +572,7 @@ async function main(): Promise<void> {
     appVersion: cliVersion,
     log,
     outputFd: log.fd,
-    timers: {
-      setTimeout: (fn, ms) => setTimeout(fn, ms),
-      clearTimeout: (handle) => clearTimeout(handle as NodeJS.Timeout),
-      now: () => Date.now(),
-    },
+    timers,
     probe: async (url) => (await fetchHealth(url, null)) !== null,
     onState: render,
   });
@@ -488,6 +585,7 @@ app.on('window-all-closed', () => {
 });
 
 app.on('activate', () => {
+  log.note(`app: activate (window ${win ? 'open' : 'closed'})`);
   if (!win && app.isReady()) createWindow();
 });
 

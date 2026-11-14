@@ -1,7 +1,8 @@
 // biome-ignore-all lint/suspicious/noTemplateCurlyInString: the mutations are source text that contains `${…}`.
 // Mutation check for the rules that must not regress silently: the security policy (DESKTOP §5),
 // the packaged-build argument rules, the menu accelerator rule, and the supervisor's lifecycle (stdin lifeline, RUN_AS_NODE,
-// restart/backoff, attach, shutdown escalation, token never logged).
+// restart/backoff, attach, shutdown escalation, token never logged), and the UI load (superseded by sequence,
+// the commit watchdog, attempts).
 //
 //   node apps/desktop/scripts/mutation-check.mjs
 //
@@ -370,6 +371,63 @@ const MUTATIONS = [
     'no clamping to the display',
     'const x = Math.min(Math.max(b.x, best.x), best.x + best.width - width);',
     'const x = b.x;',
+  ],
+  // --- loading the UI into the window (DECISIONS #591, #594) ---
+  [
+    'ui-load.ts',
+    'ui-load',
+    'ERR_ABORTED taken for superseded (the macOS flake)',
+    '        // A newer load (a screen, a forced reload) replaced it: whatever the code, not a failure.\n        if (!this.#live()) return;',
+    "        if ((error as { code?: unknown } | null)?.code === 'ERR_ABORTED') return;\n        if (!this.#live()) return;",
+  ],
+  [
+    'ui-load.ts',
+    'ui-load',
+    'a superseded failure still retried',
+    '        if (this.#ticket !== ticket) return;\n        // A newer load',
+    '        // A newer load',
+  ],
+  [
+    'ui-load.ts',
+    'ui-load',
+    'no commit watchdog',
+    '      if (this.#ticket !== ticket || this.#committed || !this.#live()) return;\n      const state',
+    '      return;\n      const state',
+  ],
+  [
+    'ui-load.ts',
+    'ui-load',
+    'a committed page still reloaded by the watchdog',
+    '    this.#committed = true;\n    this.#clearTimer();',
+    '    this.#committed = true;',
+  ],
+  [
+    'ui-load.ts',
+    'ui-load',
+    'failure screen on the first failed attempt',
+    'if (attempt >= this.#policy.maxAttempts) {',
+    'if (true) {',
+  ],
+  [
+    'ui-load.ts',
+    'ui-load',
+    'retries for ever',
+    'if (attempt >= this.#policy.maxAttempts) {',
+    'if (false) {',
+  ],
+  [
+    'ui-load.ts',
+    'ui-load',
+    'the load error message logged (holds the token)',
+    'const note = loadFailureNote(error);',
+    'const note = String(error);',
+  ],
+  [
+    'ui-load.ts',
+    'ui-load',
+    'urlForLog keeps the path and fragment',
+    "if (parsed.protocol === 'http:' || parsed.protocol === 'https:') return parsed.origin;",
+    "if (parsed.protocol === 'http:' || parsed.protocol === 'https:') return url;",
   ],
 ];
 
