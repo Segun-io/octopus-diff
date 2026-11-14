@@ -5916,3 +5916,146 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      has no working sandbox and does not start. That is no loss: Electron does not validate the asar on Linux, so the
      test only ever recorded an outcome there. It now returns early on Linux (annotated) and runs, control included,
      on macOS and Windows only.
+
+## Desktop phase C: the `octopus-diff` command from the app (session, 2026-11-13; roadmap #21)
+
+560. **`contracts:` the CLI-shim bridge lives in its own file, `packages/contracts/src/desktop-cli.ts`.** Another session
+     creates `desktop.ts` (`DesktopBridge`, #20) at the same time, so this one adds a separate additive file and one
+     `export *` line in `index.ts` instead of editing `desktop.ts`. It holds `DESKTOP_CLI_CHANNELS` (the two IPC
+     channel names, shared by the preload and the main process), the zod schemas `DesktopCliStatusSchema` and
+     `DesktopCliInstallResultSchema`, and `DesktopCliBridge { installCli(); cliStatus() }`. #20's `DesktopBridge`
+     should `extends DesktopCliBridge`. Nothing existing changed.
+561. **The launcher's second line is a frozen marker, and ownership is decided by that line alone.** Every launcher
+     (sh, cmd, AppImage) has `# <MARKER>` / `rem <MARKER>` on line 2 (`MARKER` in `src/cli-shim.ts`, ASCII). A file is
+     "ours" (`isOwnLauncher`) only when that exact comment is one of the first four lines: the text elsewhere, inside a
+     longer line, or in a file of another kind does not count. The marker is never reworded, because an older app's
+     launcher is recognised by it (that is how a newer app may rewrite it after an update moved the app). T3 Code uses
+     `content.includes(MARKER)` anywhere in the file; ours is stricter.
+562. **Never overwrite, in four layers.** (1) `decide` refuses when anything at the launcher's path is not our file
+     (an npm shim, a directory, a symlink) and when *any* other `octopus-diff` is on PATH, even if our own launcher is
+     already installed (a stale launcher next to a real install is left as it is). (2) A symlink is never followed or
+     read (`lstat`): an npm global prefix of `~/.local` links its bin, and a link to our launcher is still "not ours".
+     (3) A new launcher is created *exclusively*: a staged file hard-linked into place, which fails with EEXIST when
+     anything is there (a dangling symlink too), with an exclusive-create fallback where hard links do not exist. (4) An
+     update re-reads the file for the marker right before the atomic `rename` (`replaceOwn`); the few microseconds between
+     that read and the rename are the only window left, and only for a file that was ours a moment ago. A write that
+     loses a race to a real file is reported as "refused", never as an error. Installs, updates and the startup refresh
+     run one at a time (a promise queue), so the menu, the bridge and the refresh cannot race each other.
+563. **"Is another install on PATH" uses the PATH a terminal has.** On macOS and Linux a GUI launch has a minimal PATH, so
+     the check uses the login-shell PATH `main.ts` already resolves for the backend (DECISIONS #496-#497), awaited
+     before the first answer; on Windows the process PATH. Only absolute entries are searched (a relative or empty
+     entry means the current directory: never, PLAN SEC-03); on Windows every spelling a command can have
+     (`octopus-diff`, `.cmd`, `.exe`, `.bat`, `.com`, `.ps1`) in every entry, our own file excluded. A directory of that
+     name, a missing file and our own launcher elsewhere are not conflicts; a non-executable regular file is (cheaper to
+     refuse than to guess).
+564. **AppImage: the launcher runs the AppImage file with `--appimage-mount`, as T3 Code does; it does not run
+     `$APPIMAGE` with the CLI entry as an argument.** The issue (and DESKTOP §3.2) said "run the AppImage file itself".
+     Running the file with `ELECTRON_RUN_AS_NODE=1` would start the AppRun, which starts Electron on the arguments:
+     the CLI entry would have to be named, and its path is inside a mount whose name changes on every run. So the
+     launcher mounts the image (`--appimage-mount` prints the mount point and stays up), runs the binary and the entry
+     *relative to the mount* (`resources/app.asar/dist/cli/index.js`), and kills the mounter on exit. Without FUSE (the
+     runtime cannot mount) it extracts the image into a temp dir for that run. Which run is an AppImage: `$APPIMAGE` and
+     `$APPDIR` are both set, absolute, and `process.execPath` is inside `$APPDIR`; a stale `$APPIMAGE` from another
+     environment is ignored. The polling loop reads the mount file with `read -r` (only a whole line counts) after
+     creating it, so a half-written path or the job's late redirection cannot be mistaken for a mount (found by running
+     it against a real AppImage: stderr noise).
+565. **Places that will not stay are refused, not installed.** A launcher written from a macOS app on a mounted dmg
+     (`/Volumes/…`) or a Gatekeeper-translocated one (`/AppTranslocation/`), or from a `.mount_*` run whose AppImage file is
+     unknown, would point at a path that is gone soon; the status is `unavailable` with "move it to Applications, open it
+     from there". A development run (`electron .`, `--backend source`) is unavailable too: there is no installed app.
+566. **Windows launcher and user PATH.** `octopus-diff.cmd` under `%LOCALAPPDATA%\octopus-diff\bin` (the home directory's
+     `AppData\Local` when it is unset or relative), CRLF, `setlocal EnableExtensions DisableDelayedExpansion`,
+     `if exist "<exe>" goto run` (a `goto`, not a block: "Program Files (x86)"), `%` doubled even inside quotes, and a
+     path with `"`, CR, LF or NUL refused when the launcher is rendered (a Windows path cannot hold them). A non-ASCII path
+     switches the console to UTF-8 (`chcp 65001`) *before* the first such line (cmd reads the file line by line in the
+     current code page) and restores it on every exit; the marker line stays ASCII. The user PATH entry is edited through
+     the system PowerShell by absolute path (`-EncodedCommand`, no profile), reading the raw registry value (`%VAR%`
+     unexpanded, `REG_EXPAND_SZ` kept) and appending the directory; the new value travels in an environment variable, never
+     in the script or argv (a path with quotes or `$(…)` cannot become code), an empty value is refused, and
+     `WM_SETTINGCHANGE` is broadcast so a new terminal sees it. A failed PATH edit still installs the launcher and tells
+     the user which directory to add. **Not run on Windows here** (see the report).
+567. **The menu item is File → Install 'octopus-diff' Command…, on every platform, with no accelerator.** (VS Code and
+     T3 put theirs in a palette; this app has none.) A dialog shows the outcome (`outcomeTitle`) and the message, which
+     says when the directory is not on PATH and gives the line to add on macOS/Linux (nothing edits a shell profile).
+     The Settings button is web work (WS3, #20).
+568. **The bridge is its contracts file plus main-process handlers; the preload is #20's.** `src/cli-shim-ipc.ts` registers
+     `DESKTOP_CLI_CHANNELS.status|install` on `ipcMain` (from `main.ts`): the sender's frame must be on the daemon's
+     origin (a screen, another site, no frame: refused and logged), no arguments are accepted, and the result is parsed
+     with the contract's schema before it leaves. Nothing can call them until the preload exists. For the merge: the
+     preload exposes `installCli: () => ipcRenderer.invoke(DESKTOP_CLI_CHANNELS.install)` and `cliStatus: () =>
+     ipcRenderer.invoke(DESKTOP_CLI_CHANNELS.status)`, and `DesktopBridge` extends `DesktopCliBridge`.
+569. **At startup the app refreshes its own launcher, and only that.** After the backend starts, `refresh()` rewrites a
+     launcher that has our marker and points elsewhere (the app moved or was updated). It never creates one (installing is
+     the user's choice), never runs when another install is on PATH, and never throws.
+570. **The packaged-app e2e (`e2e/desktop/cli-shim.spec.ts`) runs the repo's installer against the packaged binary.** It
+     imports the installer's sources (the same code `main.ts` uses), points it at the packaged executable and its asar's
+     CLI with a temp home, and runs the launcher like a terminal. It does not click the menu or call the bridge (no
+     preload yet), and the Windows registry is faked in memory so a runner's PATH is never edited. With
+     `OCTOPUS_DESKTOP_APPIMAGE=<file>` it also checks the AppImage launcher against that file. CI's workflow is WS5's
+     and is unchanged: setting that variable where the AppImage is built is a follow-up.
+571. **Known limits, not fixed here.** The NSIS uninstaller does not remove the launcher or the PATH entry, and a deb
+     removal cannot touch a user's `~/.local/bin`: a launcher whose app is gone prints "the desktop app was moved or
+     removed" and exits 127. `ELECTRON_RUN_AS_NODE=1` stays in the environment of what the CLI spawns (as with T3's
+     launcher): the CLI's own children set it themselves; a browser opened by `octopus-diff open` inherits it. Without FUSE
+     every AppImage invocation extracts the whole image (seconds). The mount path itself could not be tried against a real
+     FUSE runtime here (no libfuse2); it is covered with a fake runtime.
+572. **Credits.** `apps/desktop/src/cli-shim.ts` is adapted from T3 Code's `DesktopCliShim.ts` (MIT): added to the `adapted`
+     list in `scripts/credits/acknowledgements.json`, `pnpm credits` run, attribution in the file header.
+
+### Desktop phase C: independent security review of PR #110 (2026-11-13)
+
+574. **The startup refresh rewrites a launcher only when the app it runs is gone** (supersedes the "points elsewhere"
+     condition of #569). It used to retarget the command to whichever copy of the app started last: a downloaded AppImage
+     tried once took it over from the deb and broke it when deleted; two macOS copies flipped it back and forth. Now
+     `launcherApp(content)` reads the app file out of our own launcher (`app='…'` in the sh launchers, `if exist "…" goto run`
+     in the `.cmd`; the formats are unchanged, so every launcher already written keeps working) and `refresh()` writes only
+     when that file is `missing` (`lstat`: a dangling symlink, an unreadable path, or a launcher it cannot read the app from
+     count as "still there": leave it). The menu's Install (user intent) may still retarget a launcher whose app exists.
+575. **The AppImage launcher runs the CLI as a background child and handles INT, TERM and HUP.** A foreground child
+     deferred the trap (nothing stopped it) and SIGHUP skipped the EXIT trap (the mount and the extracted image, about
+     130 MB without FUSE, stayed). Now: `wait` on the child; `trap 'exit 129|130|143' HUP|INT|TERM`; one `cleanup` on EXIT
+     stops the CLI (TERM, KILL after about 5 s), stops the mounter (that unmounts) and removes the work dir. A background job
+     gets `/dev/null` for stdin in a shell without job control, so stdin is handed over on fd 3 (`exec 3<&0`, with a
+     `/dev/null` fallback when stdin is closed). Tested by running the real sh (dash here) with a fake runtime and sending the
+     signals: exit code, CLI gone, mounter gone, work dir empty, a TERM-ignoring CLI killed, stdin reaching the CLI.
+576. **A command that cannot be read is a conflict.** `FileFacts` gains `unreadable`: `lstat` failing for any reason but
+     ENOENT/ENOTDIR (a directory that cannot be searched) or a regular file that cannot be opened (execute-only, 0711). On
+     PATH it refuses like a foreign file (#563: cheaper to refuse than to guess); at the target it already refused. The
+     refusal text says "or one that could not be inspected". A directory, FIFO or socket stays `other` (not a command).
+     Cost: a PATH directory the user cannot search makes the install refuse, naming it.
+577. **Windows PATH entries must be absolute.** `pathCandidates` and `pathContainsDir` drop entries that are not a drive
+     letter plus a separator or UNC: `.`, `bin`, `..\x`, `C:foo` (drive-relative) and `\foo` (current-drive-relative) all
+     depend on the current directory or drive (SEC-03).
+578. **`readTop` opens safely.** `O_RDONLY | O_NOFOLLOW | O_NONBLOCK`, then `fstat` on the descriptor must say regular file.
+     Between `inspect`'s `lstat` and the open the path can become a symlink (not read through now) or a FIFO (a blocking open
+     would hang the app until something writes to it). Any failure is `unreadable`. The `fstat` check is tested with
+     `/dev/zero`, because `readSync` at an offset already fails on a pipe (ESPIPE) and hid it.
+579. **Test seams for the effects, and the vacuous tests replaced.** `createNodeShimFs({ ops })` can replace `linkSync`,
+     `lstatSync`, `renameSync`, `unlinkSync` and `writeFileSync`. New tests: a rename that fails after staging leaves no
+     staging file and the old launcher; a link that fails with EEXIST leaves no staging file and the existing file; the
+     no-hard-links fallback (link fails with EPERM) writes the file, never replaces a file, symlink, dangling symlink or
+     directory, and passes other errors on. The old read-only-directory test (it passed with the cleanup removed) is gone.
+     Each has a mutant.
+580. **(Superseded by #581: the HOME redirection broke the macOS app.) The packaged-app e2e never runs the app with the real home.** `launchApp` / `runApp` build the environment with
+     `isolatedAppEnv(env, dirs)`: HOME, USERPROFILE, LOCALAPPDATA, APPDATA and the XDG directories under the run's temp root
+     (the app rewrites `~/.local/bin/octopus-diff` or `%LOCALAPPDATA%\octopus-diff\bin` at startup). Every launch goes through
+     those two functions, the tamper test's copies included. Unit-tested (`e2e/support/desktop-app-env.test.ts`).
+     `mutation-check.mjs` can now mutate a file under `e2e/` (`e2e:<path>`, with its vitest file in `e2e/support/`).
+581. **`OCTOPUS_DESKTOP_NO_CLI_REFRESH=1` is a test hook that turns the startup refresh off; the packaged e2e no longer fakes HOME**
+     (supersedes #580's approach). The macOS `desktop` job failed twice in a row at `packaged-app.spec.ts:141` ("timed out
+     after 60000 ms waiting for the web UI to be ready"): the daemon and the CLI worked, only the window's UI never became
+     ready. The one change in that path since the green run was #580's redirection of HOME, USERPROFILE, LOCALAPPDATA, APPDATA
+     and XDG_* for the launched app, which (by the likeliest reading; macOS cannot be run here) breaks Chromium's
+     Keychain / `~/Library` use. So the app's environment is left alone on every OS, and the one effect the e2e needs to
+     prevent, a rewrite of a developer's real launcher at startup (#574), is turned off by the app instead:
+     `startupRefresh(shim, env, log)` in `cli-shim-service.ts` (what `main.ts` calls; it never calls `refresh()` directly) does
+     nothing when `env.OCTOPUS_DESKTOP_NO_CLI_REFRESH === '1'` (exactly `1`; any other value is the normal refresh) and logs one
+     line saying so. It is safe-direction only: no value of any variable makes anything get written that the refresh would not
+     write anyway (it never creates a launcher and only retargets one whose app is gone), and the menu's Install and the
+     bridge ignore it. Documented in DESKTOP.md §3.2 as a test hook. In the e2e, `appLaunchEnv(env)` (replaces
+     `isolatedAppEnv` / `ensureHome`) adds the switch and still drops `ELECTRON_RUN_AS_NODE`; `launchApp` and `runApp` pass it, and
+     every GUI launch in `e2e/desktop` (the main flow, the refusals, the kill test, the tamper test and its control copy, the
+     cli-shim spec's app) goes through those two; a test reads the specs and fails if one starts the binary another way. The
+     cli-shim spec keeps its own temp home for the launcher it installs itself (that does not start the GUI app with a fake
+     HOME). Unit tests: the switch (exact value, one log line, `refresh()` not called, nothing written), `main.ts` goes
+     through `startupRefresh`, and the e2e environment; mutants for each. Not verified: the macOS job itself (CI will say).
