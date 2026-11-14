@@ -116,7 +116,7 @@ Settings button) writes a small launcher that runs the app's bundled CLI with `E
 **As built (phase C, #21; DECISIONS #560-#572; `docs/reports/desktop-cli-shim.md`).** `src/cli-shim.ts` (pure: quoting,
 launcher text, marker, location, target, PATH checks, the install/update/refuse decision), `cli-shim-service.ts` (the
 flow over injected effects: `status()`, `install()`, `refresh()`), `cli-shim-fs.ts` (the real filesystem and the Windows
-user-PATH editor), `cli-shim-ipc.ts` (the bridge's main-process handlers). The rules: a frozen marker on line 2 decides
+user-PATH editor), `cli-shim-ipc.ts` (the bridge's main-process handlers, behind the same sender check and zod as every bridge channel, #547). The rules: a frozen marker on line 2 decides
 what is ours; a file at the target that is not ours, or *any* other `octopus-diff` on the terminal's PATH, means nothing
 is written; symlinks are never followed; creation is exclusive and replacement re-checks the marker; the AppImage
 launcher mounts the AppImage file (`--appimage-mount`, extract without FUSE) and runs the CLI inside it; a dmg, a
@@ -148,7 +148,7 @@ worktree root.
 | `platform` | `'darwin' \| 'win32' \| 'linux'` (title bar layout) |
 | `pickFolder({ title, defaultPath })` | `dialog.showOpenDialog({ properties: ['openDirectory'] })` → path or null |
 | `revealPath(worktreeId, relPath)` | `shell.showItemInFolder`, only after the path is checked (below) |
-| `openPath(worktreeId, relPath)` | `shell.openPath` (default app), same check, and never a program (#535) |
+| `openPath(worktreeId, relPath)` | `shell.openPath` (default app), same check, and never a program (#535; the documented deny list, #546) |
 | `openInEditor(worktreeId, relPath, { editor?, line? })` | allowlisted editor URL schemes (`vscode://file/…`, `cursor://file/…`, `zed://file/…`) via `shell.openExternal` (#537) |
 | `setBadge(count)` | dock badge / taskbar overlay / Unity count = unreviewed files |
 | `getPathForFile(file)` | `webUtils.getPathForFile` (drop a folder on the window to add it) |

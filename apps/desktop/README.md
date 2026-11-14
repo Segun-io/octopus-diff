@@ -98,7 +98,7 @@ File → Install 'octopus-diff' Command… writes a small launcher that runs thi
 plus a user-PATH entry (Windows, no admin). The launcher's second line is a marker: only files with it are ever rewritten
 (the app does that itself at startup if it moved), and nothing is installed when another `octopus-diff` (an npm install)
 is on PATH or in the way. Code: `src/cli-shim.ts` (pure), `cli-shim-service.ts`, `cli-shim-fs.ts`, `cli-shim-ipc.ts`
-(the bridge's `installCli` / `cliStatus` handlers; the preload comes with #20). Tests: `test/cli-shim*.test.ts` (the sh
+(the bridge's `installCli` / `cliStatus` handlers, on the bridge's guard from `ipc.ts`, DECISIONS #547). Tests: `test/cli-shim*.test.ts` (the sh
 launchers are run for real, against hostile paths and a fake AppImage runtime) and, against the packaged app,
 `pnpm --filter @octopus-diff/e2e test:e2e:desktop` (`desktop/cli-shim.spec.ts`; `OCTOPUS_DESKTOP_APPIMAGE=<file>` adds the
 AppImage check).

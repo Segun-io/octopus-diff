@@ -6103,6 +6103,8 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
 572. **Credits.** `apps/desktop/src/cli-shim.ts` is adapted from T3 Code's `DesktopCliShim.ts` (MIT): added to the `adapted`
      list in `scripts/credits/acknowledgements.json`, `pnpm credits` run, attribution in the file header.
 
+### Desktop phase C: independent security review of PR #110 (2026-11-13)
+
 574. **The startup refresh rewrites a launcher only when the app it runs is gone** (supersedes the "points elsewhere"
      condition of #569). It used to retarget the command to whichever copy of the app started last: a downloaded AppImage
      tried once took it over from the deb and broke it when deleted; two macOS copies flipped it back and forth. Now
@@ -6169,5 +6171,45 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      home directory). The main process still validates the sender and the result (`cli-shim-ipc.ts`); the preload's
      shape check is light on purpose (no zod in the 4 KB preload). A mutant removes the gesture check (`mutation-check`).
      The Settings button for the command is web work and is not part of this change.
-||||||| 4756834
-### Desktop phase C: independent security review of PR #110 (2026-11-13)
+
+### Desktop phase C: independent security review of PR #113 (2026-11-14)
+
+546. **`openPath`'s deny list is documented and complete for Windows** (medium). The review found Windows types that run
+     code and were let through: `chm` (help run by hh.exe, script included), `hlp`, `website`, `msu`, `theme` /
+     `themepack` / `deskthemepack` (ThemeBleed), `xbap`, `ins`, `isp`, `shb`, `shs`, `ws`, the Access types (`ade`,
+     `adp`, `mda`, `mde`, `accde`), `vsix`, `wsb`, `msh` / `mshxml`, `psc1`, `pyo`, `py3`. Files checked out by git carry
+     no Mark-of-the-Web, so Windows' "downloaded file" prompts do not protect them. `UNSAFE_OPEN_EXTENSION_GROUPS` now
+     holds: Microsoft's **Outlook Level-1 blocked-attachment list, complete**; Windows extras (theme packs, app and
+     extension packages, shell search/library files, PowerShell modules, Access databases and runtime files, `iso` /
+     `img` disk images that mount and autorun, OneNote containers, **macro-enabled Office files** (without
+     Mark-of-the-Web Office's internet-macro block does not apply), `mjs` / `cjs`, `py3`); scripts with registered
+     interpreters; macOS (bundles, Terminal launchers incl. `.term`, Automator and `.shortcut`, installers, AppleScript,
+     location files, configuration profiles, `.widget`, libraries); Linux (desktop launchers, AppImages, packages incl.
+     `flatpak` / `flatpakrepo`, binaries). Still a deny list on purpose (an allowlist would refuse the source files
+     people open; "Open in editor" stays for everything). Side effect, accepted: `.asp(x)`, `.cer` / `.crt` / `.der`,
+     `.tmp`, `.cab` no longer open with the default app. `test/open-safety.test.ts` holds its **own copy** of the
+     Level-1 list, the review's list and the extras, so dropping an extension from the source fails it; 21 mutants.
+547. **The command installer's channels use the bridge's guard** (low). #21's `cli-shim-ipc.ts` checked only the
+     frame's origin against the raw `uiOrigin` (not gated on the UI showing), not the window or the main frame, and threw
+     across IPC; that contradicted #532/#533 once the preload exposed `installCli` / `cliStatus`. `ipc.ts` now exports
+     `createGuard` (the sender check, zod on the exact argument tuple, refusals logged with the reason only), which
+     `createBridgeHandlers` and the new `createCliShimHandlers` both use; `bridge-main.ts` registers the CLI channels with
+     the same `trusted()` as every other channel (`main.ts` no longer registers them; `isTrustedSender` and
+     `registerCliShimIpc` are gone). A refusal, a result that breaks the contract or a shim that throws becomes a value
+     in the contract's shape (`cliStatus`: `{ state: 'unavailable', reason }`; `installCli`: `{ outcome: 'failed',
+     status: unavailable, message }`), never a throw. #21's four mutants of the old check were replaced by eight.
+548. **`pickFolder`'s `defaultPath` never reaches the network** (low, Windows). `AbsolutePathSchema` accepts anything
+     starting with `/`, so `//attacker.example/share` passed, and the Windows dialog would connect over SMB (an NTLM
+     hash leak) from a script within seconds of a click. The hint is now kept only if it is a local absolute path
+     (Windows: a drive path `^[A-Za-z]:[\\/]`, so `//`, `\\` and `\\?\` are out; elsewhere one leading `/`) **and then**
+     an existing directory (`stat` runs only after the path check, so a UNC path is never touched); otherwise it is
+     dropped and the dialog opens where the OS chooses. Tests inject `platform: 'win32'` and assert `stat` was never
+     called for the UNC forms; five mutants.
+549. **Test gaps closed** (the review's surviving mutants): a command listener receives exactly one argument, never the
+     IPC event (whose `sender` is `ipcRenderer`); the preload maps a malformed main-process answer to a refusal
+     (`isResult`) and `pickFolder` passes strings only; the 32 MiB clipboard limit and the 200-character dialog title
+     limit; a rejected `shell.openPath` becomes a `failed` value and is logged without the path. A test and a mutant
+     each. The equivalent mutants the review listed (the lexical `isInside` backstop, `relPath.length > 4096`, the
+     editor URL's userinfo/port checks, the command `typeof`) are not added.
+550. **The PR #110 merge left a stray diff3 marker in this file** (`||||||| 4756834`, with the PR #110 review heading
+     moved below it). Removed, and the heading put back before #574 where `main` has it; no entry text changed.
