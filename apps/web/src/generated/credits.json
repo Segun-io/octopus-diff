@@ -2252,6 +2252,10 @@
         {
           "path": "apps/web/src/lib/selectionPosition.ts",
           "what": "Placement of the floating Copy bar next to the pointer, after resolveSelectionActionPosition in apps/web/src/lib/selectionActions.ts."
+        },
+        {
+          "path": "apps/desktop/src/cli-shim.ts",
+          "what": "Adapted from apps/desktop/src/app/DesktopCliShim.ts: the shell and cmd quoting helpers, the Windows .cmd launcher layout (a goto instead of a parenthesized block, UTF-8 code page only for non-ASCII paths) and the AppImage launcher that mounts the image itself."
         }
       ],
       "design": "The sidebar (folders, the Settled shelf, settling by hand), the folder picker and the command palette's browse mode are modelled on T3 Code's UI. The forge integration (remote recognition, CLI-login refinement for self-hosted hosts, the GitHub base-repository order, the merge request fields and PR glyphs) follows T3 Code's source-control packages.",

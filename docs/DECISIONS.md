@@ -6018,3 +6018,98 @@ Numbers: #233-#239 (after #229-#232; other open branches may use these numbers).
      any successful reveal/open/editor launch with a real editor installed, real drag-and-drop from a file manager
      (unit and jsdom tests only), and the native menu items' clicks (their routing is unit tested). The CI `desktop`
      job runs the packaged spec on macOS and Windows and is the first real test there.
+## Desktop phase C: the `octopus-diff` command from the app (session, 2026-11-13; roadmap #21)
+
+560. **`contracts:` the CLI-shim bridge lives in its own file, `packages/contracts/src/desktop-cli.ts`.** Another session
+     creates `desktop.ts` (`DesktopBridge`, #20) at the same time, so this one adds a separate additive file and one
+     `export *` line in `index.ts` instead of editing `desktop.ts`. It holds `DESKTOP_CLI_CHANNELS` (the two IPC
+     channel names, shared by the preload and the main process), the zod schemas `DesktopCliStatusSchema` and
+     `DesktopCliInstallResultSchema`, and `DesktopCliBridge { installCli(); cliStatus() }`. #20's `DesktopBridge`
+     should `extends DesktopCliBridge`. Nothing existing changed.
+561. **The launcher's second line is a frozen marker, and ownership is decided by that line alone.** Every launcher
+     (sh, cmd, AppImage) has `# <MARKER>` / `rem <MARKER>` on line 2 (`MARKER` in `src/cli-shim.ts`, ASCII). A file is
+     "ours" (`isOwnLauncher`) only when that exact comment is one of the first four lines: the text elsewhere, inside a
+     longer line, or in a file of another kind does not count. The marker is never reworded, because an older app's
+     launcher is recognised by it (that is how a newer app may rewrite it after an update moved the app). T3 Code uses
+     `content.includes(MARKER)` anywhere in the file; ours is stricter.
+562. **Never overwrite, in four layers.** (1) `decide` refuses when anything at the launcher's path is not our file
+     (an npm shim, a directory, a symlink) and when *any* other `octopus-diff` is on PATH, even if our own launcher is
+     already installed (a stale launcher next to a real install is left as it is). (2) A symlink is never followed or
+     read (`lstat`): an npm global prefix of `~/.local` links its bin, and a link to our launcher is still "not ours".
+     (3) A new launcher is created *exclusively*: a staged file hard-linked into place, which fails with EEXIST when
+     anything is there (a dangling symlink too), with an exclusive-create fallback where hard links do not exist. (4) An
+     update re-reads the file for the marker right before the atomic `rename` (`replaceOwn`); the few microseconds between
+     that read and the rename are the only window left, and only for a file that was ours a moment ago. A write that
+     loses a race to a real file is reported as "refused", never as an error. Installs, updates and the startup refresh
+     run one at a time (a promise queue), so the menu, the bridge and the refresh cannot race each other.
+563. **"Is another install on PATH" uses the PATH a terminal has.** On macOS and Linux a GUI launch has a minimal PATH, so
+     the check uses the login-shell PATH `main.ts` already resolves for the backend (DECISIONS #496-#497), awaited
+     before the first answer; on Windows the process PATH. Only absolute entries are searched (a relative or empty
+     entry means the current directory: never, PLAN SEC-03); on Windows every spelling a command can have
+     (`octopus-diff`, `.cmd`, `.exe`, `.bat`, `.com`, `.ps1`) in every entry, our own file excluded. A directory of that
+     name, a missing file and our own launcher elsewhere are not conflicts; a non-executable regular file is (cheaper to
+     refuse than to guess).
+564. **AppImage: the launcher runs the AppImage file with `--appimage-mount`, as T3 Code does; it does not run
+     `$APPIMAGE` with the CLI entry as an argument.** The issue (and DESKTOP §3.2) said "run the AppImage file itself".
+     Running the file with `ELECTRON_RUN_AS_NODE=1` would start the AppRun, which starts Electron on the arguments:
+     the CLI entry would have to be named, and its path is inside a mount whose name changes on every run. So the
+     launcher mounts the image (`--appimage-mount` prints the mount point and stays up), runs the binary and the entry
+     *relative to the mount* (`resources/app.asar/dist/cli/index.js`), and kills the mounter on exit. Without FUSE (the
+     runtime cannot mount) it extracts the image into a temp dir for that run. Which run is an AppImage: `$APPIMAGE` and
+     `$APPDIR` are both set, absolute, and `process.execPath` is inside `$APPDIR`; a stale `$APPIMAGE` from another
+     environment is ignored. The polling loop reads the mount file with `read -r` (only a whole line counts) after
+     creating it, so a half-written path or the job's late redirection cannot be mistaken for a mount (found by running
+     it against a real AppImage: stderr noise).
+565. **Places that will not stay are refused, not installed.** A launcher written from a macOS app on a mounted dmg
+     (`/Volumes/…`) or a Gatekeeper-translocated one (`/AppTranslocation/`), or from a `.mount_*` run whose AppImage file is
+     unknown, would point at a path that is gone soon; the status is `unavailable` with "move it to Applications, open it
+     from there". A development run (`electron .`, `--backend source`) is unavailable too: there is no installed app.
+566. **Windows launcher and user PATH.** `octopus-diff.cmd` under `%LOCALAPPDATA%\octopus-diff\bin` (the home directory's
+     `AppData\Local` when it is unset or relative), CRLF, `setlocal EnableExtensions DisableDelayedExpansion`,
+     `if exist "<exe>" goto run` (a `goto`, not a block: "Program Files (x86)"), `%` doubled even inside quotes, and a
+     path with `"`, CR, LF or NUL refused when the launcher is rendered (a Windows path cannot hold them). A non-ASCII path
+     switches the console to UTF-8 (`chcp 65001`) *before* the first such line (cmd reads the file line by line in the
+     current code page) and restores it on every exit; the marker line stays ASCII. The user PATH entry is edited through
+     the system PowerShell by absolute path (`-EncodedCommand`, no profile), reading the raw registry value (`%VAR%`
+     unexpanded, `REG_EXPAND_SZ` kept) and appending the directory; the new value travels in an environment variable, never
+     in the script or argv (a path with quotes or `$(…)` cannot become code), an empty value is refused, and
+     `WM_SETTINGCHANGE` is broadcast so a new terminal sees it. A failed PATH edit still installs the launcher and tells
+     the user which directory to add. **Not run on Windows here** (see the report).
+567. **The menu item is File → Install 'octopus-diff' Command…, on every platform, with no accelerator.** (VS Code and
+     T3 put theirs in a palette; this app has none.) A dialog shows the outcome (`outcomeTitle`) and the message, which
+     says when the directory is not on PATH and gives the line to add on macOS/Linux (nothing edits a shell profile).
+     The Settings button is web work (WS3, #20).
+568. **The bridge is its contracts file plus main-process handlers; the preload is #20's.** `src/cli-shim-ipc.ts` registers
+     `DESKTOP_CLI_CHANNELS.status|install` on `ipcMain` (from `main.ts`): the sender's frame must be on the daemon's
+     origin (a screen, another site, no frame: refused and logged), no arguments are accepted, and the result is parsed
+     with the contract's schema before it leaves. Nothing can call them until the preload exists. For the merge: the
+     preload exposes `installCli: () => ipcRenderer.invoke(DESKTOP_CLI_CHANNELS.install)` and `cliStatus: () =>
+     ipcRenderer.invoke(DESKTOP_CLI_CHANNELS.status)`, and `DesktopBridge` extends `DesktopCliBridge`.
+569. **At startup the app refreshes its own launcher, and only that.** After the backend starts, `refresh()` rewrites a
+     launcher that has our marker and points elsewhere (the app moved or was updated). It never creates one (installing is
+     the user's choice), never runs when another install is on PATH, and never throws.
+570. **The packaged-app e2e (`e2e/desktop/cli-shim.spec.ts`) runs the repo's installer against the packaged binary.** It
+     imports the installer's sources (the same code `main.ts` uses), points it at the packaged executable and its asar's
+     CLI with a temp home, and runs the launcher like a terminal. It does not click the menu or call the bridge (no
+     preload yet), and the Windows registry is faked in memory so a runner's PATH is never edited. With
+     `OCTOPUS_DESKTOP_APPIMAGE=<file>` it also checks the AppImage launcher against that file. CI's workflow is WS5's
+     and is unchanged: setting that variable where the AppImage is built is a follow-up.
+571. **Known limits, not fixed here.** The NSIS uninstaller does not remove the launcher or the PATH entry, and a deb
+     removal cannot touch a user's `~/.local/bin`: a launcher whose app is gone prints "the desktop app was moved or
+     removed" and exits 127. `ELECTRON_RUN_AS_NODE=1` stays in the environment of what the CLI spawns (as with T3's
+     launcher): the CLI's own children set it themselves; a browser opened by `octopus-diff open` inherits it. Without FUSE
+     every AppImage invocation extracts the whole image (seconds). The mount path itself could not be tried against a real
+     FUSE runtime here (no libfuse2); it is covered with a fake runtime.
+572. **Credits.** `apps/desktop/src/cli-shim.ts` is adapted from T3 Code's `DesktopCliShim.ts` (MIT): added to the `adapted`
+     list in `scripts/credits/acknowledgements.json`, `pnpm credits` run, attribution in the file header.
+
+## Desktop phase C: merging #20 and #21 (2026-11-14)
+
+573. **The two phase C branches meet in the bridge.** `DesktopBridge` (`desktop.ts`) now `extends DesktopCliBridge`
+     (`desktop-cli.ts`), so the web feature-detects `installCli()` / `cliStatus()` like the other methods. The preload's
+     `bridge.ts` calls the two `DESKTOP_CLI_CHANNELS`; `cliStatus` answers `unavailable` and `installCli` answers `failed`
+     (a value, never a throw) when the main process fails or sends something that is not the contract's shape, and
+     `installCli` needs a click or key press like every other action that acts on the OS (it writes a file in the
+     home directory). The main process still validates the sender and the result (`cli-shim-ipc.ts`); the preload's
+     shape check is light on purpose (no zod in the 4 KB preload). A mutant removes the gesture check (`mutation-check`).
+     The Settings button for the command is web work and is not part of this change.

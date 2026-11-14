@@ -11,6 +11,7 @@
  */
 import { spawn } from 'node:child_process';
 import { readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { DesktopCommand } from '@octopus-diff/contracts';
@@ -18,6 +19,7 @@ import {
   app,
   BrowserWindow,
   dialog,
+  ipcMain,
   Menu,
   type MessageBoxOptions,
   screen,
@@ -37,8 +39,11 @@ import {
   isReadyFor,
   type ReadyInfo,
 } from './backend.js';
-import { backendCommand } from './backend-command.js';
+import { backendCommand, cliBundleEntry } from './backend-command.js';
 import { installBridge } from './bridge-main.js';
+import { createNodeShimFs, createWindowsUserPath } from './cli-shim-fs.js';
+import { outcomeTitle, registerCliShimIpc } from './cli-shim-ipc.js';
+import { createCliShim } from './cli-shim-service.js';
 import {
   addProject,
   addScanRoot,
@@ -138,6 +143,29 @@ if (primary && app.isPackaged && app.commandLine.hasSwitch('no-sandbox')) {
       'sandboxed from Node. Prefer the .deb on systems that restrict user namespaces.',
   );
 }
+
+/**
+ * The PATH a terminal has, for the `octopus-diff` command installer (is ~/.local/bin on it, is an
+ * npm install on it): the login shell's once it resolves (main() below), the inherited one until then.
+ */
+let terminalPath: Promise<string> = Promise.resolve(process.env.PATH ?? process.env.Path ?? '');
+
+/** The `octopus-diff` command (docs/DESKTOP.md §3.2, roadmap #21): only the installed app offers it. */
+const cliShim = createCliShim({
+  platform: process.platform,
+  env: process.env,
+  homedir: homedir(),
+  execPath: process.execPath,
+  entry: cliBundleEntry(distDir),
+  isPackaged: app.isPackaged && args.backend === 'bundle',
+  fs: createNodeShimFs(),
+  pathValue: () => terminalPath,
+  ...(process.platform === 'win32'
+    ? { userPath: createWindowsUserPath({ env: process.env }) }
+    : {}),
+  log: (text) => log.note(text),
+});
+
 if (primary) {
   app.on('second-instance', () => focusWindow());
   void app.whenReady().then(main);
@@ -427,6 +455,20 @@ function pageCommand(command: DesktopCommand, fallbackScript: string): void {
   else runInPage(fallbackScript);
 }
 
+async function installCommand(): Promise<void> {
+  const result = await cliShim.install();
+  const ok =
+    result.outcome === 'installed' ||
+    result.outcome === 'updated' ||
+    result.outcome === 'unchanged';
+  await message({
+    type: ok ? 'info' : result.outcome === 'failed' ? 'error' : 'warning',
+    message: outcomeTitle(result.outcome),
+    detail: result.message,
+    buttons: ['OK'],
+  });
+}
+
 function installMenu(): void {
   const template = buildMenuTemplate({
     platform: process.platform,
@@ -440,6 +482,7 @@ function installMenu(): void {
       undo: () => pageCommand('undo', undoScript(process.platform)),
       showLog: () => void shell.openPath(log.path),
       retryBackend,
+      installCommand: () => void installCommand(),
     },
   });
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
@@ -460,13 +503,22 @@ async function main(): Promise<void> {
     log: (line) => log.note(line),
   });
   installMenu();
+  // The command installer's IPC (the preload's bridge calls it: installCli / cliStatus).
+  registerCliShimIpc({
+    ipcMain,
+    shim: cliShim,
+    uiOrigin: () => uiOrigin,
+    log: (text) => log.note(text),
+  });
   createWindow();
 
-  const resolved = await resolveShellPath({
+  const shellPath = resolveShellPath({
     platform: process.platform,
     env: process.env,
     run: defaultRunShell,
   });
+  terminalPath = shellPath.then((r) => r.path);
+  const resolved = await shellPath;
   log.note(
     resolved.source === 'login-shell'
       ? `PATH from the login shell (${resolved.shell})`
@@ -509,6 +561,8 @@ async function main(): Promise<void> {
     onState: render,
   });
   backend.start();
+  // After an update moved the app, point our own launcher (never another file) at it again.
+  void cliShim.refresh();
 }
 
 app.on('window-all-closed', () => {

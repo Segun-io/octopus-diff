@@ -15,7 +15,7 @@ repository; the daemon does all of that.
 | `pnpm --filter @octopus-diff/desktop test` | Unit tests (no Electron binary, no display) |
 | `pnpm --filter @octopus-diff/desktop smoke:backend` | The real supervisor against the built CLI under Electron's Node (no display) |
 | `pnpm --filter @octopus-diff/desktop smoke:app` | The real app window, inspected over CDP (needs a display; WSL: `DISPLAY=:0`) |
-| `pnpm --filter @octopus-diff/desktop mutation-check` | Mutates the security policy, the packaged-build argument rules and the supervisor rules; the unit tests must catch each mutation |
+| `pnpm --filter @octopus-diff/desktop mutation-check` | Mutates the security policy, the packaged-build argument rules, the supervisor rules and the `octopus-diff` command's marker/never-overwrite rules; the unit tests must catch each mutation |
 | `pnpm --filter @octopus-diff/desktop run package [-- --arch x64,arm64] [--dir]` | UNSIGNED installers in `release/` (after `pnpm build`): AppImage + deb, dmg + zip, or NSIS for this OS (`--platform` to pick another; `--dir` = only the unpacked app) |
 | `pnpm --filter @octopus-diff/desktop run check-fuses <app>` | Asserts the fuses (and the embedded asar integrity data on macOS/Windows) of a packaged app |
 | `pnpm --filter @octopus-diff/e2e test:e2e:desktop` | The packaged-app smoke (`e2e/desktop`): the app in `release/<platform>-unpacked`, or `OCTOPUS_DESKTOP_APP=<app>` |
@@ -88,3 +88,17 @@ The `window.octopusDesktop` bridge (phase C, #20; DESKTOP §3.4, DECISIONS #530-
 | `src/editor-url.ts` | `vscode://` / `cursor://` / `zed://` file URLs and their allowlist |
 | `src/badge.ts`, `src/page-commands.ts`, `src/worktrees-api.ts` | Badge plan, menu-command routing, `GET /api/projects` |
 | `src/bridge-main.ts` | Wires all of it to Electron (`ipcMain`, shell, dialog, clipboard, badge) |
+No preload and no IPC yet: the `window.octopusDesktop` bridge is phase C (#20).
+
+## The `octopus-diff` command (phase C, roadmap #21)
+
+File → Install 'octopus-diff' Command… writes a small launcher that runs this app's bundled CLI with
+`ELECTRON_RUN_AS_NODE=1`, so `octopus-diff add .` in a terminal talks to the app's daemon: `~/.local/bin/octopus-diff`
+(macOS, Linux; the dialog says if that directory is not on PATH) or `%LOCALAPPDATA%\octopus-diff\bin\octopus-diff.cmd`
+plus a user-PATH entry (Windows, no admin). The launcher's second line is a marker: only files with it are ever rewritten
+(the app does that itself at startup if it moved), and nothing is installed when another `octopus-diff` (an npm install)
+is on PATH or in the way. Code: `src/cli-shim.ts` (pure), `cli-shim-service.ts`, `cli-shim-fs.ts`, `cli-shim-ipc.ts`
+(the bridge's `installCli` / `cliStatus` handlers; the preload comes with #20). Tests: `test/cli-shim*.test.ts` (the sh
+launchers are run for real, against hostile paths and a fake AppImage runtime) and, against the packaged app,
+`pnpm --filter @octopus-diff/e2e test:e2e:desktop` (`desktop/cli-shim.spec.ts`; `OCTOPUS_DESKTOP_APPIMAGE=<file>` adds the
+AppImage check).

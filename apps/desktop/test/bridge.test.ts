@@ -1,3 +1,4 @@
+import { DESKTOP_CLI_CHANNELS } from '@octopus-diff/contracts';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { type BridgeEnv, createDesktopBridge } from '../src/bridge.js';
 import { BRIDGE_CHANNELS, COMMAND_CHANNEL } from '../src/ipc-channels.js';
@@ -142,5 +143,56 @@ describe('createDesktopBridge (the preload API)', () => {
     b.onCommand((c) => got.push(c));
     listeners.get(COMMAND_CHANNEL)?.({}, 'undo');
     expect(got).toEqual(['undo']);
+  });
+
+  describe('the command installer (#21)', () => {
+    const status = {
+      state: 'not-installed',
+      path: '/home/a/.local/bin/octopus-diff',
+      onPath: true,
+    };
+    const installed = { outcome: 'installed', status, message: 'Installed.' };
+
+    it('asks the main process for the status and the install, on their channels', async () => {
+      const b = createDesktopBridge(
+        env({
+          ipc: {
+            invoke: async (channel) => {
+              rec.invoked.push([channel, []]);
+              return channel === DESKTOP_CLI_CHANNELS.status ? status : installed;
+            },
+            send: () => undefined,
+            on: () => undefined,
+          },
+        }),
+      );
+      expect(await b.cliStatus()).toEqual(status);
+      expect(await b.installCli()).toEqual(installed);
+      expect(rec.invoked.map(([c]) => c)).toEqual([
+        DESKTOP_CLI_CHANNELS.status,
+        DESKTOP_CLI_CHANNELS.install,
+      ]);
+    });
+
+    it('does not install without a click or key press (and does not even ask)', async () => {
+      active = false;
+      const b = createDesktopBridge(env());
+      const result = await b.installCli();
+      expect(result.outcome).toBe('failed');
+      expect(rec.invoked).toEqual([]);
+    });
+
+    it('answers with a value, never a throw, when the main process fails or sends junk', async () => {
+      const bad = (invoke: BridgeEnv['ipc']['invoke']) =>
+        createDesktopBridge(env({ ipc: { invoke, send: () => undefined, on: () => undefined } }));
+      const rejecting = bad(async () => {
+        throw new Error('boom');
+      });
+      expect((await rejecting.cliStatus()).state).toBe('unavailable');
+      expect((await rejecting.installCli()).outcome).toBe('failed');
+      const junk = bad(async () => 42);
+      expect((await junk.cliStatus()).state).toBe('unavailable');
+      expect((await junk.installCli()).outcome).toBe('failed');
+    });
   });
 });

@@ -3,6 +3,8 @@ import {
   createApiClient,
   type DesktopActionResult,
   type DesktopBridge,
+  type DesktopCliInstallResult,
+  type DesktopCliStatus,
   type DesktopCommand,
   TEST_IDS,
 } from '@octopus-diff/contracts';
@@ -65,6 +67,12 @@ class FakeBridge implements DesktopBridge {
     this.calls.push(['copyText', [text]]);
     return this.copied;
   };
+  cliStatus = async (): Promise<DesktopCliStatus> => ({ state: 'unavailable', reason: 'test' });
+  installCli = async (): Promise<DesktopCliInstallResult> => ({
+    outcome: 'unavailable',
+    status: { state: 'unavailable', reason: 'test' },
+    message: 'test',
+  });
   onCommand = (listener: (command: DesktopCommand) => void) => {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);

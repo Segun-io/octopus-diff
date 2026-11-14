@@ -10,9 +10,12 @@
  * main process still checks everything itself (`ipc.ts`). Nothing here throws to the page.
  */
 import {
+  DESKTOP_CLI_CHANNELS,
   DESKTOP_COMMANDS,
   type DesktopActionResult,
   type DesktopBridge,
+  type DesktopCliInstallResult,
+  type DesktopCliStatus,
   type DesktopCommand,
   type DesktopPlatform,
 } from '@octopus-diff/contracts';
@@ -44,6 +47,30 @@ const FAILED: DesktopActionResult = {
   reason: 'failed',
   message: 'The desktop app did not answer.',
 };
+
+const CLI_UNANSWERED: DesktopCliStatus = {
+  state: 'unavailable',
+  reason: 'The desktop app did not answer.',
+};
+
+function isCliStatus(value: unknown): value is DesktopCliStatus {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    typeof (value as { state?: unknown }).state === 'string'
+  );
+}
+
+function isCliResult(value: unknown): value is DesktopCliInstallResult {
+  const v = value as { outcome?: unknown; message?: unknown; status?: unknown };
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    typeof v.outcome === 'string' &&
+    typeof v.message === 'string' &&
+    isCliStatus(v.status)
+  );
+}
 
 function isResult(value: unknown): value is DesktopActionResult {
   return (
@@ -94,6 +121,29 @@ export function createDesktopBridge(env: BridgeEnv): DesktopBridge {
         return typeof p === 'string' && p !== '' ? p : null;
       } catch {
         return null;
+      }
+    },
+    async cliStatus() {
+      try {
+        const result = await env.ipc.invoke(DESKTOP_CLI_CHANNELS.status);
+        return isCliStatus(result) ? result : CLI_UNANSWERED;
+      } catch {
+        return CLI_UNANSWERED;
+      }
+    },
+    async installCli() {
+      const failed = (message: string): DesktopCliInstallResult => ({
+        outcome: 'failed',
+        status: CLI_UNANSWERED,
+        message,
+      });
+      // Writes a file in the user's home: only from a click or key press, like the other actions.
+      if (!env.hasUserActivation()) return failed('Only available from a click or a key press.');
+      try {
+        const result = await env.ipc.invoke(DESKTOP_CLI_CHANNELS.install);
+        return isCliResult(result) ? result : failed('The desktop app did not answer.');
+      } catch {
+        return failed('The desktop app did not answer.');
       }
     },
     async copyText(text) {

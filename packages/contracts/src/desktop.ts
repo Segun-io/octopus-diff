@@ -9,6 +9,7 @@
  * are named by `worktreeId` + a repo-relative path, resolved through the daemon's API and checked
  * to stay inside that worktree (symlinks included).
  */
+import type { DesktopCliBridge } from './desktop-cli.js';
 
 export type DesktopPlatform = 'darwin' | 'win32' | 'linux';
 
@@ -70,7 +71,7 @@ export interface DesktopOpenInEditorOptions {
 export const DESKTOP_COMMANDS = ['open-settings', 'refresh', 'undo'] as const;
 export type DesktopCommand = (typeof DESKTOP_COMMANDS)[number];
 
-export interface DesktopBridge {
+export interface DesktopBridge extends DesktopCliBridge {
   /** Bumped only on breaking changes to this interface. */
   readonly version: 1;
   /** The OS, for the title bar layout (`data-desktop-platform` on `<html>`). */
