@@ -112,6 +112,18 @@ Settings button) writes a small launcher that runs the app's bundled CLI with `E
 - Quote paths for `sh` and `cmd` (T3's `shellWord` / `cmdWord`). Paths with non-ASCII characters need care on
   Windows `.cmd`.
 
+**As built (phase C, #21; DECISIONS #560-#572; `docs/reports/desktop-cli-shim.md`).** `src/cli-shim.ts` (pure: quoting,
+launcher text, marker, location, target, PATH checks, the install/update/refuse decision), `cli-shim-service.ts` (the
+flow over injected effects: `status()`, `install()`, `refresh()`), `cli-shim-fs.ts` (the real filesystem and the Windows
+user-PATH editor), `cli-shim-ipc.ts` (the bridge's main-process handlers). The rules: a frozen marker on line 2 decides
+what is ours; a file at the target that is not ours, or *any* other `octopus-diff` on the terminal's PATH, means nothing
+is written; symlinks are never followed; creation is exclusive and replacement re-checks the marker; the AppImage
+launcher mounts the AppImage file (`--appimage-mount`, extract without FUSE) and runs the CLI inside it; a dmg, a
+translocated app and a development run are refused; the startup refresh rewrites a launcher only when the app it names is gone (#574). **Test hook:** with `OCTOPUS_DESKTOP_NO_CLI_REFRESH=1` in its environment the app skips that startup refresh (one log line); the packaged-app e2e sets it on every launch so a developer's real `~/.local/bin/octopus-diff` is never rewritten, without faking HOME (which breaks Chromium on macOS, #581). No value of any variable can make the app write a launcher; the menu's Install ignores it. Menu: File → Install 'octopus-diff' Command…; the app also rewrites
+its own stale launcher at startup. Verified here on Linux x64 (deb layout via `release/linux-unpacked`, a real AppImage
+by extraction); macOS, Windows, the dmg and the NSIS installer are verified only by CI's unit tests (and not at all for
+the registry edit).
+
 ### 3.3 Renderer and the auth token
 
 - Load `authUrl` from the ready line. `apps/web/src/api/token.ts` already moves the fragment into `localStorage`
@@ -161,7 +173,9 @@ New stream **WS6 — desktop**, owning `apps/desktop/` (package `@octopus-diff/d
 apps/desktop/
   src/main.ts            app lifecycle, single-instance lock, menus, window state, security policy
   src/backend.ts         supervisor: spawn the CLI (RUN_AS_NODE), fd 3 ready line, stdin lifeline, restart/backoff
-  src/cli-shim.ts        install/inspect the `octopus-diff` launcher (marker, sh/cmd quoting, AppImage)
+  src/cli-shim.ts        pure: the `octopus-diff` launcher (marker, sh/cmd quoting, AppImage), PATH checks, the decision
+  src/cli-shim-service.ts, cli-shim-fs.ts, cli-shim-ipc.ts
+                         the install flow over injected effects, the real fs + Windows user PATH, the bridge handlers (#21)
   src/preload.cts        contextBridge (bundled to CJS; sandboxed preloads can't be ESM)
   src/ipc.ts             handlers: sender-origin check, zod validation, path check
   src/shell-env.ts       login-shell PATH resolution (macOS/Linux GUI launches)
@@ -274,7 +288,7 @@ The daemon (WS2) and git-core (WS1) need **no changes**.
 | **A0. CLI hooks** (WS5 + lead, small) | `--ready-fd`, `--exit-with-stdin`, reusable bundle step, `ServeReadySchema` | CLI tests cover started/attached ready lines and stdin-EOF shutdown on all OSes in CI |
 | **A. Shell MVP** (1–2 sessions; **done 2026-11-13**) | `apps/desktop` scaffold, backend supervisor (spawn, ready line, attach/start, restart, shutdown), window loads `authUrl`, the §5 security baseline, single instance (a second launch focuses the window), window-state persistence, menus, shell-env PATH, git-missing screen, logs | `pnpm --filter @octopus-diff/desktop start` opens the app with the user's projects; with `octopus-diff serve` already running it attaches and quitting leaves that daemon up; otherwise `octopus-diff status` sees the app's daemon and quitting stops it; killing Electron leaves no orphan daemon; unit tests for the supervisor, nav policy, IPC validation |
 | **B. Packaging** (1 session; **implemented 2026-11-13**, Linux verified here, macOS/Windows in CI) | Shared CLI bundle in the app, electron-builder config, fuses, asarUnpack, icons, CI matrix, Playwright Electron smoke in `e2e/` | The AppImage runs on a clean Linux VM and the dmg on macOS (unsigned, with the right-click → Open workaround); smoke test green; the read-only proof harness passes against the packaged app |
-| **C. Native integration + CLI shim** (1 session, WS3 + WS6) | Native folder dialog, drag-to-add, reveal/open/open-in-editor with the path check, macOS title bar, unreviewed badge, external links; install the `octopus-diff` command (§3.2) | Every bridge method is covered by tests; the shim works from deb, dmg, NSIS and AppImage installs and never overwrites an npm install; the browser build is unchanged (existing e2e green) |
+| **C. Native integration + CLI shim** (1 session, WS3 + WS6; the CLI shim, #21, is implemented 2026-11-13) | Native folder dialog, drag-to-add, reveal/open/open-in-editor with the path check, macOS title bar, unreviewed badge, external links; install the `octopus-diff` command (§3.2) | Every bridge method is covered by tests; the shim works from deb, dmg, NSIS and AppImage installs and never overwrites an npm install; the browser build is unchanged (existing e2e green) |
 | **D. Windows + WSL** (1–2 sessions) | Windows app with a WSL-distro backend (§6); distro picker in Settings | From Windows, the app shows repos inside WSL with live updates |
 | **E. Release** (needs the user) | Signing, notarization, auto-update, name, first public release | The user signs off |
 

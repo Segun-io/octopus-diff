@@ -145,7 +145,7 @@ export function launchApp(
       '--remote-debugging-pipe',
       ...extra,
     ],
-    { env: appEnv(env), stdio: [...CDP_PIPE_STDIO] },
+    { env: appLaunchEnv(env), stdio: [...CDP_PIPE_STDIO] },
   );
   let output = '';
   child.stdout?.on('data', (c) => {
@@ -160,9 +160,16 @@ export function launchApp(
   return { child, cdp: new CdpPipe(child), exited, output: () => output };
 }
 
-/** The app starts the backend itself; it must not inherit RUN_AS_NODE from the test runner. */
-function appEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  const out = { ...env };
+/**
+ * The environment of a GUI launch. The app starts the backend itself, so it must not inherit
+ * RUN_AS_NODE from the test runner. And it must not rewrite the developer's real `octopus-diff`
+ * launcher (`~/.local/bin`, `%LOCALAPPDATA%`) at startup (DECISIONS #574): the switch
+ * `OCTOPUS_DESKTOP_NO_CLI_REFRESH=1` turns that refresh off. HOME is NOT redirected: on macOS a
+ * fake HOME broke Chromium (Keychain, ~/Library) and the UI never became ready (PR #110 CI,
+ * DECISIONS #581). Every launch of the app goes through `launchApp` / `runApp`.
+ */
+export function appLaunchEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const out: NodeJS.ProcessEnv = { ...env, OCTOPUS_DESKTOP_NO_CLI_REFRESH: '1' };
   delete out.ELECTRON_RUN_AS_NODE;
   return out;
 }
@@ -185,7 +192,7 @@ export function runApp(
       dirs.configDir,
       ...extra,
     ],
-    { env: appEnv(env), encoding: 'utf8', timeout: 30_000 },
+    { env: appLaunchEnv(env), encoding: 'utf8', timeout: 30_000 },
   );
   return {
     status: result.status,
