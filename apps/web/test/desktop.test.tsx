@@ -318,6 +318,38 @@ describe('the app with the bridge', () => {
     expect(options).toEqual({ editor: 'cursor' });
   });
 
+  it('the diff header menu has the file group and the worktree group', async () => {
+    window.octopusDesktop = bridge;
+    const { store } = setup();
+    await ready();
+    const file = screen.getAllByTestId(TEST_IDS.fileItem)[0] as HTMLElement;
+    fireEvent.click(file);
+    await waitFor(() => expect(store.getState().selected).not.toBeNull());
+    fireEvent.click(await screen.findByTestId('diff-header-menu'));
+    const menu = await screen.findByTestId('diff-header-menu-list');
+    const reveals = within(menu).getAllByTestId(DESKTOP_TEST_IDS.reveal);
+    expect(reveals.length).toBe(1);
+    fireEvent.click(reveals[0] as HTMLElement);
+    await waitFor(() => expect(bridge.calls[0]?.[0]).toBe('revealPath'));
+    const selected = store.getState().selected;
+    expect(bridge.calls[0]?.[1]).toEqual([selected?.worktreeId, selected?.path]);
+  });
+
+  it('the project Overview row menu opens the worktree folder', async () => {
+    window.octopusDesktop = bridge;
+    const { store, backend } = setup();
+    await ready();
+    const projectId = backend.listProjects().projects[0]?.project.id ?? '';
+    act(() => store.setState({ view: { kind: 'project', projectId } }));
+    const row = (await screen.findAllByTestId('overview-worktree-row'))[0] as HTMLElement;
+    fireEvent.contextMenu(row);
+    const menu = await screen.findByRole('menu');
+    fireEvent.click(within(menu).getByTestId(DESKTOP_TEST_IDS.open));
+    await waitFor(() =>
+      expect(bridge.calls[0]).toEqual(['openPath', [row.dataset.worktreeId, undefined]]),
+    );
+  });
+
   it('a refusal shows as a notice', async () => {
     window.octopusDesktop = bridge;
     bridge.result = { ok: false, reason: 'outside-worktree', message: 'Outside its worktree.' };
