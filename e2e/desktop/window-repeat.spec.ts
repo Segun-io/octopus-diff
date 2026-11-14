@@ -2,14 +2,25 @@
  * Opt-in measurement (DECISIONS #595): launches the packaged app `OCTOPUS_DESKTOP_WINDOW_REPEAT`
  * times (default 0: skipped) and counts how often the window reached the web UI, and how often it
  * needed more than one load attempt, the way the macOS CI flake was measured. Each launch does what
- * packaged-app.spec.ts does before it looks at the window: wait for the backend, `status`, `add`
- * every project with the bundled CLI, then wait for the UI page and `data-ready`.
+ * packaged-app.spec.ts does before it looks at the window, under the same load (the read-only proof
+ * polling every fixture repo, the agent simulator writing to live-agent): wait for the backend,
+ * `status`, `add` every project and scan root with the bundled CLI, then wait for the UI page and
+ * `data-ready`.
  */
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { TEST_IDS } from '@octopus-diff/contracts';
-import { type FixtureSet, generateFixtures, registeredProjects } from '@octopus-diff/fixtures';
+import {
+  assertReadOnly,
+  type FixtureSet,
+  findWorktree,
+  generateFixtures,
+  proofTargetsFromManifest,
+  registeredProjects,
+  startAgentSimulator,
+  startReadOnlyProof,
+} from '@octopus-diff/fixtures';
 import { expect, test } from '@playwright/test';
 import { redact, windowTimeline } from './support/diagnostics.js';
 import {
@@ -59,12 +70,26 @@ test(`the window reaches the web UI, ${REPEAT} launches`, async () => {
   const paths = registeredProjects(fixtures.manifest)
     .map((p) => (p.registration?.kind === 'path' ? p.registration.path : null))
     .filter((p): p is string => p !== null);
+  const { manifest } = fixtures;
+  const proof = await startReadOnlyProof({
+    env: fixtures.env,
+    targets: proofTargetsFromManifest(manifest),
+  });
+  const live = findWorktree(manifest, 'live-agent').worktree;
   const results: string[] = [];
   let failed = 0;
   let retried = 0;
   for (let i = 1; i <= REPEAT; i++) {
     const dirs = appDirs(root, `launch-${i}`);
     const run = launchApp(app, dirs, env);
+    const sim = startAgentSimulator({
+      targets: [{ path: live.path, name: 'live-agent' }],
+      env: fixtures.env,
+      seed: 19 + i,
+      durationMs: 15_000,
+      minIntervalMs: 150,
+      maxIntervalMs: 500,
+    });
     let daemonPid: number | null = null;
     const t0 = Date.now();
     try {
@@ -73,6 +98,9 @@ test(`the window reaches the web UI, ${REPEAT} launches`, async () => {
       daemonPid = daemon.pid;
       cli(app, dirs, env, 'status', '--json');
       for (const path of paths) cli(app, dirs, env, 'add', path);
+      for (const scanRoot of manifest.scanRoots) {
+        cli(app, dirs, env, 'add', '--scan', scanRoot.path, '--depth', String(scanRoot.depth));
+      }
       const origin = new URL(daemon.url).origin;
       const page = await withWindowDiagnostics(run, dirs, [daemon.token], () =>
         run.cdp.page((url) => url.startsWith(origin), 60_000),
@@ -97,6 +125,7 @@ test(`the window reaches the web UI, ${REPEAT} launches`, async () => {
       results.push(`launch ${i}: FAILED after ${Date.now() - t0} ms`);
       console.log(`launch ${i} failed:\n${error instanceof Error ? error.message : String(error)}`);
     } finally {
+      await sim.stop();
       run.child.kill('SIGTERM');
       const exit = await Promise.race([
         run.exited,
@@ -111,4 +140,5 @@ test(`the window reaches the web UI, ${REPEAT} launches`, async () => {
   console.log(`${summary}\n${results.join('\n')}`);
   test.info().annotations.push({ type: 'window repeat', description: summary });
   expect(failed, summary).toBe(0);
+  assertReadOnly(await proof.finish());
 });

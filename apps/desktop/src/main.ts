@@ -148,10 +148,8 @@ if (primary && app.isPackaged && app.commandLine.hasSwitch('no-sandbox')) {
   );
 }
 if (primary) {
-  app.on('second-instance', () => {
-    log.note(`app: a second launch (window ${win ? 'open' : 'closed'})`);
-    focusWindow();
-  });
+  // Not logged: the smoke test checks that a second launch leaves the shared log as it was.
+  app.on('second-instance', () => focusWindow());
   void app.whenReady().then(main);
 }
 
@@ -269,8 +267,8 @@ function createWindow(): BrowserWindow {
     if (saved?.fullScreen && bounds) w.setFullScreen(true);
     w.show();
   });
-  w.on('show', () => log.note('window: shown'));
-  w.on('hide', () => log.note('window: hidden'));
+  // The first show only: a second launch focuses (shows) the window, and must not touch the log.
+  w.once('show', () => log.note('window: shown'));
   watchPage(w);
   let saveTimer: NodeJS.Timeout | null = null;
   const saveSoon = () => {
